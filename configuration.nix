@@ -2,7 +2,7 @@
 # your system.  Help is available in the configuration.nix(5) man page
 # and in the NixOS manual (accessible by running ‘nixos-help’).
 
-{ config, pkgs, pkgs-unstable, ... }:
+{ config, pkgs, pkgs-unstable, inputs, ... }:
 
 {
   imports =
@@ -68,23 +68,6 @@
     LC_TIME = "en_GB.UTF-8";
   };
 
-  # Enable the X11 windowing system.
-  # You can disable this if you're only using the Wayland session.
-  services.xserver.enable = true;
-
-  # Enable the KDE Plasma Desktop Environment.
-  services.displayManager.sddm.enable = true;
-  services.desktopManager.plasma6.enable = true;
-
-  # Configure keymap in X11
-  services.xserver.xkb = {
-    layout = "gb";
-    variant = "";
-  };
-
-  # Configure console keymap
-  console.keyMap = "uk";
-
   # Enable CUPS to print documents.
   services.printing.enable = true;
 
@@ -107,6 +90,14 @@
   # Enable touchpad support (enabled default in most desktopManager).
   # services.xserver.libinput.enable = true;
 
+  services.desktopManager.plasma6.enable = true;
+  services.displayManager.sddm.enable = true;
+  services.displayManager.sddm.wayland.enable = true;
+
+  # Configure console keymap
+  console.keyMap = "uk";
+  services.xserver.layout = "uk";
+
   # Define a user account. Don't forget to set a password with ‘passwd’.
   users.users.max = {
     isNormalUser = true;
@@ -118,8 +109,14 @@
     ];
   };
 
+  nixpkgs.config.allowUnfree = true; 
+
   # Install firefox.
   programs.firefox.enable = true;
+
+  programs.hyprland.enable = true;
+  programs.hyprland.withUWSM = true;
+  programs.hyprland.package = inputs.hyprland.packages."${pkgs.system}".hyprland;
 
   # List packages installed in system profile. To search, run:
   # $ nix search wget
@@ -127,6 +124,9 @@
   #  vim # Do not forget to add an editor to edit configuration.nix! The Nano editor is also installed by default.
   #  wget
     git
+    vscode
+    wayland-utils
+    wl-clipboard
   ];
 
   # Some programs need SUID wrappers, can be configured further or are

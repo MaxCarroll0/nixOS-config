@@ -14,9 +14,13 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     hyprland.url = "github:hyprwm/Hyprland";
+    hyprland-plugins = {
+      url = "github:hyprwm/hyprland-plugins";
+      inputs.hyprland.follows = "hyprland";
+    };
   };
 
-  outputs = { self, nixpkgs-unstable, nixpkgs, home-manager, sops-nix, hyprland, ... } @ inputs:
+  outputs = { self, nixpkgs-unstable, nixpkgs, home-manager, sops-nix, ... } @ inputs:
     let
       lib = nixpkgs.lib;
       system = "x86_64-linux";
@@ -31,7 +35,8 @@
           sops-nix.nixosModules.sops
         ];
         specialArgs = {
-          inherit pkgs-unstable;
+          inherit nixpkgs-unstable;
+          inherit inputs;
         };
       };
     };
@@ -40,13 +45,6 @@
         inherit pkgs;
         modules = [
           ./home.nix
-          {
-            wayland.windowManager.hyprland = {
-              enable = true;
-              package = hyprland.packages.${pkgs.stdenv.hostPlatform.system}.hyprland;
-              portalPackage = hyprland.packages.${pkgs.stdenv.hostPlatform.system}.xdg-desktop-portal-hyprland;
-            };
-          }
           ];
         extraSpecialArgs = {
           inherit pkgs-unstable;
