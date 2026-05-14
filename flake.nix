@@ -61,6 +61,7 @@
       pkgs-unstable = import nixpkgs-unstable {
         inherit system;
         overlays = [ emacs-overlay.overlay ];
+        config.allowUnfree = true;
       };
     in
     {

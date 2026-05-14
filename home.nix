@@ -217,7 +217,7 @@ in
     lean4
     agda
     ghostscript
-    claude-code
+    pkgs-unstable.claude-code
     mcp-nixos
 
     # Fonts
