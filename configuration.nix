@@ -32,6 +32,19 @@
     }
   '';
 
+  boot.kernelParams = [
+    "zswap.enabled=1"
+    "zswap.compressor=zstd"
+    "zswap.zpool=z3fold"
+    "zswap.max_pool_percent=20"
+  ];
+
+  services.earlyoom = {
+    enable = true;
+    freeMemThreshold = 5;
+    freeSwapThreshold = 10;
+  };
+
   nix.settings.experimental-features = [
     "nix-command"
     "flakes"

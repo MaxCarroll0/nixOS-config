@@ -71,6 +71,16 @@ let
     ];
     doCheck = false;
   };
+
+  curdWrapped = pkgs.symlinkJoin {
+    name = "curd";
+    paths = [ curd ];
+    nativeBuildInputs = [ pkgs.makeWrapper ];
+    postBuild = ''
+      wrapProgram $out/bin/curd \
+        --add-flags "-rod bin=${pkgs.chromium}/bin/chromium"
+    '';
+  };
 in
 {
   imports = [
@@ -90,6 +100,20 @@ in
     userEmail = "mjvcarroll@gmail.com";
     extraConfig = {
       init.defaultBranch = "main";
+    };
+  };
+
+  programs.gh = {
+    enable = true;
+    settings = {
+      git_protocol = "https";
+      aliases.co = "pr checkout";
+    };
+
+    hosts."github.com" = {
+      git_protocol = "https";
+      user = "MaxCarroll0";
+      users.MaxCarroll0 = { };
     };
   };
 
@@ -189,7 +213,7 @@ in
   # The home.packages option allows you to install Nix packages into your
   # environment.
   home.packages = [
-    curd
+    curdWrapped
     agda-mcp
     arxiv-latex-mcp
     paper-search-mcp
