@@ -349,9 +349,9 @@ Using Apheleia
 
 #+begin_src emacs-lisp
 
-(use-package 'apheleia)
-(apheleia-global-mode +1)
- 
+(use-package apheleia
+  :config (apheleia-global-mode +1))
+
 #+end_src
 
 ** LSP
