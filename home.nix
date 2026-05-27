@@ -103,6 +103,79 @@ in
     enable = true;
     userName = "Max";
     userEmail = "mjvcarroll@gmail.com";
+    ignores = [
+      "*~"
+      "\\#*\\#"
+      ".\\#*"
+      "*.swp"
+      "*.swo"
+      "**/.claude/settings.local.json"
+
+      # Editor / OS / local state
+      ".direnv/"
+      "result"
+      "result-*"
+      ".DS_Store"
+      ".vscode/"
+      ".idea/"
+
+      # Exercism
+      ".exercism/"
+
+      # Rust
+      "target/"
+
+      # TypeScript / Node / Bun
+      "node_modules/"
+      "dist/"
+      "build/"
+      ".next/"
+      "*.tsbuildinfo"
+
+      # Python
+      "__pycache__/"
+      "*.pyc"
+      "*.pyo"
+      ".venv/"
+      "*.egg-info/"
+
+      # OCaml
+      "_build/"
+      "*.install"
+
+      # Haskell
+      "dist-newstyle/"
+      ".stack-work/"
+      "*.hi"
+      "*.o"
+
+      # Scala
+      ".bloop/"
+      ".metals/"
+
+      # F# / .NET
+      "bin/"
+      "obj/"
+
+      # Clojure
+      ".cpcache/"
+      ".lsp/"
+      ".clj-kondo/"
+
+      # Common Lisp
+      "*.fasl"
+
+      # Idris
+      "*.ibc"
+      "*.ttc"
+
+      # Agda
+      "*.agdai"
+
+      # Lean4
+      ".lake/"
+      "*.olean"
+    ];
     extraConfig = {
       init.defaultBranch = "main";
     };
