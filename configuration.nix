@@ -22,6 +22,7 @@
   boot.loader.efi.efiSysMountPoint = "/boot";
   boot.loader.grub.efiSupport = true;
   boot.loader.grub.device = "nodev";
+  boot.loader.grub.configurationLimit = 10;
   boot.loader.grub.extraEntries = ''
     menuentry "Ubuntu iso" {
       insmod ext2
@@ -49,6 +50,17 @@
     "nix-command"
     "flakes"
   ];
+  nix.settings.auto-optimise-store = true;
+
+  programs.nh = {
+    enable = true;
+    flake = "/home/max/.config/nix";
+    clean = {
+      enable = true;
+      dates = "*-*-1,15 03:15:00";
+      extraArgs = "--keep 10 --keep-since 14d";
+    };
+  };
 
   sops = {
     defaultSopsFile = ./secrets/secrets.yaml;
