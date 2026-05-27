@@ -252,6 +252,22 @@ in
               };
               packageRequires = [ claude-code-ide ];
             };
+            lean4-mode = epkgs.trivialBuild {
+              pname = "lean4-mode";
+              version = "unstable";
+              src = pkgs.fetchFromGitHub {
+                owner = "leanprover-community";
+                repo = "lean4-mode";
+                rev = "1388f9d1429e38a39ab913c6daae55f6ce799479";
+                hash = "sha256-6XFcyqSTx1CwNWqQvIc25cuQMwh3YXnbgr5cDiOCxBk=";
+              };
+              packageRequires = with epkgs; [
+                compat
+                dash
+                magit-section
+                lsp-mode
+              ];
+            };
           in
           with epkgs;
           [
@@ -274,6 +290,19 @@ in
             vterm
             claude-code-ide
             claude-code-ide-mcp-tools
+            clojure-ts-mode
+            sly
+            fsharp-mode
+            haskell-mode
+            idris2-mode
+            tuareg
+            dune
+            ocamlformat
+            scala-mode
+            sweeprolog
+            lean4-mode
+            markdown-ts-mode
+            jq-mode
           ];
       }
     );

@@ -377,10 +377,31 @@ Activate eglot automatically
 #+begin_src emacs-lisp
 
 (use-package nixpkgs-fmt)
-  
+
 (use-package nix-ts-mode
  :mode "\\.nix\\'")
-  
+
+#+end_src
+
+** TypeScript
+#+begin_src emacs-lisp
+(use-package typescript-ts-mode
+  :mode (("\\.ts\\'"  . typescript-ts-mode)
+         ("\\.mts\\'" . typescript-ts-mode)
+         ("\\.cts\\'" . typescript-ts-mode)
+         ("\\.tsx\\'" . tsx-ts-mode)))
+#+end_src
+
+** Rust
+#+begin_src emacs-lisp
+(use-package rust-ts-mode
+  :mode "\\.rs\\'")
+#+end_src
+
+** Markdown
+#+begin_src emacs-lisp
+(use-package markdown-ts-mode
+  :mode ("\\.md\\'" "\\.markdown\\'"))
 #+end_src
 
 ** LaTeX
@@ -473,7 +494,88 @@ Reveal code upon cursor entry.
   :hook ((LaTeX-mode . yas-minor-mode)
          (latex-mode . yas-minor-mode)
          (tex-mode   . yas-minor-mode)))
-  
+
+#+end_src
+
+** Clojure
+#+begin_src emacs-lisp
+(use-package clojure-ts-mode :mode "\\.cljc?\\'")
+#+end_src
+
+** Common Lisp
+Sly drives SBCL directly; no LSP.
+#+begin_src emacs-lisp
+(use-package sly :commands sly)
+#+end_src
+
+** F#
+#+begin_src emacs-lisp
+(use-package fsharp-mode :mode "\\.fsx?\\'")
+#+end_src
+
+** Haskell
+#+begin_src emacs-lisp
+(use-package haskell-mode :mode "\\.hs\\'")
+
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '(haskell-mode "haskell-language-server-wrapper" "--lsp")))
+#+end_src
+
+** Idris
+=idris2-mode= uses an inferior process, not LSP.
+#+begin_src emacs-lisp
+(use-package idris2-mode :mode "\\.idr\\'")
+#+end_src
+
+** OCaml
+#+begin_src emacs-lisp
+(use-package tuareg :mode ("\\.ml[ily]?\\'" . tuareg-mode))
+(use-package dune)
+(use-package ocamlformat :after tuareg)
+#+end_src
+
+** Scala
+#+begin_src emacs-lisp
+(use-package scala-mode :mode "\\.s\\(cala\\|bt\\)\\'")
+#+end_src
+
+** Prolog
+#+begin_src emacs-lisp
+(use-package sweeprolog :mode ("\\.\\(pl\\|plt\\)\\'" . sweeprolog-mode))
+#+end_src
+
+** Lean
+=lean4-mode= uses =lsp-mode= rather than eglot.
+#+begin_src emacs-lisp
+(use-package lean4-mode
+  :ensure nil
+  :mode "\\.lean\\'"
+  :hook (lean4-mode . lsp))
+#+end_src
+
+** Roc
+#+begin_src emacs-lisp
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '(roc-mode "roc" "lsp")))
+#+end_src
+
+** jq
+#+begin_src emacs-lisp
+(use-package jq-mode :mode "\\.jq\\'")
+
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '(jq-mode . ("jq-lsp"))))
+#+end_src
+
+** AWK
+=awk-mode= is built-in (cc-mode) and auto-binds to =.awk=.
+#+begin_src emacs-lisp
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '(awk-mode . ("awk-language-server"))))
 #+end_src
 
 ** Agda
