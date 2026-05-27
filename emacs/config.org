@@ -271,24 +271,13 @@ Autocompletion. With history sorting and documentation popups.
 
 (use-package corfu
   :custom
-  (corfu-auto t) 
-  ;; (corfu-cycle t)                ;; Enable cycling for `corfu-next/previous'
-  ;; (corfu-quit-at-boundary nil)   ;; Never quit at completion boundary
-  ;; (corfu-quit-no-match nil)      ;; Never quit, even if there is no match
-  ;; (corfu-preview-current nil)    ;; Disable current candidate preview
-  ;; (corfu-preselect 'prompt)      ;; Preselect the prompt
-  ;; (corfu-on-exact-match 'insert) ;; Configure handling of exact matches
-
-  ;; Enable Corfu only for certain modes. See also `global-corfu-modes'.
-  ;; :hook ((prog-mode . corfu-mode)
-  ;;        (shell-mode . corfu-mode)
-  ;;        (eshell-mode . corfu-mode))
-
+  (corfu-auto t)
+  (corfu-quit-at-boundary 'separator)
+  (corfu-quit-no-match 'separator)
   :init
   (global-corfu-mode)
   (corfu-history-mode)
-  (corfu-popupinfo-mode)
-  )
+  (corfu-popupinfo-mode))
 
 #+end_src
 
@@ -321,8 +310,8 @@ Orderless with Corfu
 
 (use-package orderless
   :custom
-  ;; (orderless-style-dispatchers '(orderless-affix-dispatch))
-  ;; (orderless-component-separator #'orderless-escapable-split-on-space)
+  (orderless-style-dispatchers '(orderless-affix-dispatch))
+  (orderless-component-separator #'orderless-escapable-split-on-space)
   (completion-styles '(orderless basic))
   (completion-category-overrides '((file (styles partial-completion))))
   (completion-category-defaults nil) ;; Disable defaults, use our settings
@@ -336,9 +325,10 @@ Orderless with Corfu
 (use-package cape
   :after corfu
   :init
-  ;; General CAPFs for most buffers
   (add-to-list 'completion-at-point-functions #'cape-dabbrev)
-  (add-to-list 'completion-at-point-functions #'cape-file))
+  (add-to-list 'completion-at-point-functions #'cape-file)
+  :config
+  (advice-add 'eglot-completion-at-point :around #'cape-wrap-buster))
   
 #+end_src
 * Citations
