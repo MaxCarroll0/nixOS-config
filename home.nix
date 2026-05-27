@@ -335,10 +335,13 @@ in
   # plain files is through 'home.file'.
   home.file = { };
 
-  xdg.configFile."curd/curd.conf" = {
-    source = ./curd.conf;
-    force = true;
-  };
+  home.activation.curdConf = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    run mkdir -p "$HOME/.config/curd"
+    if [ -L "$HOME/.config/curd/curd.conf" ] || [ ! -e "$HOME/.config/curd/curd.conf" ]; then
+      run rm -f "$HOME/.config/curd/curd.conf"
+      run install -m644 ${./curd.conf} "$HOME/.config/curd/curd.conf"
+    fi
+  '';
 
   home.activation.exercismConf = lib.hm.dag.entryAfter [ "writeBoundary" "sops-nix" ] ''
     run ${pkgs.exercism}/bin/exercism configure \
