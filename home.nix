@@ -288,6 +288,7 @@ in
             xenops
             cdlatex
             eat
+            embrace
             claude-code-ide
             claude-code-ide-mcp-tools
             clojure-ts-mode

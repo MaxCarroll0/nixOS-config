@@ -205,6 +205,18 @@ Setup
   (add-hook 'ediff-mode-hook #'meow-motion-mode))
 
 #+end_src
+* Editing
+** Embrace
+
+Surround/change/delete pairs around region or semantic units. Works directly on meow selections.
+
+#+begin_src emacs-lisp
+
+(use-package embrace
+  :bind ("C-," . embrace-commander))
+
+#+end_src
+
 * Git
 ** Magit
 
