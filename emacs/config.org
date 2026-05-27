@@ -82,11 +82,15 @@ Mononoki for programming
 #+end_src
 
 * Basic
-Line Numbers (Globally)
+Global line numbers, with an opt-out helper.
 #+begin_src emacs-lisp
 
 (global-display-line-numbers-mode)
-  
+
+(defun my/disable-line-numbers ()
+  "Turn off line numbers in current buffer."
+  (display-line-numbers-mode -1))
+
 #+end_src
 
 Direnv
@@ -196,6 +200,7 @@ Setup
   (meow-setup)
   (meow-global-mode 1)
   (setq meow-cheatsheet-layout meow-cheatsheet-layout-qwerty)
+  (add-to-list 'meow-mode-state-list '(eat-mode . insert))
   (add-hook 'ediff-mode-hook #'meow-motion-mode))
 
 #+end_src
@@ -215,30 +220,39 @@ Setup
 #+end_src
 
 * Terminal
-** Vterm
+** Eat
+
+Pure-elisp terminal, with =eat-eshell-mode= upgrading eshell visual commands. Meow normal ↔ eat-emacs-mode, meow insert ↔ eat-semi-char-mode. =<escape>= in semi-char must be rebound because eat otherwise forwards it to the terminal. =C-l= is resent on window-size change because fullscreen TUIs cache cells and leave restored rows blank.
 
 #+begin_src emacs-lisp
 
-(use-package vterm
+(use-package eat
+  :hook ((eshell-load . eat-eshell-mode)
+         (eshell-load . eat-eshell-visual-command-mode)
+         (eat-mode . my/disable-line-numbers)
+         (eshell-mode . my/disable-line-numbers))
   :config
-  (defun my/vterm-meow-mode-sync ()
-    "Sync vterm copy mode with meow normal/insert state."
-    (when (derived-mode-p 'vterm-mode)
+  (defun my/eat-meow-mode-sync ()
+    "Sync eat input mode with meow state."
+    (when (derived-mode-p 'eat-mode)
       (if (meow-normal-mode-p)
-          (unless vterm-copy-mode
-            (vterm-copy-mode 1))
-        (when vterm-copy-mode
-          (vterm-copy-mode -1)
-          (vterm-reset-cursor-point)))))
-  (defun my/vterm-redraw-on-focus ()
-    "Send C-l to redraw vterm when switching back to it."
-    (when (and (derived-mode-p 'vterm-mode)
-              (not vterm-copy-mode))
-      (vterm-send-key "l" nil nil nil :ctrl)))
-  (add-hook 'meow-normal-mode-hook #'my/vterm-meow-mode-sync)
-  (add-hook 'meow-insert-mode-hook #'my/vterm-meow-mode-sync)
-  (add-hook 'window-buffer-change-functions
-            (lambda (_) (my/vterm-redraw-on-focus))))
+          (eat-emacs-mode)
+        (eat-semi-char-mode))))
+  (add-hook 'meow-normal-mode-hook #'my/eat-meow-mode-sync)
+  (add-hook 'meow-insert-mode-hook #'my/eat-meow-mode-sync)
+  (add-hook 'eat-mode-hook #'my/eat-meow-mode-sync)
+
+  (define-key eat-semi-char-mode-map (kbd "<escape>") #'meow-insert-exit)
+  (define-key eat-eshell-semi-char-mode-map (kbd "<escape>") #'meow-insert-exit)
+
+  (defun my/eat-redraw-on-resize (window)
+    "Force a full repaint of the eat program in WINDOW."
+    (with-selected-window window
+      (when (and (derived-mode-p 'eat-mode) eat-terminal)
+        (eat-term-send-string eat-terminal "\C-l"))))
+  (add-hook 'window-size-change-functions
+            (lambda (frame)
+              (walk-windows #'my/eat-redraw-on-resize nil frame))))
 
 #+end_src
 
@@ -250,14 +264,17 @@ MCP integration
 #+begin_src emacs-lisp
 
 (use-package claude-code-ide
-  :after vterm
+  :ensure nil
   :bind ("C-c c" . claude-code-ide-menu)
   :init
-  (setq claude-code-ide-enable-mcp-server t)
+  (setq claude-code-ide-enable-mcp-server t
+        claude-code-ide-terminal-backend 'eat)
   :config
+  (require 'eat)
   (claude-code-ide-emacs-tools-setup))
 
 (use-package claude-code-ide-mcp-tools
+  :ensure nil
   :after claude-code-ide
   :config
   (claude-code-ide-mcp-tools-setup))

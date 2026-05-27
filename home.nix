@@ -287,7 +287,7 @@ in
             cape
             xenops
             cdlatex
-            vterm
+            eat
             claude-code-ide
             claude-code-ide-mcp-tools
             clojure-ts-mode
