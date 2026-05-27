@@ -200,6 +200,7 @@ Setup
   (meow-setup)
   (meow-global-mode 1)
   (setq meow-cheatsheet-layout meow-cheatsheet-layout-qwerty)
+  (add-to-list 'meow-mode-state-list '(messages-buffer-mode . normal))
   (add-to-list 'meow-mode-state-list '(eat-mode . insert))
   (add-hook 'ediff-mode-hook #'meow-motion-mode))
 
