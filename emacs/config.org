@@ -208,6 +208,12 @@ Setup
 
 #+end_src
 
+* Dired
+#+begin_src emacs-lisp
+(use-package dired-narrow
+  :bind (:map dired-mode-map ("/" . dired-narrow)))
+#+end_src
+
 * Terminal
 ** Vterm
 

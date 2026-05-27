@@ -304,6 +304,8 @@ in
             markdown-ts-mode
             jq-mode
             ligature
+            dired-narrow
+            yasnippet
           ];
       }
     );
