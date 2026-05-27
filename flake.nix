@@ -82,6 +82,7 @@
         max = home-manager.lib.homeManagerConfiguration {
           inherit pkgs;
           modules = [
+            sops-nix.homeManagerModules.sops
             ./home.nix
           ];
           extraSpecialArgs = {

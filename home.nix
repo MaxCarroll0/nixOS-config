@@ -5,7 +5,6 @@
   pkgs-unstable,
   agda-mcp,
   curd,
-  sops-nix,
   ...
 }:
 
@@ -91,6 +90,12 @@ in
   # manage.
   home.username = "max";
   home.homeDirectory = "/home/max";
+
+  sops = {
+    defaultSopsFile = ./secrets/secrets.yaml;
+    age.keyFile = "/home/max/.config/sops/age/keys.txt";
+    secrets.exercism-API = { };
+  };
 
   fonts.fontconfig.enable = true;
 
@@ -236,6 +241,7 @@ in
     #   echo "Hello, ${config.home.username}!"
     nixfmt-rfc-style
     nixd
+    exercism
     # TODO: remove isabelle, lean4, agda. Add instead on per-project level
     isabelle
     lean4
@@ -260,6 +266,14 @@ in
     source = ./curd.conf;
     force = true;
   };
+
+  home.activation.exercismConf = lib.hm.dag.entryAfter [ "writeBoundary" "sops-nix" ] ''
+    run ${pkgs.exercism}/bin/exercism configure \
+      --no-verify \
+      --api "https://api.exercism.org/v1" \
+      --workspace "$HOME/exercism" \
+      --token "$(cat ${config.sops.secrets.exercism-API.path})"
+  '';
 
   # Home Manager can also manage your environment variables through
   # 'home.sessionVariables'. These will be explicitly sourced when using a
