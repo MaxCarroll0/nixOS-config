@@ -428,6 +428,20 @@ in
     ' "$_claude" > "$_claude.tmp" && mv "$_claude.tmp" "$_claude"
   '';
 
+  # Merges declarative keys into ~/.claude/settings.json without clobbering
+  # other entries claude code may write.
+  home.activation.claudeSettings = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    _settings="$HOME/.claude/settings.json"
+    run mkdir -p "$HOME/.claude"
+    [ -f "$_settings" ] || echo '{}' > "$_settings"
+
+    ${pkgs.jq}/bin/jq '. * {
+      "skipAutoPermissionPrompt": true,
+      "tui": "fullscreen",
+      "includeCoAuthoredBy": false
+    }' "$_settings" > "$_settings.tmp" && mv "$_settings.tmp" "$_settings"
+  '';
+
   # Let Home Manager install and manage itself.
   programs.home-manager.enable = true;
 }
