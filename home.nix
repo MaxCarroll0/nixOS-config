@@ -303,6 +303,7 @@ in
             lean4-mode
             markdown-ts-mode
             jq-mode
+            ligature
           ];
       }
     );

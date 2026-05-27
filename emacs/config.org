@@ -398,6 +398,50 @@ Activate eglot automatically
   :mode "\\.rs\\'")
 #+end_src
 
+** Ligatures
+Programming ligatures via Fira Code (already installed in =home.packages=).
+#+begin_src emacs-lisp
+(use-package ligature
+  :config
+  (ligature-set-ligatures
+   'prog-mode
+   '("|||>" "<|||" "<==>" "<!--" "####" "~~>" "***" "||=" "||>"
+     ":::" "::=" "=:=" "===" "==>" "=!=" "=>>" "=<<" "=/=" "!=="
+     "!!." ">=>" ">>=" ">>>" ">>-" ">->" "->>" "-->" "---" "-<<"
+     "<~~" "<~>" "<*>" "<||" "<|>" "<$>" "<==" "<=>" "<=<" "<->"
+     "<--" "<-<" "<<=" "<<-" "<<<" "<+>" "</>" "###" "#_(" "..<"
+     "..." "+++" "/==" "///" "_|_" "www" "&&" "^=" "~~" "~@" "~="
+     "~>" "~-" "**" "*>" "*/" "||" "|}" "|]" "|=" "|>" "|-" "{|"
+     "[|" "]#" "::" ":=" ":>" ":<" "$>" "==" "=>" "!=" "!!" ">:"
+     ">=" ">>" ">-" "-~" "-|" "->" "--" "-<" "<~" "<*" "<|" "<:"
+     "<$" "<=" "<>" "<-" "<<" "<+" "</" "#{" "#[" "#:" "#=" "#!"
+     "##" "#(" "#?" "#_" "%%" ".=" ".-" ".." ".?" "+>" "++" "?:"
+     "?=" "?." "??" ";;" "/*" "/=" "/>" "//" "__" "~~" "(*" "*)"
+     "\\\\" "://"))
+  (global-ligature-mode t))
+#+end_src
+
+** Prettify Symbols
+Anonymous-function keywords as λ; org source blocks as ⟦ … ⟧. Everything else is left to Fira Code ligatures.
+#+begin_src emacs-lisp
+(defun my/setup-prettify (alist)
+  (setq prettify-symbols-alist alist)
+  (prettify-symbols-mode 1))
+
+(add-hook 'emacs-lisp-mode-hook    (lambda () (my/setup-prettify '(("lambda"   . ?λ)))))
+(add-hook 'lisp-mode-hook          (lambda () (my/setup-prettify '(("lambda"   . ?λ)))))
+(add-hook 'rust-ts-mode-hook       (lambda () (my/setup-prettify '(("fn"       . ?λ)))))
+(add-hook 'typescript-ts-mode-hook (lambda () (my/setup-prettify '(("function" . ?λ)))))
+(add-hook 'tsx-ts-mode-hook        (lambda () (my/setup-prettify '(("function" . ?λ)))))
+(add-hook 'python-mode-hook        (lambda () (my/setup-prettify '(("lambda"   . ?λ)))))
+(add-hook 'python-ts-mode-hook     (lambda () (my/setup-prettify '(("lambda"   . ?λ)))))
+(add-hook 'org-mode-hook           (lambda () (my/setup-prettify
+                                                '(("#+begin_src" . ?⟦)
+                                                  ("#+end_src"   . ?⟧)
+                                                  ("#+BEGIN_SRC" . ?⟦)
+                                                  ("#+END_SRC"   . ?⟧)))))
+#+end_src
+
 ** Markdown
 #+begin_src emacs-lisp
 (use-package markdown-ts-mode
