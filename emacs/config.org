@@ -355,14 +355,39 @@ Using Apheleia
 #+end_src
 
 ** LSP
-Activate eglot automatically
+Auto-start eglot in every prog-mode and (La)TeX buffer. Project roots are extended so Cargo/npm/Python/Nix subdirs are detected without a =.git=. =C-h T= echoes just the LSP-reported type at point via an eglot hover request.
 #+begin_src emacs-lisp
+(setq project-vc-extra-root-markers
+      '("Cargo.toml" "package.json" "pyproject.toml" "flake.nix"))
+
+(defun my/eglot-type-at-point ()
+  "Echo only the LSP type signature at point."
+  (interactive)
+  (let* ((server (eglot--current-server-or-lose))
+         (params (eglot--TextDocumentPositionParams))
+         (resp (jsonrpc-request server :textDocument/hover params))
+         (contents (and resp (plist-get resp :contents)))
+         (text (cond ((stringp contents) contents)
+                     ((and contents (plist-get contents :value))
+                      (plist-get contents :value))
+                     ((vectorp contents)
+                      (mapconcat (lambda (c) (if (stringp c) c (plist-get c :value)))
+                                 contents "\n"))))
+         (blocks (and text
+                      (let ((pos 0) acc)
+                        (while (string-match "```[a-z-]*\n\\(\\(?:.\\|\n\\)*?\\)\n```" text pos)
+                          (push (string-trim (match-string 1 text)) acc)
+                          (setq pos (match-end 0)))
+                        (nreverse acc)))))
+    (if blocks
+        (message "%s" (car (last blocks)))
+      (user-error "No type info at point"))))
+
 (use-package eglot
   :hook
-  ;; All programming languages
   (prog-mode . eglot-ensure)
-  ;; LaTeX / TeX
   ((LaTeX-mode latex-mode tex-mode) . eglot-ensure)
+  :bind (:map eglot-mode-map ("C-h T" . my/eglot-type-at-point))
   :config
   (add-to-list 'eglot-server-programs
                '((tex-mode plain-tex-mode latex-mode LaTeX-mode)
