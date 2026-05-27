@@ -314,6 +314,7 @@ in
     #   echo "Hello, ${config.home.username}!"
     nixfmt-rfc-style
     nixd
+    shfmt
     exercism
     # TODO: remove isabelle, lean4, agda. Add instead on per-project level
     isabelle
@@ -321,6 +322,7 @@ in
     agda
     ghostscript
     pkgs-unstable.claude-code
+    pkgs-unstable.codecrafters-cli
     mcp-nixos
 
     # Fonts
