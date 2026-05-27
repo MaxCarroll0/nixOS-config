@@ -252,6 +252,21 @@ in
               };
               packageRequires = [ claude-code-ide ];
             };
+            claude-code-ide-extras = epkgs.trivialBuild {
+              pname = "claude-code-ide-extras";
+              version = "unstable";
+              src = pkgs.fetchFromGitHub {
+                owner = "acmorrow";
+                repo = "claude-code-ide-extras";
+                rev = "56ad113f7206378ce23238dd7932737513a01748";
+                hash = "sha256-A7iKmotKWOyHd8jbeY2n5/t5sE8wQobiDePp5sWJoNM=";
+              };
+              packageRequires = with epkgs; [ claude-code-ide lsp-mode ];
+              postPatch = ''
+                rm -f claude-code-ide-extras-projectile.el
+                sed -i "/extras-projectile/d" claude-code-ide-extras.el
+              '';
+            };
             lean4-mode = epkgs.trivialBuild {
               pname = "lean4-mode";
               version = "unstable";
@@ -291,6 +306,7 @@ in
             embrace
             claude-code-ide
             claude-code-ide-mcp-tools
+            claude-code-ide-extras
             clojure-ts-mode
             sly
             fsharp-mode

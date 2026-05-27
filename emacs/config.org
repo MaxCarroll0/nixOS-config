@@ -292,6 +292,13 @@ MCP integration
   :config
   (claude-code-ide-mcp-tools-setup))
 
+(use-package claude-code-ide-extras
+  :ensure nil
+  :after claude-code-ide
+  :config
+  (claude-code-ide-extras-emacs-setup)
+  (claude-code-ide-extras-meta-setup))
+
 #+end_src
 
 * Autocompletion etc.
