@@ -97,6 +97,14 @@
   # networking.wireless.userControlled.enable = true;
   # users.extraUsers.max.extraGroups = [ "wheel" ];
 
+  # WireGuard tunnel
+  sops.secrets.proton-wg = { };
+  networking.wg-quick.interfaces.proton.configFile = config.sops.secrets.proton-wg.path;
+  systemd.services."wg-quick-proton" = {
+    after = [ "sops-install-secrets.service" ];
+    wants = [ "sops-install-secrets.service" ];
+  };
+
   # Set your time zone.
   time.timeZone = "Europe/London";
 

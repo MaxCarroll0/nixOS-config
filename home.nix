@@ -370,6 +370,7 @@ in
     lean4
     agda
     ghostscript
+    yt-dlp
     pkgs-unstable.claude-code
     pkgs-unstable.codecrafters-cli
     mcp-nixos
