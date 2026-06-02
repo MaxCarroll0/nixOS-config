@@ -79,10 +79,14 @@
   #nix.extraOptions = "!include ${config.sops.templates."conf-access-tokens".path}"; # Why cant this find the file???
   nix.extraOptions = (builtins.readFile config.sops.templates."conf-access-tokens".path);
 
-  # Auto-update system.
-  system.autoUpgrade.enable = true;
-  system.autoUpgrade.allowReboot = true;
-  system.autoUpgrade.channel = "https://channels.nixos.org/nixos-25.05";
+  system.autoUpgrade = {
+    enable = true;
+    allowReboot = true;
+    flake = "/home/max/.config/nix#nixos";
+    flags = [ "--update-input" "nixpkgs" "-L" ];
+    dates = "weekly";
+    randomizedDelaySec = "45min";
+  };
 
   networking.hostName = "nixos"; # Define your hostname.
   # networking.wireless.enable = true;  # Enables wireless support via wpa_supplicant.

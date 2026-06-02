@@ -365,8 +365,7 @@ in
     nixd
     shfmt
     exercism
-    # TODO: remove isabelle, lean4, agda. Add instead on per-project level
-    isabelle
+    # TODO: lean4, agda. Add instead on per-project level
     lean4
     agda
     ghostscript
@@ -421,6 +420,14 @@ in
   #
   home.sessionVariables = {
     EDITOR = "emacs";
+  };
+
+  services.home-manager.autoUpgrade = {
+    enable = true;
+    useFlake = true;
+    flakeDir = "/home/max/.config/nix";
+    frequency = "weekly";
+    preSwitchCommands = [ "nix flake update nixpkgs-unstable" ];
   };
 
   # Hacky declarative configuration of Claude
