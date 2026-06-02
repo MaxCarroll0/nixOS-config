@@ -101,8 +101,8 @@ in
 
   programs.git = {
     enable = true;
-    userName = "Max";
-    userEmail = "mjvcarroll@gmail.com";
+    settings.user.name = "Max";
+    settings.user.email = "mjvcarroll@gmail.com";
     ignores = [
       "*~"
       "\\#*\\#"
@@ -176,9 +176,7 @@ in
       ".lake/"
       "*.olean"
     ];
-    extraConfig = {
-      init.defaultBranch = "main";
-    };
+    settings.init.defaultBranch = "main";
   };
 
   programs.gh = {
