@@ -97,16 +97,54 @@
 
   # Enable networking
   networking.networkmanager.enable = true;
-  networking.wireless.enable = false;
   # networking.wireless.userControlled.enable = true;
   # users.extraUsers.max.extraGroups = [ "wheel" ];
 
-  # WireGuard tunnel
+  networking.networkmanager.unmanaged = [
+    "interface-name:proton"
+    "interface-name:proton-2"
+  ];
   sops.secrets.proton-wg = { };
-  networking.wg-quick.interfaces.proton.configFile = config.sops.secrets.proton-wg.path;
+  sops.secrets.proton-wg-2 = { };
+  networking.wg-quick.interfaces.proton = {
+    configFile = config.sops.secrets.proton-wg.path;
+    autostart = false;
+  };
+  networking.wg-quick.interfaces.proton-2.configFile = config.sops.secrets.proton-wg-2.path;
   systemd.services."wg-quick-proton" = {
     after = [ "sops-install-secrets.service" ];
     wants = [ "sops-install-secrets.service" ];
+    conflicts = [ "wg-quick-proton-2.service" ];
+  };
+  systemd.services."wg-quick-proton-2" = {
+    after = [ "sops-install-secrets.service" ];
+    wants = [ "sops-install-secrets.service" ];
+    conflicts = [ "wg-quick-proton.service" ];
+  };
+
+  # Fail-closed VPN kill switch: drop all egress except loopback, the tunnel
+  # interfaces, WireGuard's own marked packets, LAN, and DHCP. Active even
+  # before a tunnel comes up, so the real IP can't leak in the boot race.
+  # 0xca6c is the fwmark wg-quick puts on encrypted packets (table 51820);
+  # 0xca6d covers a brief overlap if both tunnels race during a switch.
+  networking.nftables.enable = true;
+  networking.nftables.tables.vpn-killswitch = {
+    family = "inet";
+    content = ''
+      chain output {
+        type filter hook output priority 0; policy drop;
+
+        oifname "lo" accept
+        oifname { "proton", "proton-2" } accept
+        meta mark { 0xca6c, 0xca6d } accept
+
+        udp dport { 67, 68 } accept
+        ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 255.255.255.255, 224.0.0.0/4 } accept
+        ip6 daddr { fe80::/10, ff00::/8 } accept
+
+        counter drop
+      }
+    '';
   };
 
   # Set your time zone.
