@@ -40,6 +40,13 @@
     "zswap.max_pool_percent=20"
   ];
 
+  swapDevices = [
+    {
+      device = "/swapfile";
+      size = 8 * 1024;
+    }
+  ];
+
   services.earlyoom = {
     enable = true;
     freeMemThreshold = 5;
