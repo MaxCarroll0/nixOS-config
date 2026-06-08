@@ -177,8 +177,9 @@
 
   nixpkgs.config.allowUnfree = true;
 
-  # Install firefox.
+  # Install firefox from unstable.
   programs.firefox.enable = true;
+  programs.firefox.package = pkgs-unstable.firefox;
 
   programs.hyprland.enable = true;
   programs.hyprland.withUWSM = true;
