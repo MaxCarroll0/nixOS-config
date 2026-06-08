@@ -83,7 +83,13 @@
     enable = true;
     allowReboot = true;
     flake = "/home/max/.config/nix#nixos";
-    flags = [ "--update-input" "nixpkgs" "-L" ];
+    flags = [
+      "--update-input"
+      "nixpkgs"
+      "--update-input"
+      "nixpkgs-unstable"
+      "-L"
+    ];
     dates = "weekly";
     randomizedDelaySec = "45min";
   };
