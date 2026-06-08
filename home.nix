@@ -384,12 +384,12 @@ in
   # plain files is through 'home.file'.
   home.file = { };
 
+  # Writable copy (not a store symlink) so curd can rewrite it at runtime;
+  # replaced on every switch so the repo file stays the source of truth.
   home.activation.curdConf = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     run mkdir -p "$HOME/.config/curd"
-    if [ -L "$HOME/.config/curd/curd.conf" ] || [ ! -e "$HOME/.config/curd/curd.conf" ]; then
-      run rm -f "$HOME/.config/curd/curd.conf"
-      run install -m644 ${./curd.conf} "$HOME/.config/curd/curd.conf"
-    fi
+    run rm -f "$HOME/.config/curd/curd.conf"
+    run install -m644 ${./curd.conf} "$HOME/.config/curd/curd.conf"
   '';
 
   home.activation.exercismConf = lib.hm.dag.entryAfter [ "writeBoundary" "sops-nix" ] ''
