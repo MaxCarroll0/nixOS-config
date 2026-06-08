@@ -361,6 +361,7 @@ in
     #   echo "Hello, ${config.home.username}!"
     nixfmt-rfc-style
     nixd
+    lua-language-server
     shfmt
     exercism
     # TODO: lean4, agda. Add instead on per-project level

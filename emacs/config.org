@@ -456,6 +456,14 @@ Auto-start eglot in every prog-mode and (La)TeX buffer. Project roots are extend
   :mode "\\.rs\\'")
 #+end_src
 
+** Lua
+Built-in =lua-ts-mode= (tree-sitter); eglot maps it to lua-language-server.
+#+begin_src emacs-lisp
+(use-package lua-ts-mode
+  :ensure nil
+  :mode "\\.lua\\'")
+#+end_src
+
 ** Ligatures
 Programming ligatures via Fira Code (already installed in =home.packages=).
 #+begin_src emacs-lisp
