@@ -32,6 +32,11 @@
       url = "github:Wraient/curd";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    claude-code = {
+      url = "github:sadjow/claude-code-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -88,6 +93,7 @@
           extraSpecialArgs = {
             inherit pkgs-unstable;
             curd = curd.packages.${system}.default;
+            claude-code = inputs.claude-code.packages.${system}.default;
             agda-mcp = inputs.agda-mcp.packages.${system}.agda-mcp.overrideAttrs (old: {
               doCheck = false;
             });
