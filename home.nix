@@ -5,6 +5,7 @@
   pkgs-unstable,
   agda-mcp,
   curd,
+  claude-code,
   ...
 }:
 
@@ -71,13 +72,32 @@ let
     doCheck = false;
   };
 
+  # Both curd providers (allanime, animepahe) are Cloudflare-gated; curd's plain
+  # Go client can't pass the challenge. FlareSolverr solves it once, this patch
+  # makes curd replay the cf_clearance + matching UA on every provider request.
+  curdPatched = curd.overrideAttrs (old: {
+    postPatch = (old.postPatch or "") + ''
+      cp ${./curd/zz_cf_inject.go} internal/zz_cf_inject.go
+    '';
+  });
+
+  curd-cf-refresh = pkgs.writeShellApplication {
+    name = "curd-cf-refresh";
+    runtimeInputs = with pkgs; [
+      curl
+      jq
+      coreutils
+    ];
+    text = builtins.readFile ./curd/cf-refresh.sh;
+  };
+
   curdWrapped = pkgs.symlinkJoin {
     name = "curd";
-    paths = [ curd ];
+    paths = [ curdPatched ];
     nativeBuildInputs = [ pkgs.makeWrapper ];
     postBuild = ''
       wrapProgram $out/bin/curd \
-        --add-flags "-rod bin=${pkgs.chromium}/bin/chromium"
+        --run "${curd-cf-refresh}/bin/curd-cf-refresh || true"
     '';
   };
 in
@@ -259,7 +279,10 @@ in
                 rev = "56ad113f7206378ce23238dd7932737513a01748";
                 hash = "sha256-A7iKmotKWOyHd8jbeY2n5/t5sE8wQobiDePp5sWJoNM=";
               };
-              packageRequires = with epkgs; [ claude-code-ide lsp-mode ];
+              packageRequires = with epkgs; [
+                claude-code-ide
+                lsp-mode
+              ];
               postPatch = ''
                 rm -f claude-code-ide-extras-projectile.el
                 sed -i "/extras-projectile/d" claude-code-ide-extras.el
@@ -339,6 +362,7 @@ in
   # environment.
   home.packages = [
     curdWrapped
+    curd-cf-refresh
     agda-mcp
     arxiv-latex-mcp
     paper-search-mcp
@@ -369,7 +393,8 @@ in
     agda
     ghostscript
     yt-dlp
-    pkgs-unstable.claude-code
+    claude-code
+    pkgs-unstable.codex
     pkgs-unstable.codecrafters-cli
     mcp-nixos
 
@@ -384,6 +409,22 @@ in
   # Home Manager is pretty good at managing dotfiles. The primary way to manage
   # plain files is through 'home.file'.
   home.file = { };
+
+  # Local Cloudflare solver curd-cf-refresh talks to; bundles its own chromium.
+  systemd.user.services.flaresolverr = {
+    Unit.Description = "FlareSolverr Cloudflare challenge solver";
+    Install.WantedBy = [ "default.target" ];
+    Service = {
+      ExecStart = "${pkgs.flaresolverr}/bin/flaresolverr";
+      Environment = [
+        "HOST=127.0.0.1"
+        "PORT=8191"
+        "LOG_LEVEL=warning"
+      ];
+      Restart = "on-failure";
+      RestartSec = 5;
+    };
+  };
 
   # Writable copy (not a store symlink) so curd can rewrite it at runtime;
   # replaced on every switch so the repo file stays the source of truth.
