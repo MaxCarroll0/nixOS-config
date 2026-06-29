@@ -220,9 +220,18 @@ Surround/change/delete pairs around region or semantic units. Works directly on 
 * Git
 ** Magit
 
+Swap =RET= and =C-RET= in file and hunk sections, so =RET= visits the worktree file and =C-RET= the revision-appropriate one.
+
 #+begin_src emacs-lisp
 
-(use-package magit)
+(use-package magit
+  :config
+  (with-eval-after-load 'magit-diff
+    (dolist (map (list magit-file-section-map magit-hunk-section-map))
+      (let ((ret  (keymap-lookup map "RET"))
+            (cret (keymap-lookup map "C-<return>")))
+        (keymap-set map "RET" cret)
+        (keymap-set map "C-<return>" ret)))))
 
 #+end_src
 
