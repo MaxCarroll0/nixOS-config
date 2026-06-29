@@ -182,7 +182,7 @@
       chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
 
-        meta skgid 700 oifname != { "lo", "proton", "proton-2" } masquerade
+        meta mark 0xca6c oifname != { "lo", "proton", "proton-2" } masquerade
       }
     '';
   };
