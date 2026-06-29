@@ -102,15 +102,18 @@ let
     '';
   };
 
-  # Launch under the novpn group (split tunnel, see configuration.nix) and
-  # inside firejail (SUID wrapper + per-app profile from /etc/firejail) so the
-  # call apps stay outside the VPN and sandboxed from the rest of $HOME.
+  # Run the call apps under the novpn group (split tunnel, see configuration.nix)
+  # and inside firejail. Each gets a fresh private home (nothing of the real
+  # $HOME, incl. the sops age key, is readable), an isolated /tmp, no removable
+  # media, and a randomized machine-id. /dev is left intact for camera/mic/GPU.
+  fjHarden = "/run/wrappers/bin/firejail --private-tmp --disable-mnt --machine-id";
+
   zoom-novpn = pkgs.writeShellScriptBin "zoom-novpn" ''
-    exec /run/wrappers/bin/sg novpn -c '/run/wrappers/bin/firejail --private=$HOME/.local/share/zoom ${pkgs.zoom-us}/bin/zoom'
+    exec /run/wrappers/bin/sg novpn -c '${fjHarden} --private=$HOME/.local/share/zoom ${pkgs.zoom-us}/bin/zoom'
   '';
 
   google-meet = pkgs.writeShellScriptBin "google-meet" ''
-    exec /run/wrappers/bin/sg novpn -c '/run/wrappers/bin/firejail --private=$HOME/.local/share/google-meet ${pkgs.chromium}/bin/chromium --ozone-platform-hint=auto --no-first-run --app=https://meet.google.com'
+    exec /run/wrappers/bin/sg novpn -c '${fjHarden} --private=$HOME/.local/share/google-meet ${pkgs.chromium}/bin/chromium --ozone-platform-hint=auto --no-first-run --app=https://meet.google.com'
   '';
 in
 {
