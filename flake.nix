@@ -37,6 +37,11 @@
       url = "github:sadjow/claude-code-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    codex-cli = {
+      url = "github:sadjow/codex-cli-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -94,6 +99,7 @@
             inherit pkgs-unstable;
             curd = curd.packages.${system}.default;
             claude-code = inputs.claude-code.packages.${system}.default;
+            codex-cli = inputs.codex-cli.packages.${system}.default;
             agda-mcp = inputs.agda-mcp.packages.${system}.agda-mcp.overrideAttrs (old: {
               doCheck = false;
             });
