@@ -387,7 +387,13 @@ Using Apheleia
 #+begin_src emacs-lisp
 
 (use-package apheleia
-  :config (apheleia-global-mode +1))
+  :config
+  (setf (alist-get 'dune-fmt apheleia-formatters)
+        '("sh" "-c" "dune build @fmt --auto-promote >/dev/null && cat \"$1\"" "dune-fmt" file))
+  (setf (alist-get 'tuareg-mode apheleia-mode-alist) 'dune-fmt)
+  (setf (alist-get 'reason-mode apheleia-mode-alist) 'dune-fmt)
+  (setf (alist-get 'caml-mode apheleia-mode-alist) 'dune-fmt)
+  (apheleia-global-mode +1))
 
 #+end_src
 
@@ -643,6 +649,12 @@ Sly drives SBCL directly; no LSP.
 (use-package tuareg :mode ("\\.ml[ily]?\\'" . tuareg-mode))
 (use-package dune)
 (use-package ocamlformat :after tuareg)
+#+end_src
+
+** ReasonML
+Eglot's default maps =reason-mode= to =ocamllsp=, picked up from the devshell PATH via direnv.
+#+begin_src emacs-lisp
+(use-package reason-mode :mode "\\.rei?\\'")
 #+end_src
 
 ** Scala
