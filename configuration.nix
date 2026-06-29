@@ -160,6 +160,26 @@
     '';
   };
 
+  # Split tunnel: traffic from the "novpn" group bypasses the VPN. Marking it
+  # 0xca6c makes wg-quick's rules route it out the physical link instead of the
+  # tunnel, and the kill switch above already accepts that mark. DNS stays on
+  # the default path so it resolves via the tunnel's resolver while VPN is up.
+  users.groups.novpn.gid = 700;
+  networking.nftables.tables.novpn-split = {
+    family = "inet";
+    content = ''
+      chain output {
+        type route hook output priority mangle; policy accept;
+
+        meta skgid 700 udp dport 53 return
+        meta skgid 700 tcp dport 53 return
+        meta skgid 700 meta mark set 0xca6c
+      }
+    '';
+  };
+
+  programs.firejail.enable = true;
+
   # Set your time zone.
   time.timeZone = "Europe/London";
 
@@ -219,6 +239,7 @@
       "networkmanager"
       "wheel"
       "keys"
+      "novpn"
     ];
     packages = with pkgs; [
       kdePackages.kate

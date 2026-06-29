@@ -6,6 +6,7 @@
   agda-mcp,
   curd,
   claude-code,
+  codex-cli,
   ...
 }:
 
@@ -100,6 +101,17 @@ let
         --run "${curd-cf-refresh}/bin/curd-cf-refresh || true"
     '';
   };
+
+  # Launch under the novpn group (split tunnel, see configuration.nix) and
+  # inside firejail (SUID wrapper + per-app profile from /etc/firejail) so the
+  # call apps stay outside the VPN and sandboxed from the rest of $HOME.
+  zoom-novpn = pkgs.writeShellScriptBin "zoom-novpn" ''
+    exec /run/wrappers/bin/sg novpn -c '/run/wrappers/bin/firejail ${pkgs.zoom-us}/bin/zoom'
+  '';
+
+  google-meet = pkgs.writeShellScriptBin "google-meet" ''
+    exec /run/wrappers/bin/sg novpn -c '/run/wrappers/bin/firejail --private=$HOME/.local/share/google-meet ${pkgs.chromium}/bin/chromium --ozone-platform-hint=auto --no-first-run --app=https://meet.google.com'
+  '';
 in
 {
   imports = [
@@ -363,6 +375,8 @@ in
   home.packages = [
     curdWrapped
     curd-cf-refresh
+    zoom-novpn
+    google-meet
     agda-mcp
     arxiv-latex-mcp
     paper-search-mcp
@@ -394,7 +408,7 @@ in
     ghostscript
     yt-dlp
     claude-code
-    pkgs-unstable.codex
+    codex-cli
     pkgs-unstable.codecrafters-cli
     mcp-nixos
 
@@ -409,6 +423,28 @@ in
   # Home Manager is pretty good at managing dotfiles. The primary way to manage
   # plain files is through 'home.file'.
   home.file = { };
+
+  xdg.desktopEntries.zoom-novpn = {
+    name = "Zoom (no VPN)";
+    genericName = "Video Conferencing";
+    exec = "zoom-novpn";
+    icon = "Zoom";
+    categories = [
+      "Network"
+      "AudioVideo"
+    ];
+  };
+
+  xdg.desktopEntries.google-meet = {
+    name = "Google Meet";
+    genericName = "Video Conferencing";
+    exec = "google-meet";
+    icon = "google-chrome";
+    categories = [
+      "Network"
+      "AudioVideo"
+    ];
+  };
 
   # Local Cloudflare solver curd-cf-refresh talks to; bundles its own chromium.
   systemd.user.services.flaresolverr = {
