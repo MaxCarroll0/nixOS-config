@@ -187,6 +187,10 @@
     '';
   };
 
+  # Split-tunnel replies arrive on the physical link though the route to their
+  # source is via the tunnel; strict reverse-path filtering would drop them.
+  networking.firewall.checkReversePath = "loose";
+
   programs.firejail.enable = true;
 
   # Set your time zone.
