@@ -164,6 +164,9 @@
   # 0xca6c makes wg-quick's rules route it out the physical link instead of the
   # tunnel, and the kill switch above already accepts that mark. DNS stays on
   # the default path so it resolves via the tunnel's resolver while VPN is up.
+  # The reroute happens after the socket already picked the tunnel source IP,
+  # so masquerade rewrites it to the physical address (matched by skgid, not
+  # the mark, to leave WireGuard's own encrypted packets untouched).
   users.groups.novpn.gid = 700;
   networking.nftables.tables.novpn-split = {
     family = "inet";
@@ -174,6 +177,12 @@
         meta skgid 700 udp dport 53 return
         meta skgid 700 tcp dport 53 return
         meta skgid 700 meta mark set 0xca6c
+      }
+
+      chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+
+        meta skgid 700 oifname != { "lo", "proton", "proton-2" } masquerade
       }
     '';
   };
