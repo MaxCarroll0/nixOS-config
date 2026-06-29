@@ -106,7 +106,7 @@ let
   # inside firejail (SUID wrapper + per-app profile from /etc/firejail) so the
   # call apps stay outside the VPN and sandboxed from the rest of $HOME.
   zoom-novpn = pkgs.writeShellScriptBin "zoom-novpn" ''
-    exec /run/wrappers/bin/sg novpn -c '/run/wrappers/bin/firejail ${pkgs.zoom-us}/bin/zoom'
+    exec /run/wrappers/bin/sg novpn -c '/run/wrappers/bin/firejail --private=$HOME/.local/share/zoom ${pkgs.zoom-us}/bin/zoom'
   '';
 
   google-meet = pkgs.writeShellScriptBin "google-meet" ''
