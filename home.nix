@@ -109,7 +109,8 @@ let
   fjHarden = "/run/wrappers/bin/firejail --private-tmp --disable-mnt --machine-id";
 
   zoom-novpn = pkgs.writeShellScriptBin "zoom-novpn" ''
-    exec /run/wrappers/bin/sg novpn -c '${fjHarden} --private=$HOME/.local/share/zoom ${pkgs.zoom-us}/bin/zoom'
+    export ZOOM_URL="$1"
+    exec /run/wrappers/bin/sg novpn -c '${fjHarden} --private="$HOME/.local/share/zoom" ${pkgs.zoom-us}/bin/zoom ''${ZOOM_URL:+"$ZOOM_URL"}'
   '';
 
   google-meet = pkgs.writeShellScriptBin "google-meet" ''
@@ -430,11 +431,18 @@ in
   xdg.desktopEntries.zoom-novpn = {
     name = "Zoom (no VPN)";
     genericName = "Video Conferencing";
-    exec = "zoom-novpn";
+    exec = "zoom-novpn %u";
     icon = "Zoom";
     categories = [
       "Network"
       "AudioVideo"
+    ];
+    mimeType = [
+      "x-scheme-handler/zoommtg"
+      "x-scheme-handler/zoomus"
+      "x-scheme-handler/tel"
+      "x-scheme-handler/zoomphonecall"
+      "application/x-zoom"
     ];
   };
 
