@@ -106,7 +106,10 @@ let
   # and inside firejail. Each gets a fresh private home (nothing of the real
   # $HOME, incl. the sops age key, is readable), an isolated /tmp, no removable
   # media, and a randomized machine-id. /dev is left intact for camera/mic/GPU.
-  fjHarden = "/run/wrappers/bin/firejail --private-tmp --disable-mnt --machine-id";
+  # --noprofile skips the distro app profiles, whose /usr-oriented whitelisting
+  # breaks on NixOS store paths and whose D-Bus filter kills the screen-share
+  # portal; our own flags supply the isolation.
+  fjHarden = "/run/wrappers/bin/firejail --noprofile --private-tmp --disable-mnt --machine-id";
 
   zoom-novpn = pkgs.writeShellScriptBin "zoom-novpn" ''
     export ZOOM_URL="$1"
@@ -114,7 +117,7 @@ let
   '';
 
   google-meet = pkgs.writeShellScriptBin "google-meet" ''
-    exec /run/wrappers/bin/sg novpn -c '${fjHarden} --private=$HOME/.local/share/google-meet ${pkgs.chromium}/bin/chromium --ozone-platform-hint=auto --no-first-run --app=https://meet.google.com'
+    exec /run/wrappers/bin/sg novpn -c '${fjHarden} --private=$HOME/.local/share/google-meet ${pkgs.chromium}/bin/chromium --ozone-platform-hint=auto --enable-features=WebRTCPipeWireCapturer --disable-features=Vulkan --no-first-run --app=https://meet.google.com'
   '';
 in
 {
