@@ -255,7 +255,9 @@
 
   programs.hyprland.enable = true;
   programs.hyprland.withUWSM = true;
-  programs.hyprland.package = inputs.hyprland.packages."${pkgs.system}".hyprland;
+  # Temporarily using the cached channel Hyprland; the flake package compiles
+  # its whole closure from source. Restore for the upstream build:
+  # programs.hyprland.package = inputs.hyprland.packages."${pkgs.system}".hyprland;
 
   # List packages installed in system profile. To search, run:
   # $ nix search wget
