@@ -102,22 +102,20 @@ let
     '';
   };
 
-  # Run the call apps under the novpn group (split tunnel, see configuration.nix)
-  # and inside firejail. Each gets a fresh private home (nothing of the real
-  # $HOME, incl. the sops age key, is readable), an isolated /tmp, no removable
-  # media, and a randomized machine-id. /dev is left intact for camera/mic/GPU.
-  # --noprofile skips the distro app profiles, whose /usr-oriented whitelisting
-  # breaks on NixOS store paths and whose D-Bus filter kills the screen-share
-  # portal; our own flags supply the isolation.
-  fjHarden = "/run/wrappers/bin/firejail --noprofile --private-tmp --disable-mnt --machine-id";
+  # Run the call apps under the novpn group (split tunnel, see configuration.nix).
+  # Firejail breaks the screencast portal's app identity check on KDE.
 
   zoom-novpn = pkgs.writeShellScriptBin "zoom-novpn" ''
     export ZOOM_URL="$1"
-    exec /run/wrappers/bin/sg novpn -c '${fjHarden} --private="$HOME/.local/share/zoom" ${pkgs.zoom-us}/bin/zoom ''${ZOOM_URL:+"$ZOOM_URL"}'
+    if [ -n "$ZOOM_URL" ]; then
+      exec /run/wrappers/bin/sg novpn -c '${pkgs.zoom-us}/bin/zoom "$ZOOM_URL"'
+    else
+      exec /run/wrappers/bin/sg novpn -c '${pkgs.zoom-us}/bin/zoom'
+    fi
   '';
 
   google-meet = pkgs.writeShellScriptBin "google-meet" ''
-    exec /run/wrappers/bin/sg novpn -c '${fjHarden} --private=$HOME/.local/share/google-meet ${pkgs.chromium}/bin/chromium --ozone-platform-hint=auto --enable-features=WebRTCPipeWireCapturer --disable-features=Vulkan --no-first-run --app=https://meet.google.com'
+    exec /run/wrappers/bin/sg novpn -c '${pkgs.chromium}/bin/chromium --ozone-platform=wayland --enable-features=WebRTCPipeWireCapturer --disable-features=Vulkan --no-first-run --app=https://meet.google.com'
   '';
 in
 {
@@ -414,6 +412,7 @@ in
     agda
     ghostscript
     yt-dlp
+    pkgs-unstable.ani-cli
     claude-code
     codex-cli
     pkgs-unstable.codecrafters-cli
