@@ -412,7 +412,15 @@ in
     agda
     ghostscript
     yt-dlp
-    pkgs-unstable.ani-cli
+    (pkgs-unstable.ani-cli.overrideAttrs (old: {
+      version = "4.14.1-unstable-2026-05-23";
+      src = pkgs.fetchFromGitHub {
+        owner = "pystardust";
+        repo = "ani-cli";
+        rev = "b8032b72901721a1ce859ca2816e8e2c914bc616";
+        hash = "sha256-+fR46bWXJ58LkXFvWAO/LyCd5THi7oMcqmhRoCKBZfM=";
+      };
+    }))
     claude-code
     codex-cli
     pkgs-unstable.codecrafters-cli
