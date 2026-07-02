@@ -263,8 +263,22 @@
   nixpkgs.config.allowUnfree = true;
 
   # Install firefox from unstable.
-  programs.firefox.enable = true;
-  programs.firefox.package = pkgs-unstable.firefox;
+  programs.firefox = {
+    enable = true;
+    package = pkgs-unstable.firefox;
+    preferencesStatus = "user";
+    preferences = {
+      "media.navigator.enabled" = true;
+      "media.peerconnection.enabled" = true;
+      "media.getusermedia.screensharing.enabled" = true;
+      "media.webrtc.capture.allow-pipewire" = true;
+      "privacy.resistFingerprinting" = false;
+      "privacy.resistFingerprinting.pbmode" = false;
+      "privacy.resistFingerprinting.randomization.canvas.use_siphash" = false;
+      "privacy.resistFingerprinting.randomization.daily_reset.enabled" = false;
+      "privacy.resistFingerprinting.randomization.daily_reset.private.enabled" = false;
+    };
+  };
 
   programs.hyprland.enable = true;
   programs.hyprland.withUWSM = true;
