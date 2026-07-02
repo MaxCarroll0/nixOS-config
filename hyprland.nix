@@ -1,10 +1,7 @@
-{ config, pkgs, ... }:
+{ lib, pkgs, ... }:
 
 {
-  home.packages = with pkgs; [
-
-  ];
-
+  home.packages = with pkgs; [ ];
 
   programs.kitty.enable = true;
 
@@ -15,4 +12,8 @@
 
     };
   };
+
+  # KDE uses the NixOS portal set. Letting Home Manager generate its own
+  # Hyprland-only portal directory hides xdg-desktop-portal-kde from KDE.
+  xdg.portal.enable = lib.mkForce false;
 }
