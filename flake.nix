@@ -45,6 +45,10 @@
       url = "github:sadjow/codex-cli-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    anipy-cli = {
+      url = "github:ubejdullah/anipy-cli/fix/allanime-aareq";
+    };
   };
 
   outputs =
@@ -103,6 +107,7 @@
             curd = curd.packages.${system}.default;
             claude-code = inputs.claude-code.packages.${system}.default;
             codex-cli = inputs.codex-cli.packages.${system}.default;
+            anipySrc = inputs.anipy-cli;
             agda-mcp = inputs.agda-mcp.packages.${system}.agda-mcp.overrideAttrs (old: {
               doCheck = false;
             });

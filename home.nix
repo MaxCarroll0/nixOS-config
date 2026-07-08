@@ -7,10 +7,53 @@
   curd,
   claude-code,
   codex-cli,
+  anipySrc,
   ...
 }:
 
 let
+  anipyApiPr = pkgs-unstable.python3Packages.buildPythonPackage {
+    pname = "anipy-api";
+    version = "3.8.12-pr332";
+    pyproject = true;
+    src = "${anipySrc}/api";
+    build-system = [ pkgs-unstable.python3Packages.poetry-core ];
+    dependencies = with pkgs-unstable.python3Packages; [
+      python-ffmpeg
+      pycryptodomex
+      requests
+      m3u8
+      beautifulsoup4
+      mpv
+      dataclasses-json
+      levenshtein
+      simpleeval
+      pycountry
+      rapidfuzz
+      urllib3
+    ];
+    doCheck = false;
+    dontCheckRuntimeDeps = true;
+  };
+
+  anipyCliPr = pkgs-unstable.python3Packages.buildPythonApplication {
+    pname = "anipy-cli";
+    version = "3.8.12-pr332";
+    pyproject = true;
+    src = "${anipySrc}/cli";
+    build-system = [ pkgs-unstable.python3Packages.poetry-core ];
+    dependencies = with pkgs-unstable.python3Packages; [
+      pyyaml
+      yaspin
+      inquirerpy
+      appdirs
+      pypresence
+      anipyApiPr
+    ];
+    doCheck = false;
+    dontCheckRuntimeDeps = true;
+  };
+
   arxiv-to-prompt = pkgs.python3Packages.buildPythonPackage {
     pname = "arxiv-to-prompt";
     version = "0.10.0";
@@ -385,6 +428,7 @@ in
     agda-mcp
     arxiv-latex-mcp
     paper-search-mcp
+    anipyCliPr
     pkgs-unstable.context7-mcp
     (lib.meta.setPrio 5 pkgs-unstable.mcp-server-sequential-thinking)
     (lib.meta.setPrio 6 pkgs-unstable.mcp-server-memory) # Note (conflict)
@@ -411,14 +455,15 @@ in
     lean4
     agda
     ghostscript
+    mpv
     yt-dlp
     (pkgs-unstable.ani-cli.overrideAttrs (old: {
-      version = "4.14.1-unstable-2026-05-23";
+      version = "4.14.1-unstable-2026-07-07";
       src = pkgs.fetchFromGitHub {
         owner = "pystardust";
         repo = "ani-cli";
-        rev = "b8032b72901721a1ce859ca2816e8e2c914bc616";
-        hash = "sha256-+fR46bWXJ58LkXFvWAO/LyCd5THi7oMcqmhRoCKBZfM=";
+        rev = "89ec9314eba7b66c894bf8bbf3b2b25a3b80743a";
+        hash = "sha256-wU25uSikLbuzQ/nAZzWz3ilpM1Ewac4ZuICRCwUn/fQ=";
       };
     }))
     claude-code
