@@ -310,6 +310,28 @@ MCP integration
 
 #+end_src
 
+** GPTel
+Interactive LLM chat uses ChatGPT OAuth with Emacs tools available.
+
+#+begin_src emacs-lisp
+
+(use-package gptel
+  :bind ("C-c g" . gptel-menu)
+  :config
+  (setq gptel-default-mode 'org-mode
+        gptel-backend (gptel-make-openai-oauth "ChatGPT")
+        gptel-model 'gpt-5.3-codex))
+
+(use-package llm-tool-collection
+  :ensure nil
+  :after gptel
+  :config
+  (setq gptel-tools
+        (mapcar (apply-partially #'apply #'gptel-make-tool)
+                (llm-tool-collection-get-all))))
+
+#+end_src
+
 * Autocompletion etc.
 ** Corfu
 Autocompletion. With history sorting and documentation popups.

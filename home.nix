@@ -348,6 +348,16 @@ in
                 sed -i "/extras-projectile/d" claude-code-ide-extras.el
               '';
             };
+            llm-tool-collection = epkgs.trivialBuild {
+              pname = "llm-tool-collection";
+              version = "0-unstable-2026-02-26";
+              src = pkgs.fetchFromGitHub {
+                owner = "skissue";
+                repo = "llm-tool-collection";
+                rev = "b9fd45bedf3e0fb07d289730991199ae18785157";
+                hash = "sha256-40BSMoM25tdgXeH5+labLYqCPCK4SEuAWovOeJxnzNo=";
+              };
+            };
             lean4-mode = epkgs.trivialBuild {
               pname = "lean4-mode";
               version = "unstable";
@@ -388,6 +398,7 @@ in
             claude-code-ide
             claude-code-ide-mcp-tools
             claude-code-ide-extras
+            llm-tool-collection
             clojure-ts-mode
             sly
             fsharp-mode
