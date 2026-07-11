@@ -190,6 +190,8 @@ in
       "*.swp"
       "*.swo"
       "**/.claude/settings.local.json"
+      "AGENTS.md"
+      "CLAUDE.md"
 
       # Editor / OS / local state
       ".direnv/"
@@ -384,7 +386,6 @@ in
             apheleia
             nix-ts-mode
             magit
-            agda2-mode
             direnv
             auctex
             vertico

@@ -733,15 +733,65 @@ Eglot's default maps =reason-mode= to =ocamllsp=, picked up from the devshell PA
 
 ** Agda
 
-Auto-load agda-mode for .agda and .lagda.md
+agda2-mode is not pinned as an emacs package; it is loaded from whatever =agda= the buffer's direnv puts on PATH (via =agda-mode locate=), so the elisp always matches the project flake's Agda.
 
 #+begin_src emacs-lisp
 
-  (setq auto-mode-alist
-     (append
-       '(("\\.agda\\'" . agda2-mode)
-         ("\\.lagda.md\\'" . agda2-mode))
-       auto-mode-alist))
+  (defun max/agda2-bootstrap ()
+    "Load agda2-mode from the direnv PATH's agda, then enable it."
+    (direnv-update-environment)
+    (unless (fboundp 'agda2-mode)
+      (let ((coding-system-for-read 'utf-8)
+            (loc (string-trim (shell-command-to-string "agda-mode locate"))))
+        (when (file-exists-p loc)
+          (load-file loc))))
+    (if (fboundp 'agda2-mode)
+        (agda2-mode)
+      (message "No agda on PATH; agda2-mode not loaded")))
+
+  (dolist (pat '("\\.agda\\'" "\\.lagda\\'" "\\.lagda\\.md\\'" "\\.lagda\\.tex\\'"))
+    (add-to-list 'auto-mode-alist (cons pat #'max/agda2-bootstrap)))
+
+#+end_src
+
+** F*
+
+=fstar-mode= finds =fstar.exe= on the devshell PATH via direnv.
+
+#+begin_src emacs-lisp
+
+  (use-package fstar-mode
+    :mode "\\.fsti?\\'")
+
+#+end_src
+
+** Coq
+
+Proof General with company-coq; corfu is swapped out for company in coq buffers since company-coq is built on company.
+
+#+begin_src emacs-lisp
+
+  (use-package proof-general)
+
+  (use-package company-coq
+    :hook (coq-mode . max/company-coq-setup))
+
+  (defun max/company-coq-setup ()
+    (corfu-mode -1)
+    (company-mode 1)
+    (company-coq-mode 1))
+
+#+end_src
+
+** Org literate provers
+
+Lean and F* src blocks in section =main.org= files highlight and edit (=C-c '=) with their real modes.
+
+#+begin_src emacs-lisp
+
+  (with-eval-after-load 'org-src
+    (add-to-list 'org-src-lang-modes '("lean4" . lean4))
+    (add-to-list 'org-src-lang-modes '("fstar" . fstar)))
 
 #+end_src
 
