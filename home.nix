@@ -399,6 +399,7 @@ in
             claude-code-ide
             claude-code-ide-mcp-tools
             claude-code-ide-extras
+            gptel
             llm-tool-collection
             clojure-ts-mode
             sly
