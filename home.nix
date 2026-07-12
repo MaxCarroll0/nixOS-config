@@ -394,6 +394,7 @@ in
             cape
             xenops
             cdlatex
+            org-fragtog
             eat
             embrace
             claude-code-ide
@@ -401,6 +402,7 @@ in
             claude-code-ide-extras
             gptel
             llm-tool-collection
+            ellama
             clojure-ts-mode
             sly
             fsharp-mode
@@ -412,6 +414,9 @@ in
             scala-mode
             sweeprolog
             lean4-mode
+            proof-general
+            company-coq
+            fstar-mode
             markdown-ts-mode
             jq-mode
             ligature

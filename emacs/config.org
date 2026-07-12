@@ -77,7 +77,7 @@ Mononoki for programming
 #+begin_src emacs-lisp
 
 (require 'use-package)
-(setq use-package-always-ensure t)
+(setq use-package-always-ensure nil)
 
 #+end_src
 
@@ -312,15 +312,118 @@ MCP integration
 
 ** GPTel
 Interactive LLM chat uses ChatGPT OAuth with Emacs tools available.
+Global and project instructions are added as context before requests.
+Every request tells the model where its response will land (buffer at
+point, chat buffer, echo area, kill-ring, minibuffer).
 
 #+begin_src emacs-lisp
 
 (use-package gptel
-  :bind ("C-c g" . gptel-menu)
+  :bind (("C-c g" . gptel-menu)
+         ("C-c G" . max/gptel-toggle-auto-agents-context))
   :config
+  (require 'cl-lib)
+  (require 'seq)
+  (require 'gptel-context)
+
   (setq gptel-default-mode 'org-mode
         gptel-backend (gptel-make-openai-oauth "ChatGPT")
-        gptel-model 'gpt-5.3-codex))
+        gptel-model 'gpt-5.4-mini)
+
+  (defvar max/gptel-auto-agents-context t)
+
+  (defun max/gptel-toggle-auto-agents-context ()
+    "Toggle automatic AGENTS.md context for gptel."
+    (interactive)
+    (setq max/gptel-auto-agents-context
+          (not max/gptel-auto-agents-context))
+    (unless max/gptel-auto-agents-context
+      (max/gptel-remove-agents-context (current-buffer)))
+    (message "GPTel AGENTS.md context %s"
+             (if max/gptel-auto-agents-context "enabled" "disabled")))
+
+  (defun max/gptel-request-buffer (args)
+    "Return the request buffer named by ARGS."
+    (or (plist-get (cdr args) :buffer)
+        (current-buffer)))
+
+  (defun max/gptel-agents-files (buffer)
+    "Return global and project AGENTS.md files for BUFFER."
+    (let* ((global (expand-file-name "~/.codex/AGENTS.md"))
+           (default-directory
+            (buffer-local-value 'default-directory buffer))
+           (local-dir (locate-dominating-file default-directory "AGENTS.md"))
+           (local (and local-dir (expand-file-name "AGENTS.md" local-dir))))
+      (delete-dups
+       (mapcar #'file-truename
+               (seq-filter #'file-readable-p
+                           (delq nil (list global local)))))))
+
+  (defun max/gptel-remove-agents-context (buffer)
+    "Remove AGENTS.md files from gptel context for BUFFER."
+    (with-current-buffer buffer
+      (dolist (file (max/gptel-agents-files buffer))
+        (setq gptel-context
+              (cl-remove-if
+               (lambda (item)
+                 (equal item (list file)))
+               gptel-context)))))
+
+  (defun max/gptel-add-agents-context (orig &rest args)
+    "Add AGENTS.md files to gptel context before calling ORIG with ARGS."
+    (let ((buffer (max/gptel-request-buffer args)))
+      (when max/gptel-auto-agents-context
+        (with-current-buffer buffer
+          (dolist (file (max/gptel-agents-files buffer))
+            (cl-pushnew (list file) gptel-context :test #'equal)))))
+    (apply orig args))
+
+  (advice-add #'gptel-request :around #'max/gptel-add-agents-context)
+
+  (defvar max/gptel-menu-redirect nil)
+
+  (defun max/gptel-note-menu-redirect (orig args)
+    "Bind the menu output redirect while ORIG runs on ARGS."
+    (let ((max/gptel-menu-redirect
+           (cond ((member "e" args) "shown in the echo area")
+                 ((member "k" args) "copied to the kill-ring"))))
+      (funcall orig args)))
+
+  (defun max/gptel-destination-description (info)
+    "Describe where the response for request INFO will end up."
+    (or max/gptel-menu-redirect
+        (when-let* ((callback (plist-get info :callback))
+                    ((not (memq callback '(gptel--insert-response
+                                           gptel-curl--stream-insert-response)))))
+          "passed to an Emacs Lisp callback, not inserted into a buffer")
+        (let ((position (plist-get info :position)))
+          (with-current-buffer (or (and (markerp position)
+                                        (marker-buffer position))
+                                   (plist-get info :buffer))
+            (concat
+             (cond ((minibufferp) "inserted into the minibuffer")
+                   (gptel-mode
+                    (format "appended to the dedicated gptel chat buffer %s"
+                            (buffer-name)))
+                   (buffer-file-name
+                    (format "inserted at point in buffer %s (%s, visiting %s)"
+                            (buffer-name) major-mode buffer-file-name))
+                   (t (format "inserted at point in buffer %s (%s)"
+                              (buffer-name) major-mode)))
+             (and (plist-get info :in-place)
+                  ", replacing the prompt text"))))))
+
+  (defun max/gptel-add-destination-context (fsm)
+    "Tell the model where the response for FSM will be displayed."
+    (gptel-context--wrap-in-buffer
+     (format "Response destination: your reply will be %s."
+             (max/gptel-destination-description (gptel-fsm-info fsm)))
+     'system))
+
+  (add-hook 'gptel-prompt-transform-functions
+            #'max/gptel-add-destination-context 90)
+
+  (advice-add #'gptel--suffix-send :around #'max/gptel-note-menu-redirect))
 
 (use-package llm-tool-collection
   :ensure nil
@@ -329,6 +432,18 @@ Interactive LLM chat uses ChatGPT OAuth with Emacs tools available.
   (setq gptel-tools
         (mapcar (apply-partially #'apply #'gptel-make-tool)
                 (llm-tool-collection-get-all))))
+
+#+end_src
+
+** Ellama
+Small task workflows use Ellama's command map.
+
+#+begin_src emacs-lisp
+
+(use-package ellama
+  :ensure nil
+  :custom
+  (ellama-keymap-prefix "C-c e"))
 
 #+end_src
 
@@ -424,7 +539,22 @@ Using Apheleia
   (setf (alist-get 'tuareg-mode apheleia-mode-alist) 'dune-fmt)
   (setf (alist-get 'reason-mode apheleia-mode-alist) 'dune-fmt)
   (setf (alist-get 'caml-mode apheleia-mode-alist) 'dune-fmt)
+  (setf (alist-get 'nix-ts-mode apheleia-mode-alist) 'nixfmt)
   (apheleia-global-mode +1))
+
+#+end_src
+
+Prover modes and org match the template flakes' =fmt-*= scripts (those languages have no standard formatter): trailing whitespace stripped and final newline ensured on every save.
+
+#+begin_src emacs-lisp
+
+(defun max/prover-fmt-on-save ()
+  "Whitespace normalization on save, matching the flake fmt-* scripts."
+  (setq-local require-final-newline t)
+  (add-hook 'before-save-hook #'delete-trailing-whitespace nil t))
+
+(dolist (hook '(lean4-mode-hook agda2-mode-hook fstar-mode-hook coq-mode-hook org-mode-hook))
+  (add-hook hook #'max/prover-fmt-on-save))
 
 #+end_src
 
@@ -591,6 +721,17 @@ Inbuild pdf viewer
   :hook ((LaTeX-mode . turn-on-cdlatex)
          (org-mode   . turn-on-org-cdlatex)))
   
+#+end_src
+
+*** Org LaTeX previews
+Org fragments render automatically, while the fragment at point remains editable.
+#+begin_src emacs-lisp
+
+(use-package org-fragtog
+  :hook (org-mode . org-fragtog-mode)
+  :config
+  (setq org-startup-with-latex-preview t))
+
 #+end_src
 
 *** Company Auctex -> Capf

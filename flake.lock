@@ -27,16 +27,16 @@
         "poetry2nix": "poetry2nix"
       },
       "locked": {
-        "lastModified": 1783464681,
-        "narHash": "sha256-Vvjj6hmZLArCf+1619cXkiz2+yhxDAB1pmUHkILmKcw=",
+        "lastModified": 1783811573,
+        "narHash": "sha256-Mey8msql+hAFb5nGxJu3LyqhpBTY4oG2rsBdiQ29vk0=",
         "owner": "ubejdullah",
         "repo": "anipy-cli",
-        "rev": "b37592da4ee2983e2455189a8d149c244361035c",
+        "rev": "a9aec618200c316caa4a7a847ac98cbf3bfc0c3b",
         "type": "github"
       },
       "original": {
         "owner": "ubejdullah",
-        "ref": "fix/allanime-aareq",
+        "ref": "fix/allanime-tobeparsed-response-key",
         "repo": "anipy-cli",
         "type": "github"
       }
