@@ -305,50 +305,21 @@ in
         extraEmacsPackages =
           epkgs:
           let
-            claude-code-ide = epkgs.trivialBuild {
-              pname = "claude-code-ide";
+            codeium = epkgs.trivialBuild {
+              pname = "codeium";
               version = "unstable";
               src = pkgs.fetchFromGitHub {
-                owner = "manzaltu";
-                repo = "claude-code-ide.el";
-                rev = "56db02ee386d009ddb8b1482310f1f9beeefb810";
-                hash = "sha256-qH1QnG5G+0UiH/v0KaS7oSpQZY+BkUMZvrjbx6kyFhg=";
+                owner = "Exafunction";
+                repo = "codeium.el";
+                rev = "main";
+                hash = lib.fakeHash;
               };
               packageRequires = with epkgs; [
-                websocket
-                web-server
-                transient
+                request
+                s
+                dash
+                editorconfig
               ];
-              postPatch = "rm -f claude-code-ide-tests.el";
-            };
-            claude-code-ide-mcp-tools = epkgs.trivialBuild {
-              pname = "claude-code-ide-mcp-tools";
-              version = "unstable";
-              src = pkgs.fetchFromGitHub {
-                owner = "Kaylebor";
-                repo = "claude-code-ide-mcp-tools";
-                rev = "9e74701482f44090aab80f45e6e7eabce5208bd4";
-                hash = "sha256-rvju/JSdsCIGZakdkQTlERi943gXDp8pKmFEAIHZHdU=";
-              };
-              packageRequires = [ claude-code-ide ];
-            };
-            claude-code-ide-extras = epkgs.trivialBuild {
-              pname = "claude-code-ide-extras";
-              version = "unstable";
-              src = pkgs.fetchFromGitHub {
-                owner = "acmorrow";
-                repo = "claude-code-ide-extras";
-                rev = "56ad113f7206378ce23238dd7932737513a01748";
-                hash = "sha256-A7iKmotKWOyHd8jbeY2n5/t5sE8wQobiDePp5sWJoNM=";
-              };
-              packageRequires = with epkgs; [
-                claude-code-ide
-                lsp-mode
-              ];
-              postPatch = ''
-                rm -f claude-code-ide-extras-projectile.el
-                sed -i "/extras-projectile/d" claude-code-ide-extras.el
-              '';
             };
             llm-tool-collection = epkgs.trivialBuild {
               pname = "llm-tool-collection";
@@ -407,9 +378,7 @@ in
             org-fragtog
             eat
             embrace
-            claude-code-ide
-            claude-code-ide-mcp-tools
-            claude-code-ide-extras
+            codeium
             gptel
             llm-tool-collection
             ellama
@@ -600,27 +569,6 @@ in
     preSwitchCommands = [ "nix flake update nixpkgs-unstable" ];
   };
 
-  # Hacky declarative configuration of Claude
-  # Merges into ~/.claude.json
-  # emacs-tools MCP is auto-configured by claude-code-ide.el at runtime
-  home.activation.claudeMcpServers = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    _claude="$HOME/.claude.json"
-    [ -f "$_claude" ] || echo '{}' > "$_claude"
-
-    # Declaratively set MCP servers and global settings (overwrites mcpServers entirely)
-    ${pkgs.jq}/bin/jq '
-      . * {"model": "sonnet", "env": {"MAX_THINKING_TOKENS": "10000", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50", "CLAUDE_CODE_SUBAGENT_MODEL": "haiku"}}
-      | .mcpServers = {
-          "nixos": {"command": "mcp-nixos", "args": []},
-          "context7": {"command": "context7-mcp", "args": []},
-          "sequential-thinking": {"command": "mcp-server-sequential-thinking", "args": []},
-          "memory": {"command": "mcp-server-memory", "args": []},
-          "agda": {"type": "http", "url": "http://localhost:3000/mcp"},
-          "arxiv-latex": {"command": "arxiv-latex-mcp", "args": []},
-          "paper-search": {"command": "paper-search-mcp", "args": []}
-        }
-    ' "$_claude" > "$_claude.tmp" && mv "$_claude.tmp" "$_claude"
-  '';
 
   # Merges declarative keys into ~/.claude/settings.json without clobbering
   # other entries claude code may write.

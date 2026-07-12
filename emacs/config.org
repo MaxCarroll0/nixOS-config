@@ -33,7 +33,7 @@ Lexical binding.
 ** Emacs
 
 #+begin_src emacs-lisp
-  
+
 (use-package emacs
   :custom
   ;; Enable indentation+completion using the TAB key.
@@ -44,7 +44,7 @@ Lexical binding.
 
   ;; Hide commands in M-x which do not apply to the current mode.
   (read-extended-command-predicate #'command-completion-default-include-p))
-  
+
 #+end_src
 
 ** Font
@@ -129,8 +129,8 @@ Direnv uses the async =envrc= PR referenced by Tyler Langlois' [[https://blog.tj
     (advice-add 'eglot-ensure :around #'max/envrc-defer-eglot-ensure))
   (advice-add 'envrc--apply :after #'max/envrc-run-deferred-eglot)
   (envrc-global-mode))
-  
-#+end_src       
+
+#+end_src
 
 * Meow
 
@@ -309,34 +309,16 @@ Pure-elisp terminal, with =eat-eshell-mode= upgrading eshell visual commands. Me
 #+end_src
 
 * AI
-** Claude Code IDE
-MCP integration
-=M-x claude-code-ide=.
+** Codeium
+AI completion / chat.
 
 #+begin_src emacs-lisp
 
-(use-package claude-code-ide
+(use-package codeium
   :ensure nil
-  :bind ("C-c c" . claude-code-ide-menu)
+  :bind ("C-c i" . codeium-complete)
   :init
-  (setq claude-code-ide-enable-mcp-server t
-        claude-code-ide-terminal-backend 'eat)
-  :config
-  (require 'eat)
-  (claude-code-ide-emacs-tools-setup))
-
-(use-package claude-code-ide-mcp-tools
-  :ensure nil
-  :after claude-code-ide
-  :config
-  (claude-code-ide-mcp-tools-setup))
-
-(use-package claude-code-ide-extras
-  :ensure nil
-  :after claude-code-ide
-  :config
-  (claude-code-ide-extras-emacs-setup)
-  (claude-code-ide-extras-meta-setup))
+  (setq codeium/metadata/api_key ""))
 
 #+end_src
 
@@ -348,120 +330,120 @@ point, chat buffer, echo area, kill-ring, minibuffer).
 
 #+begin_src emacs-lisp
 
-(use-package gptel
-  :bind (("C-c g" . gptel-menu)
-         ("C-c G" . max/gptel-toggle-auto-agents-context))
-  :config
-  (require 'cl-lib)
-  (require 'seq)
-  (require 'gptel-context)
+  (use-package gptel
+    :bind (("C-c g" . gptel-menu)
+           ("C-c G" . gptel-toggle-auto-agents-context))
+    :config
+    (require 'cl-lib)
+    (require 'seq)
+    (require 'gptel-context)
 
-  (setq gptel-default-mode 'org-mode
-        gptel-backend (gptel-make-openai-oauth "ChatGPT")
-        gptel-model 'gpt-5.4-mini)
+    (setq gptel-default-mode 'org-mode
+          gptel-backend (gptel-make-openai-oauth "ChatGPT")
+          gptel-model 'gpt-5.4-mini)
 
-  (defvar max/gptel-auto-agents-context t)
+    (defvar gptel-auto-agents-context t)
 
-  (defun max/gptel-toggle-auto-agents-context ()
-    "Toggle automatic AGENTS.md context for gptel."
-    (interactive)
-    (setq max/gptel-auto-agents-context
-          (not max/gptel-auto-agents-context))
-    (unless max/gptel-auto-agents-context
-      (max/gptel-remove-agents-context (current-buffer)))
-    (message "GPTel AGENTS.md context %s"
-             (if max/gptel-auto-agents-context "enabled" "disabled")))
+    (defun gptel-toggle-auto-agents-context ()
+      "Toggle automatic AGENTS.md context for gptel."
+      (interactive)
+      (setq gptel-auto-agents-context
+            (not gptel-auto-agents-context))
+      (unless gptel-auto-agents-context
+        (gptel-remove-agents-context (current-buffer)))
+      (message "GPTel AGENTS.md context %s"
+               (if gptel-auto-agents-context "enabled" "disabled")))
 
-  (defun max/gptel-request-buffer (args)
-    "Return the request buffer named by ARGS."
-    (or (plist-get (cdr args) :buffer)
-        (current-buffer)))
+    (defun gptel-request-buffer (args)
+      "Return the request buffer named by ARGS."
+      (or (plist-get (cdr args) :buffer)
+          (current-buffer)))
 
-  (defun max/gptel-agents-files (buffer)
-    "Return global and project AGENTS.md files for BUFFER."
-    (let* ((global (expand-file-name "~/.codex/AGENTS.md"))
-           (default-directory
-            (buffer-local-value 'default-directory buffer))
-           (local-dir (locate-dominating-file default-directory "AGENTS.md"))
-           (local (and local-dir (expand-file-name "AGENTS.md" local-dir))))
-      (delete-dups
-       (mapcar #'file-truename
-               (seq-filter #'file-readable-p
-                           (delq nil (list global local)))))))
+    (defun gptel-agents-files (buffer)
+      "Return global and project AGENTS.md files for BUFFER."
+      (let* ((global (expand-file-name "~/.codex/AGENTS.md"))
+             (default-directory
+              (buffer-local-value 'default-directory buffer))
+             (local-dir (locate-dominating-file default-directory "AGENTS.md"))
+             (local (and local-dir (expand-file-name "AGENTS.md" local-dir))))
+        (delete-dups
+         (mapcar #'file-truename
+                 (seq-filter #'file-readable-p
+                             (delq nil (list global local)))))))
 
-  (defun max/gptel-remove-agents-context (buffer)
-    "Remove AGENTS.md files from gptel context for BUFFER."
-    (with-current-buffer buffer
-      (dolist (file (max/gptel-agents-files buffer))
-        (setq gptel-context
-              (cl-remove-if
-               (lambda (item)
-                 (equal item (list file)))
-               gptel-context)))))
+    (defun gptel-remove-agents-context (buffer)
+      "Remove AGENTS.md files from gptel context for BUFFER."
+      (with-current-buffer buffer
+        (dolist (file (gptel-agents-files buffer))
+          (setq gptel-context
+                (cl-remove-if
+                 (lambda (item)
+                   (equal item (list file)))
+                 gptel-context)))))
 
-  (defun max/gptel-add-agents-context (orig &rest args)
-    "Add AGENTS.md files to gptel context before calling ORIG with ARGS."
-    (let ((buffer (max/gptel-request-buffer args)))
-      (when max/gptel-auto-agents-context
-        (with-current-buffer buffer
-          (dolist (file (max/gptel-agents-files buffer))
-            (cl-pushnew (list file) gptel-context :test #'equal)))))
-    (apply orig args))
+    (defun gptel-add-agents-context (orig &rest args)
+      "Add AGENTS.md files to gptel context before calling ORIG with ARGS."
+      (let ((buffer (gptel-request-buffer args)))
+        (when gptel-auto-agents-context
+          (with-current-buffer buffer
+            (dolist (file (gptel-agents-files buffer))
+              (cl-pushnew (list file) gptel-context :test #'equal)))))
+      (apply orig args))
 
-  (advice-add #'gptel-request :around #'max/gptel-add-agents-context)
+    (advice-add #'gptel-request :around #'gptel-add-agents-context)
 
-  (defvar max/gptel-menu-redirect nil)
+    (defvar gptel-menu-redirect nil)
 
-  (defun max/gptel-note-menu-redirect (orig args)
-    "Bind the menu output redirect while ORIG runs on ARGS."
-    (let ((max/gptel-menu-redirect
-           (cond ((member "e" args) "shown in the echo area")
-                 ((member "k" args) "copied to the kill-ring"))))
-      (funcall orig args)))
+    (defun gptel-note-menu-redirect (orig args)
+      "Bind the menu output redirect while ORIG runs on ARGS."
+      (let ((gptel-menu-redirect
+             (cond ((member "e" args) "shown in the echo area")
+                   ((member "k" args) "copied to the kill-ring"))))
+        (funcall orig args)))
 
-  (defun max/gptel-destination-description (info)
-    "Describe where the response for request INFO will end up."
-    (or max/gptel-menu-redirect
-        (when-let* ((callback (plist-get info :callback))
-                    ((not (memq callback '(gptel--insert-response
-                                           gptel-curl--stream-insert-response)))))
-          "passed to an Emacs Lisp callback, not inserted into a buffer")
-        (let ((position (plist-get info :position)))
-          (with-current-buffer (or (and (markerp position)
-                                        (marker-buffer position))
-                                   (plist-get info :buffer))
-            (concat
-             (cond ((minibufferp) "inserted into the minibuffer")
-                   (gptel-mode
-                    (format "appended to the dedicated gptel chat buffer %s"
-                            (buffer-name)))
-                   (buffer-file-name
-                    (format "inserted at point in buffer %s (%s, visiting %s)"
-                            (buffer-name) major-mode buffer-file-name))
-                   (t (format "inserted at point in buffer %s (%s)"
-                              (buffer-name) major-mode)))
-             (and (plist-get info :in-place)
-                  ", replacing the prompt text"))))))
+    (defun gptel-destination-description (info)
+      "Describe where the response for request INFO will end up."
+      (or gptel-menu-redirect
+          (when-let* ((callback (plist-get info :callback))
+                      ((not (memq callback '(gptel--insert-response
+                                             gptel-curl--stream-insert-response)))))
+            "passed to an Emacs Lisp callback, not inserted into a buffer")
+          (let ((position (plist-get info :position)))
+            (with-current-buffer (or (and (markerp position)
+                                          (marker-buffer position))
+                                     (plist-get info :buffer))
+              (concat
+               (cond ((minibufferp) "inserted into the minibuffer")
+                     (gptel-mode
+                      (format "appended to the dedicated gptel chat buffer %s"
+                              (buffer-name)))
+                     (buffer-file-name
+                      (format "inserted at point in buffer %s (%s, visiting %s)"
+                              (buffer-name) major-mode buffer-file-name))
+                     (t (format "inserted at point in buffer %s (%s)"
+                                (buffer-name) major-mode)))
+               (and (plist-get info :in-place)
+                    ", replacing the prompt text"))))))
 
-  (defun max/gptel-add-destination-context (fsm)
-    "Tell the model where the response for FSM will be displayed."
-    (gptel-context--wrap-in-buffer
-     (format "Response destination: your reply will be %s."
-             (max/gptel-destination-description (gptel-fsm-info fsm)))
-     'system))
+    (defun gptel-add-destination-context (fsm)
+      "Tell the model where the response for FSM will be displayed."
+      (gptel-context--wrap-in-buffer
+       (format "Response destination: your reply will be %s."
+               (gptel-destination-description (gptel-fsm-info fsm)))
+       'system))
 
-  (add-hook 'gptel-prompt-transform-functions
-            #'max/gptel-add-destination-context 90)
+    (add-hook 'gptel-prompt-transform-functions
+              #'gptel-add-destination-context 90)
 
-  (advice-add #'gptel--suffix-send :around #'max/gptel-note-menu-redirect))
+    (advice-add #'gptel--suffix-send :around #'gptel-note-menu-redirect))
 
-(use-package llm-tool-collection
-  :ensure nil
-  :after gptel
-  :config
-  (setq gptel-tools
-        (mapcar (apply-partially #'apply #'gptel-make-tool)
-                (llm-tool-collection-get-all))))
+  (use-package llm-tool-collection
+    :ensure nil
+    :after gptel
+    :config
+    (setq gptel-tools
+          (mapcar (apply-partially #'apply #'gptel-make-tool)
+                  (llm-tool-collection-get-all))))
 
 #+end_src
 
@@ -504,7 +486,7 @@ Autocompletion. With history sorting and documentation popups.
         (not (or (bound-and-true-p mct--active)
                  (bound-and-true-p vertico--input)
                  (eq (current-local-map) read-passwd-map)))))
-  
+
 #+end_src
 
 *** Vertico
@@ -513,7 +495,7 @@ Autocompletion. With history sorting and documentation popups.
 (use-package vertico
   :init
   (vertico-mode))
-  
+
 #+end_src
 
 ** Orderless
@@ -542,7 +524,7 @@ Orderless with Corfu
   (add-to-list 'completion-at-point-functions #'cape-file)
   :config
   (advice-add 'eglot-completion-at-point :around #'cape-wrap-buster))
-  
+
 #+end_src
 * Citations
 Citar etc. TODO
@@ -553,7 +535,7 @@ Enable maximum highlighting
 #+begin_src emacs-lisp
 
 (setq treesit-font-lock-level 4)
-  
+
 #+end_src
 
 * Languages
@@ -717,9 +699,9 @@ Auctex:
 
     (use-package tex
       :ensure auctex
-      :hook ((LaTeX-mode . TeX-fold-mode)          
-             (LaTeX-mode . prettify-symbols-mode)  
-             (LaTeX-mode . turn-on-cdlatex))       
+      :hook ((LaTeX-mode . TeX-fold-mode)
+             (LaTeX-mode . prettify-symbols-mode)
+             (LaTeX-mode . turn-on-cdlatex))
       :defer t)
 
 #+end_src
@@ -735,7 +717,7 @@ Support multi-file documents:
 #+begin_src emacs-lisp
 
   (setq-default TeX-master nil)
-    
+
 #+end_src
 
 Inbuild pdf viewer
@@ -750,7 +732,7 @@ Inbuild pdf viewer
 (use-package cdlatex
   :hook ((LaTeX-mode . turn-on-cdlatex)
          (org-mode   . turn-on-org-cdlatex)))
-  
+
 #+end_src
 
 *** Org LaTeX previews
@@ -790,7 +772,7 @@ Org fragments render automatically, while the fragment at point remains editable
                    #'cape-dabbrev)))
 
     (add-hook 'LaTeX-mode-hook #'my/latex-capf-setup)
-  
+
 #+end_src
 
 *** Xenops
@@ -969,7 +951,7 @@ Lean and F* src blocks in section =main.org= files highlight and edit (=C-c '=) 
 
 Default to mononoki font
 #+begin_src emacs-lisp
-  
+
   (set-face-attribute 'default nil
                       :family "mononoki"
                       :height 120
