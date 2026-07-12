@@ -93,12 +93,42 @@ Global line numbers, with an opt-out helper.
 
 #+end_src
 
-Direnv
+Direnv uses the async =envrc= PR referenced by Tyler Langlois' [[https://blog.tjll.net/asynchronous-emacs-direnv-devshells/][Asynchronous Emacs Direnv Devshells]], with Eglot deferred until the buffer environment has been applied.
 #+begin_src emacs-lisp
 
-  (use-package direnv
-   :config
-   (direnv-mode))
+(use-package envrc
+  :config
+  (setq envrc-async-processing t)
+
+  (defvar-local max/envrc-deferred-eglot nil
+    "Deferred `eglot-ensure' call waiting for envrc.")
+
+  (defun max/envrc-loading-p ()
+    "Return non-nil when current buffer's envrc is still loading."
+    (and (bound-and-true-p envrc-mode)
+         (fboundp 'envrc--find-env-dir)
+         (envrc--find-env-dir)
+         (not (memq envrc--status '(on error denied)))))
+
+  (defun max/envrc-defer-eglot-ensure (orig &rest args)
+    "Defer ORIG until envrc has applied the buffer environment."
+    (if (max/envrc-loading-p)
+        (setq max/envrc-deferred-eglot
+              (lambda () (apply orig args)))
+      (apply orig args)))
+
+  (defun max/envrc-run-deferred-eglot (buf &optional _result)
+    "Run BUF's deferred Eglot startup after envrc finishes."
+    (with-current-buffer buf
+      (when max/envrc-deferred-eglot
+        (let ((fn max/envrc-deferred-eglot))
+          (setq max/envrc-deferred-eglot nil)
+          (funcall fn)))))
+
+  (with-eval-after-load 'eglot
+    (advice-add 'eglot-ensure :around #'max/envrc-defer-eglot-ensure))
+  (advice-add 'envrc--apply :after #'max/envrc-run-deferred-eglot)
+  (envrc-global-mode))
   
 #+end_src       
 
@@ -880,7 +910,8 @@ agda2-mode is not pinned as an emacs package; it is loaded from whatever =agda= 
 
   (defun max/agda2-bootstrap ()
     "Load agda2-mode from the direnv PATH's agda, then enable it."
-    (direnv-update-environment)
+    (require 'envrc)
+    (envrc--update-sync)
     (unless (fboundp 'agda2-mode)
       (let ((coding-system-for-read 'utf-8)
             (loc (string-trim (shell-command-to-string "agda-mode locate"))))

@@ -360,6 +360,16 @@ in
                 hash = "sha256-40BSMoM25tdgXeH5+labLYqCPCK4SEuAWovOeJxnzNo=";
               };
             };
+            # Drop this override once nixpkgs envrc includes async processing.
+            envrc = epkgs.envrc.overrideAttrs (_old: {
+              version = "0-unstable-2025-01-11";
+              src = pkgs.fetchFromGitHub {
+                owner = "Grimpper";
+                repo = "envrc";
+                rev = "71f67971bc5eb2974ae2f738512c8f09f0822527";
+                hash = "sha256-Zfu+yWY+POMnrWbmP6HWOjgFsASNU3HcCowNo8BIzpk=";
+              };
+            });
             lean4-mode = epkgs.trivialBuild {
               pname = "lean4-mode";
               version = "unstable";
@@ -386,7 +396,7 @@ in
             apheleia
             nix-ts-mode
             magit
-            direnv
+            envrc
             auctex
             vertico
             orderless
