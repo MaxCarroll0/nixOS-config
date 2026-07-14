@@ -620,6 +620,17 @@ Auto-start eglot in every prog-mode and (La)TeX buffer. Project roots are extend
 
 #+end_src
 
+Code-statistics command, fetching =tokei= through a throwaway nix-shell.
+
+#+begin_src emacs-lisp
+
+(defun my/tokei ()
+  "Run tokei on the current project via nix-shell."
+  (interactive)
+  (compile "nix-shell -p tokei --run tokei"))
+
+#+end_src
+
 ** TypeScript
 #+begin_src emacs-lisp
 (use-package typescript-ts-mode
