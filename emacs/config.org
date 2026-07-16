@@ -93,6 +93,13 @@ Global line numbers, with an opt-out helper.
 
 #+end_src
 
+Highlight the current line globally.
+#+begin_src emacs-lisp
+
+(global-hl-line-mode t)
+
+#+end_src
+
 Direnv uses the async =envrc= PR referenced by Tyler Langlois' [[https://blog.tjll.net/asynchronous-emacs-direnv-devshells/][Asynchronous Emacs Direnv Devshells]], with Eglot deferred until the buffer environment has been applied.
 #+begin_src emacs-lisp
 
