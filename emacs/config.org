@@ -1,0 +1,979 @@
+#+TITLE: Emacs Config
+#+AUTHOR: Max Carroll
+#+PROPERTY: header-args :tangle "config.el"
+
+* Basic Settings
+Lexical binding.
+
+#+begin_src emacs-lisp
+;; -*- lexical-binding: t; -*-
+#+end_src
+
+
+** Speedy startup
+
+   Temporarily disable garbage collection during
+   initialization. Increases the ~gc-cons-threshold~ and restores the default after initialization.
+
+   #+begin_src emacs-lisp :tangle early-init.el
+
+   (let ((file-name-handler-alist-old file-name-handler-alist))
+     (add-hook 'emacs-startup-hook
+               (lambda ()
+                 (setq gc-cons-threshold (* 1024 1024 20))
+                 (setq file-name-handler-alist file-name-handler-alist-old)))
+     (setq gc-cons-threshold most-positive-fixnum)
+     (setq file-name-handler-alist nil))
+
+   (setq inhibit-default-init t)
+
+   #+end_src
+
+
+** Emacs
+
+#+begin_src emacs-lisp
+
+(use-package emacs
+  :custom
+  ;; Enable indentation+completion using the TAB key.
+  (tab-always-indent 'complete)
+
+  ;; Disable Ispell completion function.
+  (text-mode-ispell-word-completion nil)
+
+  ;; Hide commands in M-x which do not apply to the current mode.
+  (read-extended-command-predicate #'command-completion-default-include-p))
+
+#+end_src
+
+** Font
+Mononoki for programming
+#+begin_src emacs-lisp
+(defun my/set-code-font ()
+  (setq buffer-face-mode-face
+        '(:family "FiraCode Nerd Font Mono" :height 110))
+  (buffer-face-mode 1))
+
+(add-hook 'prog-mode-hook #'my/set-code-font)
+#+end_src
+
+* Packages
+
+** Archives
+
+#+begin_src emacs-lisp
+
+(require 'package)
+(setq package-archives
+      '(("melpa" . "https://melpa.org/packages/")
+        ("gnu" . "https://elpa.gnu.org/packages/")))
+(package-initialize)
+
+#+end_src
+
+  ** Use-Package
+
+#+begin_src emacs-lisp
+
+(require 'use-package)
+(setq use-package-always-ensure nil)
+
+#+end_src
+
+* Basic
+Global line numbers, with an opt-out helper.
+#+begin_src emacs-lisp
+
+(global-display-line-numbers-mode)
+
+(defun my/disable-line-numbers ()
+  "Turn off line numbers in current buffer."
+  (display-line-numbers-mode -1))
+
+#+end_src
+
+Highlight the current line globally.
+#+begin_src emacs-lisp
+
+(global-hl-line-mode t)
+
+#+end_src
+
+Direnv uses the async =envrc= PR referenced by Tyler Langlois' [[https://blog.tjll.net/asynchronous-emacs-direnv-devshells/][Asynchronous Emacs Direnv Devshells]], with Eglot deferred until the buffer environment has been applied.
+#+begin_src emacs-lisp
+
+(use-package envrc
+  :config
+  (setq envrc-async-processing t)
+
+  (defvar-local max/envrc-deferred-eglot nil
+    "Deferred `eglot-ensure' call waiting for envrc.")
+
+  (defun max/envrc-loading-p ()
+    "Return non-nil when current buffer's envrc is still loading."
+    (and (bound-and-true-p envrc-mode)
+         (fboundp 'envrc--find-env-dir)
+         (envrc--find-env-dir)
+         (not (memq envrc--status '(on error denied)))))
+
+  (defun max/envrc-defer-eglot-ensure (orig &rest args)
+    "Defer ORIG until envrc has applied the buffer environment."
+    (if (max/envrc-loading-p)
+        (setq max/envrc-deferred-eglot
+              (lambda () (apply orig args)))
+      (apply orig args)))
+
+  (defun max/envrc-run-deferred-eglot (buf &optional _result)
+    "Run BUF's deferred Eglot startup after envrc finishes."
+    (with-current-buffer buf
+      (when max/envrc-deferred-eglot
+        (let ((fn max/envrc-deferred-eglot))
+          (setq max/envrc-deferred-eglot nil)
+          (funcall fn)))))
+
+  (with-eval-after-load 'eglot
+    (advice-add 'eglot-ensure :around #'max/envrc-defer-eglot-ensure))
+  (advice-add 'envrc--apply :after #'max/envrc-run-deferred-eglot)
+  (envrc-global-mode))
+
+#+end_src
+
+* Meow
+
+Key Bindings (QWERTY)
+
+#+begin_src emacs-lisp
+(defun meow-setup ()
+  (meow-motion-define-key
+   '("j" . meow-next)
+   '("k" . meow-prev)
+   '("<escape>" . ignore))
+  (meow-leader-define-key
+   ;; Use SPC (0-9) for digit arguments.
+   '("1" . meow-digit-argument)
+   '("2" . meow-digit-argument)
+   '("3" . meow-digit-argument)
+   '("4" . meow-digit-argument)
+   '("5" . meow-digit-argument)
+   '("6" . meow-digit-argument)
+   '("7" . meow-digit-argument)
+   '("8" . meow-digit-argument)
+   '("9" . meow-digit-argument)
+   '("0" . meow-digit-argument)
+   '("/" . meow-keypad-describe-key)
+   '("?" . meow-cheatsheet))
+  (meow-normal-define-key
+   '("0" . meow-expand-0)
+   '("9" . meow-expand-9)
+   '("8" . meow-expand-8)
+   '("7" . meow-expand-7)
+   '("6" . meow-expand-6)
+   '("5" . meow-expand-5)
+   '("4" . meow-expand-4)
+   '("3" . meow-expand-3)
+   '("2" . meow-expand-2)
+   '("1" . meow-expand-1)
+   '("-" . negative-argument)
+   '(";" . meow-reverse)
+   '("," . meow-inner-of-thing)
+   '("." . meow-bounds-of-thing)
+   '("[" . meow-beginning-of-thing)
+   '("]" . meow-end-of-thing)
+   '("a" . meow-append)
+   '("A" . meow-open-below)
+   '("b" . meow-back-word)
+   '("B" . meow-back-symbol)
+   '("c" . meow-change)
+   '("d" . meow-delete)
+   '("D" . meow-backward-delete)
+   '("e" . meow-next-word)
+   '("E" . meow-next-symbol)
+   '("f" . meow-find)
+   '("g" . meow-cancel-selection)
+   '("G" . meow-grab)
+   '("h" . meow-left)
+   '("H" . meow-left-expand)
+   '("i" . meow-insert)
+   '("I" . meow-open-above)
+   '("j" . meow-next)
+   '("J" . meow-next-expand)
+   '("k" . meow-prev)
+   '("K" . meow-prev-expand)
+   '("l" . meow-right)
+   '("L" . meow-right-expand)
+   '("m" . meow-join)
+   '("n" . meow-search)
+   '("o" . meow-block)
+   '("O" . meow-to-block)
+   '("p" . meow-yank)
+   '("q" . meow-quit)
+   '("Q" . meow-goto-line)
+   '("r" . meow-replace)
+   '("R" . meow-swap-grab)
+   '("s" . meow-kill)
+   '("t" . meow-till)
+   '("u" . meow-undo)
+   '("U" . meow-undo-in-selection)
+   '("v" . meow-visit)
+   '("w" . meow-mark-word)
+   '("W" . meow-mark-symbol)
+   '("x" . meow-line)
+   '("X" . meow-goto-line)
+   '("y" . meow-save)
+   '("Y" . meow-sync-grab)
+   '("z" . meow-pop-selection)
+   '("'" . repeat)
+   '("<escape>" . ignore)))
+
+#+end_src
+
+Setup
+
+#+begin_src emacs-lisp
+
+(use-package meow
+  :config
+  (meow-setup)
+  (meow-global-mode 1)
+  (setq meow-cheatsheet-layout meow-cheatsheet-layout-qwerty)
+  (add-to-list 'meow-mode-state-list '(messages-buffer-mode . normal))
+  (add-to-list 'meow-mode-state-list '(eat-mode . insert))
+  (add-hook 'ediff-mode-hook #'meow-motion-mode))
+
+#+end_src
+* Editing
+** Embrace
+
+Surround/change/delete pairs around region or semantic units. Works directly on meow selections.
+
+#+begin_src emacs-lisp
+
+(use-package embrace
+  :bind ("C-," . embrace-commander))
+
+#+end_src
+
+* Git
+** Magit
+
+Swap =RET= and =C-RET= in file and hunk sections, so =RET= visits the worktree file and =C-RET= the revision-appropriate one.
+
+#+begin_src emacs-lisp
+
+(use-package magit
+  :config
+  (with-eval-after-load 'magit-diff
+    (dolist (map (list magit-file-section-map magit-hunk-section-map))
+      (let ((ret  (keymap-lookup map "RET"))
+            (cret (keymap-lookup map "C-<return>")))
+        (keymap-set map "RET" cret)
+        (keymap-set map "C-<return>" ret)))))
+
+#+end_src
+
+* Dired
+#+begin_src emacs-lisp
+(use-package dired-narrow
+  :bind (:map dired-mode-map ("/" . dired-narrow)))
+#+end_src
+
+* Terminal
+** Eat
+
+Pure-elisp terminal, with =eat-eshell-mode= upgrading eshell visual commands. Meow normal ↔ eat-emacs-mode, meow insert ↔ eat-semi-char-mode. =<escape>= in semi-char must be rebound because eat otherwise forwards it to the terminal. =C-l= is resent on window-size change because fullscreen TUIs cache cells and leave restored rows blank.
+
+#+begin_src emacs-lisp
+
+(use-package eat
+  :hook ((eshell-load . eat-eshell-mode)
+         (eshell-load . eat-eshell-visual-command-mode)
+         (eat-mode . my/disable-line-numbers)
+         (eshell-mode . my/disable-line-numbers))
+  :config
+  (defun my/eat-meow-mode-sync ()
+    "Sync eat input mode with meow state."
+    (when (derived-mode-p 'eat-mode)
+      (if (meow-normal-mode-p)
+          (eat-emacs-mode)
+        (eat-semi-char-mode))))
+  (add-hook 'meow-normal-mode-hook #'my/eat-meow-mode-sync)
+  (add-hook 'meow-insert-mode-hook #'my/eat-meow-mode-sync)
+  (add-hook 'eat-mode-hook #'my/eat-meow-mode-sync)
+
+  (define-key eat-semi-char-mode-map (kbd "<escape>") #'meow-insert-exit)
+  (define-key eat-eshell-semi-char-mode-map (kbd "<escape>") #'meow-insert-exit)
+
+  (defun my/eat-redraw-on-resize (window)
+    "Force a full repaint of the eat program in WINDOW."
+    (with-selected-window window
+      (when (and (derived-mode-p 'eat-mode) eat-terminal)
+        (eat-term-send-string eat-terminal "\C-l"))))
+  (add-hook 'window-size-change-functions
+            (lambda (frame)
+              (walk-windows #'my/eat-redraw-on-resize nil frame))))
+
+#+end_src
+
+* AI
+** Codeium
+AI completion / chat.
+
+#+begin_src emacs-lisp
+
+(use-package codeium
+  :ensure nil
+  :bind ("C-c i" . codeium-complete)
+  :init
+  (setq codeium/metadata/api_key ""))
+
+#+end_src
+
+** GPTel
+Interactive LLM chat uses ChatGPT OAuth with Emacs tools available.
+Global and project instructions are added as context before requests.
+Every request tells the model where its response will land (buffer at
+point, chat buffer, echo area, kill-ring, minibuffer).
+
+#+begin_src emacs-lisp
+
+  (use-package gptel
+    :bind (("C-c g" . gptel-menu)
+           ("C-c G" . gptel-toggle-auto-agents-context))
+    :config
+    (require 'cl-lib)
+    (require 'seq)
+    (require 'gptel-context)
+
+    (setq gptel-default-mode 'org-mode
+          gptel-backend (gptel-make-openai-oauth "ChatGPT")
+          gptel-model 'gpt-5.4-mini)
+
+    (defvar gptel-auto-agents-context t)
+
+    (defun gptel-toggle-auto-agents-context ()
+      "Toggle automatic AGENTS.md context for gptel."
+      (interactive)
+      (setq gptel-auto-agents-context
+            (not gptel-auto-agents-context))
+      (unless gptel-auto-agents-context
+        (gptel-remove-agents-context (current-buffer)))
+      (message "GPTel AGENTS.md context %s"
+               (if gptel-auto-agents-context "enabled" "disabled")))
+
+    (defun gptel-request-buffer (args)
+      "Return the request buffer named by ARGS."
+      (or (plist-get (cdr args) :buffer)
+          (current-buffer)))
+
+    (defun gptel-agents-files (buffer)
+      "Return global and project AGENTS.md files for BUFFER."
+      (let* ((global (expand-file-name "~/.codex/AGENTS.md"))
+             (default-directory
+              (buffer-local-value 'default-directory buffer))
+             (local-dir (locate-dominating-file default-directory "AGENTS.md"))
+             (local (and local-dir (expand-file-name "AGENTS.md" local-dir))))
+        (delete-dups
+         (mapcar #'file-truename
+                 (seq-filter #'file-readable-p
+                             (delq nil (list global local)))))))
+
+    (defun gptel-remove-agents-context (buffer)
+      "Remove AGENTS.md files from gptel context for BUFFER."
+      (with-current-buffer buffer
+        (dolist (file (gptel-agents-files buffer))
+          (setq gptel-context
+                (cl-remove-if
+                 (lambda (item)
+                   (equal item (list file)))
+                 gptel-context)))))
+
+    (defun gptel-add-agents-context (orig &rest args)
+      "Add AGENTS.md files to gptel context before calling ORIG with ARGS."
+      (let ((buffer (gptel-request-buffer args)))
+        (when gptel-auto-agents-context
+          (with-current-buffer buffer
+            (dolist (file (gptel-agents-files buffer))
+              (cl-pushnew (list file) gptel-context :test #'equal)))))
+      (apply orig args))
+
+    (advice-add #'gptel-request :around #'gptel-add-agents-context)
+
+    (defvar gptel-menu-redirect nil)
+
+    (defun gptel-note-menu-redirect (orig args)
+      "Bind the menu output redirect while ORIG runs on ARGS."
+      (let ((gptel-menu-redirect
+             (cond ((member "e" args) "shown in the echo area")
+                   ((member "k" args) "copied to the kill-ring"))))
+        (funcall orig args)))
+
+    (defun gptel-destination-description (info)
+      "Describe where the response for request INFO will end up."
+      (or gptel-menu-redirect
+          (when-let* ((callback (plist-get info :callback))
+                      ((not (memq callback '(gptel--insert-response
+                                             gptel-curl--stream-insert-response)))))
+            "passed to an Emacs Lisp callback, not inserted into a buffer")
+          (let ((position (plist-get info :position)))
+            (with-current-buffer (or (and (markerp position)
+                                          (marker-buffer position))
+                                     (plist-get info :buffer))
+              (concat
+               (cond ((minibufferp) "inserted into the minibuffer")
+                     (gptel-mode
+                      (format "appended to the dedicated gptel chat buffer %s"
+                              (buffer-name)))
+                     (buffer-file-name
+                      (format "inserted at point in buffer %s (%s, visiting %s)"
+                              (buffer-name) major-mode buffer-file-name))
+                     (t (format "inserted at point in buffer %s (%s)"
+                                (buffer-name) major-mode)))
+               (and (plist-get info :in-place)
+                    ", replacing the prompt text"))))))
+
+    (defun gptel-add-destination-context (fsm)
+      "Tell the model where the response for FSM will be displayed."
+      (gptel-context--wrap-in-buffer
+       (format "Response destination: your reply will be %s."
+               (gptel-destination-description (gptel-fsm-info fsm)))
+       'system))
+
+    (add-hook 'gptel-prompt-transform-functions
+              #'gptel-add-destination-context 90)
+
+    (advice-add #'gptel--suffix-send :around #'gptel-note-menu-redirect))
+
+  (use-package llm-tool-collection
+    :ensure nil
+    :after gptel
+    :config
+    (setq gptel-tools
+          (mapcar (apply-partially #'apply #'gptel-make-tool)
+                  (llm-tool-collection-get-all))))
+
+#+end_src
+
+** Ellama
+Small task workflows use Ellama's command map.
+
+#+begin_src emacs-lisp
+
+(use-package ellama
+  :ensure nil
+  :custom
+  (ellama-keymap-prefix "C-c e"))
+
+#+end_src
+
+* Autocompletion etc.
+** Corfu
+Autocompletion. With history sorting and documentation popups.
+#+begin_src emacs-lisp
+
+(use-package corfu
+  :custom
+  (corfu-auto t)
+  (corfu-quit-at-boundary 'separator)
+  (corfu-quit-no-match 'separator)
+  :init
+  (global-corfu-mode)
+  (corfu-history-mode)
+  (corfu-popupinfo-mode))
+
+#+end_src
+
+** Minibuffer
+
+*** Corfu
+#+begin_src emacs-lisp
+
+(setq global-corfu-minibuffer
+      (lambda ()
+        (not (or (bound-and-true-p mct--active)
+                 (bound-and-true-p vertico--input)
+                 (eq (current-local-map) read-passwd-map)))))
+
+#+end_src
+
+*** Vertico
+#+begin_src emacs-lisp
+
+(use-package vertico
+  :init
+  (vertico-mode))
+
+#+end_src
+
+** Orderless
+Orderless with Corfu
+
+#+begin_src emacs-lisp
+
+(use-package orderless
+  :custom
+  (orderless-style-dispatchers '(orderless-affix-dispatch))
+  (orderless-component-separator #'orderless-escapable-split-on-space)
+  (completion-styles '(orderless basic))
+  (completion-category-overrides '((file (styles partial-completion))))
+  (completion-category-defaults nil) ;; Disable defaults, use our settings
+  (completion-pcm-leading-wildcard t)) ;; Emacs 31: partial-completion behaves like substring
+
+#+end_src
+
+** Cape
+#+begin_src emacs-lisp
+
+(use-package cape
+  :after corfu
+  :init
+  (add-to-list 'completion-at-point-functions #'cape-dabbrev)
+  (add-to-list 'completion-at-point-functions #'cape-file)
+  :config
+  (advice-add 'eglot-completion-at-point :around #'cape-wrap-buster))
+
+#+end_src
+* Citations
+Citar etc. TODO
+* Tree Sitters
+
+Enable maximum highlighting
+
+#+begin_src emacs-lisp
+
+(setq treesit-font-lock-level 4)
+
+#+end_src
+
+* Languages
+** Formatting
+Using Apheleia
+
+#+begin_src emacs-lisp
+
+(use-package apheleia
+  :config
+  (setf (alist-get 'dune-fmt apheleia-formatters)
+        '("sh" "-c" "dune build @fmt --auto-promote >/dev/null && cat \"$1\"" "dune-fmt" file))
+  (setf (alist-get 'tuareg-mode apheleia-mode-alist) 'dune-fmt)
+  (setf (alist-get 'reason-mode apheleia-mode-alist) 'dune-fmt)
+  (setf (alist-get 'caml-mode apheleia-mode-alist) 'dune-fmt)
+  (setf (alist-get 'nix-ts-mode apheleia-mode-alist) 'nixfmt)
+  (apheleia-global-mode +1))
+
+#+end_src
+
+Prover modes and org match the template flakes' =fmt-*= scripts (those languages have no standard formatter): trailing whitespace stripped and final newline ensured on every save.
+
+#+begin_src emacs-lisp
+
+(defun max/prover-fmt-on-save ()
+  "Whitespace normalization on save, matching the flake fmt-* scripts."
+  (setq-local require-final-newline t)
+  (add-hook 'before-save-hook #'delete-trailing-whitespace nil t))
+
+(dolist (hook '(lean4-mode-hook agda2-mode-hook fstar-mode-hook coq-mode-hook org-mode-hook))
+  (add-hook hook #'max/prover-fmt-on-save))
+
+#+end_src
+
+** LSP
+Auto-start eglot in every prog-mode and (La)TeX buffer. Project roots are extended so Cargo/npm/Python/Nix subdirs are detected without a =.git=. =C-h T= echoes just the LSP-reported type at point via an eglot hover request.
+#+begin_src emacs-lisp
+(setq project-vc-extra-root-markers
+      '("Cargo.toml" "package.json" "pyproject.toml" "flake.nix"))
+
+(defun my/eglot-type-at-point ()
+  "Echo only the LSP type signature at point."
+  (interactive)
+  (let* ((server (eglot--current-server-or-lose))
+         (params (eglot--TextDocumentPositionParams))
+         (resp (jsonrpc-request server :textDocument/hover params))
+         (contents (and resp (plist-get resp :contents)))
+         (text (cond ((stringp contents) contents)
+                     ((and contents (plist-get contents :value))
+                      (plist-get contents :value))
+                     ((vectorp contents)
+                      (mapconcat (lambda (c) (if (stringp c) c (plist-get c :value)))
+                                 contents "\n"))))
+         (blocks (and text
+                      (let ((pos 0) acc)
+                        (while (string-match "```[a-z-]*\n\\(\\(?:.\\|\n\\)*?\\)\n```" text pos)
+                          (push (string-trim (match-string 1 text)) acc)
+                          (setq pos (match-end 0)))
+                        (nreverse acc)))))
+    (if blocks
+        (message "%s" (car (last blocks)))
+      (user-error "No type info at point"))))
+
+(use-package eglot
+  :hook
+  (prog-mode . eglot-ensure)
+  ((LaTeX-mode latex-mode tex-mode) . eglot-ensure)
+  :bind (:map eglot-mode-map ("C-h T" . my/eglot-type-at-point))
+  :config
+  (add-to-list 'eglot-server-programs
+               '((tex-mode plain-tex-mode latex-mode LaTeX-mode)
+                 "digestif")))
+#+end_src
+
+** Nix
+#+begin_src emacs-lisp
+
+(use-package nixpkgs-fmt)
+
+(use-package nix-ts-mode
+ :mode "\\.nix\\'")
+
+#+end_src
+
+Code-statistics command, fetching =tokei= through a throwaway nix-shell.
+
+#+begin_src emacs-lisp
+
+(defun my/tokei ()
+  "Run tokei on the current project via nix-shell."
+  (interactive)
+  (compile "nix-shell -p tokei --run tokei"))
+
+#+end_src
+
+** TypeScript
+#+begin_src emacs-lisp
+(use-package typescript-ts-mode
+  :mode (("\\.ts\\'"  . typescript-ts-mode)
+         ("\\.mts\\'" . typescript-ts-mode)
+         ("\\.cts\\'" . typescript-ts-mode)
+         ("\\.tsx\\'" . tsx-ts-mode)))
+#+end_src
+
+** Rust
+#+begin_src emacs-lisp
+(use-package rust-ts-mode
+  :mode "\\.rs\\'")
+#+end_src
+
+** Lua
+Built-in =lua-ts-mode= (tree-sitter); eglot maps it to lua-language-server.
+#+begin_src emacs-lisp
+(use-package lua-ts-mode
+  :ensure nil
+  :mode "\\.lua\\'")
+#+end_src
+
+** Ligatures
+Programming ligatures via Fira Code (already installed in =home.packages=).
+#+begin_src emacs-lisp
+(use-package ligature
+  :config
+  (ligature-set-ligatures
+   'prog-mode
+   '("|||>" "<|||" "<==>" "<!--" "####" "~~>" "***" "||=" "||>"
+     ":::" "::=" "=:=" "===" "==>" "=!=" "=>>" "=<<" "=/=" "!=="
+     "!!." ">=>" ">>=" ">>>" ">>-" ">->" "->>" "-->" "---" "-<<"
+     "<~~" "<~>" "<*>" "<||" "<|>" "<$>" "<==" "<=>" "<=<" "<->"
+     "<--" "<-<" "<<=" "<<-" "<<<" "<+>" "</>" "###" "#_(" "..<"
+     "..." "+++" "/==" "///" "_|_" "www" "&&" "^=" "~~" "~@" "~="
+     "~>" "~-" "**" "*>" "*/" "||" "|}" "|]" "|=" "|>" "|-" "{|"
+     "[|" "]#" "::" ":=" ":>" ":<" "$>" "==" "=>" "!=" "!!" ">:"
+     ">=" ">>" ">-" "-~" "-|" "->" "--" "-<" "<~" "<*" "<|" "<:"
+     "<$" "<=" "<>" "<-" "<<" "<+" "</" "#{" "#[" "#:" "#=" "#!"
+     "##" "#(" "#?" "#_" "%%" ".=" ".-" ".." ".?" "+>" "++" "?:"
+     "?=" "?." "??" ";;" "/*" "/=" "/>" "//" "__" "~~" "(*" "*)"
+     "\\\\" "://"))
+  (global-ligature-mode t))
+#+end_src
+
+** Prettify Symbols
+Anonymous-function keywords as λ; org source blocks as ⟦ … ⟧. Everything else is left to Fira Code ligatures.
+#+begin_src emacs-lisp
+(defun my/setup-prettify (alist)
+  (setq prettify-symbols-alist alist)
+  (prettify-symbols-mode 1))
+
+(add-hook 'emacs-lisp-mode-hook    (lambda () (my/setup-prettify '(("lambda"   . ?λ)))))
+(add-hook 'lisp-mode-hook          (lambda () (my/setup-prettify '(("lambda"   . ?λ)))))
+(add-hook 'rust-ts-mode-hook       (lambda () (my/setup-prettify '(("fn"       . ?λ)))))
+(add-hook 'typescript-ts-mode-hook (lambda () (my/setup-prettify '(("function" . ?λ)))))
+(add-hook 'tsx-ts-mode-hook        (lambda () (my/setup-prettify '(("function" . ?λ)))))
+(add-hook 'python-mode-hook        (lambda () (my/setup-prettify '(("lambda"   . ?λ)))))
+(add-hook 'python-ts-mode-hook     (lambda () (my/setup-prettify '(("lambda"   . ?λ)))))
+(add-hook 'org-mode-hook           (lambda () (my/setup-prettify
+                                                '(("#+begin_src" . ?⟦)
+                                                  ("#+end_src"   . ?⟧)
+                                                  ("#+BEGIN_SRC" . ?⟦)
+                                                  ("#+END_SRC"   . ?⟧)))))
+#+end_src
+
+** Markdown
+#+begin_src emacs-lisp
+(use-package markdown-ts-mode
+  :mode ("\\.md\\'" "\\.markdown\\'"))
+#+end_src
+
+** LaTeX
+Auctex:
+#+begin_src emacs-lisp
+
+    (use-package tex
+      :ensure auctex
+      :hook ((LaTeX-mode . TeX-fold-mode)
+             (LaTeX-mode . prettify-symbols-mode)
+             (LaTeX-mode . turn-on-cdlatex))
+      :defer t)
+
+#+end_src
+Document parsing:
+#+begin_src emacs-lisp
+
+  (setq TeX-auto-save t)
+  (setq TeX-parse-self t)
+
+#+end_src
+
+Support multi-file documents:
+#+begin_src emacs-lisp
+
+  (setq-default TeX-master nil)
+
+#+end_src
+
+Inbuild pdf viewer
+#+begin_src emacs-lisp
+
+  (setq +latex-viewers '(pdf-tools))
+
+#+end_src
+*** cdLatex
+#+begin_src emacs-lisp
+
+(use-package cdlatex
+  :hook ((LaTeX-mode . turn-on-cdlatex)
+         (org-mode   . turn-on-org-cdlatex)))
+
+#+end_src
+
+*** Org LaTeX previews
+Org fragments render automatically, while the fragment at point remains editable.
+#+begin_src emacs-lisp
+
+(use-package org-fragtog
+  :hook (org-mode . org-fragtog-mode)
+  :config
+  (setq org-startup-with-latex-preview t))
+
+#+end_src
+
+*** Company Auctex -> Capf
+#+begin_src emacs-lisp
+
+(use-package company-auctex
+      :after tex
+      :commands company-auctex-macros
+                company-auctex-symbols
+                company-auctex-environments)
+
+    (defun my/latex-capf-setup ()
+      "CAPF setup for LaTeX."
+      (setq-local completion-at-point-functions
+                  (list
+                   ;; LSP completion from Eglot/Digestif
+                   #'eglot-completion-at-point
+                   ;; AUCTeX's own completion first
+                   #'TeX-completion-at-point
+                   ;; Reuse company-auctex backends through cape
+                   (cape-company-to-capf #'company-auctex-macros)
+                   (cape-company-to-capf #'company-auctex-symbols)
+                   (cape-company-to-capf #'company-auctex-environments)
+                   ;; Generic fallbacks
+                   #'cape-file
+                   #'cape-dabbrev)))
+
+    (add-hook 'LaTeX-mode-hook #'my/latex-capf-setup)
+
+#+end_src
+
+*** Xenops
+Reveal code upon cursor entry.
+#+begin_src emacs-lisp
+    (use-package xenops
+      :ensure t
+      :hook (LaTeX-mode . xenops-mode)
+      :config
+      (setq xenops-reveal-on-entry t))             ; Reveal LaTeX source on cursor
+#+end_src
+
+*** Digestif LSP
+
+*** YASnippet
+#+begin_src emacs-lisp
+
+(use-package yasnippet
+  :hook ((LaTeX-mode . yas-minor-mode)
+         (latex-mode . yas-minor-mode)
+         (tex-mode   . yas-minor-mode)))
+
+#+end_src
+
+** Clojure
+#+begin_src emacs-lisp
+(use-package clojure-ts-mode :mode "\\.cljc?\\'")
+#+end_src
+
+** Common Lisp
+Sly drives SBCL directly; no LSP.
+#+begin_src emacs-lisp
+(use-package sly :commands sly)
+#+end_src
+
+** F#
+#+begin_src emacs-lisp
+(use-package fsharp-mode :mode "\\.fsx?\\'")
+#+end_src
+
+** Haskell
+#+begin_src emacs-lisp
+(use-package haskell-mode :mode "\\.hs\\'")
+
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '(haskell-mode "haskell-language-server-wrapper" "--lsp")))
+#+end_src
+
+** Idris
+=idris2-mode= uses an inferior process, not LSP.
+#+begin_src emacs-lisp
+(use-package idris2-mode :mode "\\.idr\\'")
+#+end_src
+
+** OCaml
+#+begin_src emacs-lisp
+(use-package tuareg :mode ("\\.ml[ily]?\\'" . tuareg-mode))
+(use-package dune)
+(use-package ocamlformat :after tuareg)
+#+end_src
+
+** ReasonML
+Eglot's default maps =reason-mode= to =ocamllsp=, picked up from the devshell PATH via direnv.
+#+begin_src emacs-lisp
+(use-package reason-mode :mode "\\.rei?\\'")
+#+end_src
+
+** Scala
+#+begin_src emacs-lisp
+(use-package scala-mode :mode "\\.s\\(cala\\|bt\\)\\'")
+#+end_src
+
+** Prolog
+#+begin_src emacs-lisp
+(use-package sweeprolog :mode ("\\.\\(pl\\|plt\\)\\'" . sweeprolog-mode))
+#+end_src
+
+** Lean
+=lean4-mode= uses =lsp-mode= rather than eglot.
+#+begin_src emacs-lisp
+(use-package lean4-mode
+  :ensure nil
+  :mode "\\.lean\\'"
+  :hook (lean4-mode . lsp))
+#+end_src
+
+** Roc
+#+begin_src emacs-lisp
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '(roc-mode "roc" "lsp")))
+#+end_src
+
+** jq
+#+begin_src emacs-lisp
+(use-package jq-mode :mode "\\.jq\\'")
+
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '(jq-mode . ("jq-lsp"))))
+#+end_src
+
+** AWK
+=awk-mode= is built-in (cc-mode) and auto-binds to =.awk=.
+#+begin_src emacs-lisp
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '(awk-mode . ("awk-language-server"))))
+#+end_src
+
+** Agda
+
+agda2-mode is not pinned as an emacs package; it is loaded from whatever =agda= the buffer's direnv puts on PATH (via =agda-mode locate=), so the elisp always matches the project flake's Agda.
+
+#+begin_src emacs-lisp
+
+  (defun max/agda2-bootstrap ()
+    "Load agda2-mode from the direnv PATH's agda, then enable it."
+    (require 'envrc)
+    (envrc--update-sync)
+    (unless (fboundp 'agda2-mode)
+      (let ((coding-system-for-read 'utf-8)
+            (loc (string-trim (shell-command-to-string "agda-mode locate"))))
+        (when (file-exists-p loc)
+          (load-file loc))))
+    (if (fboundp 'agda2-mode)
+        (agda2-mode)
+      (message "No agda on PATH; agda2-mode not loaded")))
+
+  (dolist (pat '("\\.agda\\'" "\\.lagda\\'" "\\.lagda\\.md\\'" "\\.lagda\\.tex\\'"))
+    (add-to-list 'auto-mode-alist (cons pat #'max/agda2-bootstrap)))
+
+#+end_src
+
+** F*
+
+=fstar-mode= finds =fstar.exe= on the devshell PATH via direnv.
+
+#+begin_src emacs-lisp
+
+  (use-package fstar-mode
+    :mode "\\.fsti?\\'")
+
+#+end_src
+
+** Coq
+
+Proof General with company-coq; corfu is swapped out for company in coq buffers since company-coq is built on company.
+
+#+begin_src emacs-lisp
+
+  (use-package proof-general)
+
+  (use-package company-coq
+    :hook (coq-mode . max/company-coq-setup))
+
+  (defun max/company-coq-setup ()
+    (corfu-mode -1)
+    (company-mode 1)
+    (company-coq-mode 1))
+
+#+end_src
+
+** Org literate provers
+
+Lean and F* src blocks in section =main.org= files highlight and edit (=C-c '=) with their real modes.
+
+#+begin_src emacs-lisp
+
+  (with-eval-after-load 'org-src
+    (add-to-list 'org-src-lang-modes '("lean4" . lean4))
+    (add-to-list 'org-src-lang-modes '("fstar" . fstar)))
+
+#+end_src
+
+Default to mononoki font
+#+begin_src emacs-lisp
+
+  (set-face-attribute 'default nil
+                      :family "mononoki"
+                      :height 120
+                      :weight 'normal
+                      :width  'normal)
+
+#+end_src
