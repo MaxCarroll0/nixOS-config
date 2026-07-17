@@ -28,7 +28,7 @@
   boot.loader.grub.efiSupport = true;
   boot.loader.grub.efiInstallAsRemovable = true;
   boot.loader.grub.device = "nodev";
-  boot.loader.grub.configurationLimit = 10;
+  boot.loader.grub.configurationLimit = 20;
   boot.loader.grub.extraEntries = ''
     menuentry "Ubuntu iso" {
       insmod ext2
