@@ -1418,6 +1418,112 @@ Plain Org tags, completing over the ones already used.
 
 #+end_src
 
+** View-Time
+
+Visiting a node bumps its =:VIEWS:= count and stamps =:LAST_VIEWED:=. It fires on
+find/explore/lookup through =org-roam-node-visit=, and feeds ranking later.
+
+#+begin_src emacs-lisp
+
+(defun liana--record-visit (&rest _)
+  (ignore-errors
+    (when (derived-mode-p 'org-mode)
+      (save-excursion
+        (ignore-errors (org-back-to-heading t))
+        (let ((views (1+ (string-to-number (or (org-entry-get (point) "VIEWS") "0")))))
+          (org-entry-put (point) "VIEWS" (number-to-string views))
+          (org-entry-put (point) "LAST_VIEWED" (format-time-string "[%Y-%m-%d %a %H:%M]")))))))
+
+(with-eval-after-load 'org-roam
+  (advice-add 'org-roam-node-visit :after #'liana--record-visit))
+
+#+end_src
+
+** Word Count
+
+=liana-word-count= toggles a mode-line count of the note against its class limit (a
+=final= caps at 120 words). Over the limit the count turns red. It leans on =org-wc= for
+an org-aware count (drawers and links excluded).
+
+#+begin_src emacs-lisp
+
+(use-package org-wc)
+
+(defvar liana-word-limits '(("final" . 120) ("literature" . 250) ("relation" . 120)))
+
+(defun liana--wc-count ()
+  (require 'org-wc)
+  (if (org-before-first-heading-p)
+      (org-word-count-aux (point-min) (point-max))
+    (save-excursion
+      (org-back-to-heading t)
+      (org-word-count-aux (point) (progn (org-end-of-subtree t t) (point))))))
+
+(defvar-local liana--wc-modeline nil)
+
+(defun liana--wc-update ()
+  (when (derived-mode-p 'org-mode)
+    (setq liana--wc-modeline
+          (ignore-errors
+            (let ((n (liana--wc-count))
+                  (lim (cdr (assoc (liana-note-class) liana-word-limits))))
+              (cond ((and lim (> n lim))
+                     (propertize (format " wc %d/%d" n lim) 'face 'warning))
+                    (lim (format " wc %d/%d" n lim))
+                    (t (format " wc %d" n))))))
+    (force-mode-line-update)))
+
+(define-minor-mode liana-word-count-mode
+  "Show the note's word count against its class limit in the mode line."
+  :lighter (:eval (or liana--wc-modeline ""))
+  (if liana-word-count-mode
+      (add-hook 'post-command-hook #'liana--wc-update nil t)
+    (remove-hook 'post-command-hook #'liana--wc-update t)))
+
+#+end_src
+
+** Atomicity
+
+Saving a =final= note runs =liana-atomicity-lint=: a non-blocking message if it is over
+its word limit or has no links yet. =liana-atomicity-dismiss= silences the length warning
+by writing =:IGNORE_LENGTH_LIMIT:=.
+
+#+begin_src emacs-lisp
+
+(defun liana--node-link-count ()
+  (save-excursion
+    (goto-char (point-min))
+    (let ((n 0))
+      (while (re-search-forward "\\[\\[\\(?:id\\|informs\\|follows\\|supports\\|contradicts\\|relates\\):" nil t)
+        (setq n (1+ n)))
+      n)))
+
+(defun liana--atomicity-warnings ()
+  (let (ws (lim (cdr (assoc "final" liana-word-limits))))
+    (when (and lim (not (org-entry-get (point-min) "IGNORE_LENGTH_LIMIT")))
+      (let ((n (ignore-errors (liana--wc-count))))
+        (when (and n (> n lim)) (push (format "over word limit (%d/%d)" n lim) ws))))
+    (when (zerop (liana--node-link-count)) (push "no links" ws))
+    (nreverse ws)))
+
+(defun liana-atomicity-lint ()
+  (interactive)
+  (when (and (derived-mode-p 'org-mode)
+             (equal (org-entry-get (point-min) "CLASS") "final"))
+    (let ((ws (liana--atomicity-warnings)))
+      (cond (ws (message "Liana: final note %s" (string-join ws "; ")))
+            ((called-interactively-p 'any) (message "Liana: atomic"))))))
+
+(defun liana-atomicity-dismiss ()
+  (interactive)
+  (org-entry-put (point-min) "IGNORE_LENGTH_LIMIT" "t")
+  (message "Liana: length warning dismissed"))
+
+(add-hook 'org-mode-hook
+          (lambda () (add-hook 'after-save-hook #'liana-atomicity-lint nil t)))
+
+#+end_src
+
 ** Command Surface
 
 =C-c n= opens a menu of every command. Unbuilt ones are =liana--todo= placeholders.
@@ -1440,7 +1546,7 @@ Plain Org tags, completing over the ones already used.
     ("n" "new final"     liana-new-final)
     ("p" "promote"       liana-promote)
     ("s" "split"         liana--todo)
-    ("w" "word-count"    liana--todo)]
+    ("w" "word-count"    liana-word-count-mode)]
    ["Connect"
     ("l" "link"          liana--todo)
     ("e" "relation"      liana--todo)

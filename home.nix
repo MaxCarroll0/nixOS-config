@@ -414,6 +414,7 @@ in
             org-ql
             org-super-agenda
             git-auto-commit-mode
+            org-wc
           ];
       }
     );
