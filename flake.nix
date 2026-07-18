@@ -47,7 +47,7 @@
     };
 
     anipy-cli = {
-      url = "github:ubejdullah/anipy-cli/fix/allanime-tobeparsed-response-key";
+      url = "github:sdaqo/anipy-cli/v3.8.16";
     };
   };
 
