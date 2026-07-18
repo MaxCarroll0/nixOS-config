@@ -79,12 +79,13 @@
       github-API = { };
     };
 
-    templates."conf-access-tokens".content =
-      "extra-access-tokens = github.com=${config.sops.placeholder.github-API}";
+    templates."conf-access-tokens" = {
+      content = "extra-access-tokens = github.com=${config.sops.placeholder.github-API}";
+      owner = "max";
+    };
   };
 
-  #nix.extraOptions = "!include ${config.sops.templates."conf-access-tokens".path}"; # Why cant this find the file???
-  nix.extraOptions = (builtins.readFile config.sops.templates."conf-access-tokens".path);
+  nix.extraOptions = "!include ${config.sops.templates."conf-access-tokens".path}";
 
   system.autoUpgrade = {
     enable = true;
