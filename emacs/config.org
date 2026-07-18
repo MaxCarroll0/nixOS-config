@@ -548,6 +548,15 @@ Autocompletion. With history sorting and documentation popups.
 
 #+end_src
 
+*** Marginalia
+#+begin_src emacs-lisp
+
+(use-package marginalia
+  :init
+  (marginalia-mode))
+
+#+end_src
+
 ** Orderless
 Orderless with Corfu
 
