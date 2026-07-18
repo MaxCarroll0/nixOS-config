@@ -584,6 +584,13 @@ Autocompletion. With history sorting and documentation popups.
 
 #+end_src
 
+*** Wgrep
+#+begin_src emacs-lisp
+
+(use-package wgrep)
+
+#+end_src
+
 ** Orderless
 Orderless with Corfu
 
