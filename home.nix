@@ -14,7 +14,7 @@
 let
   anipyApiPr = pkgs-unstable.python3Packages.buildPythonPackage {
     pname = "anipy-api";
-    version = "3.8.12-pr332";
+    version = "3.8.16";
     pyproject = true;
     src = "${anipySrc}/api";
     build-system = [ pkgs-unstable.python3Packages.poetry-core ];
@@ -38,7 +38,7 @@ let
 
   anipyCliPr = pkgs-unstable.python3Packages.buildPythonApplication {
     pname = "anipy-cli";
-    version = "3.8.12-pr332";
+    version = "3.8.16";
     pyproject = true;
     src = "${anipySrc}/cli";
     build-system = [ pkgs-unstable.python3Packages.poetry-core ];
@@ -312,7 +312,7 @@ in
                 owner = "Exafunction";
                 repo = "codeium.el";
                 rev = "main";
-                hash = lib.fakeHash;
+                hash = "sha256-FcLuL68RChodolE8oUTWIbZLLF3UWIsy4sKgZdaovkg=";
               };
               packageRequires = with epkgs; [
                 request
@@ -401,6 +401,7 @@ in
             ligature
             dired-narrow
             yasnippet
+            nov
           ];
       }
     );
@@ -444,6 +445,7 @@ in
     # (pkgs.writeShellScriptBin "my-hello" ''
     #   echo "Hello, ${config.home.username}!"
     nixfmt-rfc-style
+    ripgrep
     nixd
     lua-language-server
     shfmt
@@ -496,6 +498,15 @@ in
       "x-scheme-handler/zoomphonecall"
       "application/x-zoom"
     ];
+  };
+
+  xdg.mimeApps = {
+    enable = true;
+    defaultApplications = {
+      "application/epub+zip" = "emacs.desktop";
+      "x-scheme-handler/claude-cli" = "claude-code-url-handler.desktop";
+    };
+    associations.added."x-scheme-handler/claude-cli" = "claude-code-url-handler.desktop";
   };
 
   xdg.desktopEntries.google-meet = {

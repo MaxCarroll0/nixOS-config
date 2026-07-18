@@ -278,6 +278,14 @@ Swap =RET= and =C-RET= in file and hunk sections, so =RET= visits the worktree f
   :bind (:map dired-mode-map ("/" . dired-narrow)))
 #+end_src
 
+* Reading
+** EPUB
+Read EPUBs with nov.el.
+#+begin_src emacs-lisp
+(use-package nov
+  :mode ("\\.epub\\'" . nov-mode))
+#+end_src
+
 * Terminal
 ** Eat
 
@@ -408,6 +416,30 @@ point, chat buffer, echo area, kill-ring, minibuffer).
                    ((member "k" args) "copied to the kill-ring"))))
         (funcall orig args)))
 
+    (defun gptel-buffer-description (buffer)
+      "Describe BUFFER's file, directory, and active modes."
+      (with-current-buffer buffer
+        (let ((minor-modes
+               (seq-filter
+                (lambda (mode)
+                  (and (boundp mode) (symbol-value mode)))
+                (mapcar #'car minor-mode-alist))))
+          (format "%s; file %s; default-directory %s; major mode %s; active minor modes %s"
+                  (buffer-name)
+                  (or buffer-file-name "none")
+                  default-directory
+                  major-mode
+                  (if minor-modes
+                      (mapconcat #'symbol-name minor-modes ", ")
+                    "none")))))
+
+    (defun gptel-destination-buffer (info)
+      "Return the response destination buffer for request INFO."
+      (let ((position (plist-get info :position)))
+        (or (and (markerp position)
+                 (marker-buffer position))
+            (plist-get info :buffer))))
+
     (defun gptel-destination-description (info)
       "Describe where the response for request INFO will end up."
       (or gptel-menu-redirect
@@ -415,10 +447,8 @@ point, chat buffer, echo area, kill-ring, minibuffer).
                       ((not (memq callback '(gptel--insert-response
                                              gptel-curl--stream-insert-response)))))
             "passed to an Emacs Lisp callback, not inserted into a buffer")
-          (let ((position (plist-get info :position)))
-            (with-current-buffer (or (and (markerp position)
-                                          (marker-buffer position))
-                                     (plist-get info :buffer))
+          (when-let* ((buffer (gptel-destination-buffer info)))
+            (with-current-buffer buffer
               (concat
                (cond ((minibufferp) "inserted into the minibuffer")
                      (gptel-mode
@@ -434,10 +464,23 @@ point, chat buffer, echo area, kill-ring, minibuffer).
 
     (defun gptel-add-destination-context (fsm)
       "Tell the model where the response for FSM will be displayed."
-      (gptel-context--wrap-in-buffer
-       (format "Response destination: your reply will be %s."
-               (gptel-destination-description (gptel-fsm-info fsm)))
-       'system))
+      (let* ((info (gptel-fsm-info fsm))
+             (request-buffer (plist-get info :buffer))
+             (destination-buffer (gptel-destination-buffer info)))
+        (gptel-context--wrap-in-buffer
+         (string-join
+          (delq nil
+                (list
+                 (format "Response destination: your reply will be %s."
+                         (gptel-destination-description info))
+                 (when request-buffer
+                   (format "Request buffer: %s."
+                           (gptel-buffer-description request-buffer)))
+                 (when destination-buffer
+                   (format "Destination buffer: %s."
+                           (gptel-buffer-description destination-buffer)))))
+          "\n")
+         'system)))
 
     (add-hook 'gptel-prompt-transform-functions
               #'gptel-add-destination-context 90)
