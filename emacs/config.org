@@ -1065,3 +1065,404 @@ Default to mononoki font
                       :width  'normal)
 
 #+end_src
+
+* Liana
+
+A plain-=.org= Zettelkasten + GTD system. The daily loop: capture a thought, it lands in
+today's buffer, and =liana-review= walks that buffer to promote, route, or archive each
+entry. Each =liana-*= command is a thin wrapper over a reused package.
+
+** Store Paths
+
+Every path derives from =org-roam-directory=, so the store can live anywhere;
+=liana--ensure-store= creates it on first use.
+
+#+begin_src emacs-lisp
+
+(defun liana-dailies-directory ()
+  (expand-file-name (or (bound-and-true-p org-roam-dailies-directory) "daily/")
+                    org-roam-directory))
+
+(defun liana-tasks-file ()
+  (expand-file-name "tasks.org" org-roam-directory))
+
+(defun liana--refile-files ()
+  (when (file-directory-p org-roam-directory)
+    (directory-files-recursively org-roam-directory "\\.org\\'")))
+
+(defun liana--inbox-files ()
+  (cons (liana-tasks-file)
+        (when (file-directory-p (liana-dailies-directory))
+          (directory-files (liana-dailies-directory) t "\\.org\\'"))))
+
+(defun liana--ensure-store ()
+  (make-directory (liana-dailies-directory) t)
+  (let ((tasks (liana-tasks-file)))
+    (unless (file-exists-p tasks)
+      (with-temp-file tasks
+        (insert "#+title: Tasks\n#+filetags: :tasks:\n\n")))))
+
+#+end_src
+
+** Notes Store And Org-roam
+
+org-roam gives every note a stable =:ID:= that survives a title rewrite.
+
+#+begin_src emacs-lisp
+
+(use-package org-roam
+  :custom
+  (org-roam-directory (file-truename "~/org/roam"))
+  (org-id-link-to-org-use-id t)
+  :config
+  (require 'org-roam-dailies)
+  (setq org-roam-dailies-directory "daily/")
+  (liana--ensure-store)
+  (org-roam-db-autosync-mode))
+
+#+end_src
+
+** History (git)
+
+Notes commit on save, once the store is a git repo (=git init= it once).
+
+#+begin_src emacs-lisp
+
+(use-package git-auto-commit-mode
+  :custom (gac-automatically-push-p nil)
+  :hook (org-mode . liana--maybe-auto-commit))
+
+(defun liana--maybe-auto-commit ()
+  (when (and buffer-file-name
+             (bound-and-true-p org-roam-directory)
+             (file-in-directory-p buffer-file-name org-roam-directory)
+             (locate-dominating-file buffer-file-name ".git"))
+    (require 'git-auto-commit-mode)
+    (git-auto-commit-mode 1)))
+
+#+end_src
+
+** Org Base
+
+Built-in Org settings the rest assumes.
+
+#+begin_src emacs-lisp
+
+(use-package org
+  :custom
+  (org-directory org-roam-directory)
+  (org-todo-keywords '((sequence "TODO" "NEXT" "WAITING(w)" "|" "DONE" "CANCELLED(c)")))
+  (org-refile-targets '((liana--refile-files :maxlevel . 2)))
+  (org-log-into-drawer t))
+
+#+end_src
+
+** Note Classes
+
+=:CLASS:= says what kind a note is. It picks the capture template and the inbox group. A
+matching tag (=:fleeting:=, =:task:=) shows the class on the headline.
+
+#+begin_src emacs-lisp
+
+(defvar liana-classes
+  '("fleeting" "literature" "final" "content" "task"
+    "index" "relation" "tag" "document" "help" "principle"))
+
+(defun liana-note-class (&optional pom)
+  (org-entry-get (or pom (point)) "CLASS"))
+
+#+end_src
+
+** Capture
+
+=liana-capture= asks for a class and writes the note: fleeting to today's buffer, task to
+=tasks.org=. A fleeting capture writes:
+
+: * constraint may be the precondition of creativity   :fleeting:
+: :PROPERTIES:
+: :CLASS: fleeting
+: :CREATED: [2026-07-18 Sat 21:40]
+: :END:
+
+#+begin_src emacs-lisp
+
+(defun liana--visit-tasks ()
+  (set-buffer (find-file-noselect (liana-tasks-file)))
+  (goto-char (point-max)))
+
+(with-eval-after-load 'org-roam-dailies
+  (setq org-roam-dailies-capture-templates
+        '(("f" "fleeting" entry
+           "* %? :fleeting:\n:PROPERTIES:\n:CLASS: fleeting\n:CREATED: %U\n:END:"
+           :target (file+head "%<%Y-%m-%d>.org"
+                              "#+title: %<%Y-%m-%d>\n#+filetags: :daily:private:\n")))))
+
+(with-eval-after-load 'org-capture
+  (setq org-capture-templates
+        '(("t" "task" entry (function liana--visit-tasks)
+           "* TODO %? [#B] :task:\n:PROPERTIES:\n:CLASS: task\n:CREATED: %U\n:END:"))))
+
+(defun liana-capture (&optional class)
+  (interactive)
+  (pcase (or class (completing-read "class: " '("fleeting" "task" "literature")))
+    ("fleeting" (org-roam-dailies-capture-today nil "f"))
+    ("task" (org-capture nil "t"))
+    (_ (liana--todo))))
+
+#+end_src
+
+** The Daily Buffer
+
+=liana-daily-goto= opens today's file (one per day). Fleeting notes land here.
+
+#+begin_src emacs-lisp
+
+(defun liana-daily-goto ()
+  (interactive)
+  (org-roam-dailies-goto-today))
+
+#+end_src
+
+** Tasks And Agenda
+
+Tasks go in =tasks.org= and show on the Org agenda.
+
+#+begin_src emacs-lisp
+
+(with-eval-after-load 'org-agenda
+  (when (boundp 'org-roam-directory)
+    (setq org-agenda-files (list (liana-tasks-file) (liana-dailies-directory)))))
+
+#+end_src
+
+** The Inbox
+
+=liana-inbox= lists everything unfiled, grouped by class. An entry leaves once it's
+promoted, routed, done, or archived.
+
+#+begin_src emacs-lisp
+
+(use-package org-ql)
+
+(use-package org-super-agenda
+  :config (org-super-agenda-mode))
+
+(defun liana-inbox ()
+  (interactive)
+  (require 'org-ql-search)
+  (org-ql-search (liana--inbox-files)
+    '(and (or (tags "fleeting") (tags "literature") (tags "task"))
+          (not (property "LIANA_PROCESSED"))
+          (not (done)))
+    :sort '(date)
+    :super-groups '((:name "Fleeting"   :tag "fleeting")
+                    (:name "Literature" :tag "literature")
+                    (:name "Tasks"      :tag "task"))))
+
+#+end_src
+
+** Daily Review
+
+=liana-review= walks today's buffer with a menu that stays open, acting on the note at
+point and moving to the next. =liana-promote= makes it a =final= note in its own file
+(=org-roam-extract-subtree= does the move, keeping =:ID:= and =:CREATED:=).
+=liana-route-to-task= moves it to =tasks.org=. Archive and discard drop it from the
+inbox.
+
+#+begin_src emacs-lisp
+
+(defun liana-promote ()
+  (interactive)
+  (org-back-to-heading t)
+  (org-entry-put (point) "CLASS" "final")
+  (org-toggle-tag "fleeting" 'off)
+  (unless (org-id-get) (org-id-get-create))
+  (org-roam-extract-subtree))
+
+(defun liana-route-to-task ()
+  (interactive)
+  (org-back-to-heading t)
+  (org-entry-put (point) "CLASS" "task")
+  (org-todo "TODO")
+  (org-toggle-tag "task" 'on)
+  (org-cut-subtree)
+  (with-current-buffer (find-file-noselect (liana-tasks-file))
+    (goto-char (point-max))
+    (unless (bolp) (insert "\n"))
+    (org-paste-subtree 1)
+    (save-buffer)))
+
+(defun liana-mark-processed ()
+  (interactive)
+  (org-back-to-heading t)
+  (org-entry-put (point) "LIANA_PROCESSED" "t"))
+
+(defun liana-discard ()
+  (interactive)
+  (when (yes-or-no-p "discard subtree? ")
+    (org-back-to-heading t)
+    (org-cut-subtree)))
+
+(defun liana-review-next ()
+  (interactive)
+  (org-next-visible-heading 1))
+
+(defun liana-review-prev ()
+  (interactive)
+  (org-previous-visible-heading 1))
+
+(defun liana-review-promote ()
+  (interactive)
+  (save-window-excursion (liana-promote))
+  (liana-review-next))
+
+(defun liana-review-route ()
+  (interactive)
+  (liana-route-to-task)
+  (liana-review-next))
+
+(defun liana-review-archive ()
+  (interactive)
+  (liana-mark-processed)
+  (liana-review-next))
+
+(defun liana-review-discard ()
+  (interactive)
+  (liana-discard)
+  (liana-review-next))
+
+(transient-define-prefix liana-review-menu ()
+  "Liana daily review."
+  [["Move"
+    ("n" "next" liana-review-next :transient t)
+    ("N" "prev" liana-review-prev :transient t)]
+   ["Act"
+    ("p" "promote -> final" liana-review-promote :transient t)
+    ("r" "route -> task"    liana-review-route :transient t)
+    ("a" "keep (archive)"   liana-review-archive :transient t)
+    ("k" "discard"          liana-review-discard :transient t)]
+   ["Surface"
+    ("s" "surface related" liana-search :transient t)]]
+  [("q" "quit" transient-quit-one)])
+
+(defun liana-review ()
+  (interactive)
+  (delete-other-windows)
+  (liana-daily-goto)
+  (goto-char (point-min))
+  (org-next-visible-heading 1)
+  (save-selected-window (liana-inbox))
+  (liana-review-menu))
+
+#+end_src
+
+** Navigation
+
+=liana-explore= opens a note with its backlinks. =liana-lookup= jumps to a note and
+leaves. =liana-new-final= makes a new =final= note.
+
+#+begin_src emacs-lisp
+
+(use-package consult-org-roam
+  :after org-roam
+  :config (consult-org-roam-mode))
+
+(defun liana-find ()
+  (interactive)
+  (org-roam-node-find))
+
+(defun liana-search ()
+  (interactive)
+  (consult-org-roam-search))
+
+(defun liana-backlinks ()
+  (interactive)
+  (consult-org-roam-backlinks))
+
+(defun liana-explore ()
+  (interactive)
+  (org-roam-node-find)
+  (org-roam-buffer-toggle))
+
+(defun liana-lookup ()
+  (interactive)
+  (consult-org-roam-search))
+
+(defun liana-new-final (title)
+  (interactive "sFinal note (claim title): ")
+  (let* ((node (org-roam-node-create :title title))
+         (slug (org-roam-node-slug node))
+         (file (expand-file-name
+                (format "%s-%s.org" (format-time-string "%Y%m%d%H%M%S") slug)
+                org-roam-directory)))
+    (find-file file)
+    (insert (format (concat ":PROPERTIES:\n:ID:       %s\n:CLASS:    final\n"
+                            ":CREATED:  %s\n:END:\n#+title: %s\n\n")
+                    (org-id-new)
+                    (format-time-string "[%Y-%m-%d %a %H:%M]")
+                    title))
+    (goto-char (point-max))
+    (org-roam-db-update-file)))
+
+#+end_src
+
+** Tags
+
+Plain Org tags, completing over the ones already used.
+
+#+begin_src emacs-lisp
+
+(with-eval-after-load 'org
+  (setq org-use-fast-tag-selection nil
+        org-complete-tags-always-offer-all-agenda-tags t))
+
+#+end_src
+
+** Command Surface
+
+=C-c n= opens a menu of every command. Unbuilt ones are =liana--todo= placeholders.
+
+#+begin_src emacs-lisp
+
+(defun liana--todo ()
+  (interactive)
+  (message "Liana: not yet implemented (a later stage)"))
+
+(transient-define-prefix liana-dispatch ()
+  "Liana."
+  [["Capture/Review"
+    ("c" "capture"       liana-capture)
+    ("b" "ref-capture"   liana--todo)
+    ("d" "daily buffer"  liana-daily-goto)
+    ("x" "inbox"         liana-inbox)
+    ("R" "review"        liana-review)]
+   ["Write"
+    ("n" "new final"     liana-new-final)
+    ("p" "promote"       liana-promote)
+    ("s" "split"         liana--todo)
+    ("w" "word-count"    liana--todo)]
+   ["Connect"
+    ("l" "link"          liana--todo)
+    ("e" "relation"      liana--todo)
+    ("m" "embed"         liana--todo)
+    ("t" "tag-note"      liana--todo)]]
+  [["Reference/Read"
+    ("L" "literature"    liana--todo)
+    ("@" "cite"          liana--todo)
+    ("A" "attach"        liana--todo)
+    ("h" "highlight"     liana--todo)]
+   ["Navigate"
+    ("f" "find"          liana-find)
+    ("/" "search"        liana-search)
+    ("o" "explore"       liana-explore)
+    ("." "lookup"        liana-lookup)
+    ("B" "backlinks"     liana-backlinks)]
+   ["Organise"
+    ("i" "index-add"     liana--todo)
+    ("I" "index-new"     liana--todo)
+    ("k" "route-to-task" liana-route-to-task)
+    ("g" "agenda"        org-agenda)]])
+
+(keymap-global-set "C-c n" #'liana-dispatch)
+
+#+end_src

@@ -402,6 +402,18 @@ in
             dired-narrow
             yasnippet
             nov
+            consult
+            marginalia
+            embark
+            embark-consult
+            wgrep
+            company-auctex
+            reason-mode
+            org-roam
+            consult-org-roam
+            org-ql
+            org-super-agenda
+            git-auto-commit-mode
           ];
       }
     );
