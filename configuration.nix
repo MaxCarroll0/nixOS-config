@@ -18,15 +18,9 @@
 
   # Bootloader.
   boot.loader.grub.enable = true;
-  # NOTE: first install is done from a BIOS-booted rescue system, which has no EFI
-  # NVRAM to write to. efiInstallAsRemovable writes the firmware fallback loader at
-  # /EFI/BOOT/BOOTX64.EFI (requires canTouchEfiVariables = false). Once the Sabrent
-  # boots in UEFI mode, flip back: set canTouchEfiVariables = true and remove
-  # efiInstallAsRemovable, then rebuild so a proper NVRAM boot entry is created.
-  boot.loader.efi.canTouchEfiVariables = false;
+  boot.loader.efi.canTouchEfiVariables = true;
   boot.loader.efi.efiSysMountPoint = "/boot";
   boot.loader.grub.efiSupport = true;
-  boot.loader.grub.efiInstallAsRemovable = true;
   boot.loader.grub.device = "nodev";
   boot.loader.grub.configurationLimit = 20;
   boot.loader.grub.extraEntries = ''
@@ -146,25 +140,25 @@
   # before a tunnel comes up, so the real IP can't leak in the boot race.
   # 0xca6c is the fwmark wg-quick puts on encrypted packets (table 51820);
   # 0xca6d covers a brief overlap if both tunnels race during a switch.
-  # networking.nftables.enable = true;
-  # networking.nftables.tables.vpn-killswitch = {
-    # family = "inet";
-    # content = ''
-      # chain output {
-        # type filter hook output priority 0; policy drop;
+  networking.nftables.enable = true;
+  networking.nftables.tables.vpn-killswitch = {
+    family = "inet";
+    content = ''
+      chain output {
+        type filter hook output priority 0; policy drop;
 
-        # oifname "lo" accept
-        # oifname { "proton", "proton-2" } accept
-        # meta mark { 0xca6c, 0xca6d } accept
+        oifname "lo" accept
+        oifname { "proton", "proton-2" } accept
+        meta mark { 0xca6c, 0xca6d } accept
 
-        # udp dport { 67, 68 } accept
-        # ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, # 255.255.255.255, 224.0.0.0/4 } accept
-  #       ip6 daddr { fe80::/10, ff00::/8 } accept
+        udp dport { 67, 68 } accept
+        ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 255.255.255.255, 224.0.0.0/4 } accept
+        ip6 daddr { fe80::/10, ff00::/8 } accept
 
-  #       counter drop
-  #     }
-  #   '';
-  # };
+        counter drop
+      }
+    '';
+  };
 
   # Split tunnel: traffic from the "novpn" group bypasses the VPN. Marking it
   # 0xca6c makes wg-quick's rules route it out the physical link instead of the
