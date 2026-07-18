@@ -557,6 +557,18 @@ Autocompletion. With history sorting and documentation popups.
 
 #+end_src
 
+*** Consult
+#+begin_src emacs-lisp
+
+(use-package consult
+  :bind (("C-x b" . consult-buffer)
+         ("M-y" . consult-yank-pop)
+         ("M-g g" . consult-goto-line)
+         ("M-s r" . consult-ripgrep)
+         ("M-s l" . consult-line)))
+
+#+end_src
+
 ** Orderless
 Orderless with Corfu
 
