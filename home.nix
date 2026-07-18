@@ -311,8 +311,8 @@ in
               src = pkgs.fetchFromGitHub {
                 owner = "Exafunction";
                 repo = "codeium.el";
-                rev = "main";
-                hash = lib.fakeHash;
+                rev = "d815912878becffda76c1c6b41294604629e0e10";
+                hash = "sha256-FcLuL68RChodolE8oUTWIbZLLF3UWIsy4sKgZdaovkg=";
               };
               packageRequires = with epkgs; [
                 request
