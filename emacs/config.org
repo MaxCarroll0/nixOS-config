@@ -1,5 +1,6 @@
 #+TITLE: Emacs Config
 #+AUTHOR: Max Carroll
+#+STARTUP: content
 #+PROPERTY: header-args :tangle "config.el"
 
 * Basic Settings
