@@ -585,6 +585,7 @@ Autocompletion. With history sorting and documentation popups.
 #+end_src
 
 *** Wgrep
+Edit grep/ripgrep result buffers in place (~C-c C-p~) and apply the edits back to the source files (~C-c C-c~).
 #+begin_src emacs-lisp
 
 (use-package wgrep)
