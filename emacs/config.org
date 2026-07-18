@@ -569,6 +569,21 @@ Autocompletion. With history sorting and documentation popups.
 
 #+end_src
 
+*** Embark
+#+begin_src emacs-lisp
+
+(use-package embark
+  :bind (("C-." . embark-act)
+         ("C-;" . embark-dwim)
+         ("C-h B" . embark-bindings))
+  :init
+  (setq prefix-help-command #'embark-prefix-help-command))
+
+(use-package embark-consult
+  :after (embark consult))
+
+#+end_src
+
 ** Orderless
 Orderless with Corfu
 
