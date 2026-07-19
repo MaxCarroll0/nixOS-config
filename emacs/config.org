@@ -1377,7 +1377,25 @@ leaves. =liana-new-final= makes a new =final= note.
 
 (defun liana-backlinks ()
   (interactive)
-  (consult-org-roam-backlinks))
+  (let* ((node (or (org-roam-node-at-point) (user-error "Not on a node")))
+         (id (org-roam-node-id node))
+         (rows (org-roam-db-query
+                [:select [source type] :from links :where (= dest $s1)] id))
+         (buf (get-buffer-create "*Liana Backlinks*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (org-mode)
+        (insert (format "#+title: Backlinks: %s\n\n" (org-roam-node-title node)))
+        (if (null rows)
+            (insert "No backlinks.\n")
+          (dolist (grp (seq-group-by #'cadr rows))
+            (insert (format "* %s\n" (car grp)))
+            (dolist (row (cdr grp))
+              (when-let ((src (org-roam-node-from-id (car row))))
+                (insert (format "- [[id:%s][%s]]\n" (car row) (org-roam-node-title src)))))
+            (insert "\n")))))
+    (pop-to-buffer buf)))
 
 (defun liana-explore ()
   (interactive)
@@ -1390,19 +1408,7 @@ leaves. =liana-new-final= makes a new =final= note.
 
 (defun liana-new-final (title)
   (interactive "sFinal note (claim title): ")
-  (let* ((node (org-roam-node-create :title title))
-         (slug (org-roam-node-slug node))
-         (file (expand-file-name
-                (format "%s-%s.org" (format-time-string "%Y%m%d%H%M%S") slug)
-                org-roam-directory)))
-    (find-file file)
-    (insert (format (concat ":PROPERTIES:\n:ID:       %s\n:CLASS:    final\n"
-                            ":CREATED:  %s\n:END:\n#+title: %s\n\n")
-                    (org-id-new)
-                    (format-time-string "[%Y-%m-%d %a %H:%M]")
-                    title))
-    (goto-char (point-max))
-    (org-roam-db-update-file)))
+  (liana--new-node title "final"))
 
 #+end_src
 
@@ -1524,6 +1530,141 @@ by writing =:IGNORE_LENGTH_LIMIT:=.
 
 #+end_src
 
+** Typed Links
+
+A Liana link carries a =kind=. =liana-link= reads a target node and a kind and inserts
+=[[kind:id][title]]=. Each kind is a real Org link type that follows to the node, so
+=[[informs:...]]= jumps like an =id= link and org-roam still records the edge.
+
+: This is the mechanism behind [[informs:9a1c][elaboration as the strongest study method]].
+
+#+begin_src emacs-lisp
+
+(defvar liana-link-kinds '("relates" "informs" "follows" "supports" "contradicts" "priority"))
+
+(defun liana--kind-follow (path _)
+  (if-let ((node (org-roam-node-from-id path)))
+      (org-roam-node-visit node)
+    (org-id-goto path)))
+
+(with-eval-after-load 'org
+  (dolist (k liana-link-kinds)
+    (org-link-set-parameters k :follow #'liana--kind-follow :face 'org-link)))
+
+(defun liana-link (&optional kind)
+  (interactive)
+  (let ((node (org-roam-node-read nil nil nil t "link to: "))
+        (kind (or kind (completing-read "kind: " liana-link-kinds nil t nil nil "relates"))))
+    (insert (format "[[%s:%s][%s]]" kind (org-roam-node-id node) (org-roam-node-title node)))))
+
+#+end_src
+
+** Relations
+
+A relation is a first-class =relation= note that explains how two notes connect, linking
+both with =relates=. =liana-relation= reads the two endpoints and a claim.
+
+#+begin_src emacs-lisp
+
+(defun liana--new-node (title class &optional body)
+  (let* ((node (org-roam-node-create :title title))
+         (slug (org-roam-node-slug node))
+         (file (expand-file-name
+                (format "%s-%s.org" (format-time-string "%Y%m%d%H%M%S") slug)
+                org-roam-directory)))
+    (find-file file)
+    (insert (format ":PROPERTIES:\n:ID:       %s\n:CLASS:    %s\n:CREATED:  %s\n:END:\n#+title: %s\n\n"
+                    (org-id-new) class (format-time-string "[%Y-%m-%d %a %H:%M]") title))
+    (when body (insert body))
+    (save-buffer)
+    (goto-char (point-max))
+    (org-roam-db-update-file)
+    (buffer-file-name)))
+
+(defun liana-relation ()
+  (interactive)
+  (let* ((a (org-roam-node-read nil nil nil t "endpoint A: "))
+         (b (org-roam-node-read nil nil nil t "endpoint B: "))
+         (claim (read-string "relation claim: ")))
+    (liana--new-node
+     claim "relation"
+     (format "[[relates:%s][%s]] and [[relates:%s][%s]].\n"
+             (org-roam-node-id a) (org-roam-node-title a)
+             (org-roam-node-id b) (org-roam-node-title b)))))
+
+#+end_src
+
+** Indices
+
+An index is a =index= note holding a few chosen doors into a topic. =liana-index-new=
+creates one; =liana-index-add= appends the note at point to a chosen index. Entry points
+are only ever written by =liana-index-add=.
+
+#+begin_src emacs-lisp
+
+(defun liana-index-new (title)
+  (interactive "sIndex title: ")
+  (liana--new-node (concat title " (index)") "index" "Start here to explore:\n\n"))
+
+(defun liana--index-node-p (node)
+  (equal "index" (cdr (assoc "CLASS" (org-roam-node-properties node)))))
+
+(defun liana-index-add ()
+  (interactive)
+  (let ((cur (org-roam-node-at-point))
+        (index (org-roam-node-read nil #'liana--index-node-p nil t "add to index: "))
+        (why (read-string "why (optional): ")))
+    (unless cur (user-error "Point is not on a node"))
+    (with-current-buffer (find-file-noselect (org-roam-node-file index))
+      (goto-char (point-max))
+      (unless (bolp) (insert "\n"))
+      (insert (format "- [[id:%s][%s]]%s\n"
+                      (org-roam-node-id cur) (org-roam-node-title cur)
+                      (if (string-empty-p why) "" (concat " - " why))))
+      (save-buffer))))
+
+#+end_src
+
+** Embeds
+
+=liana-embed= transcludes another note (the Forester model: a live include, not a copy);
+=liana-toggle-embeds= turns the transclusions in the buffer on and off.
+
+: #+transclude: [[id:7f3a][Constraint is the precondition of creativity]] :only-contents
+
+#+begin_src emacs-lisp
+
+(use-package org-transclusion)
+
+(defun liana-embed ()
+  (interactive)
+  (let ((node (org-roam-node-read nil nil nil t "embed: ")))
+    (insert (format "#+transclude: [[id:%s][%s]] :only-contents\n"
+                    (org-roam-node-id node) (org-roam-node-title node)))))
+
+(defun liana-toggle-embeds ()
+  (interactive)
+  (require 'org-transclusion)
+  (if (bound-and-true-p org-transclusion-mode)
+      (org-transclusion-mode -1)
+    (org-transclusion-mode 1)
+    (org-transclusion-add-all)))
+
+#+end_src
+
+** Tag Notes
+
+=liana-tag-note= promotes a plain tag to a first-class =tag= note that can be described
+and linked like any other note, while its members still carry the =:tag:=.
+
+#+begin_src emacs-lisp
+
+(defun liana-tag-note (tag)
+  (interactive "sTag: ")
+  (liana--new-node tag "tag" (format "Notes about =%s=.\n" tag)))
+
+#+end_src
+
 ** Command Surface
 
 =C-c n= opens a menu of every command. Unbuilt ones are =liana--todo= placeholders.
@@ -1548,10 +1689,11 @@ by writing =:IGNORE_LENGTH_LIMIT:=.
     ("s" "split"         liana--todo)
     ("w" "word-count"    liana-word-count-mode)]
    ["Connect"
-    ("l" "link"          liana--todo)
-    ("e" "relation"      liana--todo)
-    ("m" "embed"         liana--todo)
-    ("t" "tag-note"      liana--todo)]]
+    ("l" "link"          liana-link)
+    ("e" "relation"      liana-relation)
+    ("m" "embed"         liana-embed)
+    ("M" "toggle embeds" liana-toggle-embeds)
+    ("t" "tag-note"      liana-tag-note)]]
   [["Reference/Read"
     ("L" "literature"    liana--todo)
     ("@" "cite"          liana--todo)
@@ -1564,8 +1706,8 @@ by writing =:IGNORE_LENGTH_LIMIT:=.
     ("." "lookup"        liana-lookup)
     ("B" "backlinks"     liana-backlinks)]
    ["Organise"
-    ("i" "index-add"     liana--todo)
-    ("I" "index-new"     liana--todo)
+    ("i" "index-add"     liana-index-add)
+    ("I" "index-new"     liana-index-new)
     ("k" "route-to-task" liana-route-to-task)
     ("g" "agenda"        org-agenda)]])
 

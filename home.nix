@@ -415,6 +415,7 @@ in
             org-super-agenda
             git-auto-commit-mode
             org-wc
+            org-transclusion
           ];
       }
     );
