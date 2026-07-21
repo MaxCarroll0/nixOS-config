@@ -1903,9 +1903,11 @@ is what the daily review reads from the top.
   (delq nil
         (mapcar (lambda (n)
                   (when (and (equal "final" (cdr (assoc "CLASS" (org-roam-node-properties n))))
-                             (with-temp-buffer
-                               (insert-file-contents (org-roam-node-file n))
-                               (zerop (liana--node-link-count))))
+                             (let ((f (org-roam-node-file n)))
+                               (and f (file-exists-p f)
+                                    (with-temp-buffer
+                                      (insert-file-contents f)
+                                      (zerop (liana--node-link-count))))))
                     (org-roam-node-title n)))
                 (org-roam-node-list))))
 
