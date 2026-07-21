@@ -1070,7 +1070,48 @@ Default to mononoki font
 
 A plain-=.org= Zettelkasten + GTD system. The daily loop: capture a thought, it lands in
 today's buffer, and =liana-review= walks that buffer to promote, route, or archive each
-entry. Each =liana-*= command is a thin wrapper over a reused package.
+entry. Most features delegate to a reused package; only the =liana-*= functions that
+compose packages or add real logic are bespoke.
+
+** Feature Reference
+
+Each feature and the function that implements it. =org-*= / =consult-*= / =citar-*= rows
+are delegated entirely to that package; =liana-*= rows are the bespoke glue.
+
+| Feature                       | Function                       |
+|-------------------------------+--------------------------------|
+| Capture (class-aware)         | =liana-capture=                |
+| Reference capture + dedup     | =liana-ref-capture=            |
+| Daily buffer                  | =org-roam-dailies-goto-today=  |
+| Inbox (grouped, counted)      | =liana-inbox=                  |
+| Daily review walk             | =liana-review=                 |
+| Weak-enforcement dashboard    | =liana-dashboard=              |
+| New final note                | =liana-new-final=              |
+| Promote to final              | =liana-promote=                |
+| Route to task                 | =liana-route-to-task=          |
+| Word count vs class limit     | =liana-word-count-mode=        |
+| Typed link (kinds)            | =liana-link=                   |
+| Relation note                 | =liana-relation=               |
+| Embed / transclude            | =liana-embed=                  |
+| Toggle embeds                 | =liana-toggle-embeds=          |
+| Tag note                      | =liana-tag-note=               |
+| Index: new                    | =liana-index-new=              |
+| Index: add door               | =liana-index-add=              |
+| Literature note (stamped)     | =liana-literature-note=        |
+| Explore (neighbourhood)       | =liana-explore=                |
+| Backlinks grouped by kind     | =liana-backlinks=              |
+| Find node by title            | =org-roam-node-find=           |
+| Search / lookup               | =consult-org-roam-search=      |
+| Cite                          | =org-cite-insert=              |
+| Attach a copy                 | =org-attach=                   |
+| Highlight                     | =org-remark-mark=              |
+| Agenda                        | =org-agenda=                   |
+| Graph view                    | =org-roam-ui-open=             |
+| Context stamp (auto)          | =liana-capture-context=        |
+| View-time (auto, on visit)    | =liana--record-visit=          |
+| Atomicity lint (auto, save)   | =liana-atomicity-lint=         |
+| Literature nudge (auto, save) | =liana--literature-nudge=      |
+| History (auto commit)         | =git-auto-commit-mode=         |
 
 ** Store Paths
 
@@ -1214,15 +1255,8 @@ matching tag (=:fleeting:=, =:task:=) shows the class on the headline.
 
 ** The Daily Buffer
 
-=liana-daily-goto= opens today's file (one per day). Fleeting notes land here.
-
-#+begin_src emacs-lisp
-
-(defun liana-daily-goto ()
-  (interactive)
-  (org-roam-dailies-goto-today))
-
-#+end_src
+Today's file (one per day) opens with =org-roam-dailies-goto-today=; fleeting notes land
+here. No wrapper needed.
 
 ** Tasks And Agenda
 
@@ -1312,25 +1346,34 @@ inbox.
   (interactive)
   (org-previous-visible-heading 1))
 
+(defun liana--review-goto-next ()
+  (goto-char (point-min))
+  (catch 'found
+    (while (outline-next-heading)
+      (when (and (member (org-entry-get (point) "CLASS") '("fleeting" "literature"))
+                 (not (org-entry-get (point) "LIANA_PROCESSED")))
+        (throw 'found t)))
+    nil))
+
 (defun liana-review-promote ()
   (interactive)
-  (save-window-excursion (liana-promote))
-  (liana-review-next))
+  (liana-promote)
+  (liana--review-goto-next))
 
 (defun liana-review-route ()
   (interactive)
   (liana-route-to-task)
-  (liana-review-next))
+  (liana--review-goto-next))
 
 (defun liana-review-archive ()
   (interactive)
   (liana-mark-processed)
-  (liana-review-next))
+  (liana--review-goto-next))
 
 (defun liana-review-discard ()
   (interactive)
   (liana-discard)
-  (liana-review-next))
+  (liana--review-goto-next))
 
 (transient-define-prefix liana-review-menu ()
   "Liana daily review."
@@ -1343,15 +1386,14 @@ inbox.
     ("a" "keep (archive)"   liana-review-archive :transient t)
     ("k" "discard"          liana-review-discard :transient t)]
    ["Surface"
-    ("s" "surface related" liana-search :transient t)]]
+    ("s" "surface related" consult-org-roam-search :transient t)]]
   [("q" "quit" transient-quit-one)])
 
 (defun liana-review ()
   (interactive)
   (delete-other-windows)
-  (liana-daily-goto)
-  (goto-char (point-min))
-  (org-next-visible-heading 1)
+  (org-roam-dailies-goto-today)
+  (liana--review-goto-next)
   (save-selected-window (liana-inbox))
   (liana-review-menu))
 
@@ -1359,22 +1401,16 @@ inbox.
 
 ** Navigation
 
-=liana-explore= opens a note with its backlinks. =liana-lookup= jumps to a note and
-leaves. =liana-new-final= makes a new =final= note.
+=liana-explore= opens a note with its neighbourhood (composes =org-roam-node-find= with
+the roam buffer); =liana-backlinks= groups incoming links by kind; =liana-new-final=
+creates a =final= node. Plain find/search/jump delegate straight to =org-roam-node-find=
+and =consult-org-roam-search=.
 
 #+begin_src emacs-lisp
 
 (use-package consult-org-roam
   :after org-roam
   :config (consult-org-roam-mode))
-
-(defun liana-find ()
-  (interactive)
-  (org-roam-node-find))
-
-(defun liana-search ()
-  (interactive)
-  (consult-org-roam-search))
 
 (defun liana-backlinks ()
   (interactive)
@@ -1402,10 +1438,6 @@ leaves. =liana-new-final= makes a new =final= note.
   (interactive)
   (org-roam-node-find)
   (org-roam-buffer-toggle))
-
-(defun liana-lookup ()
-  (interactive)
-  (consult-org-roam-search))
 
 (defun liana-new-final (title)
   (interactive "sFinal note (claim title): ")
@@ -1670,7 +1702,7 @@ and linked like any other note, while its members still carry the =:tag:=.
 
 Citations run on the built-in =org-cite= with =citar= for completion; =citar-org-roam=
 ties each citation to its reference node. One =references.bib= lives in the store.
-=liana-cite= inserts =[cite:@key]=.
+Insert a citation with =org-cite-insert=.
 
 #+begin_src emacs-lisp
 
@@ -1693,18 +1725,14 @@ ties each citation to its reference node. One =references.bib= lives in the stor
   :after (citar org-roam)
   :config (citar-org-roam-mode))
 
-(defun liana-cite ()
-  (interactive)
-  (org-cite-insert nil))
-
 #+end_src
 
 ** References
 
 A reference is a =content= note tied to a BibTeX key. =liana-ref-capture= writes the
 BibTeX entry and a node carrying =:ROAM_REFS: @key=, author, year, and read status,
-refusing to create a second node for a key that already exists. =liana-attach= files a
-downloaded copy under the note.
+refusing to create a second node for a key that already exists. A downloaded copy is
+filed with =org-attach=.
 
 : * How to Take Smart Notes   :content:
 : :PROPERTIES:
@@ -1745,11 +1773,6 @@ downloaded copy under the note.
       (save-buffer))
     (liana--new-reference-node key title author year)))
 
-(defun liana-attach ()
-  (interactive)
-  (call-interactively #'org-attach)
-  (org-entry-put (point) "HAS_COPY" "t"))
-
 #+end_src
 
 ** Literature Notes
@@ -1757,7 +1780,7 @@ downloaded copy under the note.
 A literature note is written in my own words and must cite its source, page, and
 section. =liana-literature-note= stamps =:SOURCE:/:PAGE:/:SECTION:=, reading the page
 from a =pdf-tools= view when there is one; saving one with a missing field nudges (never
-blocks). =liana-highlight= marks a passage with =org-remark=.
+blocks). Mark a passage with =org-remark-mark=.
 
 #+begin_src emacs-lisp
 
@@ -1805,10 +1828,6 @@ blocks). =liana-highlight= marks a passage with =org-remark=.
     (org-roam-db-update-file)
     (liana--literature-nudge)
     (buffer-file-name)))
-
-(defun liana-highlight ()
-  (interactive)
-  (call-interactively #'org-remark-mark))
 
 (add-hook 'org-mode-hook
           (lambda () (add-hook 'after-save-hook #'liana--literature-nudge nil t)))
@@ -1937,16 +1956,12 @@ bookmarklet) is set up outside Emacs; the elisp is the template below.
 ** Graph
 
 =org-roam-ui= opens the whole graph in a browser, read-only, showing where clusters have
-grown. =liana-graph= starts it.
+grown. =org-roam-ui-open= starts it; delegated entirely to the package.
 
 #+begin_src emacs-lisp
 
 (use-package org-roam-ui
   :after org-roam)
-
-(defun liana-graph ()
-  (interactive)
-  (org-roam-ui-open))
 
 #+end_src
 
@@ -1965,7 +1980,7 @@ grown. =liana-graph= starts it.
   [["Capture/Review"
     ("c" "capture"       liana-capture)
     ("b" "ref-capture"   liana-ref-capture)
-    ("d" "daily buffer"  liana-daily-goto)
+    ("d" "daily buffer"  org-roam-dailies-goto-today)
     ("x" "inbox"         liana-inbox)
     ("R" "review"        liana-review)
     ("D" "dashboard"     liana-dashboard)]
@@ -1982,16 +1997,16 @@ grown. =liana-graph= starts it.
     ("t" "tag-note"      liana-tag-note)]]
   [["Reference/Read"
     ("L" "literature"    liana-literature-note)
-    ("@" "cite"          liana-cite)
-    ("A" "attach"        liana-attach)
-    ("h" "highlight"     liana-highlight)]
+    ("@" "cite"          org-cite-insert)
+    ("A" "attach"        org-attach)
+    ("h" "highlight"     org-remark-mark)]
    ["Navigate"
-    ("f" "find"          liana-find)
-    ("/" "search"        liana-search)
+    ("f" "find"          org-roam-node-find)
+    ("/" "search"        consult-org-roam-search)
     ("o" "explore"       liana-explore)
-    ("." "lookup"        liana-lookup)
+    ("." "lookup"        consult-org-roam-search)
     ("B" "backlinks"     liana-backlinks)
-    ("G" "graph"         liana-graph)]
+    ("G" "graph"         org-roam-ui-open)]
    ["Organise"
     ("i" "index-add"     liana-index-add)
     ("I" "index-new"     liana-index-new)
