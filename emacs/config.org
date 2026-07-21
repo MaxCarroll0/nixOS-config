@@ -1299,20 +1299,46 @@ promoted, routed, done, or archived.
 ** Daily Review
 
 =liana-review= walks today's buffer with a menu that stays open, acting on the note at
-point and moving to the next. =liana-promote= makes it a =final= note in its own file
-(=org-roam-extract-subtree= does the move, keeping =:ID:= and =:CREATED:=).
-=liana-route-to-task= moves it to =tasks.org=. Archive and discard drop it from the
-inbox.
+point and moving to the next. =liana-promote= moves the note into its own =final= file
+node, preserving its =:ID:=, =:CREATED:=, and body. =liana-route-to-task= moves it to
+=tasks.org=. Archive and discard drop it from the inbox.
 
 #+begin_src emacs-lisp
+
+(defun liana--heading-body ()
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((end (save-excursion (org-end-of-subtree t t) (point))))
+      (org-end-of-meta-data)
+      (string-trim (buffer-substring-no-properties (min (point) end) end)))))
 
 (defun liana-promote ()
   (interactive)
   (org-back-to-heading t)
-  (org-entry-put (point) "CLASS" "final")
-  (org-toggle-tag "fleeting" 'off)
-  (unless (org-id-get) (org-id-get-create))
-  (org-roam-extract-subtree))
+  (let* ((title (org-get-heading t t t t))
+         (id (or (org-id-get) (org-id-new)))
+         (created (org-entry-get (point) "CREATED"))
+         (tags (seq-remove (lambda (tg) (member tg '("fleeting" "literature")))
+                           (org-get-tags nil t)))
+         (body (liana--heading-body))
+         (file (expand-file-name
+                (format "%s-%s.org" (format-time-string "%Y%m%d%H%M%S")
+                        (org-roam-node-slug (org-roam-node-create :title title)))
+                org-roam-directory)))
+    (org-back-to-heading t)
+    (org-cut-subtree)
+    (with-current-buffer (find-file-noselect file)
+      (erase-buffer)
+      (insert ":PROPERTIES:\n:ID:       " id "\n:CLASS:    final\n"
+              (if (and created (not (string-empty-p created)))
+                  (concat ":CREATED:  " created "\n") "")
+              ":END:\n#+title: " title "\n"
+              (if tags (concat "#+filetags: :" (string-join tags ":") ":\n") "")
+              "\n"
+              (if (string-empty-p body) "" (concat body "\n")))
+      (save-buffer)
+      (org-roam-db-update-file))
+    (find-file file)))
 
 (defun liana-route-to-task ()
   (interactive)
@@ -1357,7 +1383,7 @@ inbox.
 
 (defun liana-review-promote ()
   (interactive)
-  (liana-promote)
+  (save-window-excursion (liana-promote))
   (liana--review-goto-next))
 
 (defun liana-review-route ()
