@@ -416,6 +416,11 @@ in
             git-auto-commit-mode
             org-wc
             org-transclusion
+            citar
+            citar-org-roam
+            org-noter
+            pdf-tools
+            org-remark
           ];
       }
     );

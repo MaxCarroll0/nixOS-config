@@ -1665,6 +1665,155 @@ and linked like any other note, while its members still carry the =:tag:=.
 
 #+end_src
 
+** Bibliography
+
+Citations run on the built-in =org-cite= with =citar= for completion; =citar-org-roam=
+ties each citation to its reference node. One =references.bib= lives in the store.
+=liana-cite= inserts =[cite:@key]=.
+
+#+begin_src emacs-lisp
+
+(defun liana-bib-file ()
+  (expand-file-name "references.bib" org-roam-directory))
+
+(use-package citar
+  :custom
+  (org-cite-insert-processor 'citar)
+  (org-cite-follow-processor 'citar)
+  (org-cite-activate-processor 'citar)
+  :config
+  (let ((bib (liana-bib-file)))
+    (make-directory (file-name-directory bib) t)
+    (unless (file-exists-p bib) (with-temp-file bib (insert "")))
+    (setq citar-bibliography (list bib)
+          org-cite-global-bibliography (list bib))))
+
+(use-package citar-org-roam
+  :after (citar org-roam)
+  :config (citar-org-roam-mode))
+
+(defun liana-cite ()
+  (interactive)
+  (org-cite-insert nil))
+
+#+end_src
+
+** References
+
+A reference is a =content= note tied to a BibTeX key. =liana-ref-capture= writes the
+BibTeX entry and a node carrying =:ROAM_REFS: @key=, author, year, and read status,
+refusing to create a second node for a key that already exists. =liana-attach= files a
+downloaded copy under the note.
+
+: * How to Take Smart Notes   :content:
+: :PROPERTIES:
+: :CLASS: content
+: :ROAM_REFS: @ahrens2017
+: :AUTHOR: Sonke Ahrens
+: :YEAR: 2017
+: :READ_STATUS: unread
+: :END:
+
+#+begin_src emacs-lisp
+
+(defun liana--reference-node (key)
+  (ignore-errors (org-roam-node-from-ref (concat "@" key))))
+
+(defun liana--new-reference-node (key title author year)
+  (let ((file (expand-file-name (format "ref-%s.org" key) org-roam-directory)))
+    (find-file file)
+    (insert (format (concat ":PROPERTIES:\n:ID:       %s\n:CLASS:    content\n"
+                            ":ROAM_REFS: @%s\n:AUTHOR:   %s\n:YEAR:     %s\n"
+                            ":READ_STATUS: unread\n:CREATED:  %s\n:END:\n#+title: %s\n\n")
+                    (org-id-new) key author year
+                    (format-time-string "[%Y-%m-%d %a %H:%M]") title))
+    (save-buffer)
+    (org-roam-db-update-file)
+    (buffer-file-name)))
+
+(defun liana-ref-capture (key title author year)
+  (interactive (list (read-string "citekey: ") (read-string "title: ")
+                     (read-string "author: ") (read-string "year: ")))
+  (if-let ((existing (liana--reference-node key)))
+      (progn (org-roam-node-visit existing)
+             (message "Liana: reference @%s already exists" key))
+    (with-current-buffer (find-file-noselect (liana-bib-file))
+      (goto-char (point-max))
+      (insert (format "\n@misc{%s,\n  title = {%s},\n  author = {%s},\n  year = {%s}\n}\n"
+                      key title author year))
+      (save-buffer))
+    (liana--new-reference-node key title author year)))
+
+(defun liana-attach ()
+  (interactive)
+  (call-interactively #'org-attach)
+  (org-entry-put (point) "HAS_COPY" "t"))
+
+#+end_src
+
+** Literature Notes
+
+A literature note is written in my own words and must cite its source, page, and
+section. =liana-literature-note= stamps =:SOURCE:/:PAGE:/:SECTION:=, reading the page
+from a =pdf-tools= view when there is one; saving one with a missing field nudges (never
+blocks). =liana-highlight= marks a passage with =org-remark=.
+
+#+begin_src emacs-lisp
+
+(use-package pdf-tools
+  :magic ("%PDF" . pdf-view-mode)
+  :config (pdf-loader-install))
+
+(use-package org-noter)
+(use-package org-remark)
+
+(defun liana--reading-page ()
+  (when (and (derived-mode-p 'pdf-view-mode) (fboundp 'pdf-view-current-page))
+    (number-to-string (pdf-view-current-page))))
+
+(defun liana--reading-source ()
+  (org-entry-get (point) "ROAM_REFS" t))
+
+(defun liana--literature-nudge ()
+  (when (equal (org-entry-get (point-min) "CLASS") "literature")
+    (let ((missing (seq-filter
+                    (lambda (p) (let ((v (org-entry-get (point-min) p)))
+                                  (or (null v) (string-empty-p v))))
+                    '("PAGE" "SECTION"))))
+      (when missing
+        (message "Liana: literature note missing :%s:" (string-join missing ": / :"))))))
+
+(defun liana-literature-note (title source page section)
+  (interactive
+   (list (read-string "literature note (claim): ")
+         (or (liana--reading-source) (read-string "source (@key): "))
+         (or (liana--reading-page) (read-string "page: "))
+         (read-string "section: ")))
+  (let* ((node (org-roam-node-create :title title))
+         (file (expand-file-name
+                (format "%s-%s.org" (format-time-string "%Y%m%d%H%M%S")
+                        (org-roam-node-slug node))
+                org-roam-directory)))
+    (find-file file)
+    (insert (format (concat ":PROPERTIES:\n:ID:       %s\n:CLASS:    literature\n"
+                            ":SOURCE:   %s\n:PAGE:     %s\n:SECTION:  %s\n"
+                            ":CREATED:  %s\n:END:\n#+title: %s\n\n")
+                    (org-id-new) source page section
+                    (format-time-string "[%Y-%m-%d %a %H:%M]") title))
+    (save-buffer)
+    (org-roam-db-update-file)
+    (liana--literature-nudge)
+    (buffer-file-name)))
+
+(defun liana-highlight ()
+  (interactive)
+  (call-interactively #'org-remark-mark))
+
+(add-hook 'org-mode-hook
+          (lambda () (add-hook 'after-save-hook #'liana--literature-nudge nil t)))
+
+#+end_src
+
 ** Command Surface
 
 =C-c n= opens a menu of every command. Unbuilt ones are =liana--todo= placeholders.
@@ -1679,7 +1828,7 @@ and linked like any other note, while its members still carry the =:tag:=.
   "Liana."
   [["Capture/Review"
     ("c" "capture"       liana-capture)
-    ("b" "ref-capture"   liana--todo)
+    ("b" "ref-capture"   liana-ref-capture)
     ("d" "daily buffer"  liana-daily-goto)
     ("x" "inbox"         liana-inbox)
     ("R" "review"        liana-review)]
@@ -1695,10 +1844,10 @@ and linked like any other note, while its members still carry the =:tag:=.
     ("M" "toggle embeds" liana-toggle-embeds)
     ("t" "tag-note"      liana-tag-note)]]
   [["Reference/Read"
-    ("L" "literature"    liana--todo)
-    ("@" "cite"          liana--todo)
-    ("A" "attach"        liana--todo)
-    ("h" "highlight"     liana--todo)]
+    ("L" "literature"    liana-literature-note)
+    ("@" "cite"          liana-cite)
+    ("A" "attach"        liana-attach)
+    ("h" "highlight"     liana-highlight)]
    ["Navigate"
     ("f" "find"          liana-find)
     ("/" "search"        liana-search)
