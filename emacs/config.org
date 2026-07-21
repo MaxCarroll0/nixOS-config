@@ -1091,9 +1091,10 @@ Every path derives from =org-roam-directory=, so the store can live anywhere;
     (directory-files-recursively org-roam-directory "\\.org\\'")))
 
 (defun liana--inbox-files ()
-  (cons (liana-tasks-file)
-        (when (file-directory-p (liana-dailies-directory))
-          (directory-files (liana-dailies-directory) t "\\.org\\'"))))
+  (seq-filter #'file-exists-p
+              (cons (liana-tasks-file)
+                    (when (file-directory-p (liana-dailies-directory))
+                      (directory-files (liana-dailies-directory) t "\\.org\\'")))))
 
 (defun liana--ensure-store ()
   (make-directory (liana-dailies-directory) t)
@@ -1193,14 +1194,14 @@ matching tag (=:fleeting:=, =:task:=) shows the class on the headline.
 (with-eval-after-load 'org-roam-dailies
   (setq org-roam-dailies-capture-templates
         '(("f" "fleeting" entry
-           "* %? :fleeting:\n:PROPERTIES:\n:CLASS: fleeting\n:CREATED: %U\n:END:"
+           "* %? :fleeting:\n:PROPERTIES:\n:CLASS: fleeting\n:CREATED: %U\n:END:\n%(liana-capture-context)"
            :target (file+head "%<%Y-%m-%d>.org"
                               "#+title: %<%Y-%m-%d>\n#+filetags: :daily:private:\n")))))
 
 (with-eval-after-load 'org-capture
   (setq org-capture-templates
         '(("t" "task" entry (function liana--visit-tasks)
-           "* TODO %? [#B] :task:\n:PROPERTIES:\n:CLASS: task\n:CREATED: %U\n:END:"))))
+           "* TODO %? [#B] :task:\n:PROPERTIES:\n:CLASS: task\n:CREATED: %U\n:END:\n%(liana-capture-context)"))))
 
 (defun liana-capture (&optional class)
   (interactive)
@@ -1814,6 +1815,141 @@ blocks). =liana-highlight= marks a passage with =org-remark=.
 
 #+end_src
 
+** Context Capture
+
+Every capture stamps a folded =:CONTEXT:= drawer recording where I was: buffer, file,
+major mode, project, git branch, and machine. It reads the buffer capture was invoked
+from, never copies the whole buffer, and adds nothing it cannot cheaply read.
+
+#+begin_src emacs-lisp
+
+(defun liana--git (file)
+  (when-let ((root (locate-dominating-file file ".git")))
+    (let* ((head-file (expand-file-name ".git/HEAD" root))
+           (head (and (file-readable-p head-file)
+                      (with-temp-buffer (insert-file-contents head-file)
+                        (string-trim (buffer-string)))))
+           (branch (and head (string-match "ref: refs/heads/\\(.*\\)" head)
+                        (match-string 1 head))))
+      (list :root (file-name-nondirectory (directory-file-name root)) :branch branch))))
+
+(defun liana-capture-context ()
+  (condition-case nil
+      (let ((buf (or (ignore-errors (org-capture-get :original-buffer)) (current-buffer))))
+        (if (not (buffer-live-p buf)) ""
+          (with-current-buffer buf
+            (let* ((file (buffer-file-name))
+                   (git (and file (liana--git file)))
+                   (fields (delq nil
+                            (list (cons "BUFFER" (buffer-name))
+                                  (and file (cons "FILE" (format "[[file:%s]]" file)))
+                                  (cons "MAJOR_MODE" (symbol-name major-mode))
+                                  (and git (plist-get git :root) (cons "PROJECT" (plist-get git :root)))
+                                  (and git (plist-get git :branch) (cons "GIT_BRANCH" (plist-get git :branch)))
+                                  (cons "SYSTEM" (system-name))))))
+              (concat ":CONTEXT:\n"
+                      (mapconcat (lambda (kv) (format "%s: %s" (car kv) (cdr kv))) fields "\n")
+                      "\n:END:")))))
+    (error "")))
+
+#+end_src
+
+** Dashboard
+
+=liana-dashboard= is a read-only summary that nudges, never gates: inbox counts, stale
+fleeting notes (older than their window), and smells (a =final= note with no links). It
+is what the daily review reads from the top.
+
+#+begin_src emacs-lisp
+
+(defvar liana-fleeting-stale-days 3)
+
+(defun liana--days-since (ts)
+  (when ts (/ (float-time (time-subtract (current-time) (org-time-string-to-time ts)))
+              86400.0)))
+
+(defun liana--count (pred)
+  (length (org-ql-select (liana--inbox-files) pred)))
+
+(defun liana--stale-fleeting ()
+  (delq nil
+        (org-ql-select (liana--inbox-files)
+          '(and (tags "fleeting") (not (property "LIANA_PROCESSED")) (property "CREATED"))
+          :action (lambda ()
+                    (let ((d (liana--days-since (org-entry-get (point) "CREATED"))))
+                      (when (and d (> d liana-fleeting-stale-days))
+                        (format "%s (%dd)" (org-get-heading t t t t) (floor d))))))))
+
+(defun liana--linkless-finals ()
+  (delq nil
+        (mapcar (lambda (n)
+                  (when (and (equal "final" (cdr (assoc "CLASS" (org-roam-node-properties n))))
+                             (with-temp-buffer
+                               (insert-file-contents (org-roam-node-file n))
+                               (zerop (liana--node-link-count))))
+                    (org-roam-node-title n)))
+                (org-roam-node-list))))
+
+(defun liana-dashboard ()
+  (interactive)
+  (let ((buf (get-buffer-create "*Liana Dashboard*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (org-mode)
+        (insert "#+title: Liana Dashboard\n\n* Inbox\n")
+        (insert (format "- Fleeting: %d\n" (liana--count '(and (tags "fleeting") (not (property "LIANA_PROCESSED"))))))
+        (insert (format "- Literature: %d\n" (liana--count '(and (tags "literature") (not (property "LIANA_PROCESSED"))))))
+        (insert (format "- Tasks: %d\n" (liana--count '(and (tags "task") (not (done))))))
+        (insert "\n* Stale fleeting\n")
+        (dolist (s (liana--stale-fleeting)) (insert (format "- %s\n" s)))
+        (insert "\n* Smells (final, no links)\n")
+        (dolist (s (liana--linkless-finals)) (insert (format "- %s\n" s)))))
+    (pop-to-buffer buf)))
+
+#+end_src
+
+** Browser Capture
+
+=org-protocol= lets a browser bookmarklet hand a URL and title to the running Emacs; it
+lands as a fleeting note in today's buffer. The OS side (a =.desktop= handler and
+bookmarklet) is set up outside Emacs; the elisp is the template below.
+
+#+begin_src emacs-lisp
+
+(require 'org-protocol)
+
+(defun liana--goto-daily-file ()
+  (let ((f (expand-file-name (format-time-string "%Y-%m-%d.org") (liana-dailies-directory))))
+    (unless (file-exists-p f)
+      (with-temp-file f
+        (insert (format-time-string "#+title: %Y-%m-%d\n#+filetags: :daily:private:\n\n"))))
+    (set-buffer (find-file-noselect f))
+    (goto-char (point-max))))
+
+(with-eval-after-load 'org-capture
+  (add-to-list 'org-capture-templates
+               '("p" "protocol (browser)" entry (function liana--goto-daily-file)
+                 "* %:description :fleeting:\n:PROPERTIES:\n:CLASS: fleeting\n:CREATED: %U\n:URL: %:link\n:END:\n%?")))
+
+#+end_src
+
+** Graph
+
+=org-roam-ui= opens the whole graph in a browser, read-only, showing where clusters have
+grown. =liana-graph= starts it.
+
+#+begin_src emacs-lisp
+
+(use-package org-roam-ui
+  :after org-roam)
+
+(defun liana-graph ()
+  (interactive)
+  (org-roam-ui-open))
+
+#+end_src
+
 ** Command Surface
 
 =C-c n= opens a menu of every command. Unbuilt ones are =liana--todo= placeholders.
@@ -1831,7 +1967,8 @@ blocks). =liana-highlight= marks a passage with =org-remark=.
     ("b" "ref-capture"   liana-ref-capture)
     ("d" "daily buffer"  liana-daily-goto)
     ("x" "inbox"         liana-inbox)
-    ("R" "review"        liana-review)]
+    ("R" "review"        liana-review)
+    ("D" "dashboard"     liana-dashboard)]
    ["Write"
     ("n" "new final"     liana-new-final)
     ("p" "promote"       liana-promote)
@@ -1853,7 +1990,8 @@ blocks). =liana-highlight= marks a passage with =org-remark=.
     ("/" "search"        liana-search)
     ("o" "explore"       liana-explore)
     ("." "lookup"        liana-lookup)
-    ("B" "backlinks"     liana-backlinks)]
+    ("B" "backlinks"     liana-backlinks)
+    ("G" "graph"         liana-graph)]
    ["Organise"
     ("i" "index-add"     liana-index-add)
     ("I" "index-new"     liana-index-new)

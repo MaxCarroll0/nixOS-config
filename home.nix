@@ -421,6 +421,7 @@ in
             org-noter
             pdf-tools
             org-remark
+            org-roam-ui
           ];
       }
     );
