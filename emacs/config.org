@@ -647,6 +647,29 @@ Using Apheleia
   (setf (alist-get 'reason-mode apheleia-mode-alist) 'dune-fmt)
   (setf (alist-get 'caml-mode apheleia-mode-alist) 'dune-fmt)
   (setf (alist-get 'nix-ts-mode apheleia-mode-alist) 'nixfmt)
+
+  (defun max/nix-fmt-project ()
+    "Format the current flake with `nix fmt', returning non-nil on success."
+    (when-let* ((file (buffer-file-name))
+                ((not (file-remote-p file)))
+                (root (locate-dominating-file file "flake.nix")))
+      (let ((default-directory root))
+        (when (zerop (call-process "nix" nil nil nil "eval" "--raw"
+                                   ".#formatter.${builtins.currentSystem}.name"))
+          ;; `nix fmt' formats files in place, so write the unsaved buffer before
+          ;; invoking it and then reload its formatted result.
+          (write-region nil nil file nil 'silent)
+          (when (zerop (call-process "nix" nil nil nil "fmt"))
+            (revert-buffer :ignore-auto :noconfirm)
+            t))))
+
+  (defun max/nix-fmt-first (original &rest arguments)
+    "Prefer a flake's `nix fmt' for every mode, then use Apheleia normally."
+    (unless (max/nix-fmt-project)
+      (apply original arguments)))
+
+  (advice-remove 'apheleia-format-buffer #'max/nix-fmt-first)
+  (advice-add 'apheleia-format-buffer :around #'max/nix-fmt-first)
   (apheleia-global-mode +1))
 
 #+end_src
