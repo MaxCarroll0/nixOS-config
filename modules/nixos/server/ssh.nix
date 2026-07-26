@@ -21,6 +21,16 @@ in
       default = [ ];
       description = "Authorized keys for the max account.";
     };
+
+    allowGlobalTCPPorts = lib.mkOption {
+      type = lib.types.listOf lib.types.port;
+      default = [ ];
+      description = ''
+        TCP ports allowed to listen on every interface. Empty keeps the host
+        reachable only over the tailnet. Declaring the empty list is not
+        self-enforcing, so an assertion checks it.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -53,7 +63,23 @@ in
 
     users.users.max.openssh.authorizedKeys.keys = cfg.userKeys;
 
-    networking.firewall.allowedTCPPorts = [ ];
     networking.firewall.interfaces.${cfg.interface}.allowedTCPPorts = [ 22 ];
+
+    assertions = [
+      {
+        assertion = lib.all (p: lib.elem p cfg.allowGlobalTCPPorts) config.networking.firewall.allowedTCPPorts;
+        message = ''
+          These TCP ports are open on every interface: ${
+            lib.concatMapStringsSep ", " toString (
+              lib.filter (p: !(lib.elem p cfg.allowGlobalTCPPorts)) config.networking.firewall.allowedTCPPorts
+            )
+          }.
+          This host is meant to be reachable only over ${cfg.interface}. Bind the
+          service to loopback, move the port to
+          networking.firewall.interfaces.${cfg.interface}, or list it in
+          local.server.ssh.allowGlobalTCPPorts if it really must be public.
+        '';
+      }
+    ];
   };
 }
