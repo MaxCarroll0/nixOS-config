@@ -99,6 +99,16 @@ in
       default = 20;
     };
 
+    idle.allowHostingDowntime = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Permit a sleeping idle policy while public hosting is on, accepting that
+        the site is unreachable whenever the host is suspended. Exists so the
+        power/availability tradeoff can be measured rather than only argued.
+      '';
+    };
+
     idle.autosuspend.loadThreshold = lib.mkOption {
       type = lib.types.float;
       default = 2.5;
@@ -128,15 +138,24 @@ in
       assertions = [
         {
           # `or` so this module stays importable without server/web.nix.
-          assertion = (config.local.web.public.enable or false) -> cfg.idle.policy == "always-on";
+          assertion =
+            ((config.local.web.public.enable or false) && !cfg.idle.allowHostingDowntime)
+            -> cfg.idle.policy == "always-on";
           message = ''
             local.web.public is enabled but local.power.idle.policy is
             "${cfg.idle.policy}". A suspended host serves no pages and nothing on
-            the internet can wake it. Set the policy to "always-on" or accept the
-            outage by overriding this assertion.
+            the internet can wake it. Either set the policy to "always-on", or set
+            local.power.idle.allowHostingDowntime = true to accept the outage.
           '';
         }
       ];
+
+      warnings = lib.optional
+        ((config.local.web.public.enable or false) && cfg.idle.allowHostingDowntime && cfg.idle.policy != "always-on")
+        ''
+          local.power.idle.policy is "${cfg.idle.policy}" with public hosting on:
+          the site is down whenever this host sleeps.
+        '';
 
       environment.systemPackages = [
         powerReport
