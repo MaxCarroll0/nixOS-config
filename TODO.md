@@ -37,8 +37,9 @@ Turning the desktop into a dual-use workstation and remote server.
 - [ ] Generate the passphrase-less `nixremote` key, root-owned
 - [ ] Set `local.build.host.authorizedKeys` and flip `enable = true`
 - [ ] Record the desktop's `publicHostKey`
-- [ ] Verify Nix actually falls back to local when the builder is unreachable;
-      if not, switch from ProxyCommand to a wrapper that waits
+- [x] Verified Nix falls back to a local build when the builder is unreachable
+      (logs `cannot build on`, exits 0), so the ProxyCommand approach stands
+- [x] Verified `builder-wake` fails fast in ~2s instead of the TCP timeout
 
 ## Phase 3: kill switch
 
@@ -70,10 +71,23 @@ Turning the desktop into a dual-use workstation and remote server.
 - [x] nginx bound to `127.0.0.1`, never opened in the firewall
 - [x] Static content as a Nix derivation, placeholder until the KB stack is picked
 - [x] systemd hardening on the nginx unit
-- [ ] Run `systemd-analyze security nginx.service` on the desktop and tighten
-- [ ] Move the web stack into a `containers.web` with `privateNetwork = true`
+- [x] `systemd-analyze security nginx.service`: 1.5 to 1.1 after dropping all
+      capabilities and restricting IPAddressAllow to localhost
+- [x] Content is read-only: `limit_except GET HEAD`, 1k body cap, store-path roots
 - [ ] Cloudflare Access policies for the gated hostnames (dashboard, not Nix)
 - [ ] Replace the placeholder site derivation with the real content
+
+The KB may end up a dynamic app served read-only. Isolation and write-path
+decisions are deferred until it is picked; assume the strictest case until then.
+When that happens, work through:
+
+- [ ] Isolation: hardened unit / nspawn container / microvm. Prefer microvm for
+      anything with a database, since nspawn root can escape to host root
+- [ ] Block write and admin paths at nginx, not only at Cloudflare Access, so one
+      misconfigured Access policy is not the only thing in the way
+- [ ] Writable app state means backups, which static content did not need
+- [ ] `client_max_body_size 1k` and `limit_except GET HEAD` will need relaxing if
+      the app uses POST for search
 
 ## Out of band (not doable from Nix)
 
@@ -84,5 +98,5 @@ Turning the desktop into a dual-use workstation and remote server.
 
 ## Open questions
 
-- [ ] Knowledge-base stack: static generator vs wiki app
+- [ ] Knowledge-base stack: which static generator (decided: read-only, no app)
 - [ ] Whether a LAN device can relay WoL so remote wake works off-LAN

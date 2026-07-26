@@ -75,6 +75,7 @@ in
         root = toString (if root == null then placeholder else root);
         extraConfig = ''
           limit_except GET HEAD { deny all; }
+          client_max_body_size 1k;
         '';
       }) cfg.hostnames;
     };
