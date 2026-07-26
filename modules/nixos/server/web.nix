@@ -43,8 +43,9 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # Stays root-owned: the unit is DynamicUser and pulls this in via
+    # LoadCredential, which reads it as root before entering the sandbox.
     sops.secrets.cloudflared-credentials = {
-      owner = "cloudflared";
       restartUnits = [ "cloudflared-tunnel-${cfg.tunnelId}.service" ];
     };
 

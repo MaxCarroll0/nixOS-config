@@ -127,7 +127,8 @@ in
     {
       assertions = [
         {
-          assertion = config.local.web.public.enable -> cfg.idle.policy == "always-on";
+          # `or` so this module stays importable without server/web.nix.
+          assertion = (config.local.web.public.enable or false) -> cfg.idle.policy == "always-on";
           message = ''
             local.web.public is enabled but local.power.idle.policy is
             "${cfg.idle.policy}". A suspended host serves no pages and nothing on
