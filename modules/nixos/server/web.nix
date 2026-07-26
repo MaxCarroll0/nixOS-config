@@ -79,7 +79,18 @@ in
       }) cfg.hostnames;
     };
 
+    # Loopback-only on a high port, so it needs no binding capabilities at all
+    # and can refuse every address but localhost.
     systemd.services.nginx.serviceConfig = {
+      CapabilityBoundingSet = [ "" ];
+      AmbientCapabilities = lib.mkForce [ "" ];
+      IPAddressAllow = [ "localhost" ];
+      IPAddressDeny = "any";
+      DevicePolicy = "closed";
+      ProtectProc = "invisible";
+      ProcSubset = "pid";
+      RemoveIPC = true;
+      UMask = lib.mkForce "0077";
       ProtectSystem = "strict";
       ProtectHome = true;
       PrivateDevices = true;
@@ -110,6 +121,10 @@ in
       {
         assertion = cfg.tunnelId != "";
         message = "local.web.public.tunnelId must be set to the Cloudflare tunnel UUID.";
+      }
+      {
+        assertion = cfg.port >= 1024;
+        message = "local.web.public.port must stay above 1024; nginx runs with no capabilities here.";
       }
     ];
   };

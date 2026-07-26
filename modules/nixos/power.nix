@@ -24,6 +24,12 @@ let
         [ -r "$d/energy_uj" ] || continue
         before["$d"]=$(cat "$d/energy_uj")
       done
+      if [ ''${#before[@]} -eq 0 ]; then
+        echo "no readable powercap domains." >&2
+        echo "energy_uj is root-only since Linux 5.10; set" >&2
+        echo "local.power.monitoring.userReadable = true, or run this as root." >&2
+        exit 1
+      fi
       sleep "$interval"
       for d in /sys/class/powercap/*/; do
         [ -r "$d/energy_uj" ] || continue
@@ -42,6 +48,16 @@ in
     monitoring.enable = lib.mkEnableOption "power and thermal metrics";
 
     monitoring.grafana = lib.mkEnableOption "a local Grafana for the metrics";
+
+    monitoring.userReadable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Relax RAPL energy counters to the wheel group. Linux 5.10 made them
+        root-only because they leak a timing side channel (PLATYPUS); without
+        this both power-report and node_exporter's rapl collector see nothing.
+      '';
+    };
 
     idle.optimise = lib.mkOption {
       type = lib.types.bool;
@@ -178,6 +194,12 @@ in
           };
         };
       };
+    })
+
+    (lib.mkIf cfg.monitoring.userReadable {
+      services.udev.extraRules = ''
+        SUBSYSTEM=="powercap", ACTION=="add", RUN+="${pkgs.coreutils}/bin/chgrp -R wheel /sys%p", RUN+="${pkgs.coreutils}/bin/chmod -R g=u /sys%p"
+      '';
     })
 
     (lib.mkIf cfg.monitoring.enable {
