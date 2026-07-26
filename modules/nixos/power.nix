@@ -177,8 +177,15 @@ in
 
       systemd.services.scheduled-suspend = {
         serviceConfig.Type = "oneshot";
+        # Next occurrence of wakeAt, not tomorrow's: suspending at 01:00 with a
+        # wake at 08:00 must mean 7 hours, not 31.
         script = ''
-          ${pkgs.util-linux}/bin/rtcwake -m no -t "$(${pkgs.coreutils}/bin/date -d 'tomorrow ${cfg.idle.scheduled.wakeAt}' +%s)"
+          now=$(${pkgs.coreutils}/bin/date +%s)
+          target=$(${pkgs.coreutils}/bin/date -d '${cfg.idle.scheduled.wakeAt}' +%s)
+          if [ "$target" -le "$now" ]; then
+            target=$(${pkgs.coreutils}/bin/date -d 'tomorrow ${cfg.idle.scheduled.wakeAt}' +%s)
+          fi
+          ${pkgs.util-linux}/bin/rtcwake -m no -t "$target"
           ${pkgs.systemd}/bin/systemctl suspend
         '';
       };
@@ -190,7 +197,8 @@ in
         settings = {
           idle_time = cfg.idle.autosuspend.idleMinutes * 60;
           suspend_cmd = "${pkgs.systemd}/bin/systemctl suspend";
-          wakeup_cmd = "echo {timestamp:.0f} > /sys/class/rtc/rtc0/wakealarm";
+          # Clear first: writing wakealarm with one already armed fails EBUSY.
+          wakeup_cmd = "echo 0 > /sys/class/rtc/rtc0/wakealarm; echo {timestamp:.0f} > /sys/class/rtc/rtc0/wakealarm";
         };
         checks = {
           ActiveConnection = {
