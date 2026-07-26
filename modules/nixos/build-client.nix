@@ -51,7 +51,9 @@ in
     };
 
     sshKey = lib.mkOption {
-      type = lib.types.path;
+      # Deliberately str, not path: a path literal would copy the private key
+      # into the world-readable Nix store.
+      type = lib.types.str;
       default = "/root/.ssh/nixremote";
       description = ''
         Passphrase-less key owned by root: the daemon runs as root and cannot

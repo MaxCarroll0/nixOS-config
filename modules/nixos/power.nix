@@ -36,7 +36,12 @@ let
         name=$(cat "$d/name" 2>/dev/null || basename "$d")
         after=$(cat "$d/energy_uj")
         delta=$(( after - ''${before["$d"]} ))
-        [ "$delta" -lt 0 ] && continue
+        # The counter is finite and wraps; fold it back rather than dropping it.
+        if [ "$delta" -lt 0 ]; then
+          range=$(cat "$d/max_energy_range_uj" 2>/dev/null || echo 0)
+          [ "$range" -gt 0 ] || continue
+          delta=$(( delta + range ))
+        fi
         printf '%-24s %6.2f W\n' "$name" "$(echo "scale=2; $delta / 1000000 / $interval" | bc)"
       done
     '';
@@ -92,6 +97,12 @@ in
     idle.autosuspend.idleMinutes = lib.mkOption {
       type = lib.types.int;
       default = 20;
+    };
+
+    idle.autosuspend.loadThreshold = lib.mkOption {
+      type = lib.types.float;
+      default = 2.5;
+      description = "Load average above which the host counts as busy.";
     };
 
     idle.autosuspend.watchPorts = lib.mkOption {
@@ -186,20 +197,29 @@ in
             ports = lib.concatMapStringsSep "," toString cfg.idle.autosuspend.watchPorts;
           };
           Users.class = "Users";
-          Load.class = "Load";
           LogindSessionsIdle.class = "LogindSessionsIdle";
-          NixBuilds = {
-            class = "Processes";
-            processes = "nix-daemon nix-build nix";
+          # A remote build arrives over SSH and holds port 22 for its duration,
+          # so ActiveConnection covers it. Matching nix-daemon by name cannot:
+          # it runs persistently, so the host would never suspend.
+          Load = {
+            class = "Load";
+            threshold = cfg.idle.autosuspend.loadThreshold;
           };
         };
       };
     })
 
+    # node_exporter runs as its own user, so a wheel-only relaxation would fix
+    # the CLI and leave the rapl collector silently blind.
     (lib.mkIf cfg.monitoring.userReadable {
+      users.groups.powermon = { };
+      users.users.max.extraGroups = [ "powermon" ];
+
       services.udev.extraRules = ''
-        SUBSYSTEM=="powercap", ACTION=="add", RUN+="${pkgs.coreutils}/bin/chgrp -R wheel /sys%p", RUN+="${pkgs.coreutils}/bin/chmod -R g=u /sys%p"
+        SUBSYSTEM=="powercap", ACTION=="add", RUN+="${pkgs.coreutils}/bin/chgrp -R powermon /sys%p", RUN+="${pkgs.coreutils}/bin/chmod -R g=u /sys%p"
       '';
+
+      systemd.services.prometheus-node-exporter.serviceConfig.SupplementaryGroups = [ "powermon" ];
     })
 
     (lib.mkIf cfg.monitoring.enable {
