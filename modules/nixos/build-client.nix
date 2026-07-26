@@ -29,10 +29,12 @@ let
   };
 
   # Fires the magic packet then fails fast, so the first build falls back to
-  # local while the builder boots and later ones land remotely.
+  # local while the builder boots and later ones land remotely. The probe owns
+  # the timeout; nc must not get -w, which would also cap idle time and tear
+  # down a long build mid-flight.
   proxy = pkgs.writeShellScript "builder-proxy" ''
-    ${wake}/bin/builder-wake "$1" || true
-    exec ${pkgs.netcat-openbsd}/bin/nc -w "${toString cfg.wake.probeSeconds}" "$1" "$2"
+    ${wake}/bin/builder-wake "$1" || exit 1
+    exec ${pkgs.netcat-openbsd}/bin/nc "$1" "$2"
   '';
 in
 

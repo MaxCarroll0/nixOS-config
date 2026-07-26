@@ -39,7 +39,10 @@ Turning the desktop into a dual-use workstation and remote server.
 - [ ] Record the desktop's `publicHostKey`
 - [x] Verified Nix falls back to a local build when the builder is unreachable
       (logs `cannot build on`, exits 0), so the ProxyCommand approach stands
-- [x] Verified `builder-wake` fails fast in ~2s instead of the TCP timeout
+- [x] Verified `builder-wake` fails fast in ~2s instead of the TCP timeout, and
+      that `wol -i` sends the packet
+- [x] Fixed: `nc -w` also caps idle time, so it would have torn down a long
+      build mid-flight. The probe owns the timeout, the data path has none.
 
 ## Phase 3: kill switch
 
