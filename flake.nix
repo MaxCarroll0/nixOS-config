@@ -16,10 +16,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    hyprland = {
-      url = "github:hyprwm/Hyprland";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    hyprland.url = "github:hyprwm/Hyprland";
     hyprland-plugins = {
       url = "github:hyprwm/hyprland-plugins";
       inputs.hyprland.follows = "hyprland";
@@ -80,27 +77,27 @@
         overlays = [ emacs-overlay.overlay ];
         config.allowUnfree = true;
       };
-    in
-    {
-      nixosConfigurations = {
-        nixos = lib.nixosSystem {
+      mkHost =
+        hostModule:
+        lib.nixosSystem {
           inherit system;
           modules = [
             sops-nix.nixosModules.sops
-            ./configuration.nix
+            hostModule
           ];
           specialArgs = {
             inherit pkgs-unstable;
             inherit inputs;
           };
         };
-      };
-      homeConfigurations = {
-        max = home-manager.lib.homeManagerConfiguration {
+
+      mkHome =
+        homeModule:
+        home-manager.lib.homeManagerConfiguration {
           inherit pkgs;
           modules = [
             sops-nix.homeManagerModules.sops
-            ./home.nix
+            homeModule
           ];
           extraSpecialArgs = {
             inherit pkgs-unstable;
@@ -113,6 +110,19 @@
             });
           };
         };
+    in
+    {
+      nixosConfigurations = {
+        laptop = mkHost ./hosts/laptop;
+        desktop = mkHost ./hosts/desktop;
+        # Retire once both machines have switched to the per-host names.
+        nixos = mkHost ./hosts/laptop;
+      };
+
+      homeConfigurations = {
+        "max@laptop" = mkHome ./home/laptop.nix;
+        "max@desktop" = mkHome ./home/desktop.nix;
+        max = mkHome ./home/laptop.nix;
       };
     };
 

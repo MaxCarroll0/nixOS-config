@@ -121,7 +121,7 @@ let
   # makes curd replay the cf_clearance + matching UA on every provider request.
   curdPatched = curd.overrideAttrs (old: {
     postPatch = (old.postPatch or "") + ''
-      cp ${./curd/zz_cf_inject.go} internal/zz_cf_inject.go
+      cp ${../curd/zz_cf_inject.go} internal/zz_cf_inject.go
     '';
   });
 
@@ -132,7 +132,7 @@ let
       jq
       coreutils
     ];
-    text = builtins.readFile ./curd/cf-refresh.sh;
+    text = builtins.readFile ../curd/cf-refresh.sh;
   };
 
   curdWrapped = pkgs.symlinkJoin {
@@ -172,7 +172,7 @@ in
   home.homeDirectory = "/home/max";
 
   sops = {
-    defaultSopsFile = ./secrets/secrets.yaml;
+    defaultSopsFile = ../secrets/secrets.yaml;
     age.keyFile = "/home/max/.config/sops/age/keys.txt";
     secrets.exercism-API = { };
   };
@@ -298,7 +298,7 @@ in
     package = (
       pkgs.emacsWithPackagesFromUsePackage {
         package = pkgs.emacs-pgtk;
-        config = ./emacs/config.org;
+        config = ../emacs/config.org;
         defaultInitFile = true;
         alwaysEnsure = true;
 
@@ -561,7 +561,7 @@ in
   home.activation.curdConf = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     run mkdir -p "$HOME/.config/curd"
     run rm -f "$HOME/.config/curd/curd.conf"
-    run install -m644 ${./curd.conf} "$HOME/.config/curd/curd.conf"
+    run install -m644 ${../curd.conf} "$HOME/.config/curd/curd.conf"
   '';
 
   home.activation.exercismConf = lib.hm.dag.entryAfter [ "writeBoundary" "sops-nix" ] ''
