@@ -26,30 +26,32 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable (lib.mkMerge [
-    {
-      services.tailscale = {
-        enable = true;
-        inherit (cfg) port;
-        openFirewall = true;
-        useRoutingFeatures = "none";
-      };
+  config = lib.mkIf cfg.enable (
+    lib.mkMerge [
+      {
+        services.tailscale = {
+          enable = true;
+          inherit (cfg) port;
+          openFirewall = true;
+          useRoutingFeatures = "none";
+        };
 
-      # Control-plane and DERP traffic goes out the physical link; replies to
-      # tailnet peers leave via the tunnel and are not marked, so both are needed.
-      local.vpn.bypassUnits = [ "tailscaled.service" ];
-      local.vpn.allowInterfaces = [ "tailscale0" ];
-    }
+        # Control-plane and DERP traffic goes out the physical link; replies to
+        # tailnet peers leave via the tunnel and are not marked, so both are needed.
+        local.vpn.bypassUnits = [ "tailscaled.service" ];
+        local.vpn.allowInterfaces = [ "tailscale0" ];
+      }
 
-    (lib.mkIf (cfg.authKeySecret != null) {
-      sops.secrets.${cfg.authKeySecret} = { };
+      (lib.mkIf (cfg.authKeySecret != null) {
+        sops.secrets.${cfg.authKeySecret} = { };
 
-      services.tailscale.authKeyFile = config.sops.secrets.${cfg.authKeySecret}.path;
+        services.tailscale.authKeyFile = config.sops.secrets.${cfg.authKeySecret}.path;
 
-      systemd.services.tailscaled = {
-        after = [ "sops-install-secrets.service" ];
-        wants = [ "sops-install-secrets.service" ];
-      };
-    })
-  ]);
+        systemd.services.tailscaled = {
+          after = [ "sops-install-secrets.service" ];
+          wants = [ "sops-install-secrets.service" ];
+        };
+      })
+    ]
+  );
 }

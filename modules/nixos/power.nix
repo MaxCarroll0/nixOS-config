@@ -110,7 +110,10 @@ in
         }
       ];
 
-      environment.systemPackages = [ powerReport ] ++ (with pkgs; [
+      environment.systemPackages = [
+        powerReport
+      ]
+      ++ (with pkgs; [
         powertop
         powerstat
         s-tui

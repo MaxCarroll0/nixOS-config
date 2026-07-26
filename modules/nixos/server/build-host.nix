@@ -12,8 +12,7 @@ let
 
   # The key buys a Nix protocol session, not a shell. This must stay in step
   # with protocol = "ssh-ng" on the client; plain ssh:// wants nix-store --serve.
-  forcedCommand =
-    key: ''command="${config.nix.package}/bin/nix-daemon --stdio",restrict ${key}'';
+  forcedCommand = key: ''command="${config.nix.package}/bin/nix-daemon --stdio",restrict ${key}'';
 in
 
 {

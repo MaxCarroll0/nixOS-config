@@ -12,14 +12,16 @@ let
 
   unitTableName = unit: "novpn-" + lib.replaceStrings [ "." "@" "\\" ] [ "-" "-" "-" ] unit;
 
-  bypassRules = unit: pkgs.writeText "${unitTableName unit}.nft" ''
-    table inet ${unitTableName unit} {
-      chain output {
-        type route hook output priority mangle; policy accept;
-        socket cgroupv2 level 2 "system.slice/${unit}" meta mark set 0xca6c
+  bypassRules =
+    unit:
+    pkgs.writeText "${unitTableName unit}.nft" ''
+      table inet ${unitTableName unit} {
+        chain output {
+          type route hook output priority mangle; policy accept;
+          socket cgroupv2 level 2 "system.slice/${unit}" meta mark set 0xca6c
+        }
       }
-    }
-  '';
+    '';
 
   # Own table per unit, loaded after the unit exists: a missing cgroup path
   # aborts the whole nft transaction, which must not take the killswitch with it.
@@ -43,10 +45,15 @@ let
     };
   };
 
-  allowedInterfaces = lib.concatStringsSep ", " (map (i: ''"${i}"'') ([
-    "proton"
-    "proton-2"
-  ] ++ cfg.allowInterfaces));
+  allowedInterfaces = lib.concatStringsSep ", " (
+    map (i: ''"${i}"'') (
+      [
+        "proton"
+        "proton-2"
+      ]
+      ++ cfg.allowInterfaces
+    )
+  );
 in
 
 {
