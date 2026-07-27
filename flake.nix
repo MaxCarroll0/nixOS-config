@@ -62,31 +62,44 @@
     let
       lib = nixpkgs.lib;
       system = "x86_64-linux";
-      pkgs = import nixpkgs {
-        inherit system;
-        overlays = [ emacs-overlay.overlay ];
-        config = {
-          allowUnfree = true;
-          permittedInsecurePackages = [
-            "python3.13-pypdf2-3.0.1"
-          ];
+
+      pkgsFor =
+        s:
+        import nixpkgs {
+          system = s;
+          overlays = [ emacs-overlay.overlay ];
+          config = {
+            allowUnfree = true;
+            permittedInsecurePackages = [
+              "python3.13-pypdf2-3.0.1"
+            ];
+          };
         };
-      };
-      pkgs-unstable = import nixpkgs-unstable {
-        inherit system;
-        overlays = [ emacs-overlay.overlay ];
-        config.allowUnfree = true;
-      };
+
+      pkgsUnstableFor =
+        s:
+        import nixpkgs-unstable {
+          system = s;
+          overlays = [ emacs-overlay.overlay ];
+          config.allowUnfree = true;
+        };
+
+      pkgs = pkgsFor system;
+      pkgs-unstable = pkgsUnstableFor system;
+
       mkHost =
-        hostModule:
+        {
+          module,
+          system ? "x86_64-linux",
+        }:
         lib.nixosSystem {
           inherit system;
           modules = [
             sops-nix.nixosModules.sops
-            hostModule
+            module
           ];
           specialArgs = {
-            inherit pkgs-unstable;
+            pkgs-unstable = pkgsUnstableFor system;
             inherit inputs;
           };
         };
@@ -110,10 +123,10 @@
     in
     {
       nixosConfigurations = {
-        laptop = mkHost ./hosts/laptop;
-        desktop = mkHost ./hosts/desktop;
+        laptop = mkHost { module = ./hosts/laptop; };
+        desktop = mkHost { module = ./hosts/desktop; };
         # Retire once both machines have switched to the per-host names.
-        nixos = mkHost ./hosts/laptop;
+        nixos = mkHost { module = ./hosts/laptop; };
       };
 
       homeConfigurations = {
