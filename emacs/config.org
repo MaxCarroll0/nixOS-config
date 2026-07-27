@@ -37,8 +37,7 @@ Lexical binding.
 
 (use-package emacs
   :custom
-  ;; Enable indentation+completion using the TAB key.
-  (tab-always-indent 'complete)
+  (tab-always-indent t)
 
   ;; Disable Ispell completion function.
   (text-mode-ispell-word-completion nil)

@@ -47,8 +47,6 @@ let
 in
 
 {
-  # Account name -> sops secret holding its mkpasswd hash. Add an entry only once
-  # that secret decrypts here, or the account ends up with no password.
   options.local.users.sopsPasswords = lib.mkOption {
     type = lib.types.attrsOf lib.types.str;
     default = { };
@@ -108,6 +106,8 @@ in
       };
     };
 
+    local.users.sopsPasswords.max = "max-password-hash";
+
     # Declared here whoever consumes them: Home Manager runs as the user and
     # cannot read a root-only host key.
     sops = {
@@ -128,9 +128,7 @@ in
       };
     };
 
-    # !include, not readFile: readFile would resolve at eval time, which needs
-    # --impure and copies the token into the world-readable store. !include also
-    # tolerates the file being absent, which it is until sops has run.
+    # !include, not readFile: readFile which needs--impure
     nix.extraOptions = "!include ${config.sops.templates."conf-access-tokens".path}";
 
     # nixos-rebuild's --update-input was removed; inputs are bumped separately.
