@@ -54,14 +54,12 @@ in
 
     monitoring.grafana = lib.mkEnableOption "a local Grafana for the metrics";
 
+    # Linux 5.10 made these root-only over the PLATYPUS side channel; without
+    # this both power-report and the rapl collector see nothing.
     monitoring.userReadable = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = ''
-        Relax RAPL energy counters to the wheel group. Linux 5.10 made them
-        root-only because they leak a timing side channel (PLATYPUS); without
-        this both power-report and node_exporter's rapl collector see nothing.
-      '';
+      description = "Relax RAPL energy counters to the powermon group.";
     };
 
     idle.optimise = lib.mkOption {
@@ -102,11 +100,7 @@ in
     idle.allowHostingDowntime = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = ''
-        Permit a sleeping idle policy while public hosting is on, accepting that
-        the site is unreachable whenever the host is suspended. Exists so the
-        power/availability tradeoff can be measured rather than only argued.
-      '';
+      description = "Allow a sleeping policy while hosting, accepting the outage.";
     };
 
     idle.autosuspend.loadThreshold = lib.mkOption {
@@ -141,21 +135,25 @@ in
           assertion =
             ((config.local.web.public.enable or false) && !cfg.idle.allowHostingDowntime)
             -> cfg.idle.policy == "always-on";
-          message = ''
-            local.web.public is enabled but local.power.idle.policy is
-            "${cfg.idle.policy}". A suspended host serves no pages and nothing on
-            the internet can wake it. Either set the policy to "always-on", or set
-            local.power.idle.allowHostingDowntime = true to accept the outage.
-          '';
+          message = "Public hosting with idle.policy \"${cfg.idle.policy}\": a suspended host serves no pages and nothing can wake it remotely. Use \"always-on\" or set idle.allowHostingDowntime.";
+        }
+        {
+          assertion = (cfg.wakeOnLan.interface == null) == (cfg.wakeOnLan.mac == null);
+          message = "local.power.wakeOnLan needs both interface and mac, or neither.";
         }
       ];
 
-      warnings = lib.optional
-        ((config.local.web.public.enable or false) && cfg.idle.allowHostingDowntime && cfg.idle.policy != "always-on")
-        ''
-          local.power.idle.policy is "${cfg.idle.policy}" with public hosting on:
-          the site is down whenever this host sleeps.
-        '';
+      warnings =
+        lib.optional
+          (
+            (config.local.web.public.enable or false)
+            && cfg.idle.allowHostingDowntime
+            && cfg.idle.policy != "always-on"
+          )
+          "idle.policy \"${cfg.idle.policy}\" with public hosting on: the site is down whenever this host sleeps."
+        ++ lib.optional (
+          cfg.idle.policy != "always-on" && cfg.wakeOnLan.mac == null
+        ) "idle.policy \"${cfg.idle.policy}\" with no Wake-on-LAN, so nothing can wake this host remotely.";
 
       environment.systemPackages = [
         powerReport

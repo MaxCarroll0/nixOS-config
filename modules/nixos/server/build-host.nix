@@ -35,6 +35,8 @@ in
     };
     users.groups.nixremote = { };
 
+    local.server.ssh.allowUsers = [ "nixremote" ];
+
     # trusted-users lets the client push unsigned paths and override settings.
     # That is a trust relationship between two machines you own, not a sandbox.
     nix.settings.trusted-users = [ "nixremote" ];

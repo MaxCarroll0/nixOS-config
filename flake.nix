@@ -95,10 +95,7 @@
         homeModule:
         home-manager.lib.homeManagerConfiguration {
           inherit pkgs;
-          modules = [
-            sops-nix.homeManagerModules.sops
-            homeModule
-          ];
+          modules = [ homeModule ];
           extraSpecialArgs = {
             inherit pkgs-unstable;
             curd = curd.packages.${system}.default;

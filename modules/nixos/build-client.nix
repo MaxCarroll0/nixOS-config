@@ -140,5 +140,16 @@ in
     '';
 
     environment.systemPackages = [ wake ];
+
+    assertions = [
+      {
+        assertion = lib.hasPrefix "/" cfg.sshKey && !(lib.hasPrefix builtins.storeDir cfg.sshKey);
+        message = "sshKey must be an absolute path outside the world-readable store, not \"${cfg.sshKey}\".";
+      }
+    ];
+
+    warnings =
+      lib.optional (cfg.publicHostKey == null)
+        "publicHostKey is unset, so the builder is unauthenticated. Get it with: ssh-keyscan -t ed25519 ${cfg.builderHost} | base64 -w0";
   };
 }

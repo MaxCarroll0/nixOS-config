@@ -131,6 +131,10 @@ in
         assertion = cfg.port >= 1024;
         message = "local.web.public.port must stay above 1024; nginx runs with no capabilities here.";
       }
+      {
+        assertion = cfg.hostnames != { };
+        message = "local.web.public has no hostnames, so the tunnel serves only its 404 catch-all.";
+      }
     ];
   };
 }

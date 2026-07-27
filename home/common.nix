@@ -171,12 +171,6 @@ in
   home.username = "max";
   home.homeDirectory = "/home/max";
 
-  sops = {
-    defaultSopsFile = ../secrets/secrets.yaml;
-    age.keyFile = "/home/max/.config/sops/age/keys.txt";
-    secrets.exercism-API = { };
-  };
-
   fonts.fontconfig.enable = true;
 
   programs.git = {
@@ -564,12 +558,18 @@ in
     run install -m644 ${../curd.conf} "$HOME/.config/curd/curd.conf"
   '';
 
-  home.activation.exercismConf = lib.hm.dag.entryAfter [ "writeBoundary" "sops-nix" ] ''
-    run ${pkgs.exercism}/bin/exercism configure \
-      --no-verify \
-      --api "https://api.exercism.org/v1" \
-      --workspace "$HOME/exercism" \
-      --token "$(cat ${config.sops.secrets.exercism-API.path})"
+  # Rendered by the system sops config with owner = max; this cannot reference
+  # NixOS config, so the path is spelled out.
+  home.activation.exercismConf = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    if [ -r /run/secrets/exercism-API ]; then
+      run ${pkgs.exercism}/bin/exercism configure \
+        --no-verify \
+        --api "https://api.exercism.org/v1" \
+        --workspace "$HOME/exercism" \
+        --token "$(cat /run/secrets/exercism-API)"
+    else
+      echo "exercism-API not readable; skipping exercism configure" >&2
+    fi
   '';
 
   # Home Manager can also manage your environment variables through
@@ -599,7 +599,6 @@ in
     frequency = "weekly";
     preSwitchCommands = [ "nix flake update nixpkgs-unstable" ];
   };
-
 
   # Merges declarative keys into ~/.claude/settings.json without clobbering
   # other entries claude code may write.

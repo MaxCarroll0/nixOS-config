@@ -9,135 +9,171 @@
 
 let
   flakePath = "/home/max/.config/nix";
+  cfg = config.local.users;
 in
 
 {
-  boot.loader.grub.enable = true;
-  boot.loader.efi.canTouchEfiVariables = true;
-  boot.loader.efi.efiSysMountPoint = "/boot";
-  boot.loader.grub.efiSupport = true;
-  boot.loader.grub.device = "nodev";
-  boot.loader.grub.configurationLimit = 20;
-
-  boot.kernelParams = [
-    "zswap.enabled=1"
-    "zswap.compressor=zstd"
-    "zswap.zpool=z3fold"
-    "zswap.max_pool_percent=20"
-  ];
-
-  swapDevices = [
-    {
-      device = "/swapfile";
-      size = 8 * 1024;
-    }
-  ];
-
-  services.earlyoom = {
-    enable = true;
-    freeMemThreshold = 5;
-    freeSwapThreshold = 10;
+  # Account name -> sops secret holding its mkpasswd hash. Add an entry only once
+  # that secret decrypts here, or the account ends up with no password.
+  options.local.users.sopsPasswords = lib.mkOption {
+    type = lib.types.attrsOf lib.types.str;
+    default = { };
+    example = {
+      alice = "alice-password-hash";
+    };
+    description = "Accounts whose password hash comes from sops.";
   };
 
-  nix.settings.experimental-features = [
-    "nix-command"
-    "flakes"
-  ];
+  config = {
+    boot.loader.grub.enable = true;
+    boot.loader.efi.canTouchEfiVariables = true;
+    boot.loader.efi.efiSysMountPoint = "/boot";
+    boot.loader.grub.efiSupport = true;
+    boot.loader.grub.device = "nodev";
+    boot.loader.grub.configurationLimit = 20;
 
-  nix.optimise.automatic = true;
-  nix.optimise.dates = [ "*-*-2,16 04:15:00" ];
+    boot.kernelParams = [
+      "zswap.enabled=1"
+      "zswap.compressor=zstd"
+      "zswap.zpool=z3fold"
+      "zswap.max_pool_percent=20"
+    ];
 
-  programs.nh = {
-    enable = true;
-    flake = flakePath;
-    clean = {
+    swapDevices = [
+      {
+        device = "/swapfile";
+        size = 8 * 1024;
+      }
+    ];
+
+    services.earlyoom = {
       enable = true;
-      dates = "*-*-1,15 03:15:00";
-      extraArgs = "--keep 10 --keep-since 14d";
-    };
-  };
-
-  sops = {
-    defaultSopsFile = ../../secrets/secrets.yaml;
-    defaultSopsFormat = "yaml";
-
-    secrets = {
-      github-API = { };
+      freeMemThreshold = 5;
+      freeSwapThreshold = 10;
     };
 
-    templates."conf-access-tokens" = {
-      content = "extra-access-tokens = github.com=${config.sops.placeholder.github-API}";
-      owner = "max";
-    };
-  };
-
-  nix.extraOptions = "!include ${config.sops.templates."conf-access-tokens".path}";
-
-  # nixos-rebuild's --update-input was removed; inputs are bumped separately.
-  # The unit runs as root, so hand the lock back to its owner afterwards.
-  systemd.services.nixos-upgrade.preStart = ''
-    ${pkgs.git}/bin/git config --global --add safe.directory ${flakePath}
-    ${config.nix.package}/bin/nix flake update --flake ${flakePath} nixpkgs nixpkgs-unstable
-    ${pkgs.coreutils}/bin/chown max:users ${flakePath}/flake.lock
-  '';
-
-  system.autoUpgrade = {
-    enable = true;
-    allowReboot = true;
-    flake = "${flakePath}#${config.networking.hostName}";
-    flags = [ "-L" ];
-    dates = "weekly";
-    randomizedDelaySec = "45min";
-    rebootWindow = {
-      lower = "03:00";
-      upper = "05:00";
-    };
-  };
-
-  networking.networkmanager.enable = true;
-
-  programs.firejail.enable = true;
-
-  time.timeZone = "Europe/London";
-
-  i18n.defaultLocale = "en_GB.UTF-8";
-
-  i18n.extraLocaleSettings = {
-    LC_ADDRESS = "en_GB.UTF-8";
-    LC_IDENTIFICATION = "en_GB.UTF-8";
-    LC_MEASUREMENT = "en_GB.UTF-8";
-    LC_MONETARY = "en_GB.UTF-8";
-    LC_NAME = "en_GB.UTF-8";
-    LC_NUMERIC = "en_GB.UTF-8";
-    LC_PAPER = "en_GB.UTF-8";
-    LC_TELEPHONE = "en_GB.UTF-8";
-    LC_TIME = "en_GB.UTF-8";
-  };
-
-  console.keyMap = "uk";
-
-  users.users.max = {
-    isNormalUser = true;
-    description = "Max Carroll";
-    extraGroups = [
-      "networkmanager"
-      "wheel"
-      "keys"
-      "novpn"
+    nix.settings.experimental-features = [
+      "nix-command"
+      "flakes"
     ];
-    packages = with pkgs; [
-      kdePackages.kate
+
+    nix.optimise.automatic = true;
+    nix.optimise.dates = [ "*-*-2,16 04:15:00" ];
+
+    programs.nh = {
+      enable = true;
+      flake = flakePath;
+      clean = {
+        enable = true;
+        dates = "*-*-1,15 03:15:00";
+        extraArgs = "--keep 10 --keep-since 14d";
+      };
+    };
+
+    # Every secret is declared here, whoever consumes it. Home Manager runs as max
+    # and cannot read a root-only host key, so it reads these rendered paths
+    # instead of decrypting anything itself.
+    sops = {
+      defaultSopsFile = ../../secrets/secrets.yaml;
+      defaultSopsFormat = "yaml";
+
+      secrets = {
+        github-API = { };
+        exercism-API.owner = "max";
+      }
+      # Decrypted to /run/secrets-for-users before accounts exist, so these
+      # cannot take an owner.
+      // lib.mapAttrs' (_: secret: lib.nameValuePair secret { neededForUsers = true; }) cfg.sopsPasswords;
+
+      templates."conf-access-tokens" = {
+        content = "extra-access-tokens = github.com=${config.sops.placeholder.github-API}";
+        owner = "max";
+      };
+    };
+
+    # !include, not readFile: readFile would resolve at eval time, which needs
+    # --impure and copies the token into the world-readable store. !include also
+    # tolerates the file being absent, which it is until sops has run.
+    nix.extraOptions = "!include ${config.sops.templates."conf-access-tokens".path}";
+
+    # nixos-rebuild's --update-input was removed; inputs are bumped separately.
+    # The unit runs as root, so hand the lock back to its owner afterwards.
+    systemd.services.nixos-upgrade.preStart = ''
+      ${pkgs.git}/bin/git config --global --add safe.directory ${flakePath}
+      ${config.nix.package}/bin/nix flake update --flake ${flakePath} nixpkgs nixpkgs-unstable
+      ${pkgs.coreutils}/bin/chown max:users ${flakePath}/flake.lock
+    '';
+
+    system.autoUpgrade = {
+      enable = true;
+      allowReboot = true;
+      flake = "${flakePath}#${config.networking.hostName}";
+      flags = [ "-L" ];
+      dates = "weekly";
+      randomizedDelaySec = "45min";
+      rebootWindow = {
+        lower = "03:00";
+        upper = "05:00";
+      };
+    };
+
+    networking.networkmanager.enable = true;
+
+    programs.firejail.enable = true;
+
+    time.timeZone = "Europe/London";
+
+    i18n.defaultLocale = "en_GB.UTF-8";
+
+    i18n.extraLocaleSettings = {
+      LC_ADDRESS = "en_GB.UTF-8";
+      LC_IDENTIFICATION = "en_GB.UTF-8";
+      LC_MEASUREMENT = "en_GB.UTF-8";
+      LC_MONETARY = "en_GB.UTF-8";
+      LC_NAME = "en_GB.UTF-8";
+      LC_NUMERIC = "en_GB.UTF-8";
+      LC_PAPER = "en_GB.UTF-8";
+      LC_TELEPHONE = "en_GB.UTF-8";
+      LC_TIME = "en_GB.UTF-8";
+    };
+
+    console.keyMap = "uk";
+
+    users.users = lib.mkMerge [
+      (lib.mapAttrs (_: secret: {
+        hashedPasswordFile = config.sops.secrets.${secret}.path;
+      }) cfg.sopsPasswords)
+      {
+        max = {
+          isNormalUser = true;
+          description = "Max Carroll";
+          extraGroups = [
+            "networkmanager"
+            "wheel"
+            "keys"
+            "novpn"
+          ];
+          packages = with pkgs; [
+            kdePackages.kate
+          ];
+        };
+      }
     ];
+
+    nixpkgs.config.allowUnfree = true;
+
+    environment.systemPackages = with pkgs; [
+      git
+      vscode
+      wayland-utils
+      wl-clipboard
+    ];
+
+    system.stateVersion = lib.mkDefault "25.05";
+
+    warnings = lib.mapAttrsToList (
+      name: _:
+      "${name} has a sops password but users.mutableUsers is true, so it only applies at account creation."
+    ) (lib.optionalAttrs config.users.mutableUsers cfg.sopsPasswords);
   };
-
-  nixpkgs.config.allowUnfree = true;
-
-  environment.systemPackages = with pkgs; [
-    git
-    vscode
-    wayland-utils
-    wl-clipboard
-  ];
-
-  system.stateVersion = lib.mkDefault "25.05";
 }

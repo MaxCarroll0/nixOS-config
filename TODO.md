@@ -103,3 +103,16 @@ When that happens, work through:
 
 - [ ] Knowledge-base stack: which static generator (decided: read-only, no app)
 - [ ] Whether a LAN device can relay WoL so remote wake works off-LAN
+
+## Secrets and host keys
+
+- [x] All secrets declared once at system level; HM reads /run/secrets paths
+- [x] Laptop enables sshd so it gets a host key for sops
+- [x] `local.users.sopsPasswords` maps accounts to sops hash secrets
+- [x] Assertions: ssh lockout pair, WoL consistency, sshKey outside the store,
+      web hostnames; warning on unverified builder host key
+- [x] README secrets steps and justfile recipes
+- [ ] Run `just host-age-key` on each machine, add to `.sops.yaml`, `just rekey`
+- [ ] Add `max-password-hash` via `mkpasswd`, set `local.users.sopsPasswords`
+- [ ] Confirm `/run/secrets-for-users/...` exists, then set `users.mutableUsers = false`
+- [ ] Drop `sops.age.keyFile` from the hosts once host-key decryption is proven
