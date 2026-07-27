@@ -8,9 +8,9 @@
     ../../modules/nixos/common.nix
     ../../modules/nixos/desktop-env.nix
     ../../modules/nixos/vpn.nix
-    ../../modules/nixos/fde.nix
     ../../modules/nixos/wake.nix
     ../../modules/nixos/power.nix
+    ../../modules/nixos/storage.nix
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/server/build-host.nix
@@ -42,10 +42,15 @@
     hostnames = { };
   };
 
+  local.storage = {
+    spinDownRotational.enable = true;
+    lazyMounts = { };
+  };
+
   local.power = {
     monitoring.enable = true;
     idle.optimise = true;
-    idle.policy = "always-on";
+    idle.policy = "autosuspend";
     # Fill from `ip link` and the BIOS Wake-on-LAN setting.
     wakeOnLan = {
       interface = null;

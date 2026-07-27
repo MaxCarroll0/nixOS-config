@@ -8,7 +8,6 @@
     ../../modules/nixos/common.nix
     ../../modules/nixos/desktop-env.nix
     ../../modules/nixos/vpn.nix
-    ../../modules/nixos/fde.nix
     ../../modules/nixos/wake.nix
     ../../modules/nixos/build-client.nix
     ../../modules/nixos/server/ssh.nix
@@ -23,7 +22,16 @@
     enable = true;
     allowUsers = [ "max" ];
   };
-  local.server.tailscale.enable = true;
+  # Interim relay: only routes while the laptop is actually at home.
+  local.server.tailscale = {
+    enable = true;
+    advertiseRoutes = [ "192.168.200.0/24" ];
+  };
+
+  local.wake.peers.desktop = {
+    mac = null; # from `ip link` on the desktop
+    broadcast = "192.168.200.255";
+  };
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
 
   # Kept alongside the host key until host-key decryption is proven on both

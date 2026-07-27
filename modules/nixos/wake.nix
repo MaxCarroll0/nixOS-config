@@ -15,7 +15,7 @@ let
       mac="${toString (p.mac or "")}"
       bcast="${toString (p.broadcast or "")}"
       unlockPort="${toString p.unlockPort}"
-      passFile="${p.passphraseFile}"
+      passFile="${toString (if p.passphraseFile == null then "" else p.passphraseFile)}"
       timeout="${toString p.timeoutSeconds}"
       ;;
   '';
@@ -44,21 +44,22 @@ let
         if [ -n "$bcast" ]; then wol -i "$bcast" "$mac"; else wol "$mac"; fi
       fi
 
-      [ -n "$unlockPort" ] || exit 1
-
       deadline=$(( $(date +%s) + timeout ))
-      while [ "$(date +%s)" -lt "$deadline" ]; do
-        if probe "$host" "$unlockPort"; then
-          if [ -r "$passFile" ]; then
-            ssh -p "$unlockPort" -o StrictHostKeyChecking=accept-new \
-                -o ConnectTimeout=5 "root@$host" < "$passFile" || true
-          else
-            echo "no passphrase at $passFile" >&2
+
+      if [ -n "$passFile" ]; then
+        while [ "$(date +%s)" -lt "$deadline" ]; do
+          if probe "$host" "$unlockPort"; then
+            if [ -r "$passFile" ]; then
+              ssh -p "$unlockPort" -o StrictHostKeyChecking=accept-new \
+                  -o ConnectTimeout=5 "root@$host" < "$passFile" || true
+            else
+              echo "no passphrase at $passFile" >&2
+            fi
+            break
           fi
-          break
-        fi
-        sleep 2
-      done
+          sleep 2
+        done
+      fi
 
       while [ "$(date +%s)" -lt "$deadline" ]; do
         probe "$host" 22 && exit 0
@@ -90,8 +91,9 @@ in
               default = 2222;
             };
             passphraseFile = lib.mkOption {
-              type = lib.types.str;
-              description = "Root-only; protected at rest by this host's own FDE.";
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Set only when this host performs the unlock itself.";
             };
             timeoutSeconds = lib.mkOption {
               type = lib.types.int;

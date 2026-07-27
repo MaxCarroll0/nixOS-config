@@ -96,12 +96,6 @@ in
       default = 20;
     };
 
-    idle.allowHostingDowntime = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = "Allow a sleeping policy while hosting, accepting the outage.";
-    };
-
     idle.autosuspend.loadThreshold = lib.mkOption {
       type = lib.types.float;
       default = 2.5;
@@ -130,29 +124,14 @@ in
     {
       assertions = [
         {
-          # `or` so this module stays importable without server/web.nix.
-          assertion =
-            ((config.local.web.public.enable or false) && !cfg.idle.allowHostingDowntime)
-            -> cfg.idle.policy == "always-on";
-          message = "Public hosting with idle.policy \"${cfg.idle.policy}\": a suspended host serves no pages and nothing can wake it remotely. Use \"always-on\" or set idle.allowHostingDowntime.";
-        }
-        {
           assertion = (cfg.wakeOnLan.interface == null) == (cfg.wakeOnLan.mac == null);
           message = "local.power.wakeOnLan needs both interface and mac, or neither.";
         }
       ];
 
-      warnings =
-        lib.optional
-          (
-            (config.local.web.public.enable or false)
-            && cfg.idle.allowHostingDowntime
-            && cfg.idle.policy != "always-on"
-          )
-          "idle.policy \"${cfg.idle.policy}\" with public hosting on: the site is down whenever this host sleeps."
-        ++ lib.optional (
-          cfg.idle.policy != "always-on" && cfg.wakeOnLan.mac == null
-        ) "idle.policy \"${cfg.idle.policy}\" with no Wake-on-LAN, so nothing can wake this host remotely.";
+      warnings = lib.optional (
+        cfg.idle.policy != "always-on" && cfg.wakeOnLan.mac == null
+      ) "idle.policy \"${cfg.idle.policy}\" with no Wake-on-LAN, so nothing can wake this host remotely.";
 
       environment.systemPackages = [
         powerReport

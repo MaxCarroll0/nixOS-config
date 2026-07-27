@@ -16,6 +16,14 @@ in
       description = "Fixed listen port, so the firewall rule is static.";
     };
 
+    # Routes still need approving in the tailscale admin console.
+    advertiseRoutes = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "192.168.1.0/24" ];
+      description = "LAN subnets this host routes for the tailnet.";
+    };
+
     authKeySecret = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -33,7 +41,13 @@ in
           enable = true;
           inherit (cfg) port;
           openFirewall = true;
-          useRoutingFeatures = "none";
+          useRoutingFeatures = if cfg.advertiseRoutes == [ ] then "none" else "server";
+          extraUpFlags = lib.optional (
+            cfg.advertiseRoutes != [ ]
+          ) "--advertise-routes=${lib.concatStringsSep "," cfg.advertiseRoutes}";
+          extraSetFlags = lib.optional (
+            cfg.advertiseRoutes != [ ]
+          ) "--advertise-routes=${lib.concatStringsSep "," cfg.advertiseRoutes}";
         };
 
         # Control-plane and DERP traffic goes out the physical link; replies to
