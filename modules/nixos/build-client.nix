@@ -10,6 +10,8 @@
 let
   cfg = config.local.build.client;
 
+  # Delegates to wake-peer when the builder is a configured peer, so a LUKS
+  # unlock happens on the way up.
   wake = pkgs.writeShellApplication {
     name = "builder-wake";
     runtimeInputs = with pkgs; [
@@ -21,9 +23,14 @@ let
       if nc -z -w "${toString cfg.wake.probeSeconds}" "$host" 22 2>/dev/null; then
         exit 0
       fi
-      ${lib.optionalString (cfg.wake.mac != null) ''
-        wol ${lib.optionalString (cfg.wake.broadcast != null) "-i ${cfg.wake.broadcast}"} ${cfg.wake.mac}
-      ''}
+      ${
+        if config.local.wake.peers ? ${cfg.builderHost} then
+          ''exec ${config.local.wake.package}/bin/wake-peer "$host"''
+        else
+          lib.optionalString (cfg.wake.mac != null) ''
+            wol ${lib.optionalString (cfg.wake.broadcast != null) "-i ${cfg.wake.broadcast}"} ${cfg.wake.mac}
+          ''
+      }
       exit 1
     '';
   };
@@ -105,6 +112,7 @@ in
         type = lib.types.int;
         default = 2;
       };
+
     };
   };
 

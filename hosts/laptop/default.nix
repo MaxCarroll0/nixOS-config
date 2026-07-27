@@ -8,6 +8,8 @@
     ../../modules/nixos/common.nix
     ../../modules/nixos/desktop-env.nix
     ../../modules/nixos/vpn.nix
+    ../../modules/nixos/fde.nix
+    ../../modules/nixos/wake.nix
     ../../modules/nixos/build-client.nix
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/server/tailscale.nix
