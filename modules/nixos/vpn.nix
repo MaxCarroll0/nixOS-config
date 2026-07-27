@@ -12,12 +12,16 @@ let
 
   unitTableName = unit: "novpn-" + lib.replaceStrings [ "." "@" "\\" ] [ "-" "-" "-" ] unit;
 
+  # DNS stays unmarked: the resolver is an address inside the tunnel, so queries
+  # sent out the physical link cannot reach it.
   bypassRules =
     unit:
     pkgs.writeText "${unitTableName unit}.nft" ''
       table inet ${unitTableName unit} {
         chain output {
           type route hook output priority mangle; policy accept;
+          socket cgroupv2 level 2 "system.slice/${unit}" udp dport 53 return
+          socket cgroupv2 level 2 "system.slice/${unit}" tcp dport 53 return
           socket cgroupv2 level 2 "system.slice/${unit}" meta mark set 0xca6c
         }
       }

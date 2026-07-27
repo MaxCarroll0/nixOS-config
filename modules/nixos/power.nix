@@ -10,7 +10,6 @@
 let
   cfg = config.local.power;
 
-  # RAPL counters are per-domain energy in microjoules; watts is the delta.
   powerReport = pkgs.writeShellApplication {
     name = "power-report";
     runtimeInputs = [
@@ -36,7 +35,7 @@ let
         name=$(cat "$d/name" 2>/dev/null || basename "$d")
         after=$(cat "$d/energy_uj")
         delta=$(( after - ''${before["$d"]} ))
-        # The counter is finite and wraps; fold it back rather than dropping it.
+        # The counter wraps at max_energy_range_uj.
         if [ "$delta" -lt 0 ]; then
           range=$(cat "$d/max_energy_range_uj" 2>/dev/null || echo 0)
           [ "$range" -gt 0 ] || continue
@@ -194,8 +193,7 @@ in
 
       systemd.services.scheduled-suspend = {
         serviceConfig.Type = "oneshot";
-        # Next occurrence of wakeAt, not tomorrow's: suspending at 01:00 with a
-        # wake at 08:00 must mean 7 hours, not 31.
+        # wakeAt is a time of day; pick its next occurrence.
         script = ''
           now=$(${pkgs.coreutils}/bin/date +%s)
           target=$(${pkgs.coreutils}/bin/date -d '${cfg.idle.scheduled.wakeAt}' +%s)
@@ -224,9 +222,8 @@ in
           };
           Users.class = "Users";
           LogindSessionsIdle.class = "LogindSessionsIdle";
-          # A remote build arrives over SSH and holds port 22 for its duration,
-          # so ActiveConnection covers it. Matching nix-daemon by name cannot:
-          # it runs persistently, so the host would never suspend.
+          # Remote builds hold port 22 open, so ActiveConnection covers them.
+          # nix-daemon runs persistently and cannot be matched by name.
           Load = {
             class = "Load";
             threshold = cfg.idle.autosuspend.loadThreshold;
@@ -235,8 +232,7 @@ in
       };
     })
 
-    # node_exporter runs as its own user, so a wheel-only relaxation would fix
-    # the CLI and leave the rapl collector silently blind.
+    # node_exporter runs as its own user, so it needs the group too.
     (lib.mkIf cfg.monitoring.userReadable {
       users.groups.powermon = { };
       users.users.max.extraGroups = [ "powermon" ];

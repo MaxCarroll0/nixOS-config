@@ -10,6 +10,39 @@
 let
   flakePath = "/home/max/.config/nix";
   cfg = config.local.users;
+
+  rebuild = pkgs.writeShellApplication {
+    name = "rebuild";
+    runtimeInputs = [ pkgs.git ];
+    text = ''
+      host="${config.networking.hostName}"
+      flake="${flakePath}"
+      opts=()
+
+      if [ "''${1:-}" = "--local" ]; then
+        opts+=(--option builders "")
+        shift
+      fi
+
+      action="''${1:-switch}"
+      [ $# -gt 0 ] && shift
+
+      untracked=$(git -C "$flake" ls-files --others --exclude-standard -- '*.nix' 'secrets/*' || true)
+      if [ -n "$untracked" ]; then
+        echo "warning: untracked files, invisible to the flake:" >&2
+        echo "$untracked" | sed 's/^/  /' >&2
+      fi
+
+      case "$action" in
+        home)
+          exec home-manager switch --flake "$flake#max@$host" "''${opts[@]}" "$@" ;;
+        build|dry-build|repl)
+          exec nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
+        *)
+          exec sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
+      esac
+    '';
+  };
 in
 
 {
@@ -57,6 +90,10 @@ in
       "flakes"
     ];
 
+    nix.settings.connect-timeout = 5;
+    nix.settings.fallback = true;
+    nix.settings.builders-use-substitutes = true;
+
     nix.optimise.automatic = true;
     nix.optimise.dates = [ "*-*-2,16 04:15:00" ];
 
@@ -70,9 +107,8 @@ in
       };
     };
 
-    # Every secret is declared here, whoever consumes it. Home Manager runs as max
-    # and cannot read a root-only host key, so it reads these rendered paths
-    # instead of decrypting anything itself.
+    # Declared here whoever consumes them: Home Manager runs as the user and
+    # cannot read a root-only host key.
     sops = {
       defaultSopsFile = ../../secrets/secrets.yaml;
       defaultSopsFormat = "yaml";
@@ -162,12 +198,15 @@ in
 
     nixpkgs.config.allowUnfree = true;
 
-    environment.systemPackages = with pkgs; [
+    environment.systemPackages = [
+      rebuild
+    ]
+    ++ (with pkgs; [
       git
       vscode
       wayland-utils
       wl-clipboard
-    ];
+    ]);
 
     system.stateVersion = lib.mkDefault "25.05";
 

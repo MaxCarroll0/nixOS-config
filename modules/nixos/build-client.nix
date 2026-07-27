@@ -28,10 +28,7 @@ let
     '';
   };
 
-  # Fires the magic packet then fails fast, so the first build falls back to
-  # local while the builder boots and later ones land remotely. The probe owns
-  # the timeout; nc must not get -w, which would also cap idle time and tear
-  # down a long build mid-flight.
+  # nc must not get -w: it caps idle time too, tearing down long builds.
   proxy = pkgs.writeShellScript "builder-proxy" ''
     ${wake}/bin/builder-wake "$1" || exit 1
     exec ${pkgs.netcat-openbsd}/bin/nc "$1" "$2"
@@ -53,8 +50,7 @@ in
     };
 
     sshKey = lib.mkOption {
-      # Deliberately str, not path: a path literal would copy the private key
-      # into the world-readable Nix store.
+      # str, not path: a path literal would copy the key into the store.
       type = lib.types.str;
       default = "/root/.ssh/nixremote";
       description = ''
@@ -136,7 +132,7 @@ in
         IdentityFile ${toString cfg.sshKey}
         ConnectTimeout ${toString cfg.wake.probeSeconds}
         ServerAliveInterval 30
-        ${lib.optionalString (cfg.wake.mac != null) "ProxyCommand ${proxy} %h %p"}
+        ProxyCommand ${proxy} %h %p
     '';
 
     environment.systemPackages = [ wake ];
