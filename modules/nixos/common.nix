@@ -29,8 +29,9 @@ let
 
       untracked=$(git -C "$flake" ls-files --others --exclude-standard -- '*.nix' 'secrets/*' || true)
       if [ -n "$untracked" ]; then
+        mapfile -t untrackedFiles <<< "$untracked"
         echo "warning: untracked files, invisible to the flake:" >&2
-        echo "$untracked" | sed 's/^/  /' >&2
+        printf '  %s\n' "''${untrackedFiles[@]}" >&2
       fi
 
       case "$action" in
