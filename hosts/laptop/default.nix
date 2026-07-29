@@ -16,6 +16,17 @@
 
   networking.hostName = "laptop";
 
+  services.earlyoom = {
+    freeMemThreshold = 15;
+    freeSwapThreshold = 25;
+    extraArgs = [
+      "--prefer"
+      "^firefox$"
+      "--avoid"
+      "^(sshd?|systemd|kwin_wayland|Hyprland|plasmashell)$"
+    ];
+  };
+
   # Enabling sshd is also what generates /etc/ssh/ssh_host_ed25519_key, which
   # sops.age.sshKeyPaths picks up by default.
   local.server.ssh = {

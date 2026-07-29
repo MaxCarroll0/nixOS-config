@@ -93,8 +93,8 @@ in
 
     services.earlyoom = {
       enable = true;
-      freeMemThreshold = 5;
-      freeSwapThreshold = 10;
+      freeMemThreshold = lib.mkDefault 5;
+      freeSwapThreshold = lib.mkDefault 10;
     };
 
     nix.settings.experimental-features = [
