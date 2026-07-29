@@ -475,8 +475,8 @@ in
       src = pkgs.fetchFromGitHub {
         owner = "pystardust";
         repo = "ani-cli";
-        rev = "89ec9314eba7b66c894bf8bbf3b2b25a3b80743a";
-        hash = "sha256-wU25uSikLbuzQ/nAZzWz3ilpM1Ewac4ZuICRCwUn/fQ=";
+        rev = "6129513ee081bec9c2fe888ca7c6e1c11f4d2aca";
+        hash = "sha256-QcsQCbW51/NSUI4WSn75p0JQLyr2xUqZXU1L+5DtevM=";
       };
     }))
     claude-code
