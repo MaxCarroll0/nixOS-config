@@ -44,6 +44,19 @@ let
       esac
     '';
   };
+
+  projectClosureRetention = pkgs.writeShellApplication {
+    name = "project-closure-retention";
+    runtimeInputs = [
+      config.nix.package
+      pkgs.angrr
+      pkgs.python3
+    ];
+    text = ''
+      exec python3 ${./project-closure-retention.py} "$@"
+    '';
+  };
+
 in
 
 {
@@ -101,10 +114,14 @@ in
       flake = flakePath;
       clean = {
         enable = true;
-        dates = "*-*-1,15 03:15:00";
-        extraArgs = "--keep 10 --keep-since 14d";
+        dates = "daily";
+        extraArgs = "--keep 10 --keep-since 14d --no-gcroots";
       };
     };
+
+    systemd.services.nh-clean.preStart = ''
+      ${projectClosureRetention}/bin/project-closure-retention --apply
+    '';
 
     local.users.sopsPasswords.max = "max-password-hash";
 
@@ -199,6 +216,8 @@ in
 
     environment.systemPackages = [
       rebuild
+      projectClosureRetention
+      pkgs.nix-sweep
     ]
     ++ (with pkgs; [
       git
