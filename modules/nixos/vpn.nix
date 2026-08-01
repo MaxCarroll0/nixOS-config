@@ -9,6 +9,10 @@
 
 let
   cfg = config.local.vpn;
+  nixDaemonNovpn = import ./nix-daemon-novpn.nix {
+    inherit pkgs;
+    nixPackage = config.nix.package;
+  };
 
   unitTableName = unit: "novpn-" + lib.replaceStrings [ "." "@" "\\" ] [ "-" "-" "-" ] unit;
 
@@ -85,6 +89,8 @@ in
 
   config = {
     local.vpn.bypassUnits = [ "nix-daemon.service" ];
+
+    environment.systemPackages = [ nixDaemonNovpn ];
 
     networking.networkmanager.unmanaged = [
       "interface-name:proton"
