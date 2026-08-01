@@ -114,6 +114,19 @@ in
     nix.settings.connect-timeout = 5;
     nix.settings.fallback = true;
     nix.settings.builders-use-substitutes = true;
+    nix.settings.substituters = [
+      "https://hyprland.cachix.org"
+    ];
+    nix.settings.trusted-substituters = [
+      "https://hyprland.cachix.org"
+    ];
+    nix.settings.trusted-public-keys = [
+      "hyprland.cachix.org-1:a7pgxzMz7+chwVL3/pzj6jIBMioiJM7ypFP8PwtkuGc="
+    ];
+    nix.settings.trusted-users = [
+      "root"
+      "@wheel"
+    ];
 
     nix.optimise.automatic = true;
     nix.optimise.dates = [ "*-*-2,16 04:15:00" ];

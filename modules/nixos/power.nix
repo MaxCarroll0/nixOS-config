@@ -158,6 +158,7 @@ in
 
       services.udev.extraRules = ''
         ACTION=="add", SUBSYSTEM=="scsi_host", KERNEL=="host*", ATTR{link_power_management_policy}="med_power_with_dipm"
+        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="03", TEST=="../power/control", ATTR{../power/control}="on"
       '';
     })
 
