@@ -46,7 +46,7 @@
   };
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
 
-  boot.loader.grub.extraEntries = ''
+  boot.loader.grub.extraEntries = /* bash */ ''
     menuentry "Ubuntu iso" {
       insmod ext2
       set isofile="/ubuntu/ubuntu.iso"

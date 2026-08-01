@@ -180,7 +180,7 @@ in
       };
     };
 
-    systemd.services.nh-clean.preStart = ''
+    systemd.services.nh-clean.preStart = /* bash */ ''
       ${projectClosureRetention}/bin/project-closure-retention --apply
     '';
 
@@ -212,7 +212,7 @@ in
 
     # nixos-rebuild's --update-input was removed; inputs are bumped separately.
     # The unit runs as root, so hand the lock back to its owner afterwards.
-    systemd.services.nixos-upgrade.preStart = ''
+    systemd.services.nixos-upgrade.preStart = /* bash */ ''
       ${pkgs.git}/bin/git config --global --add safe.directory ${flakePath}
       ${config.nix.package}/bin/nix flake update --flake ${flakePath} nixpkgs nixpkgs-unstable
       ${pkgs.coreutils}/bin/chown max:users ${flakePath}/flake.lock

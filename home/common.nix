@@ -280,7 +280,7 @@ in
   programs.bash = {
     enable = true;
 
-    bashrcExtra = ''
+    bashrcExtra = /* bash */ ''
       set -o vi
       eval "$(direnv hook bash)"
     '';
@@ -554,7 +554,7 @@ in
 
   # Writable copy (not a store symlink) so curd can rewrite it at runtime;
   # replaced on every switch so the repo file stays the source of truth.
-  home.activation.curdConf = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+  home.activation.curdConf = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
     run mkdir -p "$HOME/.config/curd"
     run rm -f "$HOME/.config/curd/curd.conf"
     run install -m644 ${../curd.conf} "$HOME/.config/curd/curd.conf"
@@ -562,7 +562,7 @@ in
 
   # Rendered by the system sops config with owner = max; this cannot reference
   # NixOS config, so the path is spelled out.
-  home.activation.exercismConf = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+  home.activation.exercismConf = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
     if [ -r /run/secrets/exercism-API ]; then
       run ${pkgs.exercism}/bin/exercism configure \
         --no-verify \
@@ -604,7 +604,7 @@ in
 
   # Merges declarative keys into ~/.claude/settings.json without clobbering
   # other entries claude code may write.
-  home.activation.claudeSettings = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+  home.activation.claudeSettings = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
     _settings="$HOME/.claude/settings.json"
     run mkdir -p "$HOME/.claude"
     [ -f "$_settings" ] || echo '{}' > "$_settings"

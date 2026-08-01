@@ -10,7 +10,7 @@
 let
   cfg = config.local.wake;
 
-  peerCase = name: p: ''
+  peerCase = name: p: /* bash */ ''
     ${name})
       mac="${toString (p.mac or "")}"
       bcast="${toString (p.broadcast or "")}"
