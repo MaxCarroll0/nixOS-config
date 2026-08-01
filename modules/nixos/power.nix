@@ -56,6 +56,34 @@ let
       exec powertop --quiet --csv="/var/log/powertop/$(date --utc +%Y%m%dT%H%M%SZ).csv" --time=10
     '';
   };
+
+  suspendSoft = pkgs.writeShellApplication {
+    name = "suspend-soft";
+    runtimeInputs = [
+      pkgs.kdePackages.libkscreen
+      pkgs.sudo
+      pkgs.systemd
+    ];
+    text = ''
+      sudo -n ${pkgs.systemd}/bin/systemctl start suspend-soft-hardware.service
+
+      session_uid=$(id -u)
+      export XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-/run/user/$session_uid}"
+      export DBUS_SESSION_BUS_ADDRESS="''${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+      if [ -z "''${WAYLAND_DISPLAY:-}" ]; then
+        for socket in "$XDG_RUNTIME_DIR"/wayland-*; do
+          if [ -S "$socket" ]; then
+            WAYLAND_DISPLAY=$(basename "$socket")
+            export WAYLAND_DISPLAY
+            break
+          fi
+        done
+      fi
+      if [ -n "''${WAYLAND_DISPLAY:-}" ]; then
+        kscreen-doctor --dpms off
+      fi
+    '';
+  };
 in
 
 {
@@ -146,6 +174,7 @@ in
 
       environment.systemPackages = [
         powerReport
+        suspendSoft
       ]
       ++ (with pkgs; [
         below
@@ -156,6 +185,18 @@ in
         s-tui
         lm_sensors
       ]);
+
+      security.sudo.extraRules = [
+        {
+          users = [ "max" ];
+          commands = [
+            {
+              command = "${pkgs.systemd}/bin/systemctl start suspend-soft-hardware.service";
+              options = [ "NOPASSWD" ];
+            }
+          ];
+        }
+      ];
     }
 
     (lib.mkIf (cfg.wakeOnLan.interface != null) {
@@ -187,6 +228,35 @@ in
             if [ "$id" = 258a:1006 ] || [ "$id" = 1d57:ad17 ]; then
               echo 300000 > "$device/power/autosuspend_delay_ms"
               echo auto > "$device/power/control"
+            fi
+          done
+        '';
+      };
+
+      systemd.services.suspend-soft-hardware = {
+        description = "Suspend idle hardware without suspending the system";
+        serviceConfig.Type = "oneshot";
+        script = ''
+          for device in /sys/bus/usb/devices/*; do
+            id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
+            if [ "$id" = 258a:1006 ] || [ "$id" = 1d57:ad17 ]; then
+              echo 0 > "$device/power/autosuspend_delay_ms"
+              echo auto > "$device/power/control"
+            fi
+          done
+
+          sleep 3
+
+          for device in /sys/bus/usb/devices/*; do
+            id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
+            if [ "$id" = 258a:1006 ] || [ "$id" = 1d57:ad17 ]; then
+              echo 300000 > "$device/power/autosuspend_delay_ms"
+            fi
+          done
+
+          for device in /sys/block/*; do
+            if [ "$(cat "$device/queue/rotational" 2>/dev/null || true)" = 1 ]; then
+              ${pkgs.hdparm}/bin/hdparm -y "/dev/$(basename "$device")"
             fi
           done
         '';
