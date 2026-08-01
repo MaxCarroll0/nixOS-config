@@ -957,7 +957,7 @@ Eglot's default maps =reason-mode= to =ocamllsp=, picked up from the devshell PA
 #+end_src
 
 ** Lean
-=lean4-mode= uses =lsp-mode= rather than eglot.
+=lean4-mode= uses =lsp-mode= rather than eglot. The Lean toolchain itself is project-local via direnv.
 #+begin_src emacs-lisp
 (use-package lean4-mode
   :ensure nil
@@ -991,7 +991,7 @@ Eglot's default maps =reason-mode= to =ocamllsp=, picked up from the devshell PA
 
 ** Agda
 
-agda2-mode is not pinned as an emacs package; it is loaded from whatever =agda= the buffer's direnv puts on PATH (via =agda-mode locate=), so the elisp always matches the project flake's Agda.
+agda2-mode is loaded from the project direnv PATH's =agda=, so the Emacs mode matches the project flake instead of a global Agda install.
 
 #+begin_src emacs-lisp
 

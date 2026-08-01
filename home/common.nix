@@ -3,7 +3,6 @@
   lib,
   pkgs,
   pkgs-unstable,
-  agda-mcp,
   curd,
   claude-code,
   codex-cli,
@@ -437,7 +436,6 @@ in
     curd-cf-refresh
     zoom-novpn
     google-meet
-    agda-mcp
     arxiv-latex-mcp
     paper-search-mcp
     anipyCliPr
@@ -464,9 +462,6 @@ in
     lua-language-server
     shfmt
     exercism
-    # TODO: lean4, agda. Add instead on per-project level
-    lean4
-    agda
     ghostscript
     mpv
     yt-dlp
@@ -523,6 +518,7 @@ in
     };
     associations.added."x-scheme-handler/claude-cli" = "claude-code-url-handler.desktop";
   };
+  xdg.configFile."mimeapps.list".force = true;
 
   xdg.desktopEntries.google-meet = {
     name = "Google Meet";
@@ -567,7 +563,7 @@ in
         --no-verify \
         --api "https://api.exercism.org/v1" \
         --workspace "$HOME/exercism" \
-        --token "$(cat /run/secrets/exercism-API)"
+        --token "$(cat /run/secrets/exercism-API)" >/dev/null
     else
       echo "exercism-API not readable; skipping exercism configure" >&2
     fi

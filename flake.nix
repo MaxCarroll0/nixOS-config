@@ -24,10 +24,6 @@
 
     emacs-overlay.url = "github:nix-community/emacs-overlay";
 
-    agda-mcp = {
-      url = "github:faezs/agda-mcp";
-    };
-
     curd = {
       url = "github:Wraient/curd";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -115,9 +111,6 @@
             claude-code = inputs.claude-code.packages.${system}.default;
             codex-cli = inputs.codex-cli.packages.${system}.default;
             anipySrc = inputs.anipy-cli;
-            agda-mcp = inputs.agda-mcp.packages.${system}.agda-mcp.overrideAttrs (old: {
-              doCheck = false;
-            });
           };
         };
     in

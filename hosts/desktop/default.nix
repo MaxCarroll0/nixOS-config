@@ -1,6 +1,6 @@
 # AMD desktop: workstation plus remote builder, SSH host, and web origin.
 
-{ ... }:
+{ lib, ... }:
 
 {
   imports = [
@@ -18,6 +18,13 @@
   ];
 
   networking.hostName = "desktop";
+
+  swapDevices = lib.mkForce [
+    {
+      device = "/swapfile";
+      size = 32 * 1024;
+    }
+  ];
 
   local.server.ssh = {
     enable = true;
