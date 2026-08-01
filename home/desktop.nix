@@ -16,6 +16,7 @@
       vim_keys = true;
     };
   };
+  xdg.configFile."btop/btop.conf".force = true;
 
   xdg.configFile."powerdevilrc" = {
     force = true;
