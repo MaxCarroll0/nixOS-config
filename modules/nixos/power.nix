@@ -45,6 +45,28 @@ let
       done
     '';
   };
+
+  atopRecorder = pkgs.writeShellApplication {
+    name = "atop-recorder";
+    runtimeInputs = [
+      pkgs.atop
+      pkgs.coreutils
+    ];
+    text = ''
+      exec atop -w "/var/log/atop/atop_$(date --utc +%Y%m%d)" -S -a 60
+    '';
+  };
+
+  powertopSnapshot = pkgs.writeShellApplication {
+    name = "powertop-snapshot";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.powertop
+    ];
+    text = ''
+      exec powertop --quiet --csv="/var/log/powertop/$(date --utc +%Y%m%dT%H%M%SZ).csv" --time=10
+    '';
+  };
 in
 
 {
@@ -137,6 +159,9 @@ in
         powerReport
       ]
       ++ (with pkgs; [
+        atop
+        btop
+        nvtopPackages.amd
         powertop
         powerstat
         s-tui
@@ -158,7 +183,6 @@ in
 
       services.udev.extraRules = ''
         ACTION=="add", SUBSYSTEM=="scsi_host", KERNEL=="host*", ATTR{link_power_management_policy}="med_power_with_dipm"
-        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="03", TEST=="../power/control", ATTR{../power/control}="on"
       '';
     })
 
@@ -225,6 +249,43 @@ in
     })
 
     (lib.mkIf cfg.monitoring.enable {
+      systemd.services.atop-recorder = {
+        description = "Record system and process resource usage";
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig = {
+          ExecStart = lib.getExe atopRecorder;
+          LogsDirectory = "atop";
+          LogsDirectoryMode = "0750";
+          Restart = "always";
+          RestartSec = 5;
+        };
+      };
+
+      systemd.services.powertop-snapshot = {
+        description = "Record device power states and wakeups";
+        serviceConfig = {
+          ExecStart = lib.getExe powertopSnapshot;
+          LogsDirectory = "powertop";
+          LogsDirectoryMode = "0750";
+          Type = "oneshot";
+        };
+      };
+
+      systemd.timers.powertop-snapshot = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnBootSec = "5m";
+          OnUnitActiveSec = "15m";
+          Persistent = true;
+          RandomizedDelaySec = "30s";
+        };
+      };
+
+      systemd.tmpfiles.rules = [
+        "d /var/log/atop 0750 root root 30d"
+        "d /var/log/powertop 0750 root root 30d"
+      ];
+
       services.prometheus.exporters.node = {
         enable = true;
         listenAddress = "127.0.0.1";
@@ -239,6 +300,7 @@ in
       services.prometheus = {
         enable = true;
         listenAddress = "127.0.0.1";
+        retentionTime = "30d";
         scrapeConfigs = [
           {
             job_name = "node";

@@ -158,7 +158,7 @@ in
           StrictHostKeyChecking no
           UserKnownHostsFile /dev/null
         ''}
-        ConnectTimeout ${toString (if cfg.tailscaleSsh then 15 else cfg.wake.probeSeconds)}
+        ${lib.optionalString (!cfg.tailscaleSsh) "ConnectTimeout ${toString cfg.wake.probeSeconds}"}
         ServerAliveInterval 30
         ProxyCommand ${proxy} %h %p
     '';
