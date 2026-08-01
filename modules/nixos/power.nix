@@ -172,19 +172,21 @@ in
 
       services.udev.extraRules = ''
         ACTION=="add", SUBSYSTEM=="scsi_host", KERNEL=="host*", ATTR{link_power_management_policy}="med_power_with_dipm"
-        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="258a", ATTR{idProduct}=="1006", TEST=="power/control", ATTR{power/control}="on"
+        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="258a", ATTR{idProduct}=="1006", TEST=="power/control", ATTR{power/autosuspend_delay_ms}="300000", ATTR{power/control}="auto"
+        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="1d57", ATTR{idProduct}=="ad17", TEST=="power/control", ATTR{power/autosuspend_delay_ms}="300000", ATTR{power/control}="auto"
       '';
 
-      systemd.services.keyboard-no-autosuspend = {
-        description = "Disable USB autosuspend for the keyboard";
+      systemd.services.input-autosuspend = {
+        description = "Delay USB input autosuspend";
         after = [ "powertop.service" ];
         wantedBy = [ "multi-user.target" ];
         serviceConfig.Type = "oneshot";
         script = ''
           for device in /sys/bus/usb/devices/*; do
-            if [ "$(cat "$device/idVendor" 2>/dev/null || true)" = 258a ] \
-              && [ "$(cat "$device/idProduct" 2>/dev/null || true)" = 1006 ]; then
-              echo on > "$device/power/control"
+            id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
+            if [ "$id" = 258a:1006 ] || [ "$id" = 1d57:ad17 ]; then
+              echo 300000 > "$device/power/autosuspend_delay_ms"
+              echo auto > "$device/power/control"
             fi
           done
         '';
