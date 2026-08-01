@@ -13,6 +13,19 @@ let
     inherit pkgs;
     nixPackage = config.nix.package;
   };
+  nixClientCommands = [
+    "nix"
+    "nix-build"
+    "nix-channel"
+    "nix-collect-garbage"
+    "nix-copy-closure"
+    "nix-env"
+    "nix-hash"
+    "nix-instantiate"
+    "nix-prefetch-url"
+    "nix-shell"
+    "nix-store"
+  ];
 
   unitTableName = unit: "novpn-" + lib.replaceStrings [ "." "@" "\\" ] [ "-" "-" "-" ] unit;
 
@@ -91,6 +104,14 @@ in
     local.vpn.bypassUnits = [ "nix-daemon.service" ];
 
     environment.systemPackages = [ nixDaemonNovpn ];
+
+    security.wrappers = lib.genAttrs nixClientCommands (command: {
+      source = "${config.nix.package}/bin/${command}";
+      owner = "root";
+      group = "novpn";
+      permissions = "u+rx,g+rx,o-rwx";
+      setgid = true;
+    });
 
     networking.networkmanager.unmanaged = [
       "interface-name:proton"
