@@ -70,6 +70,9 @@ in
         };
 
         systemd.services.tailscaled-autoconnect = {
+          # Enrollment must not hold up or fail a system activation. Start it
+          # from a timer and retry transient failures in the background.
+          wantedBy = lib.mkForce [ ];
           after = [
             "network-online.target"
             "novpn-tailscaled-service.service"
@@ -79,7 +82,19 @@ in
             "network-online.target"
             "sops-install-secrets.service"
           ];
-          serviceConfig.TimeoutStartSec = "20s";
+          serviceConfig = {
+            TimeoutStartSec = "20s";
+            Restart = "on-failure";
+            RestartSec = "1min";
+          };
+        };
+
+        systemd.timers.tailscaled-autoconnect = {
+          wantedBy = [ "timers.target" ];
+          timerConfig = {
+            OnBootSec = "5s";
+            Unit = "tailscaled-autoconnect.service";
+          };
         };
       })
     ]
