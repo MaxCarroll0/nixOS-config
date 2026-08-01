@@ -57,6 +57,7 @@
 
   local.power = {
     monitoring.enable = true;
+    monitoring.userReadable = true;
     idle.optimise = true;
     idle.policy = "always-on";
     # Fill from `ip link` and the BIOS Wake-on-LAN setting.

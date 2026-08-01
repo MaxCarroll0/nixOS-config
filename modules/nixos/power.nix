@@ -19,14 +19,23 @@ let
     text = ''
       interval="''${1:-5}"
       declare -A before
+      available=0
+      domains=0
       for d in /sys/class/powercap/*/; do
+        [ -e "$d/energy_uj" ] || continue
+        available=$((available + 1))
         [ -r "$d/energy_uj" ] || continue
         before["$d"]=$(cat "$d/energy_uj")
+        domains=$((domains + 1))
       done
-      if [ ''${#before[@]} -eq 0 ]; then
-        echo "no readable powercap domains." >&2
-        echo "energy_uj is root-only since Linux 5.10; set" >&2
-        echo "local.power.monitoring.userReadable = true, or run this as root." >&2
+      if [ "$domains" -eq 0 ]; then
+        if [ "$available" -eq 0 ]; then
+          echo "no powercap energy counters found." >&2
+        else
+          echo "no readable powercap domains." >&2
+          echo "energy_uj is root-only since Linux 5.10; set" >&2
+          echo "local.power.monitoring.userReadable = true, or run this as root." >&2
+        fi
         exit 1
       fi
       sleep "$interval"
