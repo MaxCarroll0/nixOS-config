@@ -104,6 +104,7 @@ in
     };
     networking.wg-quick.interfaces.proton-2.configFile = config.sops.secrets.proton-wg-2.path;
     systemd.services = lib.listToAttrs (map bypassService cfg.bypassUnits) // {
+      nix-daemon.serviceConfig.Group = "novpn";
       "wg-quick-proton" = {
         after = [ "sops-install-secrets.service" ];
         wants = [ "sops-install-secrets.service" ];
