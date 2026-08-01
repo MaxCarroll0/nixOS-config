@@ -53,7 +53,6 @@ let
     name = "sudo-request";
     runtimeInputs = [
       pkgs.kdePackages.ksshaskpass
-      pkgs.sudo
       pkgs.tailscale
     ];
     text = ''
@@ -68,15 +67,15 @@ let
         password="$(${lib.getExe pkgs.kdePackages.ksshaskpass} "Authorize sudo on $host: $command")" || exit
         [ -n "$password" ] || exit 1
         printf '%s\n' "$password" \
-          | tailscale ssh "$host" "sudo -k; sudo -S -p \"\" -v && $command; status=\$?; sudo -k; exit \$status"
+          | tailscale ssh "$host" "/run/wrappers/bin/sudo -k; /run/wrappers/bin/sudo -S -p \"\" -v && $command; status=\$?; /run/wrappers/bin/sudo -k; exit \$status"
         status=$?
         unset password
       else
-        sudo -k
-        SUDO_ASKPASS=${lib.getExe pkgs.kdePackages.ksshaskpass} sudo --askpass --validate || exit
+        /run/wrappers/bin/sudo -k
+        SUDO_ASKPASS=${lib.getExe pkgs.kdePackages.ksshaskpass} /run/wrappers/bin/sudo --askpass --validate || exit
         status=0
         "$@" || status=$?
-        sudo -k
+        /run/wrappers/bin/sudo -k
       fi
       exit "$status"
     '';
