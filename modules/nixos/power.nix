@@ -57,40 +57,45 @@ let
     '';
   };
 
-  suspendSoft = pkgs.writeShellApplication {
-    name = "suspend-soft";
-    runtimeInputs = [
-      pkgs.kdePackages.libkscreen
-      pkgs.systemd
-      pkgs.util-linux
-    ];
-    text = ''
-      if [ "$(id -u)" -ne 0 ]; then
-        echo "run with sudo" >&2
-        exit 1
-      fi
-
-      ${pkgs.systemd}/bin/systemctl start suspend-soft-hardware.service
-
-      session_uid="''${SUDO_UID:-1000}"
-      session_user="''${SUDO_USER:-max}"
-      runtime_dir="/run/user/$session_uid"
-      wayland_display=""
-      for socket in "$runtime_dir"/wayland-*; do
-        if [ -S "$socket" ]; then
-          wayland_display=$(basename "$socket")
-          break
+  softPowerCommand =
+    name: service: dpms:
+    pkgs.writeShellApplication {
+      inherit name;
+      runtimeInputs = [
+        pkgs.kdePackages.libkscreen
+        pkgs.systemd
+        pkgs.util-linux
+      ];
+      text = ''
+        if [ "$(id -u)" -ne 0 ]; then
+          echo "run with sudo" >&2
+          exit 1
         fi
-      done
-      if [ -n "$wayland_display" ]; then
-        runuser -u "$session_user" -- env \
-          XDG_RUNTIME_DIR="$runtime_dir" \
-          DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
-          WAYLAND_DISPLAY="$wayland_display" \
-          kscreen-doctor --dpms off
-      fi
-    '';
-  };
+
+        ${pkgs.systemd}/bin/systemctl start ${service}.service
+
+        session_uid="''${SUDO_UID:-1000}"
+        session_user="''${SUDO_USER:-max}"
+        runtime_dir="/run/user/$session_uid"
+        wayland_display=""
+        for socket in "$runtime_dir"/wayland-*; do
+          if [ -S "$socket" ]; then
+            wayland_display=$(basename "$socket")
+            break
+          fi
+        done
+        if [ -n "$wayland_display" ]; then
+          runuser -u "$session_user" -- env \
+            XDG_RUNTIME_DIR="$runtime_dir" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
+            WAYLAND_DISPLAY="$wayland_display" \
+            kscreen-doctor --dpms ${dpms}
+        fi
+      '';
+    };
+
+  suspendSoft = softPowerCommand "suspend-soft" "suspend-soft-hardware" "off";
+  wakeSoft = softPowerCommand "wake-soft" "wake-soft-hardware" "on";
 in
 
 {
@@ -182,6 +187,7 @@ in
       environment.systemPackages = [
         powerReport
         suspendSoft
+        wakeSoft
       ]
       ++ (with pkgs; [
         below
@@ -253,6 +259,27 @@ in
           for device in /sys/block/*; do
             if [ "$(cat "$device/queue/rotational" 2>/dev/null || true)" = 1 ]; then
               ${pkgs.hdparm}/bin/hdparm -y "/dev/$(basename "$device")"
+            fi
+          done
+        '';
+      };
+
+      systemd.services.wake-soft-hardware = {
+        description = "Wake hardware without changing the system power state";
+        serviceConfig.Type = "oneshot";
+        script = ''
+          for device in /sys/bus/usb/devices/*; do
+            id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
+            if [ "$id" = 258a:1006 ] || [ "$id" = 1d57:ad17 ]; then
+              echo on > "$device/power/control"
+              echo 300000 > "$device/power/autosuspend_delay_ms"
+              echo auto > "$device/power/control"
+            fi
+          done
+
+          for device in /sys/block/*; do
+            if [ "$(cat "$device/queue/rotational" 2>/dev/null || true)" = 1 ]; then
+              ${pkgs.coreutils}/bin/dd if="/dev/$(basename "$device")" of=/dev/null bs=512 count=1 status=none
             fi
           done
         '';
