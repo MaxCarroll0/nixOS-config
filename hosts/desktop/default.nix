@@ -28,10 +28,12 @@
 
   local.server.ssh = {
     enable = true;
+    port = 2222;
     allowUsers = [ "max" ];
   };
   local.server.tailscale = {
     enable = true;
+    ssh = true;
     authKeySecret = "tailscale-auth-key";
   };
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];

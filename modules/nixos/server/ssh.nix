@@ -22,7 +22,13 @@ in
     interface = lib.mkOption {
       type = lib.types.str;
       default = "tailscale0";
-      description = "The only interface on which port 22 is opened.";
+      description = "The only interface on which OpenSSH is allowed.";
+    };
+
+    port = lib.mkOption {
+      type = lib.types.port;
+      default = 22;
+      description = "OpenSSH port.";
     };
 
     allowUsers = lib.mkOption {
@@ -42,6 +48,7 @@ in
     services.openssh = {
       enable = true;
       openFirewall = false;
+      ports = [ cfg.port ];
       hostKeys = [
         {
           path = "/etc/ssh/ssh_host_ed25519_key";
@@ -63,7 +70,7 @@ in
       '';
     };
 
-    networking.firewall.interfaces.${cfg.interface}.allowedTCPPorts = [ 22 ];
+    networking.firewall.interfaces.${cfg.interface}.allowedTCPPorts = [ cfg.port ];
 
     assertions = [
       {

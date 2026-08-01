@@ -31,11 +31,13 @@
   # sops.age.sshKeyPaths picks up by default.
   local.server.ssh = {
     enable = true;
+    port = 2222;
     allowUsers = [ "max" ];
   };
   # Interim relay: only routes while the laptop is actually at home.
   local.server.tailscale = {
     enable = true;
+    ssh = true;
     authKeySecret = "tailscale-auth-key";
     advertiseRoutes = [ "192.168.200.0/24" ];
   };
@@ -59,6 +61,7 @@
   local.build.client = {
     enable = true;
     builderHost = "desktop";
+    publicHostKey = "c3NoLWVkMjU1MTkgQUFBQUMzTnphQzFsWkRJMU5URTVBQUFBSUVobFMzS3gzN25PaEU2bkFua1hnb0hVM0p3dEZMbVQxbUxiRkxjbUxYbDggcm9vdEBkZXNrdG9wCg==";
     maxJobs = 8;
     speedFactor = 4;
   };

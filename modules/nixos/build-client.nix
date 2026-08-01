@@ -20,7 +20,7 @@ let
     ];
     text = ''
       host="''${1:-${cfg.builderHost}}"
-      if nc -z -w "${toString cfg.wake.probeSeconds}" "$host" 22 2>/dev/null; then
+      if nc -z -w "${toString cfg.wake.probeSeconds}" "$host" "${toString cfg.builderPort}" 2>/dev/null; then
         exit 0
       fi
       ${
@@ -54,6 +54,11 @@ in
     builderUser = lib.mkOption {
       type = lib.types.str;
       default = "nixremote";
+    };
+
+    builderPort = lib.mkOption {
+      type = lib.types.port;
+      default = 2222;
     };
 
     sshKey = lib.mkOption {
@@ -123,7 +128,7 @@ in
     nix.buildMachines = [
       (
         {
-          hostName = cfg.builderHost;
+          hostName = "${cfg.builderHost}-builder";
           sshUser = cfg.builderUser;
           sshKey = toString cfg.sshKey;
           protocol = "ssh-ng";
@@ -135,7 +140,9 @@ in
     ];
 
     programs.ssh.extraConfig = ''
-      Host ${cfg.builderHost}
+      Host ${cfg.builderHost}-builder
+        HostName ${cfg.builderHost}
+        Port ${toString cfg.builderPort}
         User ${cfg.builderUser}
         IdentityFile ${toString cfg.sshKey}
         ConnectTimeout ${toString cfg.wake.probeSeconds}
@@ -154,6 +161,6 @@ in
 
     warnings =
       lib.optional (cfg.publicHostKey == null)
-        "publicHostKey is unset, so the builder is unauthenticated. Get it with: ssh-keyscan -t ed25519 ${cfg.builderHost} | base64 -w0";
+        "publicHostKey is unset, so the builder is unauthenticated. Get it with: base64 -w0 /etc/ssh/ssh_host_ed25519_key.pub";
   };
 }

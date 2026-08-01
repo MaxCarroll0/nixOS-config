@@ -16,6 +16,8 @@ in
       description = "Fixed listen port, so the firewall rule is static.";
     };
 
+    ssh = lib.mkEnableOption "Tailscale SSH";
+
     # Routes still need approving in the tailscale admin console.
     advertiseRoutes = lib.mkOption {
       type = lib.types.listOf lib.types.str;
@@ -42,12 +44,16 @@ in
           inherit (cfg) port;
           openFirewall = true;
           useRoutingFeatures = if cfg.advertiseRoutes == [ ] then "none" else "server";
-          extraUpFlags = lib.optional (
-            cfg.advertiseRoutes != [ ]
-          ) "--advertise-routes=${lib.concatStringsSep "," cfg.advertiseRoutes}";
-          extraSetFlags = lib.optional (
-            cfg.advertiseRoutes != [ ]
-          ) "--advertise-routes=${lib.concatStringsSep "," cfg.advertiseRoutes}";
+          extraUpFlags =
+            lib.optional cfg.ssh "--ssh"
+            ++ lib.optional (
+              cfg.advertiseRoutes != [ ]
+            ) "--advertise-routes=${lib.concatStringsSep "," cfg.advertiseRoutes}";
+          extraSetFlags =
+            lib.optional cfg.ssh "--ssh"
+            ++ lib.optional (
+              cfg.advertiseRoutes != [ ]
+            ) "--advertise-routes=${lib.concatStringsSep "," cfg.advertiseRoutes}";
         };
 
         # Use native nftables backend.
