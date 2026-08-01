@@ -59,7 +59,9 @@
   local.build.client = {
     enable = true;
     builderHost = "desktop";
-    publicHostKey = "c3NoLWVkMjU1MTkgQUFBQUMzTnphQzFsWkRJMU5URTVBQUFBSUVobFMzS3gzN25PaEU2bkFua1hnb0hVM0p3dEZMbVQxbUxiRkxjbUxYbDggcm9vdEBkZXNrdG9wCg==";
+    builderUser = "max";
+    builderPort = 22;
+    tailscaleSsh = true;
     maxJobs = 8;
     speedFactor = 4;
   };

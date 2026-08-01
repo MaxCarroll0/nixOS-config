@@ -34,9 +34,7 @@ Turning the desktop into a dual-use workstation and remote server.
 - [x] `nix.settings.trusted-users`, `nrBuildUsers`, `auto-allocate-uids` + `cgroups`
 - [x] `modules/nixos/build-client.nix`: `buildMachines` with `protocol = "ssh-ng"`
 - [x] WoL wake wrapper, first build local and subsequent builds remote
-- [ ] Generate the passphrase-less `nixremote` key, root-owned
-- [ ] Set `local.build.host.authorizedKeys` and flip `enable = true`
-- [ ] Record the desktop's `publicHostKey`
+- [x] Reuse Tailscale SSH identity for builder authentication
 - [x] Verified Nix falls back to a local build when the builder is unreachable
       (logs `cannot build on`, exits 0), so the ProxyCommand approach stands
 - [x] Verified `builder-wake` fails fast in ~2s instead of the TCP timeout, and
@@ -97,7 +95,6 @@ When that happens, work through:
 - [ ] Enable Wake-on-LAN in the desktop BIOS/UEFI; record NIC name and MAC
 - [ ] Create the Tailscale auth key or enrol interactively
 - [ ] Create the Cloudflare tunnel and Access policies; point DNS at Cloudflare
-- [ ] Generate the `nixremote` keypair
 
 ## Open questions
 
