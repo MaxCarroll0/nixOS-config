@@ -50,6 +50,9 @@ in
           ) "--advertise-routes=${lib.concatStringsSep "," cfg.advertiseRoutes}";
         };
 
+        # Use native nftables backend.
+        systemd.services.tailscaled.environment.TS_DEBUG_FIREWALL_MODE = "nftables";
+
         # Control-plane and DERP traffic goes out the physical link; replies to
         # tailnet peers leave via the tunnel and are not marked, so both are needed.
         local.vpn.bypassUnits = [ "tailscaled.service" ];
@@ -64,6 +67,19 @@ in
         systemd.services.tailscaled = {
           after = [ "sops-install-secrets.service" ];
           wants = [ "sops-install-secrets.service" ];
+        };
+
+        systemd.services.tailscaled-autoconnect = {
+          after = [
+            "network-online.target"
+            "novpn-tailscaled-service.service"
+            "sops-install-secrets.service"
+          ];
+          wants = [
+            "network-online.target"
+            "sops-install-secrets.service"
+          ];
+          serviceConfig.TimeoutStartSec = "20s";
         };
       })
     ]

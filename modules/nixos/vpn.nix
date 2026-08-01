@@ -19,9 +19,9 @@ let
     pkgs.writeText "${unitTableName unit}.nft" ''
       table inet ${unitTableName unit} {
         chain output {
-          type route hook output priority mangle; policy accept;
-          socket cgroupv2 level 2 "system.slice/${unit}" udp dport 53 return
-          socket cgroupv2 level 2 "system.slice/${unit}" tcp dport 53 return
+          type route hook output priority mangle + 1; policy accept;
+          socket cgroupv2 level 2 "system.slice/${unit}" udp dport 53 meta mark set 0 return
+          socket cgroupv2 level 2 "system.slice/${unit}" tcp dport 53 meta mark set 0 return
           socket cgroupv2 level 2 "system.slice/${unit}" meta mark set 0xca6c
         }
       }
@@ -147,10 +147,10 @@ in
       family = "inet";
       content = ''
         chain output {
-          type route hook output priority mangle; policy accept;
+          type route hook output priority mangle + 1; policy accept;
 
-          meta skgid 700 udp dport 53 return
-          meta skgid 700 tcp dport 53 return
+          meta skgid 700 udp dport 53 meta mark set 0 return
+          meta skgid 700 tcp dport 53 meta mark set 0 return
           meta skgid 700 meta mark set 0xca6c
         }
 

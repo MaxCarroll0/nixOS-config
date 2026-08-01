@@ -471,12 +471,13 @@ in
     mpv
     yt-dlp
     (pkgs-unstable.ani-cli.overrideAttrs (old: {
-      version = "4.14.1-unstable-2026-07-07";
+      version = "4.15.0-unstable-2026-07-26";
+      runtimeInputs = (old.runtimeInputs or [ ]) ++ [ pkgs.botan3 ];
       src = pkgs.fetchFromGitHub {
         owner = "pystardust";
         repo = "ani-cli";
-        rev = "6129513ee081bec9c2fe888ca7c6e1c11f4d2aca";
-        hash = "sha256-QcsQCbW51/NSUI4WSn75p0JQLyr2xUqZXU1L+5DtevM=";
+        rev = "a8aa499e3c9c70b252e8a899c04d3a29898d5caf";
+        hash = "sha256-E85m9EvP418zcd8bkQDgNuRelMoHHvnThI5v6XnQIfI=";
       };
     }))
     claude-code

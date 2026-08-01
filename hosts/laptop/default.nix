@@ -36,6 +36,7 @@
   # Interim relay: only routes while the laptop is actually at home.
   local.server.tailscale = {
     enable = true;
+    authKeySecret = "tailscale-auth-key";
     advertiseRoutes = [ "192.168.200.0/24" ];
   };
 
@@ -44,10 +45,6 @@
     broadcast = "192.168.200.255";
   };
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
-
-  # Kept alongside the host key until host-key decryption is proven on both
-  # machines; sops-nix tries every configured identity.
-  sops.age.keyFile = "/home/max/.config/sops/age/keys.txt";
 
   boot.loader.grub.extraEntries = ''
     menuentry "Ubuntu iso" {

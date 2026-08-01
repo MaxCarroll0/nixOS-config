@@ -24,7 +24,7 @@ host-age-key:
     nix run nixpkgs#ssh-to-age -- -i /etc/ssh/ssh_host_ed25519_key.pub
 
 edit-secrets:
-    nix run nixpkgs#sops -- secrets/secrets.yaml
+    edit-secrets
 
 # Re-encrypt after changing recipients in .sops.yaml.
 rekey:

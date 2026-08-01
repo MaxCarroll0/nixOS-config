@@ -45,6 +45,15 @@ let
     '';
   };
 
+  editSecrets = pkgs.writeShellApplication {
+    name = "edit-secrets";
+    text = ''
+      ageKey=$(sudo ${pkgs.ssh-to-age}/bin/ssh-to-age -private-key -i /etc/ssh/ssh_host_ed25519_key)
+      export SOPS_AGE_KEY="$ageKey"
+      exec ${pkgs.sops}/bin/sops ${flakePath}/secrets/secrets.yaml
+    '';
+  };
+
   projectClosureRetention = pkgs.writeShellApplication {
     name = "project-closure-retention";
     runtimeInputs = [
@@ -124,6 +133,7 @@ in
     '';
 
     local.users.sopsPasswords.max = "max-password-hash";
+    users.mutableUsers = false;
 
     # Declared here whoever consumes them: Home Manager runs as the user and
     # cannot read a root-only host key.
@@ -216,6 +226,7 @@ in
 
     environment.systemPackages = [
       rebuild
+      editSecrets
       projectClosureRetention
       pkgs.nix-sweep
     ]
