@@ -45,6 +45,7 @@ let
     '';
   };
 
+  # KDE askpass keeps sudo passwords out of the invoking terminal.
   sudoRequest = pkgs.writeShellApplication {
     name = "sudo-request";
     runtimeInputs = [
