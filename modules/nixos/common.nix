@@ -79,6 +79,11 @@ in
   };
 
   config = {
+    security.sudo.extraConfig = ''
+      Defaults:max timestamp_type=global
+      Defaults:max timestamp_timeout=2
+    '';
+
     boot.loader.grub.enable = true;
     boot.loader.efi.canTouchEfiVariables = true;
     boot.loader.efi.efiSysMountPoint = "/boot";

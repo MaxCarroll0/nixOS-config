@@ -46,17 +46,6 @@ let
     '';
   };
 
-  atopRecorder = pkgs.writeShellApplication {
-    name = "atop-recorder";
-    runtimeInputs = [
-      pkgs.atop
-      pkgs.coreutils
-    ];
-    text = ''
-      exec atop -w "/var/log/atop/atop_$(date --utc +%Y%m%d)" -S -a 60
-    '';
-  };
-
   powertopSnapshot = pkgs.writeShellApplication {
     name = "powertop-snapshot";
     runtimeInputs = [
@@ -159,7 +148,7 @@ in
         powerReport
       ]
       ++ (with pkgs; [
-        atop
+        below
         btop
         nvtopPackages.amd
         powertop
@@ -249,16 +238,10 @@ in
     })
 
     (lib.mkIf cfg.monitoring.enable {
-      systemd.services.atop-recorder = {
-        description = "Record system and process resource usage";
-        wantedBy = [ "multi-user.target" ];
-        serviceConfig = {
-          ExecStart = lib.getExe atopRecorder;
-          LogsDirectory = "atop";
-          LogsDirectoryMode = "0750";
-          Restart = "always";
-          RestartSec = 5;
-        };
+      services.below = {
+        enable = true;
+        collect.ioStats = true;
+        retention.time = 30 * 24 * 60 * 60;
       };
 
       systemd.services.powertop-snapshot = {
@@ -282,7 +265,6 @@ in
       };
 
       systemd.tmpfiles.rules = [
-        "d /var/log/atop 0750 root root 30d"
         "d /var/log/powertop 0750 root root 30d"
       ];
 
