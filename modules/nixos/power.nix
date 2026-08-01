@@ -354,6 +354,20 @@ in
         SUBSYSTEM=="powercap", ACTION=="add", RUN+="${pkgs.coreutils}/bin/chgrp -R powermon /sys%p", RUN+="${pkgs.coreutils}/bin/chmod -R g=u /sys%p"
       '';
 
+      systemd.services.powercap-permissions = {
+        description = "Allow the powermon group to read energy counters";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "systemd-modules-load.service" ];
+        serviceConfig.Type = "oneshot";
+        script = ''
+          for energy in /sys/class/powercap/*/energy_uj; do
+            [ -e "$energy" ] || continue
+            chgrp powermon "$energy"
+            chmod g+r "$energy"
+          done
+        '';
+      };
+
       systemd.services.prometheus-node-exporter.serviceConfig.SupplementaryGroups = [ "powermon" ];
     })
 
