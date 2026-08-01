@@ -172,7 +172,23 @@ in
 
       services.udev.extraRules = ''
         ACTION=="add", SUBSYSTEM=="scsi_host", KERNEL=="host*", ATTR{link_power_management_policy}="med_power_with_dipm"
+        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="258a", ATTR{idProduct}=="1006", TEST=="power/control", ATTR{power/control}="on"
       '';
+
+      systemd.services.keyboard-no-autosuspend = {
+        description = "Disable USB autosuspend for the keyboard";
+        after = [ "powertop.service" ];
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig.Type = "oneshot";
+        script = ''
+          for device in /sys/bus/usb/devices/*; do
+            if [ "$(cat "$device/idVendor" 2>/dev/null || true)" = 258a ] \
+              && [ "$(cat "$device/idProduct" 2>/dev/null || true)" = 1006 ]; then
+              echo on > "$device/power/control"
+            fi
+          done
+        '';
+      };
     })
 
     (lib.mkIf (cfg.idle.policy == "scheduled") {

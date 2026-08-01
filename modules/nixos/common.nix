@@ -45,6 +45,38 @@ let
     '';
   };
 
+  sudoRequest = pkgs.writeShellApplication {
+    name = "sudo-request";
+    runtimeInputs = [
+      pkgs.kdePackages.ksshaskpass
+      pkgs.sudo
+      pkgs.tailscale
+    ];
+    text = ''
+      if [ "''${1:-}" = "--host" ]; then
+        if [ "$#" -lt 3 ]; then
+          echo "usage: sudo-request --host HOST COMMAND [ARG ...]" >&2
+          exit 2
+        fi
+        host="$2"
+        shift 2
+        printf -v command '%q ' "$@"
+        password="$(${lib.getExe pkgs.kdePackages.ksshaskpass} "Authorize sudo on $host: $command")" || exit
+        [ -n "$password" ] || exit 1
+        printf '%s\n' "$password" \
+          | tailscale ssh "$host" "sudo -k; sudo -S -p \"\" -- $command; status=\$?; sudo -k; exit \$status"
+        status=$?
+        unset password
+      else
+        sudo -k
+        status=0
+        SUDO_ASKPASS=${lib.getExe pkgs.kdePackages.ksshaskpass} sudo --askpass -- "$@" || status=$?
+        sudo -k
+      fi
+      exit "$status"
+    '';
+  };
+
   editSecrets = pkgs.writeShellApplication {
     name = "edit-secrets";
     text = ''
@@ -79,11 +111,6 @@ in
   };
 
   config = {
-    security.sudo.extraConfig = ''
-      Defaults:max timestamp_type=global
-      Defaults:max timestamp_timeout=2
-    '';
-
     boot.loader.grub.enable = true;
     boot.loader.efi.canTouchEfiVariables = true;
     boot.loader.efi.efiSysMountPoint = "/boot";
@@ -249,6 +276,7 @@ in
       rebuild
       editSecrets
       projectClosureRetention
+      sudoRequest
       pkgs.nix-sweep
     ]
     ++ (with pkgs; [
