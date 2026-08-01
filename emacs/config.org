@@ -636,7 +636,9 @@ Prefer tree-sitter modes when their grammar and mode are available.
         treesit-auto-langs
         (seq-remove (lambda (language) (memq language '(markdown org)))
                     treesit-auto-langs))
-  (global-treesit-auto-mode +1))
+  (global-treesit-auto-mode +1)
+  (setq major-mode-remap-alist
+        (treesit-auto--build-major-mode-remap-alist)))
 
 #+end_src
 
@@ -859,10 +861,8 @@ Using Apheleia
   (setf (alist-get 'reason-mode apheleia-mode-alist) 'dune-fmt)
   (setf (alist-get 'caml-mode apheleia-mode-alist) 'dune-fmt)
   (setf (alist-get 'nix-ts-mode apheleia-mode-alist) 'nixfmt)
-  (setf (alist-get 'max/poly-nix-mode apheleia-mode-alist) 'nixfmt)
   (setf (alist-get 'markdown-mode apheleia-mode-alist) 'prettier-markdown)
   (setf (alist-get 'markdown-ts-mode apheleia-mode-alist) 'prettier-markdown)
-  (setf (alist-get 'max/poly-markdown-mode apheleia-mode-alist) 'prettier-markdown)
   (apheleia-global-mode +1))
 
 #+end_src
@@ -884,7 +884,7 @@ Embedded chunks format explicitly with =M-x max/format-embedded-code=; Polymode 
                (buffer-narrowed-p))
     (user-error "Point is not in a narrowed Polymode code chunk"))
   (when (and (eq (buffer-local-value 'major-mode (max/nix--base-buffer))
-                 'max/poly-nix-mode)
+                 'nix-ts-mode)
              (max/nix--string-has-interpolation-p (point)))
     (user-error "Nix interpolation makes this chunk unsafe to format"))
   (call-interactively #'apheleia-format-buffer))
