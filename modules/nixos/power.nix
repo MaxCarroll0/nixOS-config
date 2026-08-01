@@ -61,26 +61,33 @@ let
     name = "suspend-soft";
     runtimeInputs = [
       pkgs.kdePackages.libkscreen
-      pkgs.sudo
       pkgs.systemd
+      pkgs.util-linux
     ];
     text = ''
-      sudo -n ${pkgs.systemd}/bin/systemctl start suspend-soft-hardware.service
-
-      session_uid=$(id -u)
-      export XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-/run/user/$session_uid}"
-      export DBUS_SESSION_BUS_ADDRESS="''${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
-      if [ -z "''${WAYLAND_DISPLAY:-}" ]; then
-        for socket in "$XDG_RUNTIME_DIR"/wayland-*; do
-          if [ -S "$socket" ]; then
-            WAYLAND_DISPLAY=$(basename "$socket")
-            export WAYLAND_DISPLAY
-            break
-          fi
-        done
+      if [ "$(id -u)" -ne 0 ]; then
+        echo "run with sudo" >&2
+        exit 1
       fi
-      if [ -n "''${WAYLAND_DISPLAY:-}" ]; then
-        kscreen-doctor --dpms off
+
+      ${pkgs.systemd}/bin/systemctl start suspend-soft-hardware.service
+
+      session_uid="''${SUDO_UID:-1000}"
+      session_user="''${SUDO_USER:-max}"
+      runtime_dir="/run/user/$session_uid"
+      wayland_display=""
+      for socket in "$runtime_dir"/wayland-*; do
+        if [ -S "$socket" ]; then
+          wayland_display=$(basename "$socket")
+          break
+        fi
+      done
+      if [ -n "$wayland_display" ]; then
+        runuser -u "$session_user" -- env \
+          XDG_RUNTIME_DIR="$runtime_dir" \
+          DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
+          WAYLAND_DISPLAY="$wayland_display" \
+          kscreen-doctor --dpms off
       fi
     '';
   };
@@ -186,17 +193,6 @@ in
         lm_sensors
       ]);
 
-      security.sudo.extraRules = [
-        {
-          users = [ "max" ];
-          commands = [
-            {
-              command = "${pkgs.systemd}/bin/systemctl start suspend-soft-hardware.service";
-              options = [ "NOPASSWD" ];
-            }
-          ];
-        }
-      ];
     }
 
     (lib.mkIf (cfg.wakeOnLan.interface != null) {
