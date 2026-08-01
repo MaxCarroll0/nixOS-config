@@ -34,12 +34,10 @@
     port = 2222;
     allowUsers = [ "max" ];
   };
-  # Interim relay: only routes while the laptop is actually at home.
   local.server.tailscale = {
     enable = true;
     ssh = true;
     authKeySecret = "tailscale-auth-key";
-    advertiseRoutes = [ "192.168.200.0/24" ];
   };
 
   local.wake.peers.desktop = {
