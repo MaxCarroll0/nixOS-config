@@ -39,6 +39,9 @@ let
           exec home-manager switch --flake "$flake#max@$host" "''${opts[@]}" "$@" ;;
         build|dry-build|repl)
           exec nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
+        switch|boot|test|dry-activate)
+          nixos-rebuild build --flake "$flake#$host" "''${opts[@]}" "$@"
+          exec sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
         *)
           exec sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
       esac
