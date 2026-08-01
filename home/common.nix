@@ -354,7 +354,12 @@ in
           with epkgs;
           [
             treesit-grammars.with-all-grammars
+            treesit-auto
             use-package
+            polymode
+            poly-org
+            poly-markdown
+            poly-noweb
             meow
             nixpkgs-fmt
             apheleia

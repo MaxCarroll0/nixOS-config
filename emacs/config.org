@@ -624,15 +624,228 @@ Orderless with Corfu
 Citar etc. TODO
 * Tree Sitters
 
-Enable maximum highlighting
+Prefer tree-sitter modes when their grammar and mode are available.
 
 #+begin_src emacs-lisp
 
-(setq treesit-font-lock-level 4)
+(use-package treesit-auto
+  :custom
+  (treesit-auto-install nil)
+  :config
+  (setq treesit-font-lock-level 4
+        treesit-auto-langs
+        (seq-remove (lambda (language) (memq language '(markdown org)))
+                    treesit-auto-langs))
+  (global-treesit-auto-mode +1))
 
 #+end_src
 
 * Languages
+** Embedded languages
+
+Polymode gives Org, Markdown, noweb, and Nix strings their language's full major mode.
+
+#+begin_src emacs-lisp
+
+(use-package polymode
+  :demand t)
+
+(use-package nix-ts-mode
+  :demand t)
+
+(defun max/nix--base-buffer ()
+  "Return the base buffer containing the Nix parser."
+  (or (buffer-base-buffer) (current-buffer)))
+
+(defun max/nix--captured-nodes (kind)
+  "Return captured Nix nodes of KIND."
+  (with-current-buffer (max/nix--base-buffer)
+    (when-let ((root (treesit-buffer-root-node 'nix)))
+      (mapcar #'cdr
+              (pcase kind
+                ('string
+                 (treesit-query-capture
+                  root '((indented_string_expression) @node)))
+                ('interpolation
+                 (treesit-query-capture root '((interpolation) @node))))))))
+
+(defun max/nix--node-boundary (kind boundary direction)
+  "Find a KIND node BOUNDARY in DIRECTION."
+  (let* ((origin (point))
+         (ranges
+          (mapcar
+           (lambda (node)
+             (let ((first (treesit-node-child node 0))
+                   (last (treesit-node-child node -1)))
+               (if (eq boundary 'head)
+                   (cons (treesit-node-start first) (treesit-node-end first))
+                 (cons (treesit-node-start last) (treesit-node-end last)))))
+           (max/nix--captured-nodes kind))))
+    (if (> direction 0)
+        (seq-find (lambda (range) (>= (car range) origin)) ranges)
+      (car (last (seq-filter (lambda (range) (< (car range) origin)) ranges))))))
+
+(defun max/nix--string-head-matcher (direction)
+  "Find a Nix indented-string head in DIRECTION."
+  (max/nix--node-boundary 'string 'head direction))
+
+(defun max/nix--string-tail-matcher (direction)
+  "Find a Nix indented-string tail in DIRECTION."
+  (max/nix--node-boundary 'string 'tail direction))
+
+(defun max/nix--interpolation-head-matcher (direction)
+  "Find a Nix interpolation head in DIRECTION."
+  (max/nix--node-boundary 'interpolation 'head direction))
+
+(defun max/nix--interpolation-tail-matcher (direction)
+  "Find a Nix interpolation tail in DIRECTION."
+  (max/nix--node-boundary 'interpolation 'tail direction))
+
+(defun max/nix--node-at (position kind)
+  "Return the enclosing Nix node at POSITION matching KIND."
+  (with-current-buffer (max/nix--base-buffer)
+    (when-let ((node (treesit-node-at position 'nix)))
+      (while (and node (not (string= (treesit-node-type node) kind)))
+        (setq node (treesit-node-parent node)))
+      node)))
+
+(defun max/nix--marker-language (node)
+  "Return the explicit language marker preceding NODE."
+  (with-current-buffer (max/nix--base-buffer)
+    (save-excursion
+      (goto-char (treesit-node-start node))
+      (skip-chars-backward " \t\n")
+      (let ((comment-end (point)))
+        (when (re-search-backward
+               "/\\*[ \t\n]*\\([[:alnum:]_+.-]+\\)[ \t\n]*\\*/"
+               (max (point-min) (- comment-end 200)) t)
+          (when (= (match-end 0) comment-end)
+            (pcase (downcase (match-string-no-properties 1))
+              ((or "bash" "shell") "sh")
+              ((or "elisp" "emacs-lisp") "emacs-lisp")
+              (language language))))))))
+
+(defun max/nix--binding-name (node)
+  "Return the binding name containing NODE."
+  (while (and node (not (string= (treesit-node-type node) "binding")))
+    (setq node (treesit-node-parent node)))
+  (when-let ((attrpath (and node (treesit-node-child-by-field-name node "attrpath"))))
+    (treesit-node-text attrpath t)))
+
+(defun max/nix--shell-builder-p (node)
+  "Return non-nil when NODE is an argument to a shell builder."
+  (with-current-buffer (max/nix--base-buffer)
+    (let ((string-start (treesit-node-start node))
+          (limit 10)
+          found)
+      (while (and node (> limit 0) (not found))
+        (when (string= (treesit-node-type node) "apply_expression")
+          (let ((prefix (buffer-substring-no-properties
+                         (treesit-node-start node)
+                         (min string-start (treesit-node-end node)))))
+            (setq found
+                  (string-match-p
+                   "\\_<\\(?:writeShellApplication\\|writeShellScript\\(?:Bin\\)?\\|runCommand\\(?:CC\\|Local\\|NoCC\\)?\\)\\_>"
+                   prefix))))
+        (setq node (treesit-node-parent node)
+              limit (1- limit)))
+      found)))
+
+(defun max/nix--inferred-language (node)
+  "Infer the embedded language for NODE."
+  (let ((binding (max/nix--binding-name node)))
+    (when (or (max/nix--shell-builder-p node)
+              (and binding
+                   (string-match-p
+                    "\\(?:^\\|\\.\\)\\(?:\\(?:pre\\|post\\)?\\(?:Unpack\\|Patch\\|Configure\\|Build\\|Check\\|Install\\|Fixup\\|Dist\\)\\(?:Phase\\)?\\|.*\\(?:Script\\|Hook\\)\\|script\\|startup\\)\\'"
+                    binding)))
+      "sh")))
+
+(defun max/nix--mode-matcher ()
+  "Return the language for the Nix string beginning at point."
+  (when-let ((node (seq-find
+                    (lambda (candidate)
+                      (= (treesit-node-start candidate) (point)))
+                    (max/nix--captured-nodes 'string))))
+    (or (max/nix--marker-language node)
+        (max/nix--inferred-language node))))
+
+(define-hostmode max/poly-nix-hostmode
+  :mode 'nix-ts-mode
+  :protect-syntax t)
+
+(define-auto-innermode max/poly-nix-code-innermode
+  :fallback-mode 'host
+  :head-mode 'host
+  :tail-mode 'host
+  :head-matcher #'max/nix--string-head-matcher
+  :tail-matcher #'max/nix--string-tail-matcher
+  :mode-matcher #'max/nix--mode-matcher
+  :protect-indent t
+  :protect-syntax t
+  :allow-nested t)
+
+(define-innermode max/poly-nix-interpolation-innermode
+  :mode 'nix-ts-mode
+  :head-mode 'body
+  :tail-mode 'body
+  :head-matcher #'max/nix--interpolation-head-matcher
+  :tail-matcher #'max/nix--interpolation-tail-matcher
+  :can-nest t
+  :allow-nested nil
+  :protect-indent t
+  :protect-syntax t)
+
+(define-polymode max/poly-nix-mode
+  :hostmode 'max/poly-nix-hostmode
+  :innermodes '(max/poly-nix-code-innermode
+                max/poly-nix-interpolation-innermode))
+
+(use-package poly-org
+  :demand t
+  :mode ("\\.org\\'" . poly-org-mode)
+  :config
+  (with-eval-after-load 'org-src
+    (dolist (mapping '(("bash" . bash-ts)
+                       ("sh" . bash-ts)
+                       ("python" . python-ts)
+                       ("json" . json-ts)
+                       ("yaml" . yaml-ts)
+                       ("nix" . nix-ts)))
+      (when (and (fboundp (intern (format "%s-mode" (cdr mapping))))
+                 (treesit-language-available-p
+                  (intern (string-remove-suffix "-ts" (symbol-name (cdr mapping))))))
+        (setf (alist-get (car mapping) org-src-lang-modes nil nil #'string=)
+              (cdr mapping))))))
+
+(use-package markdown-ts-mode)
+
+(use-package poly-markdown
+  :after markdown-ts-mode
+  :demand t
+  :config
+  (define-hostmode max/poly-markdown-hostmode
+    :mode 'markdown-ts-mode
+    :init-functions '(poly-markdown-remove-markdown-hooks))
+  (define-polymode max/poly-markdown-mode
+    :hostmode 'max/poly-markdown-hostmode
+    :innermodes (append
+                 '(poly-markdown-fenced-code-innermode
+                   poly-markdown-yaml-metadata-innermode)
+                 (when poly-markdown-enable-latex-math
+                   '(poly-markdown-inline-math-innermode
+                     poly-markdown-displayed-math-innermode))))
+  (add-to-list 'auto-mode-alist '("\\.markdown\\'" . max/poly-markdown-mode))
+  (add-to-list 'auto-mode-alist '("\\.md\\'" . max/poly-markdown-mode)))
+
+(use-package poly-noweb
+  :demand t
+  :mode ("\\.nw\\'" . poly-noweb-mode))
+
+(add-to-list 'auto-mode-alist '("\\.nix\\'" . max/poly-nix-mode))
+
+#+end_src
+
 ** Formatting
 Using Apheleia
 
@@ -646,7 +859,35 @@ Using Apheleia
   (setf (alist-get 'reason-mode apheleia-mode-alist) 'dune-fmt)
   (setf (alist-get 'caml-mode apheleia-mode-alist) 'dune-fmt)
   (setf (alist-get 'nix-ts-mode apheleia-mode-alist) 'nixfmt)
+  (setf (alist-get 'max/poly-nix-mode apheleia-mode-alist) 'nixfmt)
+  (setf (alist-get 'markdown-mode apheleia-mode-alist) 'prettier-markdown)
+  (setf (alist-get 'markdown-ts-mode apheleia-mode-alist) 'prettier-markdown)
+  (setf (alist-get 'max/poly-markdown-mode apheleia-mode-alist) 'prettier-markdown)
   (apheleia-global-mode +1))
+
+#+end_src
+
+Embedded chunks format explicitly with =M-x max/format-embedded-code=; Polymode also provides =polymode-next-chunk=, =polymode-previous-chunk=, and =polymode-toggle-chunk-narrowing=.
+
+#+begin_src emacs-lisp
+
+(defun max/nix--string-has-interpolation-p (position)
+  "Return non-nil when the Nix string at POSITION has interpolation."
+  (when-let ((node (max/nix--node-at position "indented_string_expression")))
+    (treesit-query-capture node '((interpolation) @interpolation))))
+
+(defun max/format-embedded-code ()
+  "Format the current Polymode code chunk with Apheleia."
+  (interactive)
+  (unless (and (bound-and-true-p polymode-mode)
+               (eq (car (pm-innermost-span)) 'body)
+               (buffer-narrowed-p))
+    (user-error "Point is not in a narrowed Polymode code chunk"))
+  (when (and (eq (buffer-local-value 'major-mode (max/nix--base-buffer))
+                 'max/poly-nix-mode)
+             (max/nix--string-has-interpolation-p (point)))
+    (user-error "Nix interpolation makes this chunk unsafe to format"))
+  (call-interactively #'apheleia-format-buffer))
 
 #+end_src
 
@@ -666,6 +907,8 @@ Prover modes and org match the template flakes' =fmt-*= scripts (those languages
 
 ** LSP
 Auto-start eglot in every prog-mode and (La)TeX buffer. Project roots are extended so Cargo/npm/Python/Nix subdirs are detected without a =.git=. =C-h T= echoes just the LSP-reported type at point via an eglot hover request.
+
+TODO: connect embedded buffers to project-local direnv servers or language servers hosted on the desktop.
 #+begin_src emacs-lisp
 (setq project-vc-extra-root-markers
       '("Cargo.toml" "package.json" "pyproject.toml" "flake.nix"))
@@ -708,9 +951,6 @@ Auto-start eglot in every prog-mode and (La)TeX buffer. Project roots are extend
 #+begin_src emacs-lisp
 
 (use-package nixpkgs-fmt)
-
-(use-package nix-ts-mode
- :mode "\\.nix\\'")
 
 #+end_src
 
@@ -793,10 +1033,7 @@ Anonymous-function keywords as λ; org source blocks as ⟦ … ⟧. Everything 
 #+end_src
 
 ** Markdown
-#+begin_src emacs-lisp
-(use-package markdown-ts-mode
-  :mode ("\\.md\\'" "\\.markdown\\'"))
-#+end_src
+Markdown uses a tree-sitter host with full modes inside fenced code blocks.
 
 ** LaTeX
 Auctex:
