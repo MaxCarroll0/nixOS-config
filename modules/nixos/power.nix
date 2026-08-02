@@ -15,9 +15,13 @@ let
     runtimeInputs = [
       pkgs.coreutils
       pkgs.bc
+      pkgs.curl
+      pkgs.jq
+      pkgs.gnuplot
     ];
     text = ''
       interval="''${1:-5}"
+      history="''${2:-24 hours}"
       declare -A before
       available=0
       domains=0
@@ -52,6 +56,49 @@ let
         fi
         printf '%-24s %6.2f W\n' "$name" "$(echo "scale=2; $delta / 1000000 / $interval" | bc)"
       done
+
+      start=$(date --date="$history ago" +%s)
+      end=$(date +%s)
+      reports=$(mktemp --directory)
+      trap 'rm -rf "$reports"' EXIT
+
+      graph() {
+        key="$1"
+        title="$2"
+        query="$3"
+        report="$reports/$key"
+
+        if ! curl --fail --silent --show-error --get \
+          --data-urlencode "query=$query" \
+          --data-urlencode "start=$start" \
+          --data-urlencode "end=$end" \
+          --data-urlencode "step=60" \
+          http://127.0.0.1:9090/api/v1/query_range \
+          | jq -r '.data.result[0].values[]? | "\(.[0]) \(.[1])"' > "$report"; then
+          echo "could not read historical $title data" >&2
+          return
+        fi
+
+        if [ ! -s "$report" ]; then
+          echo "no historical $title data yet" >&2
+          return
+        fi
+
+        printf '\n%s, last %s\n' "$title" "$history"
+        gnuplot <<EOF
+      set terminal dumb 100 20
+      set xdata time
+      set timefmt "%s"
+      set format x "%H:%M"
+      set ylabel "W"
+      set yrange [0:*]
+      plot "$report" using 1:2 with lines title "$title"
+      EOF
+      }
+
+      graph cpu-package "CPU package" "rate(node_rapl_package_joules_total[5m])"
+      graph cpu-cores "CPU cores" "rate(node_rapl_core_joules_total[5m])"
+      graph gpu "GPU" "node_hwmon_power_watt"
     '';
   };
 

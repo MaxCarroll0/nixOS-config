@@ -67,7 +67,7 @@ let
         password="$(${lib.getExe pkgs.kdePackages.ksshaskpass} "Authorize sudo on $host: $command")" || exit
         [ -n "$password" ] || exit 1
         printf '%s\n' "$password" \
-          | tailscale ssh "$host" "/run/wrappers/bin/sudo -k; /run/wrappers/bin/sudo -S -p \"\" -v && $command; status=\$?; /run/wrappers/bin/sudo -k; exit \$status"
+          | tailscale ssh "$host" "/run/wrappers/bin/sudo -k; /run/wrappers/bin/sudo -S -p \"\" -- $command; status=\$?; /run/wrappers/bin/sudo -k; exit \$status"
         status=$?
         unset password
       else
