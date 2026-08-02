@@ -1,5 +1,4 @@
-# VPN-bypass options, declared for every host so units can reference them
-# whether or not vpn.nix (the killswitch itself) is imported.
+# VPN-bypass options, shared by every host.
 
 { lib, ... }:
 

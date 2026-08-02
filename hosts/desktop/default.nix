@@ -11,6 +11,7 @@
     ../../modules/nixos/wake.nix
     ../../modules/nixos/power.nix
     ../../modules/nixos/storage.nix
+    ../../modules/nixos/wifi.nix
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/server/build-host.nix
@@ -37,6 +38,11 @@
     authKeySecret = "tailscale-auth-key";
   };
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
+
+  local.wifi = {
+    ssid = "Gigaclear_FA8E";
+    pskSecret = "wifi-psk";
+  };
 
   # Enable once the laptop's root key exists; see TODO.md.
   local.build.host = {

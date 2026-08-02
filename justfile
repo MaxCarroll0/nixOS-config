@@ -29,3 +29,7 @@ edit-secrets:
 # Re-encrypt after changing recipients in .sops.yaml.
 rekey:
     nix run nixpkgs#sops -- updatekeys secrets/secrets.yaml
+
+# Pre-generate a host's SSH identity before its first boot.
+bootstrap host:
+    scripts/bootstrap-host.sh {{host}}

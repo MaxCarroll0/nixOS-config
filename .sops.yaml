@@ -2,6 +2,7 @@ keys:
   - &primary age1pqr4uyzrsnm0l5tgtgy09x76xdtar2ex9pq6z3muw9p38z6v59nskel73t
   - &laptop age1kx30ua2qdu6ug0qdvxun54hjmlajt9esd9tsnmjjuyxwt7q5a3vsvgvk75
   - &desktop age1dsvv2wangclezl745vqlvvmcggaszc4fcxu84ks7qphm5tupq98srdtgx8
+  - &pi age1m4ycl8t27weff4q6upne4zzprdfw6x0wdf50s3z63shpe8c6kqgs64djpv
 creation_rules:
   - path_regex: secrets/secrets.yaml$
     key_groups:
@@ -9,3 +10,4 @@ creation_rules:
       - *primary
       - *laptop
       - *desktop
+      - *pi

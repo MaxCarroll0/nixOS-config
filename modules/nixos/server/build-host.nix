@@ -35,9 +35,6 @@ in
   config = lib.mkMerge [
     {
       boot.binfmt.emulatedSystems = cfg.emulatedSystems;
-
-      # Building for a foreign system also needs a matching daemon setting,
-      # independent of the nixremote-account setup below.
       nix.settings.extra-platforms = cfg.emulatedSystems;
     }
     (lib.mkIf cfg.enable {
