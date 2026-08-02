@@ -647,6 +647,8 @@ Prefer tree-sitter modes when their grammar and mode are available.
 
 Polymode gives Org, Markdown, noweb, and Nix strings their language's full major mode.
 
+TODO: test Polymode interactively in real Nix, Org, Markdown, and noweb files.
+
 #+begin_src emacs-lisp
 
 (use-package polymode
