@@ -27,6 +27,22 @@ let
     "nix-store"
   ];
 
+  # Nix drops any inherited setgid privilege at startup (getgid() !=
+  # getegid() triggers a defensive setresgid back to the real gid), so a
+  # plain setgid bit on these binaries is a no-op. Route through sg instead,
+  # which sets the *real* gid, so Nix has nothing to drop and the whole
+  # process tree it spawns (including an entered nix-shell and everything
+  # run inside it) keeps skgid 700.
+  novpnWrapper =
+    name: bin:
+    pkgs.writeShellApplication {
+      name = "${name}-novpn";
+      text = ''
+        args=$(printf '%q ' "$@")
+        exec /run/wrappers/bin/sg novpn -c "exec ${bin} $args"
+      '';
+    };
+
   unitTableName = unit: "novpn-" + lib.replaceStrings [ "." "@" "\\" ] [ "-" "-" "-" ] unit;
 
   # DNS stays unmarked: the resolver is an address inside the tunnel, so queries
@@ -85,19 +101,17 @@ in
 
     security.wrappers =
       lib.genAttrs nixClientCommands (command: {
-        source = "${config.nix.package}/bin/${command}";
+        source = "${novpnWrapper command "${config.nix.package}/bin/${command}"}/bin/${command}-novpn";
         owner = "root";
-        group = "novpn";
-        permissions = "u+rx,g+rx,o-rwx";
-        setgid = true;
+        group = "root";
+        permissions = "u+rx,g+rx,o+rx";
       })
       // {
         nixos-rebuild = {
-          source = "${pkgs.nixos-rebuild-ng}/bin/nixos-rebuild";
+          source = "${novpnWrapper "nixos-rebuild" "${pkgs.nixos-rebuild-ng}/bin/nixos-rebuild"}/bin/nixos-rebuild-novpn";
           owner = "root";
-          group = "novpn";
-          permissions = "u+rx,g+rx,o-rwx";
-          setgid = true;
+          group = "root";
+          permissions = "u+rx,g+rx,o+rx";
         };
       };
 

@@ -1,0 +1,89 @@
+# Raspberry Pi 5: always-on server, no VPN, remote build client.
+
+{ lib, pkgs, ... }:
+
+{
+  imports = [
+    ./hardware.nix
+    ../../modules/nixos/common.nix
+    ../../modules/nixos/wifi.nix
+    ../../modules/nixos/wake.nix
+    ../../modules/nixos/power.nix
+    ../../modules/nixos/server/ssh.nix
+    ../../modules/nixos/server/tailscale.nix
+    ../../modules/nixos/build-client.nix
+  ];
+
+  networking.hostName = "pi";
+
+  swapDevices = lib.mkForce [
+    {
+      device = "/swapfile";
+      size = 4 * 1024;
+    }
+  ];
+
+  local.wifi = {
+    ssid = "Gigaclear_FA8E";
+    pskSecret = "wifi-psk";
+  };
+
+  local.wake.peers.desktop = {
+    mac = "70:85:c2:54:c6:89";
+    broadcast = "192.168.200.255";
+  };
+
+  local.server.ssh = {
+    enable = true;
+    port = 2222;
+    allowUsers = [ "max" ];
+  };
+
+  local.server.tailscale = {
+    enable = true;
+    ssh = true;
+    authKeySecret = "tailscale-auth-key";
+  };
+
+  users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
+
+  local.build.client = {
+    enable = true;
+    builderHost = "desktop";
+    builderUser = "max";
+    builderPort = 22;
+    tailscaleSsh = true;
+    system = "aarch64-linux";
+    maxJobs = 8;
+    speedFactor = 4;
+  };
+
+  local.power = {
+    monitoring.enable = true;
+    monitoring.userReadable = true;
+    idle.optimise = false;
+  };
+
+  powerManagement.cpuFreqGovernor = "powersave";
+
+  nix.settings = {
+    min-free = 2 * 1024 * 1024 * 1024;
+    max-free = 5 * 1024 * 1024 * 1024;
+    auto-optimise-store = true;
+  };
+
+  systemd.services.boot-network-watchdog = {
+    description = "Reboot if tailscale never comes up after boot";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig.Type = "oneshot";
+    script = ''
+      for _ in $(seq 1 30); do
+        ${pkgs.iproute2}/bin/ip -4 addr show tailscale0 2>/dev/null | grep -q inet && exit 0
+        sleep 10
+      done
+      ${pkgs.systemd}/bin/systemctl reboot
+    '';
+  };
+}

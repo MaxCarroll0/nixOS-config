@@ -117,12 +117,12 @@ in
   };
 
   config = {
-    boot.loader.grub.enable = true;
-    boot.loader.efi.canTouchEfiVariables = true;
-    boot.loader.efi.efiSysMountPoint = "/boot";
-    boot.loader.grub.efiSupport = true;
-    boot.loader.grub.device = "nodev";
-    boot.loader.grub.configurationLimit = 20;
+    boot.loader.grub.enable = lib.mkDefault true;
+    boot.loader.efi.canTouchEfiVariables = lib.mkDefault true;
+    boot.loader.efi.efiSysMountPoint = lib.mkDefault "/boot";
+    boot.loader.grub.efiSupport = lib.mkDefault true;
+    boot.loader.grub.device = lib.mkDefault "nodev";
+    boot.loader.grub.configurationLimit = lib.mkDefault 20;
 
     boot.kernelParams = [
       "zswap.enabled=1"

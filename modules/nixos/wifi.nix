@@ -36,6 +36,8 @@ in
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
+        Restart = "on-failure";
+        RestartSec = "5s";
       };
       script = ''
         psk=$(cat ${config.sops.secrets.${cfg.pskSecret}.path})

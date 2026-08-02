@@ -42,6 +42,8 @@
     anipy-cli = {
       url = "github:sdaqo/anipy-cli/v3.8.16";
     };
+
+    nixos-hardware.url = "github:NixOS/nixos-hardware";
   };
 
   outputs =
@@ -87,11 +89,13 @@
         {
           module,
           system ? "x86_64-linux",
+          unstable ? false,
         }:
-        lib.nixosSystem {
+        (if unstable then nixpkgs-unstable.lib else lib).nixosSystem {
           inherit system;
           modules = [
             sops-nix.nixosModules.sops
+            { nixpkgs.overlays = [ emacs-overlay.overlay ]; nixpkgs.config.allowUnfree = true; }
             module
           ];
           specialArgs = {
@@ -101,12 +105,15 @@
         };
 
       mkHome =
-        homeModule:
+        {
+          module,
+          system ? "x86_64-linux",
+        }:
         home-manager.lib.homeManagerConfiguration {
-          inherit pkgs;
-          modules = [ homeModule ];
+          pkgs = pkgsFor system;
+          modules = [ module ];
           extraSpecialArgs = {
-            inherit pkgs-unstable;
+            pkgs-unstable = pkgsUnstableFor system;
             curd = curd.packages.${system}.default;
             claude-code = inputs.claude-code.packages.${system}.default;
             codex-cli = inputs.codex-cli.packages.${system}.default;
@@ -118,14 +125,23 @@
       nixosConfigurations = {
         laptop = mkHost { module = ./hosts/laptop; };
         desktop = mkHost { module = ./hosts/desktop; };
+        pi = mkHost {
+          module = ./hosts/pi;
+          system = "aarch64-linux";
+          unstable = true;
+        };
         # Retire once both machines have switched to the per-host names.
         nixos = mkHost { module = ./hosts/laptop; };
       };
 
       homeConfigurations = {
-        "max@laptop" = mkHome ./home/laptop.nix;
-        "max@desktop" = mkHome ./home/desktop.nix;
-        max = mkHome ./home/laptop.nix;
+        "max@laptop" = mkHome { module = ./home/laptop.nix; };
+        "max@desktop" = mkHome { module = ./home/desktop.nix; };
+        "max@pi" = mkHome {
+          module = ./home/pi.nix;
+          system = "aarch64-linux";
+        };
+        max = mkHome { module = ./home/laptop.nix; };
       };
     };
 
