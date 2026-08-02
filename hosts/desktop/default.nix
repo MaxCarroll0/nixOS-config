@@ -60,10 +60,9 @@
     monitoring.userReadable = true;
     idle.optimise = true;
     idle.policy = "always-on";
-    # Fill from `ip link` and the BIOS Wake-on-LAN setting.
     wakeOnLan = {
-      interface = null;
-      mac = null;
+      interface = "enp6s0";
+      mac = "70:85:c2:54:c6:89";
     };
   };
 }

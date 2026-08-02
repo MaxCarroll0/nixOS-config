@@ -41,7 +41,7 @@
   };
 
   local.wake.peers.desktop = {
-    mac = null; # from `ip link` on the desktop
+    mac = "70:85:c2:54:c6:89";
     broadcast = "192.168.200.255";
   };
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
