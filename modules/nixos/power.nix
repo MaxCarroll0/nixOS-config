@@ -258,7 +258,33 @@ in
     }
 
     (lib.mkIf (cfg.wakeOnLan.interface != null) {
+      # No-op under NetworkManager, which owns this interface and asserts
+      # its own wake-on-lan setting (below) on every connection activation.
+      # ensureProfiles doesn't take over NetworkManager's own
+      # auto-generated profile for an unconfigured interface, so patch that
+      # profile directly instead.
       networking.interfaces.${cfg.wakeOnLan.interface}.wakeOnLan.enable = true;
+
+      systemd.services.wake-on-lan-networkmanager = {
+        description = "Enable magic-packet Wake-on-LAN via NetworkManager";
+        after = [
+          "NetworkManager.service"
+          "sys-subsystem-net-devices-${cfg.wakeOnLan.interface}.device"
+        ];
+        wants = [ "sys-subsystem-net-devices-${cfg.wakeOnLan.interface}.device" ];
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig.Type = "oneshot";
+        script = ''
+          conn=$(${pkgs.networkmanager}/bin/nmcli -t -f NAME,DEVICE connection show --active \
+            | ${pkgs.gawk}/bin/awk -F: -v d="${cfg.wakeOnLan.interface}" '$2 == d { print $1; exit }')
+          if [ -z "$conn" ]; then
+            echo "no active NetworkManager connection on ${cfg.wakeOnLan.interface}" >&2
+            exit 1
+          fi
+          ${pkgs.networkmanager}/bin/nmcli connection modify "$conn" 802-3-ethernet.wake-on-lan magic
+          ${pkgs.networkmanager}/bin/nmcli connection up "$conn"
+        '';
+      };
     })
 
     (lib.mkIf cfg.idle.optimise {

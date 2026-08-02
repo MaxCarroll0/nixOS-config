@@ -105,13 +105,23 @@ in
 
     environment.systemPackages = [ nixDaemonNovpn ];
 
-    security.wrappers = lib.genAttrs nixClientCommands (command: {
-      source = "${config.nix.package}/bin/${command}";
-      owner = "root";
-      group = "novpn";
-      permissions = "u+rx,g+rx,o-rwx";
-      setgid = true;
-    });
+    security.wrappers =
+      lib.genAttrs nixClientCommands (command: {
+        source = "${config.nix.package}/bin/${command}";
+        owner = "root";
+        group = "novpn";
+        permissions = "u+rx,g+rx,o-rwx";
+        setgid = true;
+      })
+      // {
+        nixos-rebuild = {
+          source = "${pkgs.nixos-rebuild-ng}/bin/nixos-rebuild";
+          owner = "root";
+          group = "novpn";
+          permissions = "u+rx,g+rx,o-rwx";
+          setgid = true;
+        };
+      };
 
     networking.networkmanager.unmanaged = [
       "interface-name:proton"
