@@ -105,6 +105,8 @@ let
 in
 
 {
+  imports = [ ./vpn-bypass.nix ];
+
   options.local.users.sopsPasswords = lib.mkOption {
     type = lib.types.attrsOf lib.types.str;
     default = { };

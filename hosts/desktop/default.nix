@@ -42,6 +42,7 @@
   local.build.host = {
     enable = false;
     authorizedKeys = [ ];
+    emulatedSystems = [ "aarch64-linux" ];
   };
 
   local.web.public = {

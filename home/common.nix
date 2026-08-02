@@ -163,6 +163,12 @@ in
     ./hyprland.nix
   ];
 
+  options.local.emacs.guiToolkit = lib.mkOption {
+    type = lib.types.bool;
+    default = true;
+    description = "Build emacs against the GTK toolkit. False for headless hosts.";
+  };
+
   # Home Manager needs a bit of information about you and the paths it should
   # manage.
   home.username = "max";
@@ -287,7 +293,7 @@ in
     enable = true;
     package = (
       pkgs.emacsWithPackagesFromUsePackage {
-        package = pkgs.emacs-pgtk;
+        package = if config.local.emacs.guiToolkit then pkgs.emacs-pgtk else pkgs.emacs-nox;
         config = ../emacs/config.org;
         defaultInitFile = true;
         alwaysEnsure = true;

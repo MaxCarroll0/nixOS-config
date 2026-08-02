@@ -24,44 +24,59 @@ in
       default = [ ];
       description = "Public keys of the root users allowed to submit builds.";
     };
+
+    emulatedSystems = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Foreign systems to build for via binfmt emulation, e.g. aarch64-linux.";
+    };
   };
 
-  config = lib.mkIf cfg.enable {
-    users.users.nixremote = {
-      isSystemUser = true;
-      group = "nixremote";
-      shell = pkgs.bashInteractive;
-      openssh.authorizedKeys.keys = map forcedCommand cfg.authorizedKeys;
-    };
-    users.groups.nixremote = { };
+  config = lib.mkMerge [
+    {
+      boot.binfmt.emulatedSystems = cfg.emulatedSystems;
 
-    local.server.ssh.allowUsers = [ "nixremote" ];
+      # Building for a foreign system also needs a matching daemon setting,
+      # independent of the nixremote-account setup below.
+      nix.settings.extra-platforms = cfg.emulatedSystems;
+    }
+    (lib.mkIf cfg.enable {
+      users.users.nixremote = {
+        isSystemUser = true;
+        group = "nixremote";
+        shell = pkgs.bashInteractive;
+        openssh.authorizedKeys.keys = map forcedCommand cfg.authorizedKeys;
+      };
+      users.groups.nixremote = { };
 
-    # trusted-users lets the client push unsigned paths and override settings.
-    # That is a trust relationship between two machines you own, not a sandbox.
-    nix.settings.trusted-users = [ "nixremote" ];
-    nix.nrBuildUsers = 64;
+      local.server.ssh.allowUsers = [ "nixremote" ];
 
-    nix.settings = {
-      max-jobs = "auto";
-      cores = 0;
-      sandbox = true;
-      sandbox-fallback = false;
-      min-free = 10 * 1024 * 1024 * 1024;
-      max-free = 200 * 1024 * 1024 * 1024;
-      auto-allocate-uids = true;
-      experimental-features = [
-        "auto-allocate-uids"
-        "cgroups"
+      # trusted-users lets the client push unsigned paths and override settings.
+      # That is a trust relationship between two machines you own, not a sandbox.
+      nix.settings.trusted-users = [ "nixremote" ];
+      nix.nrBuildUsers = 64;
+
+      nix.settings = {
+        max-jobs = "auto";
+        cores = 0;
+        sandbox = true;
+        sandbox-fallback = false;
+        min-free = 10 * 1024 * 1024 * 1024;
+        max-free = 200 * 1024 * 1024 * 1024;
+        auto-allocate-uids = true;
+        experimental-features = [
+          "auto-allocate-uids"
+          "cgroups"
+        ];
+        use-cgroups = true;
+      };
+
+      assertions = [
+        {
+          assertion = cfg.authorizedKeys != [ ];
+          message = "local.build.host.authorizedKeys is empty; the builder would accept nobody.";
+        }
       ];
-      use-cgroups = true;
-    };
-
-    assertions = [
-      {
-        assertion = cfg.authorizedKeys != [ ];
-        message = "local.build.host.authorizedKeys is empty; the builder would accept nobody.";
-      }
-    ];
-  };
+    })
+  ];
 }

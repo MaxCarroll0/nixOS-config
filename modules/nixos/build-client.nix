@@ -108,6 +108,12 @@ in
       description = "Base64 host key of the builder. Null skips verification.";
     };
 
+    system = lib.mkOption {
+      type = lib.types.str;
+      default = pkgs.stdenv.hostPlatform.system;
+      description = "System string to request from the builder.";
+    };
+
     wake = {
       mac = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -144,8 +150,7 @@ in
           sshUser = cfg.builderUser;
           sshKey = if cfg.tailscaleSsh then null else toString cfg.sshKey;
           protocol = "ssh-ng";
-          system = pkgs.stdenv.hostPlatform.system;
-          inherit (cfg) maxJobs speedFactor supportedFeatures;
+          inherit (cfg) system maxJobs speedFactor supportedFeatures;
         }
         // lib.optionalAttrs (cfg.publicHostKey != null) { inherit (cfg) publicHostKey; }
       )

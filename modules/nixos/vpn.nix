@@ -78,28 +78,6 @@ let
 in
 
 {
-  options.local.vpn = {
-    bypassUnits = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-      description = ''
-        Systemd units whose sockets are marked 0xca6c, routing them out the
-        physical link instead of the tunnel. The kill switch already accepts
-        that mark, so marking is also what lets them out at all.
-      '';
-    };
-
-    allowInterfaces = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-      description = ''
-        Extra output interfaces the kill switch accepts, for tunnels the host
-        terminates itself (tailscale0). Traffic leaving this way is not marked,
-        so it needs an explicit accept.
-      '';
-    };
-  };
-
   config = {
     local.vpn.bypassUnits = [ "nix-daemon.service" ];
 
@@ -180,7 +158,6 @@ in
     # The reroute happens after the socket already picked the tunnel source IP,
     # so masquerade rewrites it to the physical address (matched by skgid, not
     # the mark, to leave WireGuard's own encrypted packets untouched).
-    users.groups.novpn.gid = 700;
     networking.nftables.tables.novpn-split = {
       family = "inet";
       content = ''

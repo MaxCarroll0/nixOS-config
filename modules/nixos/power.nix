@@ -479,11 +479,11 @@ in
         enable = true;
         listenAddress = "127.0.0.1";
         enabledCollectors = [
-          "rapl"
           "hwmon"
           "cpufreq"
           "thermal_zone"
-        ];
+        ]
+        ++ lib.optionals pkgs.stdenv.hostPlatform.isx86 [ "rapl" ];
       };
 
       services.prometheus = {
