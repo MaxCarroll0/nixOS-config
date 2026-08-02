@@ -145,8 +145,6 @@ let
   };
 
   # Run the call apps under the novpn group (split tunnel, see configuration.nix).
-  # Firejail breaks the screencast portal's app identity check on KDE.
-
   zoom-novpn = pkgs.writeShellScriptBin "zoom-novpn" ''
     export ZOOM_URL="$1"
     if [ -n "$ZOOM_URL" ]; then
@@ -282,7 +280,6 @@ in
 
     bashrcExtra = /* bash */ ''
       set -o vi
-      eval "$(direnv hook bash)"
     '';
   };
 
