@@ -57,10 +57,3 @@ nix run nixpkgs#sops -- secrets/secrets.yaml
 Add `local.users.sopsPasswords.<account> = "<secret-name>";`, switch, and confirm
 `/run/secrets-for-users/<secret-name>` exists before setting
 `users.mutableUsers = false`.
-
-### Note
-
-`nix.extraOptions` uses `!include`, not `readFile`. `readFile` resolves at
-evaluation time, which needs `--impure` and copies the token into the
-world-readable store. `!include` also tolerates the file being absent, which it
-is until sops has run.
