@@ -78,6 +78,10 @@ let
     };
   };
 
+  tailnetRoutePriority =
+    lib.optionalString (config.local.server.tailscale.enable or false)
+      "${config.local.server.tailscale.routePriorityScript}";
+
   allowedInterfaces = lib.concatStringsSep ", " (
     map (i: ''"${i}"'') (
       [
@@ -144,11 +148,17 @@ in
     sops.secrets.${cfg.configSecret} = { };
     sops.secrets.${cfg.altSecret} = { };
 
-    networking.wg-quick.interfaces.proton.configFile = config.sops.secrets.${cfg.configSecret}.path;
+    # wg-quick inserts its rules below whatever exists, so the tailnet rule has
+    # to be re-asserted here, after every tunnel start, or MagicDNS is captured.
+    networking.wg-quick.interfaces.proton = {
+      configFile = config.sops.secrets.${cfg.configSecret}.path;
+      postUp = tailnetRoutePriority;
+    };
 
     networking.wg-quick.interfaces.proton-alt = {
       configFile = config.sops.secrets.${cfg.altSecret}.path;
       autostart = false;
+      postUp = tailnetRoutePriority;
     };
 
     systemd.services = lib.listToAttrs (map bypassService cfg.bypassUnits) // {
