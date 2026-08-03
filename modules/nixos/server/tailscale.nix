@@ -69,11 +69,10 @@ in
         local.vpn.bypassUnits = [ "tailscaled.service" ];
         local.vpn.allowInterfaces = [ "tailscale0" ];
 
-        # wg-quick's kill-switch redirect (priority 99) outranks tailscale's
-        # own routing table, so unmarked traffic to a tailnet address
-        # (MagicDNS, a fresh peer connection) never reaches it. `ip rule`
-        # evaluates lowest priority number first, so this must be < 99. Fixed
-        # Tailscale ranges, not specific to this tailnet.
+        # wg-quick's redirect lands at priority 48-49 (kernel-assigned, not the
+        # documented 99), and ip rule takes the lowest number first, so this
+        # must sit below it or MagicDNS is routed into the tunnel and dies.
+        # Fixed Tailscale ranges, not specific to this tailnet.
         systemd.services.tailscale-route-priority = {
           description = "Route tailnet addresses ahead of the VPN kill switch";
           after = [ "tailscaled.service" ];
@@ -84,12 +83,12 @@ in
             Type = "oneshot";
             RemainAfterExit = true;
             ExecStart = [
-              "-${pkgs.iproute2}/bin/ip rule add to 100.64.0.0/10 lookup 52 priority 50"
-              "-${pkgs.iproute2}/bin/ip -6 rule add to fd7a:115c:a1e0::/48 lookup 52 priority 50"
+              "-${pkgs.iproute2}/bin/ip rule add to 100.64.0.0/10 lookup 52 priority 20"
+              "-${pkgs.iproute2}/bin/ip -6 rule add to fd7a:115c:a1e0::/48 lookup 52 priority 20"
             ];
             ExecStop = [
-              "-${pkgs.iproute2}/bin/ip rule del to 100.64.0.0/10 lookup 52 priority 50"
-              "-${pkgs.iproute2}/bin/ip -6 rule del to fd7a:115c:a1e0::/48 lookup 52 priority 50"
+              "-${pkgs.iproute2}/bin/ip rule del to 100.64.0.0/10 lookup 52 priority 20"
+              "-${pkgs.iproute2}/bin/ip -6 rule del to fd7a:115c:a1e0::/48 lookup 52 priority 20"
             ];
           };
         };
