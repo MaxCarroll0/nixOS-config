@@ -78,10 +78,6 @@ let
     };
   };
 
-  tailnetRoutePriority =
-    lib.optionalString (config.local.server.tailscale.enable or false)
-      "${config.local.server.tailscale.routePriorityScript}";
-
   allowedInterfaces = lib.concatStringsSep ", " (
     map (i: ''"${i}"'') (
       [
@@ -157,16 +153,8 @@ in
 
     systemd.services = lib.listToAttrs (map bypassService cfg.bypassUnits) // {
       nix-daemon.serviceConfig.Group = "novpn";
-      # wg-quick inserts its rules below whatever already exists, so the tailnet
-      # rule must be re-asserted after every tunnel start or MagicDNS is captured.
-      "wg-quick-proton" = {
-        conflicts = [ "wg-quick-proton-alt.service" ];
-        serviceConfig.ExecStartPost = lib.mkIf (tailnetRoutePriority != "") tailnetRoutePriority;
-      };
-      "wg-quick-proton-alt" = {
-        conflicts = [ "wg-quick-proton.service" ];
-        serviceConfig.ExecStartPost = lib.mkIf (tailnetRoutePriority != "") tailnetRoutePriority;
-      };
+      "wg-quick-proton".conflicts = [ "wg-quick-proton-alt.service" ];
+      "wg-quick-proton-alt".conflicts = [ "wg-quick-proton.service" ];
     };
 
     # Fail-closed VPN kill switch: drop all egress except loopback, the tunnel
@@ -212,7 +200,7 @@ in
         chain postrouting {
           type nat hook postrouting priority srcnat; policy accept;
 
-          meta mark 0xca6c oifname != { "lo", "proton", "proton-alt" } masquerade
+          meta mark 0xca6c oifname != { "lo", "proton", "proton-alt", "tailscale0" } masquerade
         }
       '';
     };

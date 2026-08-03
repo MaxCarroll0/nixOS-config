@@ -9,29 +9,6 @@
 
 let
   cfg = config.local.server.tailscale;
-
-  routePriority = pkgs.writeShellScript "tailnet-route-priority" ''
-    ip=${pkgs.iproute2}/bin/ip
-    for family in "-4" "-6"; do
-      case "$family" in
-        -4) net=100.64.0.0/10 ;;
-        -6) net=fd7a:115c:a1e0::/48 ;;
-      esac
-
-      $ip $family rule show 2>/dev/null \
-        | ${pkgs.gawk}/bin/awk -v n="$net" '$0 ~ n { sub(":","",$1); print $1 }' \
-        | while read -r old; do $ip $family rule del to "$net" lookup 52 priority "$old" 2>/dev/null || true; done
-
-      wg=$($ip $family rule show 2>/dev/null \
-        | ${pkgs.gawk}/bin/awk '/not .*fwmark 0xca6c/ || /suppress_prefixlength/ { sub(":","",$1); print $1 }' \
-        | sort -n | head -1)
-      prio=$(( ''${wg:-50} - 1 ))
-      [ "$prio" -lt 1 ] && prio=1
-
-      $ip $family rule add to "$net" lookup 52 priority "$prio" || true
-      echo "tailnet $net via table 52 at priority $prio (wg-quick at ''${wg:-none})"
-    done
-  '';
 in
 
 {
@@ -61,13 +38,6 @@ in
         Name of a sops secret holding a tailnet auth key. Null means enrol once
         by hand with `tailscale up`, which avoids storing a key at all.
       '';
-    };
-
-    routePriorityScript = lib.mkOption {
-      type = lib.types.path;
-      default = routePriority;
-      readOnly = true;
-      description = "Re-asserts the tailnet ip rule below wg-quick's; for wg postUp.";
     };
   };
 
@@ -99,22 +69,22 @@ in
         local.vpn.bypassUnits = [ "tailscaled.service" ];
         local.vpn.allowInterfaces = [ "tailscale0" ];
 
-        # wg-quick adds its redirect without an explicit priority, and the kernel
-        # places it just below whatever rules already exist, so a hardcoded
-        # number here gets undercut on the next tunnel restart. Read wg-quick's
-        # actual priority and sit one below it. Fixed Tailscale ranges, not
-        # specific to this tailnet.
-        systemd.services.tailscale-route-priority = {
-          description = "Route tailnet addresses ahead of the VPN kill switch";
-          after = [ "tailscaled.service" ];
-          wants = [ "tailscaled.service" ];
-          partOf = [ "tailscaled.service" ];
-          wantedBy = [ "multi-user.target" ];
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            ExecStart = routePriority;
-          };
+        # wg-quick's redirect rule takes everything unmarked, including MagicDNS
+        # and peer traffic. Competing on ip-rule priority does not work: wg-quick
+        # inserts below whatever exists, so each restart walks it lower until it
+        # reaches 0 and nothing can get under it. Mark by destination instead —
+        # wg-quick's own "not fwmark 0xca6c" then skips these. Fixed Tailscale
+        # ranges, not specific to this tailnet.
+        networking.nftables.tables.tailnet-bypass = {
+          family = "inet";
+          content = ''
+            chain output {
+              type route hook output priority mangle + 2; policy accept;
+
+              ip daddr 100.64.0.0/10 counter meta mark set 0xca6c
+              ip6 daddr fd7a:115c:a1e0::/48 counter meta mark set 0xca6c
+            }
+          '';
         };
       }
 
