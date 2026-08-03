@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage() { echo "usage: flash-pi.sh <image.img> <device>   e.g. flash-pi.sh result /dev/sda" >&2; exit 2; }
+usage() { echo "usage: flash-pi.sh [--yes] <image.img> <device>   e.g. flash-pi.sh result /dev/sda" >&2; exit 2; }
+
+assume_yes=0
+if [ "${1:-}" = "--yes" ]; then
+  assume_yes=1
+  shift
+fi
 
 image="${1:-}"
 device="${2:-}"
@@ -28,8 +34,10 @@ echo "host key matches .sops.yaml recipient $recipient"
 
 echo "about to ERASE $device:"
 lsblk -o NAME,SIZE,TRAN,MODEL,SERIAL "$device"
-read -r -p "type the device again to confirm: " confirm
-[ "$confirm" = "$device" ] || { echo "aborted" >&2; exit 1; }
+if [ "$assume_yes" -ne 1 ]; then
+  read -r -p "type the device again to confirm: " confirm
+  [ "$confirm" = "$device" ] || { echo "aborted" >&2; exit 1; }
+fi
 
 sudo dd if="$image" of="$device" bs=4M status=progress conv=fsync
 sudo partprobe "$device"
