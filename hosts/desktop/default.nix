@@ -21,6 +21,8 @@
 
   networking.hostName = "desktop";
 
+  local.vpn.configSecret = "proton-wg-2";
+
   swapDevices = lib.mkForce [
     {
       device = "/swapfile";

@@ -83,17 +83,16 @@ let
   };
 
   allowedInterfaces = lib.concatStringsSep ", " (
-    map (i: ''"${i}"'') (
-      [
-        "proton"
-        "proton-2"
-      ]
-      ++ cfg.allowInterfaces
-    )
+    map (i: ''"${i}"'') ([ "proton" ] ++ cfg.allowInterfaces)
   );
 in
 
 {
+  options.local.vpn.configSecret = lib.mkOption {
+    type = lib.types.str;
+    description = "sops secret with this host's WireGuard config. One per host.";
+  };
+
   config = {
     local.vpn.bypassUnits = [ "nix-daemon.service" ];
 
@@ -115,28 +114,17 @@ in
         };
       };
 
-    networking.networkmanager.unmanaged = [
-      "interface-name:proton"
-      "interface-name:proton-2"
-    ];
-    sops.secrets.proton-wg = { };
-    sops.secrets.proton-wg-2 = { };
-    networking.wg-quick.interfaces.proton = {
-      configFile = config.sops.secrets.proton-wg.path;
-      autostart = false;
-    };
-    networking.wg-quick.interfaces.proton-2.configFile = config.sops.secrets.proton-wg-2.path;
+    networking.networkmanager.unmanaged = [ "interface-name:proton" ];
+
+    sops.secrets.${cfg.configSecret} = { };
+
+    networking.wg-quick.interfaces.proton.configFile = config.sops.secrets.${cfg.configSecret}.path;
+
     systemd.services = lib.listToAttrs (map bypassService cfg.bypassUnits) // {
       nix-daemon.serviceConfig.Group = "novpn";
       "wg-quick-proton" = {
         after = [ "sops-install-secrets.service" ];
         wants = [ "sops-install-secrets.service" ];
-        conflicts = [ "wg-quick-proton-2.service" ];
-      };
-      "wg-quick-proton-2" = {
-        after = [ "sops-install-secrets.service" ];
-        wants = [ "sops-install-secrets.service" ];
-        conflicts = [ "wg-quick-proton.service" ];
       };
     };
 
@@ -144,7 +132,7 @@ in
     # interfaces, WireGuard's own marked packets, LAN, and DHCP. Active even
     # before a tunnel comes up, so the real IP can't leak in the boot race.
     # 0xca6c is the fwmark wg-quick puts on encrypted packets (table 51820);
-    # 0xca6d covers a brief overlap if both tunnels race during a switch.
+    # 0xca6d covers a brief overlap during a tunnel restart.
     networking.nftables.enable = true;
     networking.nftables.tables.vpn-killswitch = {
       family = "inet";
@@ -186,7 +174,7 @@ in
         chain postrouting {
           type nat hook postrouting priority srcnat; policy accept;
 
-          meta mark 0xca6c oifname != { "lo", "proton", "proton-2" } masquerade
+          meta mark 0xca6c oifname != { "lo", "proton" } masquerade
         }
       '';
     };

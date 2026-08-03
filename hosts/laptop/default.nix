@@ -16,6 +16,8 @@
 
   networking.hostName = "laptop";
 
+  local.vpn.configSecret = "proton-wg";
+
   services.earlyoom = {
     freeMemThreshold = 15;
     freeSwapThreshold = 25;
