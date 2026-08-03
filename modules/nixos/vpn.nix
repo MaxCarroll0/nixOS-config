@@ -200,7 +200,7 @@ in
         chain postrouting {
           type nat hook postrouting priority srcnat; policy accept;
 
-          meta mark 0xca6c oifname != { "lo", "proton", "proton-alt", "tailscale0" } masquerade
+          meta mark 0xca6c oifname != { "lo", "proton", "proton-alt" } masquerade
         }
       '';
     };

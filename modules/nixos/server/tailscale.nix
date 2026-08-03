@@ -49,13 +49,19 @@ in
           inherit (cfg) port;
           openFirewall = true;
           useRoutingFeatures = if cfg.advertiseRoutes == [ ] then "none" else "server";
+          # MagicDNS lives at 100.100.100.100, which wg-quick's redirect rule
+          # captures into the tunnel. Its ip-rule priority cannot be beaten:
+          # wg-quick inserts below whatever exists, down to 0. Use the tunnel's
+          # own resolver instead; tailnet names resolve via tailscale directly.
           extraUpFlags =
-            lib.optional cfg.ssh "--ssh"
+            [ "--accept-dns=false" ]
+            ++ lib.optional cfg.ssh "--ssh"
             ++ lib.optional (
               cfg.advertiseRoutes != [ ]
             ) "--advertise-routes=${lib.concatStringsSep "," cfg.advertiseRoutes}";
           extraSetFlags =
-            lib.optional cfg.ssh "--ssh"
+            [ "--accept-dns=false" ]
+            ++ lib.optional cfg.ssh "--ssh"
             ++ lib.optional (
               cfg.advertiseRoutes != [ ]
             ) "--advertise-routes=${lib.concatStringsSep "," cfg.advertiseRoutes}";
@@ -68,24 +74,6 @@ in
         # tailnet peers leave via the tunnel and are not marked, so both are needed.
         local.vpn.bypassUnits = [ "tailscaled.service" ];
         local.vpn.allowInterfaces = [ "tailscale0" ];
-
-        # wg-quick's redirect rule takes everything unmarked, including MagicDNS
-        # and peer traffic. Competing on ip-rule priority does not work: wg-quick
-        # inserts below whatever exists, so each restart walks it lower until it
-        # reaches 0 and nothing can get under it. Mark by destination instead —
-        # wg-quick's own "not fwmark 0xca6c" then skips these. Fixed Tailscale
-        # ranges, not specific to this tailnet.
-        networking.nftables.tables.tailnet-bypass = {
-          family = "inet";
-          content = ''
-            chain output {
-              type route hook output priority mangle + 2; policy accept;
-
-              ip daddr 100.64.0.0/10 counter meta mark set 0xca6c
-              ip6 daddr fd7a:115c:a1e0::/48 counter meta mark set 0xca6c
-            }
-          '';
-        };
       }
 
       (lib.mkIf (cfg.authKeySecret != null) {
