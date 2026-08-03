@@ -62,6 +62,10 @@
     builderUser = "max";
     builderPort = 22;
     tailscaleSsh = true;
+    systems = [
+      "x86_64-linux"
+      "aarch64-linux"
+    ];
     maxJobs = 8;
     speedFactor = 4;
   };
