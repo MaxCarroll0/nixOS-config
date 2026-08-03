@@ -11,6 +11,7 @@
     ../../modules/nixos/power.nix
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/server/tailscale.nix
+    ../../modules/nixos/tailscale-watchdog.nix
     ../../modules/nixos/build-client.nix
   ];
 
@@ -53,7 +54,7 @@
     builderUser = "max";
     builderPort = 22;
     tailscaleSsh = true;
-    system = "aarch64-linux";
+    systems = [ "aarch64-linux" ];
     maxJobs = 8;
     speedFactor = 4;
   };
@@ -72,18 +73,12 @@
     auto-optimise-store = true;
   };
 
-  systemd.services.boot-network-watchdog = {
-    description = "Reboot if tailscale never comes up after boot";
-    after = [ "network-online.target" ];
-    wants = [ "network-online.target" ];
-    wantedBy = [ "multi-user.target" ];
-    serviceConfig.Type = "oneshot";
-    script = ''
-      for _ in $(seq 1 30); do
-        ${pkgs.iproute2}/bin/ip -4 addr show tailscale0 2>/dev/null | grep -q inet && exit 0
-        sleep 10
-      done
-      ${pkgs.systemd}/bin/systemctl reboot
-    '';
-  };
+  system.stateVersion = lib.mkForce "26.05";
+
+  system.autoUpgrade.allowReboot = lib.mkForce false;
+
+  # No local clone on a freshly flashed drive.
+  system.autoUpgrade.flake = lib.mkForce "github:MaxCarroll0/nixOS-config#pi";
+
+  local.server.tailscaleWatchdog.enable = true;
 }

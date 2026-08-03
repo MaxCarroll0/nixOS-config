@@ -5,7 +5,14 @@ check:
     nix flake check --no-build
     nix build --no-link .#nixosConfigurations.laptop.config.system.build.toplevel
     nix build --no-link .#nixosConfigurations.desktop.config.system.build.toplevel
+    nix build --no-link .#nixosConfigurations.pi.config.system.build.toplevel
     nix build --no-link '.#homeConfigurations."max@laptop".activationPackage'
+    nix build --no-link '.#homeConfigurations."max@desktop".activationPackage'
+    nix build --no-link '.#homeConfigurations."max@pi".activationPackage'
+
+# Bootable image for the pi's USB SSD.
+pi-image:
+    nix build --print-out-paths .#packages.aarch64-linux.pi-image
 
 build host:
     nix build --no-link .#nixosConfigurations.{{host}}.config.system.build.toplevel
@@ -33,3 +40,7 @@ rekey:
 # Pre-generate a host's SSH identity before its first boot.
 bootstrap host:
     scripts/bootstrap-host.sh {{host}}
+
+# Write the pi image to its USB SSD and inject the host key.
+flash-pi image device:
+    scripts/flash-pi.sh {{image}} {{device}}

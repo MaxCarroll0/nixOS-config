@@ -87,17 +87,18 @@
 
       mkHost =
         {
+          modules ? [ ],
           module,
           system ? "x86_64-linux",
-          unstable ? false,
         }:
-        (if unstable then nixpkgs-unstable.lib else lib).nixosSystem {
+        lib.nixosSystem {
           inherit system;
           modules = [
             sops-nix.nixosModules.sops
             { nixpkgs.overlays = [ emacs-overlay.overlay ]; nixpkgs.config.allowUnfree = true; }
             module
-          ];
+          ]
+          ++ modules;
           specialArgs = {
             pkgs-unstable = pkgsUnstableFor system;
             inherit inputs;
@@ -128,7 +129,6 @@
         pi = mkHost {
           module = ./hosts/pi;
           system = "aarch64-linux";
-          unstable = true;
         };
         # Retire once both machines have switched to the per-host names.
         nixos = mkHost { module = ./hosts/laptop; };
@@ -143,6 +143,13 @@
         };
         max = mkHome { module = ./home/laptop.nix; };
       };
+
+      packages.aarch64-linux.pi-image =
+        (mkHost {
+          module = ./hosts/pi;
+          modules = [ ./hosts/pi/image.nix ];
+          system = "aarch64-linux";
+        }).config.system.build.sdImage;
     };
 
 }
