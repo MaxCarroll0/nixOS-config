@@ -70,6 +70,7 @@
   local.power = {
     monitoring.enable = true;
     monitoring.userReadable = true;
+    monitoring.grafana = true;
     idle.optimise = true;
     idle.policy = "always-on";
     wakeOnLan = {

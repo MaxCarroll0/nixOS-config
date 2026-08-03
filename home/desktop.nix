@@ -109,6 +109,43 @@
     '';
   };
 
+  xdg.configFile."wtfutil/config.yml" = {
+    force = true;
+    text = ''
+      wtf:
+        grid:
+          columns: [80, 80]
+          rows: [20]
+        refreshInterval: 1
+        mods:
+          power_live:
+            type: cmdrunner
+            title: "power (live + 24h graphs)"
+            cmd: "power-report"
+            args: ["2", "24 hours"]
+            pty: true
+            enabled: true
+            position:
+              top: 0
+              left: 0
+              height: 1
+              width: 1
+            refreshInterval: 30
+          power_stats:
+            type: cmdrunner
+            title: "historical min / avg / max"
+            cmd: "power-stats"
+            args: []
+            enabled: true
+            position:
+              top: 0
+              left: 1
+              height: 1
+              width: 1
+            refreshInterval: 60
+    '';
+  };
+
   xdg.configFile."powerdevilrc" = {
     force = true;
     text = ''

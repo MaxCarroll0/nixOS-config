@@ -102,6 +102,46 @@ let
     '';
   };
 
+  powerStats = pkgs.writeShellApplication {
+    name = "power-stats";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.curl
+      pkgs.jq
+    ];
+    text = ''
+      metric_query() {
+        case "$1" in
+          cpu-package) echo 'rate(node_rapl_package_joules_total[5m])' ;;
+          cpu-cores) echo 'rate(node_rapl_core_joules_total[5m])' ;;
+          gpu) echo 'node_hwmon_power_watt' ;;
+        esac
+      }
+
+      stat() {
+        agg="$1"
+        query="$2"
+        range="$3"
+        curl --fail --silent --show-error --get \
+          --data-urlencode "query=''${agg}_over_time((''${query})[''${range}:1m])" \
+          http://127.0.0.1:9090/api/v1/query \
+          | jq -r '(.data.result[0].value[1] // "n/a") as $v
+                   | if $v == "n/a" then $v else ($v | tonumber | (. * 100 | round) / 100 | tostring) end'
+      }
+
+      printf '%-12s %-6s %8s %8s %8s\n' metric range min avg max
+      for key in cpu-package cpu-cores gpu; do
+        query=$(metric_query "$key")
+        for range in 24h 7d 30d; do
+          min=$(stat min "$query" "$range")
+          avg=$(stat avg "$query" "$range")
+          max=$(stat max "$query" "$range")
+          printf '%-12s %-6s %8s %8s %8s\n' "$key" "$range" "$min" "$avg" "$max"
+        done
+      done
+    '';
+  };
+
   powertopSnapshot = pkgs.writeShellApplication {
     name = "powertop-snapshot";
     runtimeInputs = [
@@ -242,6 +282,7 @@ in
 
       environment.systemPackages = [
         powerReport
+        powerStats
       ]
       ++ (with pkgs; [
         below
@@ -250,6 +291,7 @@ in
         powerstat
         s-tui
         lm_sensors
+        wtfutil
       ])
       ++ lib.optionals cfg.idle.optimise [
         suspendSoft
@@ -518,11 +560,45 @@ in
     })
 
     (lib.mkIf (cfg.monitoring.enable && cfg.monitoring.grafana) {
+      sops.secrets."grafana-secret-key".owner = "grafana";
+      systemd.services.grafana = {
+        after = [ "sops-install-secrets.service" ];
+        wants = [ "sops-install-secrets.service" ];
+      };
+
       services.grafana = {
         enable = true;
         settings.server = {
           http_addr = "127.0.0.1";
           http_port = 3000;
+        };
+        settings.security.secret_key = "$__file{${config.sops.secrets."grafana-secret-key".path}}";
+
+        provision.datasources.settings = {
+          apiVersion = 1;
+          datasources = [
+            {
+              name = "Prometheus";
+              uid = "prometheus";
+              type = "prometheus";
+              access = "proxy";
+              url = "http://127.0.0.1:${toString config.services.prometheus.port}";
+              isDefault = true;
+            }
+          ];
+        };
+
+        provision.dashboards.settings = {
+          apiVersion = 1;
+          providers = [
+            {
+              name = "power";
+              orgId = 1;
+              folder = "Power";
+              type = "file";
+              options.path = ./power-dashboards;
+            }
+          ];
         };
       };
     })
