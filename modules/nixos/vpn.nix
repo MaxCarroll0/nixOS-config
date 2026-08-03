@@ -148,23 +148,25 @@ in
     sops.secrets.${cfg.configSecret} = { };
     sops.secrets.${cfg.altSecret} = { };
 
-    # wg-quick inserts its rules below whatever exists, so the tailnet rule has
-    # to be re-asserted here, after every tunnel start, or MagicDNS is captured.
-    networking.wg-quick.interfaces.proton = {
-      configFile = config.sops.secrets.${cfg.configSecret}.path;
-      postUp = tailnetRoutePriority;
-    };
+    networking.wg-quick.interfaces.proton.configFile = config.sops.secrets.${cfg.configSecret}.path;
 
     networking.wg-quick.interfaces.proton-alt = {
       configFile = config.sops.secrets.${cfg.altSecret}.path;
       autostart = false;
-      postUp = tailnetRoutePriority;
     };
 
     systemd.services = lib.listToAttrs (map bypassService cfg.bypassUnits) // {
       nix-daemon.serviceConfig.Group = "novpn";
-      "wg-quick-proton".conflicts = [ "wg-quick-proton-alt.service" ];
-      "wg-quick-proton-alt".conflicts = [ "wg-quick-proton.service" ];
+      # wg-quick inserts its rules below whatever already exists, so the tailnet
+      # rule must be re-asserted after every tunnel start or MagicDNS is captured.
+      "wg-quick-proton" = {
+        conflicts = [ "wg-quick-proton-alt.service" ];
+        serviceConfig.ExecStartPost = lib.mkIf (tailnetRoutePriority != "") tailnetRoutePriority;
+      };
+      "wg-quick-proton-alt" = {
+        conflicts = [ "wg-quick-proton.service" ];
+        serviceConfig.ExecStartPost = lib.mkIf (tailnetRoutePriority != "") tailnetRoutePriority;
+      };
     };
 
     # Fail-closed VPN kill switch: drop all egress except loopback, the tunnel
