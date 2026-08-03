@@ -79,10 +79,21 @@ in
           after = [
             "tailscaled.service"
             "wg-quick-proton.service"
+            "wg-quick-proton-alt.service"
           ];
           wants = [ "tailscaled.service" ];
-          partOf = [ "tailscaled.service" ];
-          wantedBy = [ "multi-user.target" ];
+          # Restarted with either tunnel: wg-quick re-adds its rules below ours
+          # on every start, so the priority has to be recomputed each time.
+          partOf = [
+            "tailscaled.service"
+            "wg-quick-proton.service"
+            "wg-quick-proton-alt.service"
+          ];
+          wantedBy = [
+            "multi-user.target"
+            "wg-quick-proton.service"
+            "wg-quick-proton-alt.service"
+          ];
           serviceConfig = {
             Type = "oneshot";
             RemainAfterExit = true;
@@ -100,7 +111,8 @@ in
                 | while read -r old; do $ip $family rule del to "$net" lookup 52 priority "$old" 2>/dev/null || true; done
 
               wg=$($ip $family rule show 2>/dev/null \
-                | ${pkgs.gawk}/bin/awk '/not .*fwmark 0xca6c/ { sub(":","",$1); print $1; exit }')
+                | ${pkgs.gawk}/bin/awk '/not .*fwmark 0xca6c/ || /suppress_prefixlength/ { sub(":","",$1); print $1 }' \
+                | sort -n | head -1)
               prio=$(( ''${wg:-50} - 1 ))
               [ "$prio" -lt 1 ] && prio=1
 
