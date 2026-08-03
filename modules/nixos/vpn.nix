@@ -45,17 +45,13 @@ let
 
   unitTableName = unit: "novpn-" + lib.replaceStrings [ "." "@" "\\" ] [ "-" "-" "-" ] unit;
 
-  # DNS stays unmarked: the resolver is an address inside the tunnel, so queries
-  # sent out the physical link cannot reach it.
   bypassRules =
     unit:
     pkgs.writeText "${unitTableName unit}.nft" ''
       table inet ${unitTableName unit} {
         chain output {
           type route hook output priority mangle + 1; policy accept;
-          socket cgroupv2 level 2 "system.slice/${unit}" udp dport 53 meta mark set 0 return
-          socket cgroupv2 level 2 "system.slice/${unit}" tcp dport 53 meta mark set 0 return
-          socket cgroupv2 level 2 "system.slice/${unit}" meta mark set 0xca6c
+          socket cgroupv2 level 2 "system.slice/${unit}" counter meta mark set 0xca6c
         }
       }
     '';
@@ -93,6 +89,12 @@ in
     description = "sops secret with this host's WireGuard config. One per host.";
   };
 
+  options.local.vpn.bypassResolver = lib.mkOption {
+    type = lib.types.str;
+    default = "1.1.1.1";
+    description = "Resolver for novpn traffic, reachable off the tunnel.";
+  };
+
   config = {
     local.vpn.bypassUnits = [ "nix-daemon.service" ];
 
@@ -108,6 +110,12 @@ in
       // {
         nixos-rebuild = {
           source = "${novpnWrapper "nixos-rebuild" "${pkgs.nixos-rebuild-ng}/bin/nixos-rebuild"}/bin/nixos-rebuild-novpn";
+          owner = "root";
+          group = "root";
+          permissions = "u+rx,g+rx,o+rx";
+        };
+        nh = {
+          source = "${novpnWrapper "nh" "${pkgs.nh}/bin/nh"}/bin/nh-novpn";
           owner = "root";
           group = "root";
           permissions = "u+rx,g+rx,o+rx";
@@ -155,8 +163,7 @@ in
 
     # Split tunnel: traffic from the "novpn" group bypasses the VPN. Marking it
     # 0xca6c makes wg-quick's rules route it out the physical link instead of the
-    # tunnel, and the kill switch above already accepts that mark. DNS stays on
-    # the default path so it resolves via the tunnel's resolver while VPN is up.
+    # tunnel, and the kill switch above already accepts that mark.
     # The reroute happens after the socket already picked the tunnel source IP,
     # so masquerade rewrites it to the physical address (matched by skgid, not
     # the mark, to leave WireGuard's own encrypted packets untouched).
@@ -166,15 +173,29 @@ in
         chain output {
           type route hook output priority mangle + 1; policy accept;
 
-          meta skgid 700 udp dport 53 meta mark set 0 return
-          meta skgid 700 tcp dport 53 meta mark set 0 return
-          meta skgid 700 meta mark set 0xca6c
+          meta skgid 700 counter meta mark set 0xca6c
         }
 
         chain postrouting {
           type nat hook postrouting priority srcnat; policy accept;
 
           meta mark 0xca6c oifname != { "lo", "proton" } masquerade
+        }
+      '';
+    };
+
+    # resolv.conf points at the tunnel resolver, which bypassed traffic cannot
+    # reach by definition. Send its queries to a resolver on the physical link.
+    networking.nftables.tables.novpn-dns = {
+      family = "ip";
+      content = ''
+        chain output {
+          type nat hook output priority dstnat; policy accept;
+
+          ip daddr 100.100.100.100 return
+
+          meta mark 0xca6c udp dport 53 dnat to ${cfg.bypassResolver}
+          meta mark 0xca6c tcp dport 53 dnat to ${cfg.bypassResolver}
         }
       '';
     };

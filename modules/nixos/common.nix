@@ -36,7 +36,8 @@ let
 
       case "$action" in
         home)
-          exec home-manager switch --flake "$flake#max@$host" "''${opts[@]}" "$@" ;;
+          printf -v hmArgs '%q ' --flake "$flake#max@$host" "''${opts[@]}" "$@"
+          exec /run/wrappers/bin/sg novpn -c "exec home-manager switch $hmArgs" ;;
         build|dry-build|repl)
           exec nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
         switch|boot|test|dry-activate)
