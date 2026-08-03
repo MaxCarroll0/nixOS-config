@@ -69,28 +69,45 @@ in
         local.vpn.bypassUnits = [ "tailscaled.service" ];
         local.vpn.allowInterfaces = [ "tailscale0" ];
 
-        # wg-quick's redirect lands at priority 48-49 (kernel-assigned, not the
-        # documented 99), and ip rule takes the lowest number first, so this
-        # must sit below it or MagicDNS is routed into the tunnel and dies.
-        # Fixed Tailscale ranges, not specific to this tailnet.
+        # wg-quick adds its redirect without an explicit priority, and the kernel
+        # places it just below whatever rules already exist, so a hardcoded
+        # number here gets undercut on the next tunnel restart. Read wg-quick's
+        # actual priority and sit one below it. Fixed Tailscale ranges, not
+        # specific to this tailnet.
         systemd.services.tailscale-route-priority = {
           description = "Route tailnet addresses ahead of the VPN kill switch";
-          after = [ "tailscaled.service" ];
+          after = [
+            "tailscaled.service"
+            "wg-quick-proton.service"
+          ];
           wants = [ "tailscaled.service" ];
           partOf = [ "tailscaled.service" ];
           wantedBy = [ "multi-user.target" ];
           serviceConfig = {
             Type = "oneshot";
             RemainAfterExit = true;
-            ExecStart = [
-              "-${pkgs.iproute2}/bin/ip rule add to 100.64.0.0/10 lookup 52 priority 20"
-              "-${pkgs.iproute2}/bin/ip -6 rule add to fd7a:115c:a1e0::/48 lookup 52 priority 20"
-            ];
-            ExecStop = [
-              "-${pkgs.iproute2}/bin/ip rule del to 100.64.0.0/10 lookup 52 priority 20"
-              "-${pkgs.iproute2}/bin/ip -6 rule del to fd7a:115c:a1e0::/48 lookup 52 priority 20"
-            ];
           };
+          script = ''
+            ip=${pkgs.iproute2}/bin/ip
+            for family in "-4" "-6"; do
+              case "$family" in
+                -4) net=100.64.0.0/10 ;;
+                -6) net=fd7a:115c:a1e0::/48 ;;
+              esac
+
+              $ip $family rule show 2>/dev/null \
+                | ${pkgs.gawk}/bin/awk -v n="$net" '$0 ~ n { sub(":","",$1); print $1 }' \
+                | while read -r old; do $ip $family rule del to "$net" lookup 52 priority "$old" 2>/dev/null || true; done
+
+              wg=$($ip $family rule show 2>/dev/null \
+                | ${pkgs.gawk}/bin/awk '/not .*fwmark 0xca6c/ { sub(":","",$1); print $1; exit }')
+              prio=$(( ''${wg:-50} - 1 ))
+              [ "$prio" -lt 1 ] && prio=1
+
+              $ip $family rule add to "$net" lookup 52 priority "$prio" || true
+              echo "tailnet $net via table 52 at priority $prio (wg-quick at ''${wg:-none})"
+            done
+          '';
         };
       }
 
