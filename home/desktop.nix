@@ -109,7 +109,7 @@
     '';
   };
 
-  xdg.configFile."wtfutil/config.yml" = {
+  xdg.configFile."wtf/config.yml" = {
     force = true;
     text = ''
       wtf:
