@@ -40,7 +40,8 @@ if [ "$assume_yes" -ne 1 ]; then
 fi
 
 sudo dd if="$image" of="$device" bs=4M status=progress conv=fsync
-sudo partprobe "$device"
+sudo blockdev --rereadpt "$device" 2>/dev/null || sudo partx -u "$device" 2>/dev/null || true
+sudo udevadm settle 2>/dev/null || sleep 2
 
 mnt=$(mktemp -d)
 cleanup() { sudo umount "$mnt" 2>/dev/null || true; rmdir "$mnt" 2>/dev/null || true; }
