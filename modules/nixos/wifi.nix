@@ -27,40 +27,30 @@ in
   config = lib.mkIf (cfg.ssid != null && cfg.pskSecret != null) {
     sops.secrets.${cfg.pskSecret} = { };
 
-    systemd.services.wifi-profile = {
-      description = "Write NetworkManager profile for ${cfg.ssid}";
-      after = [ "sops-install-secrets.service" ];
-      wants = [ "sops-install-secrets.service" ];
-      before = [ "network-pre.target" ];
-      wantedBy = [ "multi-user.target" ];
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        Restart = "on-failure";
-        RestartSec = "5s";
+    sops.templates."wifi-env".content = ''
+      WIFI_PSK=${config.sops.placeholder.${cfg.pskSecret}}
+    '';
+
+    networking.networkmanager.ensureProfiles = {
+      environmentFiles = [ config.sops.templates."wifi-env".path ];
+
+      profiles.${cfg.ssid} = {
+        connection = {
+          id = cfg.ssid;
+          type = "wifi";
+        };
+        wifi = {
+          ssid = cfg.ssid;
+          mode = "infrastructure";
+        };
+        wifi-security = {
+          auth-alg = "open";
+          key-mgmt = "wpa-psk";
+          psk = "$WIFI_PSK";
+        };
+        ipv4.method = "auto";
+        ipv6.method = "auto";
       };
-      script = ''
-        psk=$(cat ${config.sops.secrets.${cfg.pskSecret}.path})
-        install -d -m 0700 /etc/NetworkManager/system-connections
-        cat > /etc/NetworkManager/system-connections/${cfg.ssid}.nmconnection <<EOF
-        [connection]
-        id=${cfg.ssid}
-        type=wifi
-        [wifi]
-        ssid=${cfg.ssid}
-        mode=infrastructure
-        [wifi-security]
-        auth-alg=open
-        key-mgmt=wpa-psk
-        psk=$psk
-        [ipv4]
-        method=auto
-        [ipv6]
-        method=auto
-        EOF
-        chmod 0600 /etc/NetworkManager/system-connections/${cfg.ssid}.nmconnection
-        systemctl reload-or-restart NetworkManager
-      '';
     };
   };
 }
