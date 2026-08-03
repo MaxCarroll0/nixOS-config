@@ -79,14 +79,28 @@ let
   };
 
   allowedInterfaces = lib.concatStringsSep ", " (
-    map (i: ''"${i}"'') ([ "proton" ] ++ cfg.allowInterfaces)
+    map (i: ''"${i}"'') (
+      [
+        "proton"
+        "proton-alt"
+      ]
+      ++ cfg.allowInterfaces
+    )
   );
 in
 
 {
   options.local.vpn.configSecret = lib.mkOption {
     type = lib.types.str;
+    default = "proton-wg-2";
     description = "sops secret with this host's WireGuard config. One per host.";
+  };
+
+  options.local.vpn.altSecret = lib.mkOption {
+    type = lib.types.str;
+    default = if cfg.configSecret == "proton-wg" then "proton-wg-2" else "proton-wg";
+    defaultText = lib.literalExpression "whichever of the two configs configSecret is not";
+    description = "Second config, started by hand as wg-quick-proton-alt.";
   };
 
   options.local.vpn.bypassResolver = lib.mkOption {
@@ -122,18 +136,25 @@ in
         };
       };
 
-    networking.networkmanager.unmanaged = [ "interface-name:proton" ];
+    networking.networkmanager.unmanaged = [
+      "interface-name:proton"
+      "interface-name:proton-alt"
+    ];
 
     sops.secrets.${cfg.configSecret} = { };
+    sops.secrets.${cfg.altSecret} = { };
 
     networking.wg-quick.interfaces.proton.configFile = config.sops.secrets.${cfg.configSecret}.path;
 
+    networking.wg-quick.interfaces.proton-alt = {
+      configFile = config.sops.secrets.${cfg.altSecret}.path;
+      autostart = false;
+    };
+
     systemd.services = lib.listToAttrs (map bypassService cfg.bypassUnits) // {
       nix-daemon.serviceConfig.Group = "novpn";
-      "wg-quick-proton" = {
-        after = [ "sops-install-secrets.service" ];
-        wants = [ "sops-install-secrets.service" ];
-      };
+      "wg-quick-proton".conflicts = [ "wg-quick-proton-alt.service" ];
+      "wg-quick-proton-alt".conflicts = [ "wg-quick-proton.service" ];
     };
 
     # Fail-closed VPN kill switch: drop all egress except loopback, the tunnel
@@ -179,7 +200,7 @@ in
         chain postrouting {
           type nat hook postrouting priority srcnat; policy accept;
 
-          meta mark 0xca6c oifname != { "lo", "proton" } masquerade
+          meta mark 0xca6c oifname != { "lo", "proton", "proton-alt" } masquerade
         }
       '';
     };
