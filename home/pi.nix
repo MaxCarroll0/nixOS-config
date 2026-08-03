@@ -1,9 +1,9 @@
-# Home for the Pi.
+# Home for the Pi: base only, no GUI.
 
 { ... }:
 
 {
-  imports = [ ./common.nix ];
+  imports = [ ./base.nix ];
 
   local.emacs.guiToolkit = false;
 }

@@ -160,285 +160,12 @@ let
 in
 {
   imports = [
+    ./base.nix
     ./hyprland.nix
   ];
 
-  options.local.emacs.guiToolkit = lib.mkOption {
-    type = lib.types.bool;
-    default = true;
-    description = "Build emacs against the GTK toolkit. False for headless hosts.";
-  };
-
-  # Home Manager needs a bit of information about you and the paths it should
-  # manage.
-  home.username = "max";
-  home.homeDirectory = "/home/max";
-
   fonts.fontconfig.enable = true;
 
-  programs.git = {
-    enable = true;
-    settings.user.name = "Max";
-    settings.user.email = "mjvcarroll@gmail.com";
-    ignores = [
-      "*~"
-      "\\#*\\#"
-      ".\\#*"
-      "*.swp"
-      "*.swo"
-      "**/.claude/settings.local.json"
-      "AGENTS.md"
-      "CLAUDE.md"
-
-      # Editor / OS / local state
-      ".direnv/"
-      "result"
-      "result-*"
-      ".DS_Store"
-      ".vscode/"
-      ".idea/"
-
-      # Exercism
-      ".exercism/"
-
-      # Rust
-      "target/"
-
-      # TypeScript / Node / Bun
-      "node_modules/"
-      "dist/"
-      "build/"
-      ".next/"
-      "*.tsbuildinfo"
-
-      # Python
-      "__pycache__/"
-      "*.pyc"
-      "*.pyo"
-      ".venv/"
-      "*.egg-info/"
-
-      # OCaml
-      "_build/"
-      "*.install"
-
-      # Haskell
-      "dist-newstyle/"
-      ".stack-work/"
-      "*.hi"
-      "*.o"
-
-      # Scala
-      ".bloop/"
-      ".metals/"
-
-      # F# / .NET
-      "bin/"
-      "obj/"
-
-      # Clojure
-      ".cpcache/"
-      ".lsp/"
-      ".clj-kondo/"
-
-      # Common Lisp
-      "*.fasl"
-
-      # Idris
-      "*.ibc"
-      "*.ttc"
-
-      # Agda
-      "*.agdai"
-
-      # Lean4
-      ".lake/"
-      "*.olean"
-    ];
-    settings.init.defaultBranch = "main";
-  };
-
-  programs.gh = {
-    enable = true;
-    settings = {
-      git_protocol = "https";
-      aliases.co = "pr checkout";
-    };
-
-    hosts."github.com" = {
-      git_protocol = "https";
-      user = "MaxCarroll0";
-      users.MaxCarroll0 = { };
-    };
-  };
-
-  #programs.opam = {
-  #    enable = true;
-  #  };
-
-  programs.direnv = {
-    enable = true;
-    nix-direnv.enable = true;
-  };
-
-  programs.bash = {
-    enable = true;
-
-    bashrcExtra = /* bash */ ''
-      set -o vi
-    '';
-  };
-
-  programs.emacs = {
-    enable = true;
-    package = (
-      pkgs.emacsWithPackagesFromUsePackage {
-        package = if config.local.emacs.guiToolkit then pkgs.emacs-pgtk else pkgs.emacs-nox;
-        config = ../emacs/config.org;
-        defaultInitFile = true;
-        alwaysEnsure = true;
-
-        extraEmacsPackages =
-          epkgs:
-          let
-            codeium = epkgs.trivialBuild {
-              pname = "codeium";
-              version = "unstable";
-              src = pkgs.fetchFromGitHub {
-                owner = "Exafunction";
-                repo = "codeium.el";
-                rev = "main";
-                hash = "sha256-FcLuL68RChodolE8oUTWIbZLLF3UWIsy4sKgZdaovkg=";
-              };
-              packageRequires = with epkgs; [
-                request
-                s
-                dash
-                editorconfig
-              ];
-            };
-            llm-tool-collection = epkgs.trivialBuild {
-              pname = "llm-tool-collection";
-              version = "0-unstable-2026-02-26";
-              src = pkgs.fetchFromGitHub {
-                owner = "skissue";
-                repo = "llm-tool-collection";
-                rev = "b9fd45bedf3e0fb07d289730991199ae18785157";
-                hash = "sha256-40BSMoM25tdgXeH5+labLYqCPCK4SEuAWovOeJxnzNo=";
-              };
-            };
-            # Drop this override once nixpkgs envrc includes async processing.
-            envrc = epkgs.envrc.overrideAttrs (_old: {
-              version = "0-unstable-2025-01-11";
-              src = pkgs.fetchFromGitHub {
-                owner = "Grimpper";
-                repo = "envrc";
-                rev = "71f67971bc5eb2974ae2f738512c8f09f0822527";
-                hash = "sha256-Zfu+yWY+POMnrWbmP6HWOjgFsASNU3HcCowNo8BIzpk=";
-              };
-            });
-            lean4-mode = epkgs.trivialBuild {
-              pname = "lean4-mode";
-              version = "unstable";
-              src = pkgs.fetchFromGitHub {
-                owner = "leanprover-community";
-                repo = "lean4-mode";
-                rev = "1388f9d1429e38a39ab913c6daae55f6ce799479";
-                hash = "sha256-6XFcyqSTx1CwNWqQvIc25cuQMwh3YXnbgr5cDiOCxBk=";
-              };
-              packageRequires = with epkgs; [
-                compat
-                dash
-                magit-section
-                lsp-mode
-              ];
-            };
-          in
-          with epkgs;
-          [
-            treesit-grammars.with-all-grammars
-            treesit-auto
-            use-package
-            polymode
-            poly-org
-            poly-markdown
-            poly-noweb
-            meow
-            nixpkgs-fmt
-            apheleia
-            nix-ts-mode
-            magit
-            envrc
-            auctex
-            vertico
-            orderless
-            corfu
-            cape
-            xenops
-            cdlatex
-            org-fragtog
-            eat
-            embrace
-            codeium
-            gptel
-            llm-tool-collection
-            ellama
-            clojure-ts-mode
-            sly
-            fsharp-mode
-            haskell-mode
-            idris2-mode
-            tuareg
-            dune
-            ocamlformat
-            scala-mode
-            sweeprolog
-            lean4-mode
-            proof-general
-            company-coq
-            fstar-mode
-            markdown-ts-mode
-            jq-mode
-            ligature
-            dired-narrow
-            yasnippet
-            nov
-            consult
-            marginalia
-            embark
-            embark-consult
-            wgrep
-            company-auctex
-            reason-mode
-            org-roam
-            consult-org-roam
-            org-ql
-            org-super-agenda
-            git-auto-commit-mode
-            org-wc
-            org-transclusion
-            citar
-            citar-org-roam
-            org-noter
-            pdf-tools
-            org-remark
-            org-roam-ui
-          ];
-      }
-    );
-  };
-
-  # This value determines the Home Manager release that your configuration is
-  # compatible with. This helps avoid breakage when a new Home Manager release
-  # introduces backwards incompatible changes.
-  #
-  # You should not change this value, even if you update Home Manager. If you do
-  # want to update the value, then make sure to first check the Home Manager
-  # release notes.
-  home.stateVersion = "25.05"; # Please read the comment before changing.
-
-  # The home.packages option allows you to install Nix packages into your
-  # environment.
   home.packages = [
     curdWrapped
     curd-cf-refresh
@@ -474,13 +201,13 @@ in
     mpv
     yt-dlp
     (pkgs-unstable.ani-cli.overrideAttrs (old: {
-      version = "4.15.0-unstable-2026-07-26";
+      version = "4.15.0-unstable-2026-08-01";
       runtimeInputs = (old.runtimeInputs or [ ]) ++ [ pkgs.botan3 ];
       src = pkgs.fetchFromGitHub {
         owner = "pystardust";
         repo = "ani-cli";
-        rev = "a8aa499e3c9c70b252e8a899c04d3a29898d5caf";
-        hash = "sha256-E85m9EvP418zcd8bkQDgNuRelMoHHvnThI5v6XnQIfI=";
+        rev = "489087b541eb1457393b997fdd3589ffe7a8d6a2";
+        hash = "sha256-nl4c0ASIvoBylnk/F4AxVxQl68de9kWPwnNtiTOLzZc=";
       };
     }))
     claude-code
@@ -577,34 +304,6 @@ in
     fi
   '';
 
-  # Home Manager can also manage your environment variables through
-  # 'home.sessionVariables'. These will be explicitly sourced when using a
-  # shell provided by Home Manager. If you don't want to manage your shell
-  # through Home Manager then you have to manually source 'hm-session-vars.sh'
-  # located at either
-  #
-  #  ~/.nix-profile/etc/profile.d/hm-session-vars.sh
-  #
-  # or
-  #
-  #  ~/.local/state/nix/profiles/profile/etc/profile.d/hm-session-vars.sh
-  #
-  # or
-  #
-  #  /etc/profiles/per-user/max/etc/profile.d/hm-session-vars.sh
-  #
-  home.sessionVariables = {
-    EDITOR = "emacs";
-  };
-
-  services.home-manager.autoUpgrade = {
-    enable = true;
-    useFlake = true;
-    flakeDir = "/home/max/.config/nix";
-    frequency = "weekly";
-    preSwitchCommands = [ "nix flake update nixpkgs-unstable" ];
-  };
-
   # Merges declarative keys into ~/.claude/settings.json without clobbering
   # other entries claude code may write.
   home.activation.claudeSettings = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
@@ -618,7 +317,4 @@ in
       "includeCoAuthoredBy": false
     }' "$_settings" > "$_settings.tmp" && mv "$_settings.tmp" "$_settings"
   '';
-
-  # Let Home Manager install and manage itself.
-  programs.home-manager.enable = true;
 }
