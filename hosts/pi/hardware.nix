@@ -1,5 +1,6 @@
 {
   lib,
+  pkgs,
   inputs,
   ...
 }:
@@ -11,6 +12,9 @@
   ];
 
   local.rpi.directBoot.enable = true;
+
+  # linux-rpi is not in any binary cache, so it is compiled under emulation.
+  boot.kernelPackages = lib.mkForce pkgs.linuxPackages;
 
   boot.loader.grub.enable = lib.mkForce false;
   boot.loader.efi.canTouchEfiVariables = lib.mkForce false;

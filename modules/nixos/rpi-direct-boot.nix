@@ -114,7 +114,8 @@ in
       }
 
       (lib.optionalAttrs (options ? sdImage) {
-        sdImage.populateFirmwareCommands = ''
+        # nixos-hardware mkForces this for U-Boot, regardless of firmware.enable.
+        sdImage.populateFirmwareCommands = lib.mkOverride 10 ''
           ${lib.getExe cfg.stagePackage} ./firmware ${config.system.build.toplevel}
         '';
 
