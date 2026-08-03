@@ -12,7 +12,6 @@
 let
   cfg = config.local.rpi.directBoot;
 
-  # config.txt rejects "=" on initramfs alone.
   configTxt = pkgs.buildPackages.runCommand "config.txt" { } ''
     cat ${options.hardware.raspberry-pi.configtxt.file.default} > $out
     printf 'initramfs initrd followkernel\n' >> $out

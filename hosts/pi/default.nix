@@ -10,6 +10,7 @@
     ../../modules/nixos/wake.nix
     ../../modules/nixos/power.nix
     ../../modules/nixos/server/ssh.nix
+    ../../modules/nixos/rollback-guard.nix
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/tailscale-watchdog.nix
     ../../modules/nixos/build-client.nix
@@ -46,6 +47,8 @@
     authKeySecret = "tailscale-auth-key";
   };
 
+  local.rollbackGuard.enable = true;
+
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
 
   local.build.client = {
@@ -77,7 +80,6 @@
 
   system.autoUpgrade.allowReboot = lib.mkForce false;
 
-  # No local clone on a freshly flashed drive.
   system.autoUpgrade.flake = lib.mkForce "github:MaxCarroll0/nixOS-config#pi";
 
   local.server.tailscaleWatchdog.enable = true;

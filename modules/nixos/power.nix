@@ -251,8 +251,6 @@ in
         s-tui
         lm_sensors
       ])
-      # These drive suspend-soft-hardware / wake-soft-hardware, which only
-      # exist under idle.optimise.
       ++ lib.optionals cfg.idle.optimise [
         suspendSoft
         wakeSoft
@@ -383,8 +381,6 @@ in
         RebootWatchdogSec = "3min";
       };
 
-      # An emergency shell on an unattended host is indistinguishable from a
-      # dead one; panic=10 turns the same fault into a reboot.
       systemd.enableEmergencyMode = false;
     })
 
