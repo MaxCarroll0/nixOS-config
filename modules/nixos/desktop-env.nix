@@ -1,13 +1,62 @@
 # Graphical session: Plasma, Hyprland, audio, printing, Firefox.
 
 {
+  lib,
   pkgs,
   pkgs-unstable,
   inputs,
   ...
 }:
 
+let
+  # KDE askpass keeps sudo passwords out of the invoking terminal.
+  sudoRequest = pkgs.writeShellApplication {
+    name = "sudo-request";
+    runtimeInputs = [
+      pkgs.kdePackages.ksshaskpass
+      pkgs.tailscale
+    ];
+    text = ''
+      if [ "''${1:-}" = "--host" ]; then
+        if [ "$#" -lt 3 ]; then
+          echo "usage: sudo-request --host HOST COMMAND [ARG ...]" >&2
+          exit 2
+        fi
+        host="$2"
+        shift 2
+        printf -v command '%q ' "$@"
+        password="$(${lib.getExe pkgs.kdePackages.ksshaskpass} "Authorize sudo on $host: $command")" || exit
+        [ -n "$password" ] || exit 1
+        printf '%s\n' "$password" \
+          | tailscale ssh "$host" "/run/wrappers/bin/sudo -k; /run/wrappers/bin/sudo -S -p \"\" -- $command; status=\$?; /run/wrappers/bin/sudo -k; exit \$status"
+        status=$?
+        unset password
+      else
+        /run/wrappers/bin/sudo -k
+        SUDO_ASKPASS=${lib.getExe pkgs.kdePackages.ksshaskpass} /run/wrappers/bin/sudo --askpass --validate || exit
+        status=0
+        "$@" || status=$?
+        /run/wrappers/bin/sudo -k
+      fi
+      exit "$status"
+    '';
+  };
+in
+
 {
+  programs.firejail.enable = true;
+
+  users.users.max.packages = [ pkgs.kdePackages.kate ];
+
+  environment.systemPackages = [
+    sudoRequest
+  ]
+  ++ (with pkgs; [
+    vscode
+    wayland-utils
+    wl-clipboard
+  ]);
+
   services.printing.enable = true;
 
   services.logind.settings.Login.HandleLidSwitch = "ignore";

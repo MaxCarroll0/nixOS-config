@@ -48,39 +48,6 @@ let
     '';
   };
 
-  # KDE askpass keeps sudo passwords out of the invoking terminal.
-  sudoRequest = pkgs.writeShellApplication {
-    name = "sudo-request";
-    runtimeInputs = [
-      pkgs.kdePackages.ksshaskpass
-      pkgs.tailscale
-    ];
-    text = ''
-      if [ "''${1:-}" = "--host" ]; then
-        if [ "$#" -lt 3 ]; then
-          echo "usage: sudo-request --host HOST COMMAND [ARG ...]" >&2
-          exit 2
-        fi
-        host="$2"
-        shift 2
-        printf -v command '%q ' "$@"
-        password="$(${lib.getExe pkgs.kdePackages.ksshaskpass} "Authorize sudo on $host: $command")" || exit
-        [ -n "$password" ] || exit 1
-        printf '%s\n' "$password" \
-          | tailscale ssh "$host" "/run/wrappers/bin/sudo -k; /run/wrappers/bin/sudo -S -p \"\" -- $command; status=\$?; /run/wrappers/bin/sudo -k; exit \$status"
-        status=$?
-        unset password
-      else
-        /run/wrappers/bin/sudo -k
-        SUDO_ASKPASS=${lib.getExe pkgs.kdePackages.ksshaskpass} /run/wrappers/bin/sudo --askpass --validate || exit
-        status=0
-        "$@" || status=$?
-        /run/wrappers/bin/sudo -k
-      fi
-      exit "$status"
-    '';
-  };
-
   editSecrets = pkgs.writeShellApplication {
     name = "edit-secrets";
     text = ''
@@ -127,7 +94,7 @@ in
     boot.kernelParams = [
       "zswap.enabled=1"
       "zswap.compressor=zstd"
-      "zswap.zpool=z3fold"
+      "zswap.zpool=zsmalloc"
       "zswap.max_pool_percent=20"
     ];
 
@@ -215,9 +182,11 @@ in
     # nixos-rebuild's --update-input was removed; inputs are bumped separately.
     # The unit runs as root, so hand the lock back to its owner afterwards.
     systemd.services.nixos-upgrade.preStart = /* bash */ ''
-      ${pkgs.git}/bin/git config --global --add safe.directory ${flakePath}
-      ${config.nix.package}/bin/nix flake update --flake ${flakePath} nixpkgs nixpkgs-unstable
-      ${pkgs.coreutils}/bin/chown max:users ${flakePath}/flake.lock
+      if [ -d ${flakePath}/.git ]; then
+        ${pkgs.git}/bin/git config --global --add safe.directory ${flakePath}
+        ${config.nix.package}/bin/nix flake update --flake ${flakePath} nixpkgs nixpkgs-unstable
+        ${pkgs.coreutils}/bin/chown max:users ${flakePath}/flake.lock
+      fi
     '';
 
     system.autoUpgrade = {
@@ -234,8 +203,6 @@ in
     };
 
     networking.networkmanager.enable = true;
-
-    programs.firejail.enable = true;
 
     time.timeZone = "Europe/London";
 
@@ -269,9 +236,6 @@ in
             "keys"
             "novpn"
           ];
-          packages = with pkgs; [
-            kdePackages.kate
-          ];
         };
       }
     ];
@@ -282,15 +246,9 @@ in
       rebuild
       editSecrets
       projectClosureRetention
-      sudoRequest
       pkgs.nix-sweep
-    ]
-    ++ (with pkgs; [
-      git
-      vscode
-      wayland-utils
-      wl-clipboard
-    ]);
+      pkgs.git
+    ];
 
     system.stateVersion = lib.mkDefault "25.05";
 
