@@ -12,10 +12,7 @@
 let
   cfg = config.local.rpi.directBoot;
 
-  configTxt = pkgs.buildPackages.runCommand "config.txt" { } ''
-    cat ${options.hardware.raspberry-pi.configtxt.file.default} > $out
-    printf 'initramfs initrd followkernel\n' >> $out
-  '';
+  configTxt = options.hardware.raspberry-pi.configtxt.file.default;
 
   mkStage =
     scriptPkgs:
@@ -47,14 +44,14 @@ let
 
         replace ${configTxt} "$target/config.txt"
 
-        for f in Image initrd; do
+        for f in kernel_2712.img initramfs_2712; do
           if [ -e "$target/$f" ]; then
             replace "$target/$f" "$target/$f.prev"
           fi
         done
 
-        replace "$toplevel/kernel" "$target/Image"
-        replace "$toplevel/initrd" "$target/initrd"
+        replace "$toplevel/kernel" "$target/kernel_2712.img"
+        replace "$toplevel/initrd" "$target/initramfs_2712"
 
         printf '%s init=%s\n' "$(cat "$toplevel/kernel-params")" "$toplevel/init" \
           > "$target/cmdline.txt.tmp"
@@ -93,8 +90,7 @@ in
     lib.mkMerge [
       {
         hardware.raspberry-pi.firmware.enable = false;
-        hardware.raspberry-pi.configtxt.settings.all.kernel = "Image";
-        hardware.raspberry-pi.configtxt.file = lib.mkForce configTxt;
+        hardware.raspberry-pi.configtxt.settings.all.auto_initramfs = 1;
 
         boot.loader.generic-extlinux-compatible.enable = lib.mkForce false;
 

@@ -7,8 +7,12 @@
 
   sdImage.compressImage = false;
 
-  # sd-image.nix writes 0x0b; the Pi bootloader wants 0x0c (FAT32 LBA).
-  sdImage.postBuildCommands = "sfdisk --part-type $img 1 c";
+  # Raspberry Pi OS uses FAT32 LBA and no boot flag.
+  sdImage.postBuildCommands = ''
+    sfdisk --part-type $img 1 c
+    sfdisk -A $img 1 2>/dev/null || true
+    sfdisk --activate $img - 2>/dev/null || true
+  '';
 
   sdImage.firmwareSize = 1024;
 
