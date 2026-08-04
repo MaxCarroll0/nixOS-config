@@ -70,10 +70,6 @@ in
         # Use native nftables backend.
         systemd.services.tailscaled.environment.TS_DEBUG_FIREWALL_MODE = "nftables";
 
-        # Control-plane and DERP traffic goes out the physical link; replies to
-        # tailnet peers leave via the tunnel and are not marked, so both are needed.
-        local.vpn.bypassUnits = [ "tailscaled.service" ];
-        local.vpn.allowInterfaces = [ "tailscale0" ];
       }
 
       (lib.mkIf (cfg.authKeySecret != null) {

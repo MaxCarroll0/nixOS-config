@@ -4,6 +4,7 @@
   config,
   pkgs,
   lib,
+  inputs,
   ...
 }:
 
@@ -95,6 +96,18 @@ in
     description = "Interface suffix to sops secret, one set per host.";
   };
 
+  options.local.vpn.bypassUnits = lib.mkOption {
+    type = lib.types.listOf lib.types.str;
+    default = [ ];
+    description = "Units whose sockets are marked 0xca6c, routed around the tunnel.";
+  };
+
+  options.local.vpn.allowInterfaces = lib.mkOption {
+    type = lib.types.listOf lib.types.str;
+    default = [ ];
+    description = "Extra output interfaces the kill switch accepts.";
+  };
+
   options.local.vpn.primary = lib.mkOption {
     type = lib.types.str;
     description = "Which entry in configs autostarts.";
@@ -107,7 +120,15 @@ in
   };
 
   config = {
-    local.vpn.bypassUnits = [ "nix-daemon.service" ];
+    users.groups.novpn.gid = 700;
+    users.users.max.extraGroups = [ "novpn" ];
+
+    local.vpn.bypassUnits = [
+      "nix-daemon.service"
+    ]
+    ++ lib.optional config.services.tailscale.enable "tailscaled.service";
+
+    local.vpn.allowInterfaces = lib.optional config.services.tailscale.enable "tailscale0";
 
     environment.systemPackages = [ nixDaemonNovpn ];
 
@@ -127,6 +148,14 @@ in
         };
         nh = {
           source = "${novpnWrapper "nh" "${pkgs.nh}/bin/nh"}/bin/nh-novpn";
+          owner = "root";
+          group = "root";
+          permissions = "u+rx,g+rx,o+rx";
+        };
+        home-manager = {
+          source = "${novpnWrapper "home-manager" "${
+            inputs.home-manager.packages.${pkgs.stdenv.hostPlatform.system}.default
+          }/bin/home-manager"}/bin/home-manager-novpn";
           owner = "root";
           group = "root";
           permissions = "u+rx,g+rx,o+rx";

@@ -36,8 +36,7 @@ let
 
       case "$action" in
         home)
-          printf -v hmArgs '%q ' --flake "$flake#max@$host" "''${opts[@]}" "$@"
-          exec /run/wrappers/bin/sg novpn -c "exec home-manager switch $hmArgs" ;;
+          exec home-manager switch --flake "$flake#max@$host" "''${opts[@]}" "$@" ;;
         build|dry-build|repl)
           exec nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
         switch|boot|test|dry-activate)
@@ -73,8 +72,6 @@ let
 in
 
 {
-  imports = [ ./vpn-bypass.nix ];
-
   options.local.users.sopsPasswords = lib.mkOption {
     type = lib.types.attrsOf lib.types.str;
     default = { };
@@ -237,7 +234,6 @@ in
             "networkmanager"
             "wheel"
             "keys"
-            "novpn"
           ];
         };
       }
