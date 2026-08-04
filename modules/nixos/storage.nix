@@ -54,6 +54,33 @@ in
         }
       );
     };
+
+    luksVaults = lib.mkOption {
+      default = { };
+      description = "LUKS volumes that unlock on cd into their mount point and lock again on cd out.";
+      type = lib.types.attrsOf (
+        lib.types.submodule (
+          { name, ... }:
+          {
+            options = {
+              device = lib.mkOption {
+                type = lib.types.str;
+                description = "Path to the LUKS partition, e.g. /dev/disk/by-uuid/....";
+              };
+              mapperName = lib.mkOption {
+                type = lib.types.str;
+                default = name;
+              };
+              mountPoint = lib.mkOption { type = lib.types.str; };
+              users = lib.mkOption {
+                type = lib.types.listOf lib.types.str;
+                default = [ "max" ];
+              };
+            };
+          }
+        )
+      );
+    };
   };
 
   config = lib.mkMerge [
@@ -76,6 +103,80 @@ in
           "x-systemd.device-timeout=10s"
         ];
       }) cfg.lazyMounts;
+    })
+
+    (lib.mkIf (cfg.luksVaults != { }) {
+      environment.systemPackages = [ pkgs.cryptsetup ];
+
+      systemd.tmpfiles.rules = lib.mapAttrsToList (
+        _: v: "d ${v.mountPoint} 0700 root root - -"
+      ) cfg.luksVaults;
+
+      security.sudo.extraRules = lib.mapAttrsToList (_: v: {
+        users = v.users;
+        commands = [
+          {
+            command = "${pkgs.cryptsetup}/bin/cryptsetup luksOpen ${v.device} ${v.mapperName}";
+            options = [ "NOPASSWD" ];
+          }
+          {
+            command = "${pkgs.cryptsetup}/bin/cryptsetup luksClose ${v.mapperName}";
+            options = [ "NOPASSWD" ];
+          }
+          {
+            command = "${pkgs.util-linux}/bin/mount /dev/mapper/${v.mapperName} ${v.mountPoint}";
+            options = [ "NOPASSWD" ];
+          }
+          {
+            command = "${pkgs.util-linux}/bin/umount ${v.mountPoint}";
+            options = [ "NOPASSWD" ];
+          }
+        ];
+      }) cfg.luksVaults;
+
+      programs.bash.interactiveShellInit =
+        lib.concatStrings (
+          lib.mapAttrsToList (name: v: ''
+            __vault_${name}_open() {
+              sudo -n ${pkgs.cryptsetup}/bin/cryptsetup luksOpen ${v.device} ${v.mapperName} \
+                && sudo -n ${pkgs.util-linux}/bin/mount /dev/mapper/${v.mapperName} ${v.mountPoint}
+            }
+            __vault_${name}_close() {
+              sudo -n ${pkgs.util-linux}/bin/umount ${v.mountPoint} >/dev/null 2>&1
+              sudo -n ${pkgs.cryptsetup}/bin/cryptsetup luksClose ${v.mapperName} >/dev/null 2>&1
+            }
+          '') cfg.luksVaults
+        )
+        + ''
+          cd() {
+            local target dest
+            target="''${1:-$HOME}"
+            if [[ "$target" == "-" ]]; then
+              dest="''${OLDPWD:-$PWD}"
+            else
+              dest="$(realpath -m -- "$target" 2>/dev/null || printf '%s' "$target")"
+            fi
+        ''
+        + lib.concatStrings (
+          lib.mapAttrsToList (name: v: ''
+            if [[ "$PWD" == "${v.mountPoint}" || "$PWD" == "${v.mountPoint}"/* ]] \
+              && [[ "$dest" != "${v.mountPoint}" && "$dest" != "${v.mountPoint}"/* ]]; then
+              builtin cd "$@" && __vault_${name}_close
+              return
+            fi
+          '') cfg.luksVaults
+        )
+        + lib.concatStrings (
+          lib.mapAttrsToList (name: v: ''
+            if [[ "$dest" == "${v.mountPoint}" || "$dest" == "${v.mountPoint}"/* ]] && ! mountpoint -q "${v.mountPoint}"; then
+              __vault_${name}_open || return 1
+            fi
+          '') cfg.luksVaults
+        )
+        + ''
+            builtin cd "$@"
+          }
+        '';
     })
 
     {
