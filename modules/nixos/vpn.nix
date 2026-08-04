@@ -78,29 +78,26 @@ let
     };
   };
 
+  vpnNames = lib.attrNames cfg.configs;
+
   allowedInterfaces = lib.concatStringsSep ", " (
-    map (i: ''"${i}"'') (
-      [
-        "proton"
-        "proton-alt"
-      ]
-      ++ cfg.allowInterfaces
-    )
+    map (i: ''"${i}"'') (map (n: "proton-${n}") vpnNames ++ cfg.allowInterfaces)
   );
 in
 
 {
-  options.local.vpn.configSecret = lib.mkOption {
-    type = lib.types.str;
-    default = "proton-wg-2";
-    description = "sops secret with this host's WireGuard config. One per host.";
+  options.local.vpn.configs = lib.mkOption {
+    type = lib.types.attrsOf lib.types.str;
+    example = {
+      uk = "proton-wg-laptop-uk";
+      nl = "proton-wg-laptop-nl";
+    };
+    description = "Interface suffix to sops secret, one set per host.";
   };
 
-  options.local.vpn.altSecret = lib.mkOption {
+  options.local.vpn.primary = lib.mkOption {
     type = lib.types.str;
-    default = if cfg.configSecret == "proton-wg" then "proton-wg-2" else "proton-wg";
-    defaultText = lib.literalExpression "whichever of the two configs configSecret is not";
-    description = "Second config, started by hand as wg-quick-proton-alt.";
+    description = "Which entry in configs autostarts.";
   };
 
   options.local.vpn.bypassResolver = lib.mkOption {
@@ -136,26 +133,34 @@ in
         };
       };
 
-    networking.networkmanager.unmanaged = [
-      "interface-name:proton"
-      "interface-name:proton-alt"
-    ];
+    networking.networkmanager.unmanaged = map (n: "interface-name:proton-${n}") vpnNames;
 
-    sops.secrets.${cfg.configSecret} = { };
-    sops.secrets.${cfg.altSecret} = { };
+    sops.secrets = lib.mapAttrs' (_: secret: lib.nameValuePair secret { }) cfg.configs;
 
-    networking.wg-quick.interfaces.proton.configFile = config.sops.secrets.${cfg.configSecret}.path;
-
-    networking.wg-quick.interfaces.proton-alt = {
-      configFile = config.sops.secrets.${cfg.altSecret}.path;
-      autostart = false;
-    };
+    networking.wg-quick.interfaces = lib.mapAttrs' (
+      name: secret:
+      lib.nameValuePair "proton-${name}" {
+        configFile = config.sops.secrets.${secret}.path;
+        autostart = name == cfg.primary;
+      }
+    ) cfg.configs;
 
     systemd.services = lib.listToAttrs (map bypassService cfg.bypassUnits) // {
       nix-daemon.serviceConfig.Group = "novpn";
-      "wg-quick-proton".conflicts = [ "wg-quick-proton-alt.service" ];
-      "wg-quick-proton-alt".conflicts = [ "wg-quick-proton.service" ];
-    };
+    }
+    // lib.mapAttrs' (
+      name: _:
+      lib.nameValuePair "wg-quick-proton-${name}" {
+        conflicts = map (o: "wg-quick-proton-${o}.service") (lib.remove name vpnNames);
+      }
+    ) cfg.configs;
+
+    assertions = [
+      {
+        assertion = cfg.configs ? ${cfg.primary};
+        message = "local.vpn.primary \"${cfg.primary}\" is not a key in local.vpn.configs.";
+      }
+    ];
 
     # Fail-closed VPN kill switch: drop all egress except loopback, the tunnel
     # interfaces, WireGuard's own marked packets, LAN, and DHCP. Active even
@@ -200,7 +205,7 @@ in
         chain postrouting {
           type nat hook postrouting priority srcnat; policy accept;
 
-          meta mark 0xca6c oifname != { "lo", "proton", "proton-alt" } masquerade
+          meta mark 0xca6c oifname != { "lo", ${lib.concatMapStringsSep ", " (n: "\"proton-${n}\"") vpnNames} } masquerade
         }
       '';
     };

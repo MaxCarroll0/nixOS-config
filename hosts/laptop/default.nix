@@ -16,6 +16,11 @@
 
   networking.hostName = "laptop";
 
+  local.vpn = {
+    configs.nl = "proton-wg-2";
+    primary = "nl";
+  };
+
   services.earlyoom = {
     freeMemThreshold = 15;
     freeSwapThreshold = 25;
