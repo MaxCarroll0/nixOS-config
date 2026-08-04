@@ -7,6 +7,9 @@
 
   sdImage.compressImage = false;
 
+  # sd-image.nix writes 0x0b; the Pi bootloader wants 0x0c (FAT32 LBA).
+  sdImage.postBuildCommands = "sfdisk --part-type $img 1 c";
+
   sdImage.firmwareSize = 1024;
 
   networking.firewall.allowedTCPPorts = [ 2222 ];
