@@ -205,6 +205,8 @@ in
 
     networking.networkmanager.enable = true;
 
+    networking.networkmanager.wifi.powersave = false;
+
     time.timeZone = "Europe/London";
 
     i18n.defaultLocale = "en_GB.UTF-8";
