@@ -18,7 +18,7 @@ let
     scriptPkgs:
     scriptPkgs.writeShellApplication {
       name = "stage-rpi-boot";
-      runtimeInputs = [ scriptPkgs.coreutils ];
+      runtimeInputs = [ scriptPkgs.coreutils scriptPkgs.gzip ];
       text = ''
         target="$1"
         toplevel="$2"
@@ -50,7 +50,10 @@ let
           fi
         done
 
-        replace "$toplevel/kernel" "$target/kernel_2712.img"
+        # Raspberry Pi OS ships a gzipped kernel; a raw arm64 Image is ~6x
+        # larger and can collide with the initramfs load address.
+        gzip -9 -c "$toplevel/kernel" > "$target/kernel_2712.img.tmp"
+        mv "$target/kernel_2712.img.tmp" "$target/kernel_2712.img"
         replace "$toplevel/initrd" "$target/initramfs_2712"
 
         printf '%s init=%s\n' "$(cat "$toplevel/kernel-params")" "$toplevel/init" \
