@@ -10,11 +10,6 @@
 let
   cfg = config.local.build.client;
   tailscale = lib.getExe config.services.tailscale.package;
-  nixDaemonNovpn = import ./nix-daemon-novpn.nix {
-    inherit pkgs;
-    nixPackage = config.nix.package;
-  };
-
   # Delegates to wake-peer when the builder is a configured peer, so a LUKS
   # unlock happens on the way up.
   wake = pkgs.writeShellApplication {
@@ -102,6 +97,12 @@ in
       ];
     };
 
+    remoteProgram = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "/run/current-system/sw/bin/nix-daemon-novpn";
+      description = "Daemon path, resolved on the builder, not here.";
+    };
+
     publicHostKey = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -146,7 +147,7 @@ in
     nix.buildMachines = [
       (
         {
-          hostName = "${cfg.builderHost}-builder${lib.optionalString cfg.tailscaleSsh "?remote-program=${nixDaemonNovpn}/bin/nix-daemon-novpn"}";
+          hostName = "${cfg.builderHost}-builder${lib.optionalString (cfg.remoteProgram != null) "?remote-program=${cfg.remoteProgram}"}";
           sshUser = cfg.builderUser;
           sshKey = if cfg.tailscaleSsh then null else toString cfg.sshKey;
           protocol = "ssh-ng";

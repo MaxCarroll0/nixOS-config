@@ -10,10 +10,6 @@ check:
     nix build --no-link '.#homeConfigurations."max@desktop".activationPackage'
     nix build --no-link '.#homeConfigurations."max@pi".activationPackage'
 
-# Bootable image for the pi's USB SSD.
-pi-image:
-    nix build --print-out-paths .#packages.aarch64-linux.pi-image
-
 build host:
     nix build --no-link .#nixosConfigurations.{{host}}.config.system.build.toplevel
 

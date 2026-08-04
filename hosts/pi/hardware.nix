@@ -1,34 +1,37 @@
 {
   lib,
-  pkgs,
-  inputs,
+  nixos-raspberrypi,
   ...
 }:
 
 {
-  imports = [
-    inputs.nixos-hardware.nixosModules.raspberry-pi-5
-    ../../modules/nixos/rpi-direct-boot.nix
+  imports = with nixos-raspberrypi.nixosModules; [
+    raspberry-pi-5.base
+    trusted-nix-caches
   ];
-
-  local.rpi.directBoot.enable = true;
-
-  # linux-rpi is not in any binary cache, so it is compiled under emulation.
-  boot.kernelPackages = lib.mkForce pkgs.linuxPackages;
 
   boot.loader.grub.enable = lib.mkForce false;
   boot.loader.efi.canTouchEfiVariables = lib.mkForce false;
+  boot.loader.raspberry-pi.bootloader = "kernel";
 
   fileSystems."/" = {
     device = "/dev/disk/by-label/NIXOS_SD";
     fsType = "ext4";
-    options = [ "noatime" ];
+    options = [
+      "x-initrd.mount"
+      "noatime"
+    ];
   };
 
   fileSystems."/boot/firmware" = {
     device = "/dev/disk/by-label/FIRMWARE";
     fsType = "vfat";
-    options = [ "nofail" ];
+    options = [
+      "noatime"
+      "noauto"
+      "x-systemd.automount"
+      "x-systemd.idle-timeout=1min"
+    ];
   };
 
   boot.initrd.availableKernelModules = [

@@ -44,6 +44,16 @@
     };
 
     nixos-hardware.url = "github:NixOS/nixos-hardware";
+
+    # No nixpkgs follows: its cached kernel is keyed to its own revision.
+    nixos-raspberrypi.url = "github:nvmd/nixos-raspberrypi/main";
+  };
+
+  nixConfig = {
+    extra-substituters = [ "https://nixos-raspberrypi.cachix.org" ];
+    extra-trusted-public-keys = [
+      "nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI="
+    ];
   };
 
   outputs =
@@ -105,6 +115,20 @@
           };
         };
 
+      mkPi =
+        { module }:
+        inputs.nixos-raspberrypi.lib.nixosSystem {
+          modules = [
+            sops-nix.nixosModules.sops
+            module
+          ];
+          specialArgs = {
+            pkgs-unstable = pkgsUnstableFor "aarch64-linux";
+            inherit (inputs) nixos-raspberrypi;
+            inherit inputs;
+          };
+        };
+
       mkHome =
         {
           module,
@@ -126,10 +150,7 @@
       nixosConfigurations = {
         laptop = mkHost { module = ./hosts/laptop; };
         desktop = mkHost { module = ./hosts/desktop; };
-        pi = mkHost {
-          module = ./hosts/pi;
-          system = "aarch64-linux";
-        };
+        pi = mkPi { module = ./hosts/pi; };
         # Retire once both machines have switched to the per-host names.
         nixos = mkHost { module = ./hosts/laptop; };
       };
@@ -143,13 +164,6 @@
         };
         max = mkHome { module = ./home/laptop.nix; };
       };
-
-      packages.aarch64-linux.pi-image =
-        (mkHost {
-          module = ./hosts/pi;
-          modules = [ ./hosts/pi/image.nix ];
-          system = "aarch64-linux";
-        }).config.system.build.sdImage;
     };
 
 }

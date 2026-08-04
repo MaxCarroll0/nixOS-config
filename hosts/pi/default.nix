@@ -1,6 +1,6 @@
 # Raspberry Pi 5: always-on server, no VPN, remote build client.
 
-{ lib, pkgs, ... }:
+{ lib, ... }:
 
 {
   imports = [
