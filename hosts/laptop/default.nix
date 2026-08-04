@@ -10,6 +10,7 @@
     ../../modules/nixos/vpn.nix
     ../../modules/nixos/wake.nix
     ../../modules/nixos/build-client.nix
+    ../../modules/nixos/torrent.nix
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/server/tailscale.nix
   ];
@@ -20,6 +21,8 @@
     configs.nl = "proton-wg-2";
     primary = "nl";
   };
+
+  local.torrent.enable = true;
 
   services.earlyoom = {
     freeMemThreshold = 15;
