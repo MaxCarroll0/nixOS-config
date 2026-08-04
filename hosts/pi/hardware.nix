@@ -31,9 +31,6 @@
     options = [ "nofail" ];
   };
 
-  # ASM1153 UAS resets and corrupts under load on the Pi.
-  boot.kernelParams = [ "usb-storage.quirks=174c:55aa:u" ];
-
   boot.initrd.availableKernelModules = [
     "xhci_pci"
     "usb-storage"
