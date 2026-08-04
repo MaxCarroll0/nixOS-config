@@ -37,6 +37,10 @@ rekey:
 bootstrap host:
     scripts/bootstrap-host.sh {{host}}
 
-# Write the pi image to its USB SSD and inject the host key.
-flash-pi image device:
-    scripts/flash-pi.sh {{image}} {{device}}
+# Bootable image for a pi host's USB SSD.
+pi-image host="pi":
+    nix build --print-out-paths .#packages.aarch64-linux.{{host}}-image
+
+# Write an image to the SSD and inject that host's key.
+flash-pi host image device:
+    scripts/flash-pi.sh {{host}} {{image}} {{device}}

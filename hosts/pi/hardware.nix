@@ -14,7 +14,7 @@
   boot.loader.efi.canTouchEfiVariables = lib.mkForce false;
   boot.loader.raspberry-pi.bootloader = "kernel";
 
-  fileSystems."/" = {
+  fileSystems."/" = lib.mkDefault {
     device = "/dev/disk/by-label/NIXOS_SD";
     fsType = "ext4";
     options = [
@@ -23,7 +23,7 @@
     ];
   };
 
-  fileSystems."/boot/firmware" = {
+  fileSystems."/boot/firmware" = lib.mkDefault {
     device = "/dev/disk/by-label/FIRMWARE";
     fsType = "vfat";
     options = [

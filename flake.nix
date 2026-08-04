@@ -116,18 +116,26 @@
         };
 
       mkPi =
-        { module }:
+        {
+          module,
+          modules ? [ ],
+        }:
         inputs.nixos-raspberrypi.lib.nixosSystem {
           modules = [
             sops-nix.nixosModules.sops
             module
-          ];
+          ]
+          ++ modules;
           specialArgs = {
             pkgs-unstable = pkgsUnstableFor "aarch64-linux";
             inherit (inputs) nixos-raspberrypi;
             inherit inputs;
           };
         };
+
+      piHosts = {
+        pi = ./hosts/pi;
+      };
 
       mkHome =
         {
@@ -150,7 +158,9 @@
       nixosConfigurations = {
         laptop = mkHost { module = ./hosts/laptop; };
         desktop = mkHost { module = ./hosts/desktop; };
-        pi = mkPi { module = ./hosts/pi; };
+      }
+      // lib.mapAttrs (_: module: mkPi { inherit module; }) piHosts
+      // {
         # Retire once both machines have switched to the per-host names.
         nixos = mkHost { module = ./hosts/laptop; };
       };
@@ -164,6 +174,16 @@
         };
         max = mkHome { module = ./home/laptop.nix; };
       };
+
+      packages.aarch64-linux = lib.mapAttrs' (
+        name: module:
+        lib.nameValuePair "${name}-image" (
+          mkPi {
+            inherit module;
+            modules = [ inputs.nixos-raspberrypi.nixosModules.sd-image ];
+          }
+        ).config.system.build.sdImage
+      ) piHosts;
     };
 
 }

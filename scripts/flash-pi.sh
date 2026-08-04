@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage() { echo "usage: flash-pi.sh [--yes] <image.img> <device>   e.g. flash-pi.sh result /dev/sda" >&2; exit 2; }
+usage() { echo "usage: flash-pi.sh [--yes] <host> <image> <device>   e.g. flash-pi.sh pi result /dev/sda" >&2; exit 2; }
 
 assume_yes=0
 if [ "${1:-}" = "--yes" ]; then
@@ -9,17 +9,18 @@ if [ "${1:-}" = "--yes" ]; then
   shift
 fi
 
-image="${1:-}"
-device="${2:-}"
-[ -n "$image" ] && [ -n "$device" ] || usage
+host="${1:-}"
+image="${2:-}"
+device="${3:-}"
+[ -n "$host" ] && [ -n "$image" ] && [ -n "$device" ] || usage
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 keydir="$repo/keys/generated"
-key="$keydir/pi_ed25519"
+key="$keydir/${host}_ed25519"
 
 [ -f "$image" ] || { echo "no image at $image" >&2; exit 1; }
 [ -b "$device" ] || { echo "$device is not a block device" >&2; exit 1; }
-[ -f "$key" ] || { echo "no host key at $key; run: just bootstrap pi" >&2; exit 1; }
+[ -f "$key" ] || { echo "no host key at $key; run: just bootstrap $host" >&2; exit 1; }
 
 # A host key that is not a sops recipient boots into a machine that cannot
 # decrypt its wifi PSK or tailscale key, and is then unreachable.
