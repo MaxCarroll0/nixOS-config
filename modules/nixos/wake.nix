@@ -17,6 +17,8 @@ let
       unlockPort="${toString p.unlockPort}"
       passFile="${toString (if p.passphraseFile == null then "" else p.passphraseFile)}"
       timeout="${toString p.timeoutSeconds}"
+      lanHost="${toString (if p.address == null then "" else p.address)}"
+      lanPort="${toString p.port}"
       ;;
   '';
 
@@ -33,12 +35,21 @@ let
       probe() { nc -z -w 2 "$1" "$2" 2>/dev/null; }
 
       mac=""; bcast=""; unlockPort=""; passFile=""; timeout=90
+      lanHost=""; lanPort=22
       case "$host" in
         ${lib.concatStrings (lib.mapAttrsToList peerCase cfg.peers)}
         *) ;;
       esac
 
-      probe "$host" 22 && exit 0
+      ready() {
+        if [ -n "$lanHost" ]; then
+          probe "$lanHost" "$lanPort"
+        else
+          probe "$host" 22
+        fi
+      }
+
+      ready && exit 0
 
       if [ -n "$mac" ]; then
         if [ -n "$bcast" ]; then wol -i "$bcast" "$mac"; else wol "$mac"; fi
@@ -62,8 +73,8 @@ let
       fi
 
       while [ "$(date +%s)" -lt "$deadline" ]; do
-        probe "$host" 22 && exit 0
-        sleep 2
+        ready && exit 0
+        sleep 0.5
       done
       exit 1
     '';
@@ -85,6 +96,18 @@ in
             broadcast = lib.mkOption {
               type = lib.types.nullOr lib.types.str;
               default = null;
+            };
+
+            address = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "LAN address, reachable well before the tailnet name is.";
+            };
+
+            port = lib.mkOption {
+              type = lib.types.port;
+              default = 22;
+              description = "Port on address that proves the peer is up.";
             };
             unlockPort = lib.mkOption {
               type = lib.types.port;

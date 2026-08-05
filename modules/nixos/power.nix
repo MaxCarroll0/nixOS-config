@@ -189,9 +189,6 @@ let
         fi
       '';
     };
-
-  # Hubs cannot be parked independently, and a USB NIC must stay powered to
-  # receive a magic packet.
   peripherals = pkgs.writeShellScript "usb-peripherals" ''
     for device in /sys/bus/usb/devices/*; do
       [ -w "$device/power/control" ] || continue
@@ -204,8 +201,6 @@ let
 
   suspendSoft = softPowerCommand "suspend-soft" "suspend-soft-hardware" "off";
   wakeSoft = softPowerCommand "wake-soft" "wake-soft-hardware" "on";
-
-  # autosuspend reads this the other way round: exit 0 means "busy".
   sessionActivity = pkgs.writeShellApplication {
     name = "session-activity";
     runtimeInputs = with pkgs; [
@@ -214,8 +209,6 @@ let
       systemd
     ];
     text = ''
-      # A remote build arrives as its own nix-daemon beside the resident one,
-      # because buildMachines pins remote-program=nix-daemon-novpn.
       resident=$(systemctl show -p MainPID --value nix-daemon.service 2>/dev/null || echo 0)
       for pid in $(pgrep -x nix-daemon || true); do
         if [ "$pid" != "$resident" ]; then
@@ -502,9 +495,6 @@ in
           done
         '';
       };
-
-      # No eager disk spin-up here: it is on the resume path, and a build only
-      # needs the store, which is on NVMe. Rotational disks spin up on access.
       systemd.services.wake-soft-hardware = {
         description = "Restore peripheral power without changing the system power state";
         serviceConfig.Type = "oneshot";
@@ -524,6 +514,15 @@ in
       powerManagement.resumeCommands = ''
         ${pkgs.systemd}/bin/systemctl start wake-soft-hardware.service
       '';
+      systemd.services.tailscale-resume = lib.mkIf config.services.tailscale.enable {
+        description = "Re-establish the tailnet immediately after resume";
+        after = [ "suspend.target" ];
+        wantedBy = [ "suspend.target" ];
+        serviceConfig.Type = "oneshot";
+        script = ''
+          ${pkgs.systemd}/bin/systemctl try-restart tailscaled.service
+        '';
+      };
     })
 
     (lib.mkIf (cfg.idle.policy == "always-on") {
@@ -576,8 +575,6 @@ in
               lib.getExe (suspendThenPowerOff cfg.idle.autosuspend.powerOffAfterHours);
         };
         checks = {
-          # An open SSH connection is not activity: a forgotten shell would pin
-          # the host awake forever. What counts is a live build or recent typing.
           SessionActivity = {
             class = "ExternalCommand";
             command = lib.getExe sessionActivity;

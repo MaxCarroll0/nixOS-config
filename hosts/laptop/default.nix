@@ -51,6 +51,9 @@
   local.wake.peers.desktop = {
     mac = "70:85:c2:54:c6:89";
     broadcast = "192.168.200.255";
+    address = "192.168.200.204";
+    port = 2222;
+    timeoutSeconds = 180;
   };
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
 
