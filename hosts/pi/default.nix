@@ -1,6 +1,6 @@
 # Raspberry Pi 5: always-on server, no VPN, remote build client.
 
-{ lib, ... }:
+{ lib, pkgs, ... }:
 
 {
   imports = [
@@ -12,7 +12,7 @@
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/rollback-guard.nix
     ../../modules/nixos/server/tailscale.nix
-    ../../modules/nixos/tailscale-watchdog.nix
+    ../../modules/nixos/net-watchdog.nix
     ../../modules/nixos/build-client.nix
   ];
 
@@ -70,6 +70,8 @@
 
   powerManagement.cpuFreqGovernor = "powersave";
 
+  environment.systemPackages = [ pkgs.raspberrypi-eeprom ];
+
   nix.settings = {
     min-free = 2 * 1024 * 1024 * 1024;
     max-free = 5 * 1024 * 1024 * 1024;
@@ -82,5 +84,8 @@
 
   system.autoUpgrade.flake = lib.mkForce "github:MaxCarroll0/nixOS-config#pi";
 
-  local.server.tailscaleWatchdog.enable = true;
+  local.server.netWatchdog = {
+    enable = true;
+    peers = [ "desktop" ];
+  };
 }

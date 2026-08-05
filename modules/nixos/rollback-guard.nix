@@ -9,6 +9,15 @@
 
 let
   cfg = config.local.rollbackGuard;
+
+  # An address on tailscale0 survives a wifi outage, so it alone cannot tell a
+  # working generation from one that just cut the host off.
+  healthy =
+    if (config.local.server.netWatchdog.enable or false) then
+      lib.getExe config.local.server.netWatchdog.package
+    else
+      "${pkgs.iproute2}/bin/ip -4 addr show tailscale0 2>/dev/null | grep -q inet "
+      + "&& ${pkgs.systemd}/bin/systemctl is-active --quiet NetworkManager.service";
 in
 
 {
@@ -63,8 +72,7 @@ in
         done
 
         for _ in $(seq 1 ${toString cfg.graceSeconds}); do
-          if ${pkgs.iproute2}/bin/ip -4 addr show tailscale0 2>/dev/null | grep -q inet \
-            && ${pkgs.systemd}/bin/systemctl is-active --quiet NetworkManager.service; then
+          if ${healthy}; then
             echo "network is up"
             rm -f "$STATE_DIRECTORY/count"
             echo "$booted" > "$STATE_DIRECTORY/good"

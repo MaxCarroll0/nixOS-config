@@ -38,6 +38,10 @@ in
         connection = {
           id = cfg.ssid;
           type = "wifi";
+          autoconnect = true;
+          # NetworkManager gives up on wifi after four tries by default, so an
+          # AP reboot can leave a headless host down for good.
+          autoconnect-retries = 0;
         };
         wifi = {
           ssid = cfg.ssid;
