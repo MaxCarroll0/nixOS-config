@@ -148,6 +148,13 @@ in
     ];
 
     nix.settings.connect-timeout = 5;
+    # rebuild evaluates the flake again under sudo, and git refuses a repo owned
+    # by another user.
+    environment.etc."gitconfig".text = ''
+      [safe]
+        directory = ${flakePath}
+    '';
+
     nix.settings.fallback = true;
     nix.settings.builders-use-substitutes = true;
     nix.settings.substituters = [
