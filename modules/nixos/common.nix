@@ -13,7 +13,12 @@ let
 
   rebuild = pkgs.writeShellApplication {
     name = "rebuild";
-    runtimeInputs = [ pkgs.git ];
+    runtimeInputs = [
+      pkgs.git
+      pkgs.coreutils
+      pkgs.systemd
+      config.services.tailscale.package
+    ];
     text = ''
       host="${config.networking.hostName}"
       flake="${flakePath}"
@@ -39,7 +44,33 @@ let
           exec home-manager switch --flake "$flake#max@$host" "''${opts[@]}" "$@" ;;
         build|dry-build|repl)
           exec nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
-        switch|boot|test|dry-activate)
+        switch|boot)
+          nixos-rebuild build --flake "$flake#$host" "''${opts[@]}" "$@"
+
+          initiator=""
+          [ -n "''${SSH_CONNECTION:-}" ] && initiator=''${SSH_CONNECTION%% *}
+
+          if [ -n "$initiator" ]; then
+            sudo systemd-run --on-active=10min --unit=rebuild-rollback --collect \
+              /bin/sh -c 'nix-env --rollback -p /nix/var/nix/profiles/system && /nix/var/nix/profiles/system/bin/switch-to-configuration boot; systemctl reboot'
+            echo "rollback armed: reverting in 10m unless $initiator answers" >&2
+          fi
+
+          sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" || status=$?
+
+          if [ -n "$initiator" ]; then
+            deadline=$(( $(date +%s) + 60 ))
+            while [ "$(date +%s)" -lt "$deadline" ]; do
+              if tailscale ping --timeout=2s --c=1 "$initiator" >/dev/null 2>&1; then
+                sudo systemctl stop rebuild-rollback.timer 2>/dev/null || true
+                echo "$initiator still reachable, rollback disarmed" >&2
+                exit "''${status:-0}"
+              fi
+            done
+            echo "$initiator unreachable, leaving rollback armed" >&2
+          fi
+          exit "''${status:-0}" ;;
+        test|dry-activate)
           nixos-rebuild build --flake "$flake#$host" "''${opts[@]}" "$@"
           exec sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
         *)
@@ -120,14 +151,17 @@ in
     nix.settings.substituters = [
       "https://hyprland.cachix.org"
       "https://nix-community.cachix.org"
+      "https://nixos-raspberrypi.cachix.org"
     ];
     nix.settings.trusted-substituters = [
       "https://hyprland.cachix.org"
       "https://nix-community.cachix.org"
+      "https://nixos-raspberrypi.cachix.org"
     ];
     nix.settings.trusted-public-keys = [
       "hyprland.cachix.org-1:a7pgxzMz7+chwVL3/pzj6jIBMioiJM7ypFP8PwtkuGc="
       "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
+      "nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI="
     ];
     nix.settings.trusted-users = [
       "root"

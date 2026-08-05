@@ -10,7 +10,6 @@
     ../../modules/nixos/wake.nix
     ../../modules/nixos/power.nix
     ../../modules/nixos/server/ssh.nix
-    ../../modules/nixos/rollback-guard.nix
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/net-watchdog.nix
     ../../modules/nixos/build-client.nix
@@ -34,7 +33,7 @@
     mac = "70:85:c2:54:c6:89";
     broadcast = "192.168.200.255";
     address = "192.168.200.204";
-    timeoutSeconds = 180;
+    timeoutSeconds = 90;
   };
 
   local.server.ssh = {
@@ -48,8 +47,6 @@
     ssh = true;
     authKeySecret = "tailscale-auth-key";
   };
-
-  local.rollbackGuard.enable = true;
 
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
 
@@ -86,8 +83,5 @@
 
   system.autoUpgrade.flake = lib.mkForce "github:MaxCarroll0/nixOS-config#pi";
 
-  local.server.netWatchdog = {
-    enable = true;
-    peers = [ "desktop" ];
-  };
+  local.server.netWatchdog.enable = true;
 }

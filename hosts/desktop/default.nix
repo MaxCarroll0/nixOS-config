@@ -13,7 +13,6 @@
     ../../modules/nixos/storage.nix
     ../../modules/nixos/wifi.nix
     ../../modules/nixos/server/ssh.nix
-    ../../modules/nixos/rollback-guard.nix
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/server/build-host.nix
     ../../modules/nixos/server/web.nix
@@ -44,7 +43,6 @@
     authKeySecret = "tailscale-auth-key";
   };
 
-  local.rollbackGuard.enable = true;
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
 
   local.wifi = {
