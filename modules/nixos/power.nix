@@ -410,7 +410,9 @@ in
           interface-name = cfg.wakeOnLan.interface;
           autoconnect = true;
         };
-        "802-3-ethernet".wake-on-lan = "magic";
+        # NM_SETTING_WIRED_WAKE_ON_LAN_MAGIC. The keyfile parser rejects the
+        # name "magic" here: it only accepts the numeric flag.
+        "802-3-ethernet".wake-on-lan = 64;
         ipv4.method = "auto";
         ipv6.method = "auto";
       };
