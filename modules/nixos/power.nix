@@ -190,8 +190,99 @@ let
       '';
     };
 
+  # Hubs cannot be parked independently, and a USB NIC must stay powered to
+  # receive a magic packet.
+  peripherals = pkgs.writeShellScript "usb-peripherals" ''
+    for device in /sys/bus/usb/devices/*; do
+      [ -w "$device/power/control" ] || continue
+      [ "$(cat "$device/bDeviceClass" 2>/dev/null || true)" = "09" ] && continue
+      [ -d "$device/net" ] && continue
+      echo "$device"
+    done
+    exit 0
+  '';
+
   suspendSoft = softPowerCommand "suspend-soft" "suspend-soft-hardware" "off";
   wakeSoft = softPowerCommand "wake-soft" "wake-soft-hardware" "on";
+
+  # autosuspend reads this the other way round: exit 0 means "busy".
+  sessionActivity = pkgs.writeShellApplication {
+    name = "session-activity";
+    runtimeInputs = with pkgs; [
+      coreutils
+      procps
+      systemd
+    ];
+    text = ''
+      # A remote build arrives as its own nix-daemon beside the resident one,
+      # because buildMachines pins remote-program=nix-daemon-novpn.
+      resident=$(systemctl show -p MainPID --value nix-daemon.service 2>/dev/null || echo 0)
+      for pid in $(pgrep -x nix-daemon || true); do
+        if [ "$pid" != "$resident" ]; then
+          exit 0
+        fi
+      done
+
+      if [ "$resident" != 0 ] && pgrep -P "$resident" >/dev/null 2>&1; then
+        exit 0
+      fi
+
+      threshold=$(( $(date +%s) - ${toString (cfg.idle.autosuspend.idleMinutes * 60)} ))
+      for pty in /dev/pts/*; do
+        [ -c "$pty" ] || continue
+        case "$pty" in
+          */ptmx) continue ;;
+        esac
+        atime=$(stat -c %X "$pty" 2>/dev/null || echo 0)
+        if [ "$atime" -gt "$threshold" ]; then
+          exit 0
+        fi
+      done
+
+      exit 1
+    '';
+  };
+
+  suspendThenPowerOff =
+    hours:
+    pkgs.writeShellApplication {
+      name = "suspend-then-power-off";
+      runtimeInputs = with pkgs; [
+        coreutils
+        gawk
+        systemd
+      ];
+      text = ''
+        alarm=/sys/class/rtc/rtc0/wakealarm
+        target=$(( $(date +%s) + ${toString (hours * 3600)} ))
+
+        # Writing a wakealarm that is already armed fails EBUSY.
+        echo 0 > "$alarm"
+        echo "$target" > "$alarm"
+
+        systemctl suspend
+
+        if [ "$(date +%s)" -lt "$(( target - 60 ))" ]; then
+          echo 0 > "$alarm"
+          exit 0
+        fi
+
+        sleep 60
+        echo 0 > "$alarm"
+
+        for session in $(loginctl list-sessions --no-legend | awk '{print $1}'); do
+          if [ -n "$(loginctl show-session "$session" -p Seat --value 2>/dev/null || true)" ]; then
+            exec systemctl suspend
+          fi
+        done
+
+        if ${lib.getExe sessionActivity}; then
+          exit 0
+        fi
+
+        exec systemctl poweroff
+      '';
+    };
 in
 
 {
@@ -253,6 +344,12 @@ in
       type = lib.types.listOf lib.types.port;
       default = [ 22 ];
       description = "An established connection to any of these counts as activity.";
+    };
+
+    idle.autosuspend.powerOffAfterHours = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+      description = "Escalate from suspend to power off after this long still idle.";
     };
 
     wakeOnLan.interface = lib.mkOption {
@@ -382,24 +479,18 @@ in
       };
 
       systemd.services.suspend-soft-hardware = {
-        description = "Suspend idle hardware without suspending the system";
+        description = "Park peripherals without suspending the system";
         serviceConfig.Type = "oneshot";
         script = ''
-          for device in /sys/bus/usb/devices/*; do
-            id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
-            if [ "$id" = 258a:1006 ] || [ "$id" = 1d57:ad17 ]; then
-              echo 0 > "$device/power/autosuspend_delay_ms"
-              echo auto > "$device/power/control"
-            fi
+          ${peripherals} | while read -r device; do
+            echo 0 > "$device/power/autosuspend_delay_ms"
+            echo auto > "$device/power/control"
           done
 
           sleep 3
 
-          for device in /sys/bus/usb/devices/*; do
-            id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
-            if [ "$id" = 258a:1006 ] || [ "$id" = 1d57:ad17 ]; then
-              echo 300000 > "$device/power/autosuspend_delay_ms"
-            fi
+          ${peripherals} | while read -r device; do
+            echo 300000 > "$device/power/autosuspend_delay_ms"
           done
 
           for device in /sys/block/*; do
@@ -410,26 +501,27 @@ in
         '';
       };
 
+      # No eager disk spin-up here: it is on the resume path, and a build only
+      # needs the store, which is on NVMe. Rotational disks spin up on access.
       systemd.services.wake-soft-hardware = {
-        description = "Wake hardware without changing the system power state";
+        description = "Restore peripheral power without changing the system power state";
         serviceConfig.Type = "oneshot";
         script = ''
-          for device in /sys/bus/usb/devices/*; do
-            id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
-            if [ "$id" = 258a:1006 ] || [ "$id" = 1d57:ad17 ]; then
-              echo on > "$device/power/control"
-              echo 300000 > "$device/power/autosuspend_delay_ms"
-              echo auto > "$device/power/control"
-            fi
-          done
-
-          for device in /sys/block/*; do
-            if [ "$(cat "$device/queue/rotational" 2>/dev/null || true)" = 1 ]; then
-              ${pkgs.coreutils}/bin/dd if="/dev/$(basename "$device")" of=/dev/null bs=512 count=1 status=none
-            fi
+          ${peripherals} | while read -r device; do
+            echo on > "$device/power/control"
+            echo 300000 > "$device/power/autosuspend_delay_ms"
+            echo auto > "$device/power/control"
           done
         '';
       };
+
+      powerManagement.powerDownCommands = ''
+        ${pkgs.systemd}/bin/systemctl start suspend-soft-hardware.service
+      '';
+
+      powerManagement.resumeCommands = ''
+        ${pkgs.systemd}/bin/systemctl start wake-soft-hardware.service
+      '';
     })
 
     (lib.mkIf (cfg.idle.policy == "always-on") {
@@ -475,19 +567,20 @@ in
         enable = true;
         settings = {
           idle_time = cfg.idle.autosuspend.idleMinutes * 60;
-          suspend_cmd = "${pkgs.systemd}/bin/systemctl suspend";
-          # Clear first: writing wakealarm with one already armed fails EBUSY.
-          wakeup_cmd = "echo 0 > /sys/class/rtc/rtc0/wakealarm; echo {timestamp:.0f} > /sys/class/rtc/rtc0/wakealarm";
+          suspend_cmd =
+            if cfg.idle.autosuspend.powerOffAfterHours == null then
+              "${pkgs.systemd}/bin/systemctl suspend"
+            else
+              lib.getExe (suspendThenPowerOff cfg.idle.autosuspend.powerOffAfterHours);
         };
         checks = {
-          ActiveConnection = {
-            class = "ActiveConnection";
-            ports = lib.concatMapStringsSep "," toString cfg.idle.autosuspend.watchPorts;
+          # An open SSH connection is not activity: a forgotten shell would pin
+          # the host awake forever. What counts is a live build or recent typing.
+          SessionActivity = {
+            class = "ExternalCommand";
+            command = lib.getExe sessionActivity;
           };
-          Users.class = "Users";
           LogindSessionsIdle.class = "LogindSessionsIdle";
-          # Remote builds hold port 22 open, so ActiveConnection covers them.
-          # nix-daemon runs persistently and cannot be matched by name.
           Load = {
             class = "Load";
             threshold = cfg.idle.autosuspend.loadThreshold;
