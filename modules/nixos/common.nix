@@ -51,8 +51,9 @@ let
           [ -n "''${SSH_CONNECTION:-}" ] && initiator=''${SSH_CONNECTION%% *}
 
           if [ -n "$initiator" ]; then
+            sudo systemctl stop rebuild-rollback.timer rebuild-rollback.service 2>/dev/null || true
             sudo systemd-run --on-active=10min --unit=rebuild-rollback --collect \
-              /bin/sh -c 'nix-env --rollback -p /nix/var/nix/profiles/system && /nix/var/nix/profiles/system/bin/switch-to-configuration boot; systemctl reboot'
+              ${pkgs.bash}/bin/sh -c '${config.nix.package}/bin/nix-env --rollback -p /nix/var/nix/profiles/system && /nix/var/nix/profiles/system/bin/switch-to-configuration boot; ${pkgs.systemd}/bin/systemctl reboot'
             echo "rollback armed: reverting in 10m unless $initiator answers" >&2
           fi
 
@@ -66,6 +67,7 @@ let
                 echo "$initiator still reachable, rollback disarmed" >&2
                 exit "''${status:-0}"
               fi
+              sleep 2
             done
             echo "$initiator unreachable, leaving rollback armed" >&2
           fi
