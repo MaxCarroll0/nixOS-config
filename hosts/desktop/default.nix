@@ -77,6 +77,7 @@
     idle.optimise = true;
     idle.policy = "autosuspend";
     idle.autosuspend.idleMinutes = 30;
+    idle.autosuspend.powerOffAfterHours = 6;
     idle.autosuspend.watchPorts = [
       22
       2222
