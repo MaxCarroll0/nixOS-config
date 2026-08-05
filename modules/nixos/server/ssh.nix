@@ -42,6 +42,12 @@ in
       default = [ ];
       description = "TCP ports allowed on every interface. Empty keeps the host tailnet-only.";
     };
+
+    lanInterfaces = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Local interfaces that also accept sshd, so a dead tailscaled is still reachable.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -70,7 +76,12 @@ in
       '';
     };
 
-    networking.firewall.interfaces.${cfg.interface}.allowedTCPPorts = [ cfg.port ];
+    networking.firewall.interfaces = {
+      ${cfg.interface}.allowedTCPPorts = [ cfg.port ];
+    }
+    // lib.genAttrs cfg.lanInterfaces (_: {
+      allowedTCPPorts = [ cfg.port ];
+    });
 
     assertions = [
       {

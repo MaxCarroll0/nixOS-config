@@ -36,6 +36,10 @@
     enable = true;
     port = 2222;
     allowUsers = [ "max" ];
+    lanInterfaces = [
+      "enp6s0"
+      "wlp5s0"
+    ];
   };
   local.server.tailscale = {
     enable = true;

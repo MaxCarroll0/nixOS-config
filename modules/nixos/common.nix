@@ -54,7 +54,7 @@ let
             sudo systemctl stop rebuild-rollback.timer rebuild-rollback.service 2>/dev/null || true
             sudo systemd-run --on-active=10min --unit=rebuild-rollback --collect \
               ${pkgs.bash}/bin/sh -c '${config.nix.package}/bin/nix-env --rollback -p /nix/var/nix/profiles/system && /nix/var/nix/profiles/system/bin/switch-to-configuration boot; ${pkgs.systemd}/bin/systemctl reboot'
-            echo "rollback armed: reverting in 10m unless $initiator answers" >&2
+            echo "rollback scheduled: reverting in 10m unless $initiator answers" >&2
           fi
 
           sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" || status=$?
@@ -64,12 +64,12 @@ let
             while [ "$(date +%s)" -lt "$deadline" ]; do
               if tailscale ping --timeout=2s --c=1 "$initiator" >/dev/null 2>&1; then
                 sudo systemctl stop rebuild-rollback.timer 2>/dev/null || true
-                echo "$initiator still reachable, rollback disarmed" >&2
+                echo "$initiator still reachable, rollback cancelled" >&2
                 exit "''${status:-0}"
               fi
               sleep 2
             done
-            echo "$initiator unreachable, leaving rollback armed" >&2
+            echo "$initiator unreachable, rollback still scheduled" >&2
           fi
           exit "''${status:-0}" ;;
         test|dry-activate)
