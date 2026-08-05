@@ -59,6 +59,9 @@ let
 
   # Own table per unit, loaded after the unit exists: a missing cgroup path
   # aborts the whole nft transaction, which must not take the killswitch with it.
+  # PartOf the unit too: nft resolves the cgroup path to an ID at load time, so a
+  # restart of the unit leaves the rule pointing at a dead cgroup and the traffic
+  # unmarked. Restarting alongside it re-resolves against the new cgroup.
   bypassService = unit: {
     name = unitTableName unit;
     value = {
@@ -68,7 +71,10 @@ let
         unit
       ];
       wants = [ unit ];
-      partOf = [ "nftables.service" ];
+      partOf = [
+        "nftables.service"
+        unit
+      ];
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
         Type = "oneshot";
