@@ -511,9 +511,6 @@ in
         ${pkgs.systemd}/bin/systemctl start suspend-soft-hardware.service
       '';
 
-      powerManagement.resumeCommands = ''
-        ${pkgs.systemd}/bin/systemctl start wake-soft-hardware.service
-      '';
       systemd.services.tailscale-resume = lib.mkIf config.services.tailscale.enable {
         description = "Re-establish the tailnet immediately after resume";
         after = [ "suspend.target" ];

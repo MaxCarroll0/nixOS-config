@@ -18,7 +18,6 @@ let
       passFile="${toString (if p.passphraseFile == null then "" else p.passphraseFile)}"
       timeout="${toString p.timeoutSeconds}"
       lanHost="${toString (if p.address == null then "" else p.address)}"
-      lanPort="${toString p.port}"
       ;;
   '';
 
@@ -26,6 +25,7 @@ let
     name = "wake-peer";
     runtimeInputs = with pkgs; [
       netcat-openbsd
+      iputils
       wol
       openssh
       coreutils
@@ -35,7 +35,7 @@ let
       probe() { nc -z -w 2 "$1" "$2" 2>/dev/null; }
 
       mac=""; bcast=""; unlockPort=""; passFile=""; timeout=90
-      lanHost=""; lanPort=22
+      lanHost=""
       case "$host" in
         ${lib.concatStrings (lib.mapAttrsToList peerCase cfg.peers)}
         *) ;;
@@ -43,7 +43,7 @@ let
 
       ready() {
         if [ -n "$lanHost" ]; then
-          probe "$lanHost" "$lanPort"
+          ping -c 1 -W 1 "$lanHost" >/dev/null 2>&1
         else
           probe "$host" 22
         fi
@@ -102,12 +102,6 @@ in
               type = lib.types.nullOr lib.types.str;
               default = null;
               description = "LAN address, reachable well before the tailnet name is.";
-            };
-
-            port = lib.mkOption {
-              type = lib.types.port;
-              default = 22;
-              description = "Port on address that proves the peer is up.";
             };
             unlockPort = lib.mkOption {
               type = lib.types.port;

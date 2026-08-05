@@ -39,7 +39,6 @@
   # sops.age.sshKeyPaths picks up by default.
   local.server.ssh = {
     enable = true;
-    port = 2222;
     allowUsers = [ "max" ];
   };
   local.server.tailscale = {
