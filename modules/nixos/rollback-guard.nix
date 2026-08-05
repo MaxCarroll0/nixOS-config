@@ -60,7 +60,8 @@ in
       script = ''
         booted=$(readlink -f /run/current-system)
 
-        for _ in $(seq 1 ${toString cfg.settleSeconds}); do
+        deadline=$(( $(date +%s) + ${toString cfg.settleSeconds} ))
+        while [ "$(date +%s)" -lt "$deadline" ]; do
           state=$(${pkgs.systemd}/bin/systemctl is-system-running 2>/dev/null || true)
           case "$state" in
             starting|initializing|"") sleep 1 ;;
@@ -68,7 +69,8 @@ in
           esac
         done
 
-        for _ in $(seq 1 ${toString cfg.graceSeconds}); do
+        deadline=$(( $(date +%s) + ${toString cfg.graceSeconds} ))
+        while [ "$(date +%s)" -lt "$deadline" ]; do
           if ${healthy}; then
             echo "network is up"
             rm -f "$STATE_DIRECTORY/count"

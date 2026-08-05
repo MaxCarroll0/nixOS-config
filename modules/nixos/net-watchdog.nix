@@ -23,12 +23,12 @@ let
       ip -4 addr show tailscale0 2>/dev/null | grep -q inet || exit 1
 
       gateway=$(ip -4 route show default | awk '{ print $3; exit }')
-      if [ -n "$gateway" ] && ping -c 1 -W 3 "$gateway" >/dev/null 2>&1; then
+      if [ -n "$gateway" ] && ping -c 1 -W 1 "$gateway" >/dev/null 2>&1; then
         exit 0
       fi
 
       ${lib.concatMapStringsSep "\n" (peer: ''
-        if ${lib.getExe config.services.tailscale.package} ping --timeout=3s --c=1 ${lib.escapeShellArg peer} >/dev/null 2>&1; then
+        if ${lib.getExe config.services.tailscale.package} ping --timeout=2s --c=1 ${lib.escapeShellArg peer} >/dev/null 2>&1; then
           exit 0
         fi
       '') cfg.peers}
