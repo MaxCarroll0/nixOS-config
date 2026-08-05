@@ -18,8 +18,8 @@
   networking.hostName = "laptop";
 
   local.vpn = {
-    configs.nl = "proton-wg-2";
-    primary = "nl";
+    configs.uk = "proton-wg";
+    primary = "uk";
   };
 
   local.torrent.enable = true;
