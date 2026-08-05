@@ -510,16 +510,6 @@ in
       powerManagement.powerDownCommands = ''
         ${pkgs.systemd}/bin/systemctl start suspend-soft-hardware.service
       '';
-
-      systemd.services.tailscale-resume = lib.mkIf config.services.tailscale.enable {
-        description = "Re-establish the tailnet immediately after resume";
-        after = [ "suspend.target" ];
-        wantedBy = [ "suspend.target" ];
-        serviceConfig.Type = "oneshot";
-        script = ''
-          ${pkgs.systemd}/bin/systemctl try-restart tailscaled.service
-        '';
-      };
     })
 
     (lib.mkIf (cfg.idle.policy == "always-on") {
