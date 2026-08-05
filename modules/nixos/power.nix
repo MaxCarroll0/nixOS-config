@@ -264,7 +264,9 @@ let
         echo 0 > "$alarm"
 
         for session in $(loginctl list-sessions --no-legend | awk '{print $1}'); do
-          if [ -n "$(loginctl show-session "$session" -p Seat --value 2>/dev/null || true)" ]; then
+          seat=$(loginctl show-session "$session" -p Seat --value 2>/dev/null || true)
+          class=$(loginctl show-session "$session" -p Class --value 2>/dev/null || true)
+          if [ -n "$seat" ] && [ "$class" = user ]; then
             exec systemctl suspend
           fi
         done

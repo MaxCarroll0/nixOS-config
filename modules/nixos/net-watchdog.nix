@@ -104,6 +104,13 @@ in
             ${pkgs.systemd}/bin/systemctl restart NetworkManager.service || true
             ;;
           *)
+            # A reboot returns to the same generation, so it cannot fix a bad
+            # switch. Let rollback-guard finish deciding first.
+            if [ "$(${pkgs.systemd}/bin/systemctl show -p ActiveState --value rollback-guard.service 2>/dev/null)" = activating ]; then
+              echo "rollback-guard still deciding, deferring reboot" >&2
+              exit 0
+            fi
+
             reboots=$(cat "$STATE_DIRECTORY/reboots" 2>/dev/null || echo 0)
             if [ "$reboots" -ge ${toString cfg.maxReboots} ]; then
               echo "still down after $reboots reboots, giving up" >&2
