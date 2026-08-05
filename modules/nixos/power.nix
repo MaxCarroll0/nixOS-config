@@ -302,32 +302,52 @@ in
     }
 
     (lib.mkIf (cfg.wakeOnLan.interface != null) {
-      # No-op under NetworkManager, which owns this interface and asserts
-      # its own wake-on-lan setting (below) on every connection activation.
-      # ensureProfiles doesn't take over NetworkManager's own
-      # auto-generated profile for an unconfigured interface, so patch that
-      # profile directly instead.
       networking.interfaces.${cfg.wakeOnLan.interface}.wakeOnLan.enable = true;
 
-      systemd.services.wake-on-lan-networkmanager = {
-        description = "Enable magic-packet Wake-on-LAN via NetworkManager";
-        after = [
-          "NetworkManager.service"
-          "sys-subsystem-net-devices-${cfg.wakeOnLan.interface}.device"
-        ];
-        wants = [ "sys-subsystem-net-devices-${cfg.wakeOnLan.interface}.device" ];
-        wantedBy = [ "multi-user.target" ];
-        serviceConfig.Type = "oneshot";
-        script = ''
-          conn=$(${pkgs.networkmanager}/bin/nmcli -t -f NAME,DEVICE connection show --active \
-            | ${pkgs.gawk}/bin/awk -F: -v d="${cfg.wakeOnLan.interface}" '$2 == d { print $1; exit }')
-          if [ -z "$conn" ]; then
-            echo "no active NetworkManager connection on ${cfg.wakeOnLan.interface}" >&2
-            exit 1
-          fi
-          ${pkgs.networkmanager}/bin/nmcli connection modify "$conn" 802-3-ethernet.wake-on-lan magic
-          ${pkgs.networkmanager}/bin/nmcli connection up "$conn"
-        '';
+      environment.systemPackages = [ pkgs.ethtool ];
+
+      networking.networkmanager.ensureProfiles.profiles.${cfg.wakeOnLan.interface} = {
+        connection = {
+          id = cfg.wakeOnLan.interface;
+          type = "802-3-ethernet";
+          interface-name = cfg.wakeOnLan.interface;
+          autoconnect = true;
+        };
+        "802-3-ethernet".wake-on-lan = "magic";
+        ipv4.method = "auto";
+        ipv6.method = "auto";
+      };
+
+      networking.networkmanager.dispatcherScripts = [
+        {
+          type = "basic";
+          source = pkgs.writeShellScript "arm-wake-on-lan" ''
+            [ "$1" = "${cfg.wakeOnLan.interface}" ] || exit 0
+            case "$2" in
+              up|dhcp4-change) ${pkgs.ethtool}/bin/ethtool -s "$1" wol g || true ;;
+            esac
+          '';
+        }
+      ];
+
+      services.udev.extraRules = ''
+        ACTION=="add", SUBSYSTEM=="net", NAME=="${cfg.wakeOnLan.interface}", RUN+="${pkgs.ethtool}/bin/ethtool -s ${cfg.wakeOnLan.interface} wol g"
+        ACTION=="add|change", SUBSYSTEM=="pci", DRIVERS=="r8169", ATTR{power/wakeup}="enabled"
+      '';
+
+      # r8169 clears the WoL bit during shutdown, so S5 wake needs it re-armed
+      # after the network stack is gone but before power is cut.
+      systemd.services.wake-on-lan-shutdown = {
+        description = "Re-arm Wake-on-LAN across shutdown";
+        wantedBy = [ "shutdown.target" ];
+        before = [ "shutdown.target" ];
+        unitConfig.DefaultDependencies = false;
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStart = "${pkgs.coreutils}/bin/true";
+          ExecStop = "${pkgs.ethtool}/bin/ethtool -s ${cfg.wakeOnLan.interface} wol g";
+        };
       };
     })
 
