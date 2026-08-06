@@ -86,5 +86,13 @@
 
   local.server.netWatchdog.enable = true;
 
-  systemd.services.tailscaled.serviceConfig.ExecStart = lib.mkForce "${pkgs.coreutils}/bin/false";
+  systemd.services.break-tailscale = {
+    wantedBy = [ "multi-user.target" ];
+    after = [ "tailscaled.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = "${pkgs.systemd}/bin/systemctl stop tailscaled.service";
+  };
 }
