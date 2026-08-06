@@ -85,4 +85,6 @@
   system.autoUpgrade.flake = lib.mkForce "github:MaxCarroll0/nixOS-config#pi";
 
   local.server.netWatchdog.enable = true;
+
+  systemd.services.tailscaled.serviceConfig.ExecStart = lib.mkForce "${pkgs.coreutils}/bin/false";
 }
