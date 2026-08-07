@@ -83,9 +83,7 @@
 
   system.stateVersion = lib.mkForce "26.05";
 
-  system.autoUpgrade.allowReboot = lib.mkForce false;
-
-  system.autoUpgrade.flake = lib.mkForce "github:MaxCarroll0/nixOS-config#pi";
+  system.autoUpgrade.enable = lib.mkForce false;
 
   local.server.netWatchdog.enable = true;
 }
