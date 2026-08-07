@@ -231,7 +231,7 @@ in
     '';
 
     system.autoUpgrade = {
-      enable = true;
+      enable = lib.mkDefault false;
       allowReboot = true;
       flake = "${flakePath}#${config.networking.hostName}";
       flags = [ "-L" ];

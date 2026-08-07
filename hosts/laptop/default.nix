@@ -66,6 +66,8 @@
     }
   '';
 
+  system.autoUpgrade.enable = true;
+
   local.build.host.emulatedSystems = [ "aarch64-linux" ];
 
   local.build.client = {

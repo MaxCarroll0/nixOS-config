@@ -83,7 +83,5 @@
 
   system.stateVersion = lib.mkForce "26.05";
 
-  system.autoUpgrade.enable = lib.mkForce false;
-
   local.server.netWatchdog.enable = true;
 }
