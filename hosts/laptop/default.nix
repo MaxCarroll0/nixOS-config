@@ -13,6 +13,7 @@
     ../../modules/nixos/torrent.nix
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/server/tailscale.nix
+    ../../modules/nixos/server/build-host.nix
   ];
 
   networking.hostName = "laptop";
@@ -64,6 +65,8 @@
       initrd (loop)/casper/initrd
     }
   '';
+
+  local.build.host.emulatedSystems = [ "aarch64-linux" ];
 
   local.build.client = {
     enable = true;
