@@ -56,7 +56,7 @@
 
   local.build.client = {
     enable = true;
-    builderHost = "desktop";
+    builderHost = "laptop";
     builderUser = "max";
     builderPort = 22;
     tailscaleSsh = true;
