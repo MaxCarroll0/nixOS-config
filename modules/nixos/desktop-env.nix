@@ -15,22 +15,9 @@ let
     runtimeInputs = [
       pkgs.kdePackages.ksshaskpass
       pkgs.tailscale
-      pkgs.util-linux
     ];
     text = ''
-      if [ "''${1:-}" = "--pty" ]; then
-        if [ "$#" -lt 2 ]; then
-          echo "usage: sudo-request --pty COMMAND [ARG ...]" >&2
-          exit 2
-        fi
-        shift
-        printf -v command '%q ' "$@"
-        password="$(${lib.getExe pkgs.kdePackages.ksshaskpass} "Authorize sudo for: $command")" || exit
-        [ -n "$password" ] || exit 1
-        printf '%s\n' "$password" | script -qec "$command" /dev/null
-        status=$?
-        unset password
-      elif [ "''${1:-}" = "--host" ]; then
+      if [ "''${1:-}" = "--host" ]; then
         if [ "$#" -lt 3 ]; then
           echo "usage: sudo-request --host HOST COMMAND [ARG ...]" >&2
           exit 2

@@ -61,7 +61,9 @@ let
             exit 2 ;;
         esac
 
-        printf -v deployCmd '%q ' nix run --accept-flake-config "$flake#deploy-rs" -- \
+        export NIX_CONFIG="accept-flake-config = true"
+
+        printf -v deployCmd '%q ' nix run "$flake#deploy-rs" -- \
           "$flake#$target" "''${deployOpts[@]}" "$@"
 
         if getent group novpn >/dev/null 2>&1; then
