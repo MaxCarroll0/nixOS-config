@@ -88,13 +88,6 @@ in
         echo "$attempts" > "$STATE_DIRECTORY/attempts"
 
         if [ "$attempts" -ge ${toString cfg.rebootAfter} ]; then
-          # A reboot would drop the transient rollback timer and leave the host
-          # on the generation that broke it.
-          if [ "$(${pkgs.systemd}/bin/systemctl is-active rebuild-rollback.timer)" = active ]; then
-            echo "rollback pending, not rebooting" >&2
-            exit 0
-          fi
-
           reboots=$(cat "$STATE_DIRECTORY/reboots" 2>/dev/null || echo 0)
           if [ "$reboots" -ge ${toString cfg.maxReboots} ]; then
             echo "still down after $reboots reboots, giving up" >&2
