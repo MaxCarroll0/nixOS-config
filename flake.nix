@@ -227,6 +227,8 @@
 
       checks = lib.mapAttrs (_: deployLib: deployLib.deployChecks self.deploy) inputs.deploy-rs.lib;
 
+      packages.x86_64-linux.deploy-rs = inputs.deploy-rs.packages.x86_64-linux.default;
+
       packages.aarch64-linux = lib.mapAttrs' (
         name: module:
         lib.nameValuePair "${name}-image"

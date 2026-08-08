@@ -16,18 +16,25 @@ let
     runtimeInputs = [
       pkgs.git
       pkgs.coreutils
-      pkgs.systemd
-      config.services.tailscale.package
+      pkgs.getent
     ];
     text = ''
       host="${config.networking.hostName}"
       flake="${flakePath}"
       opts=()
 
-      if [ "''${1:-}" = "--local" ]; then
-        opts+=(--option builders "")
-        shift
-      fi
+      target=""
+      while true; do
+        case "''${1:-}" in
+          --local)
+            opts+=(--option builders "")
+            shift ;;
+          --host)
+            target="''${2:?--host needs a node name}"
+            shift 2 ;;
+          *) break ;;
+        esac
+      done
 
       action="''${1:-switch}"
       [ $# -gt 0 ] && shift
@@ -39,40 +46,45 @@ let
         printf '  %s\n' "''${untrackedFiles[@]}" >&2
       fi
 
+      if [ -n "$target" ]; then
+        deployOpts=()
+        case "$action" in
+          switch) ;;
+          boot) deployOpts+=(--boot) ;;
+          test) deployOpts+=(--test) ;;
+          dry-activate) deployOpts+=(--dry-activate) ;;
+          home)
+            echo "error: --host deploys the home profile alongside the system" >&2
+            exit 2 ;;
+          *)
+            echo "error: $action is not a deploy action" >&2
+            exit 2 ;;
+        esac
+
+        printf -v deployCmd '%q ' nix run --accept-flake-config "$flake#deploy-rs" -- \
+          "$flake#$target" "''${deployOpts[@]}" "$@"
+
+        if getent group novpn >/dev/null 2>&1; then
+          exec /run/wrappers/bin/sg novpn -c "$deployCmd"
+        fi
+        exec ${pkgs.bash}/bin/bash -c "$deployCmd"
+      fi
+
+      case "$action" in
+        switch|boot)
+          if [ -n "''${SSH_CONNECTION:-}" ]; then
+            echo "error: remote session; activating here has no rollback guarantee" >&2
+            echo "  from your workstation: rebuild --host $host $action" >&2
+            exit 1
+          fi ;;
+      esac
+
       case "$action" in
         home)
           exec home-manager switch --flake "$flake#max@$host" "''${opts[@]}" "$@" ;;
         build|dry-build|repl)
           exec nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
-        switch|boot)
-          nixos-rebuild build --flake "$flake#$host" "''${opts[@]}" "$@"
-
-          initiator=""
-          [ -n "''${SSH_CONNECTION:-}" ] && initiator=''${SSH_CONNECTION%% *}
-
-          if [ -n "$initiator" ]; then
-            sudo systemctl stop rebuild-rollback.timer rebuild-rollback.service 2>/dev/null || true
-            sudo systemd-run --on-active=10min --unit=rebuild-rollback --collect \
-              ${pkgs.bash}/bin/sh -c '${config.nix.package}/bin/nix-env --rollback -p /nix/var/nix/profiles/system && /nix/var/nix/profiles/system/bin/switch-to-configuration boot; ${pkgs.systemd}/bin/systemctl reboot'
-            echo "rollback scheduled: reverting in 10m unless $initiator answers" >&2
-          fi
-
-          sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" || status=$?
-
-          if [ -n "$initiator" ]; then
-            deadline=$(( $(date +%s) + 60 ))
-            while [ "$(date +%s)" -lt "$deadline" ]; do
-              if tailscale ping --timeout=2s --c=1 "$initiator" >/dev/null 2>&1; then
-                sudo systemctl stop rebuild-rollback.timer 2>/dev/null || true
-                echo "$initiator still reachable, rollback cancelled" >&2
-                exit "''${status:-0}"
-              fi
-              sleep 2
-            done
-            echo "$initiator unreachable, rollback still scheduled" >&2
-          fi
-          exit "''${status:-0}" ;;
-        test|dry-activate)
+        switch|boot|test|dry-activate)
           nixos-rebuild build --flake "$flake#$host" "''${opts[@]}" "$@"
           exec sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
         *)
