@@ -56,13 +56,14 @@
 
   local.build.client = {
     enable = true;
-    builderHost = "laptop";
-    builderUser = "max";
-    builderPort = 22;
-    tailscaleSsh = true;
-    systems = [ "aarch64-linux" ];
-    maxJobs = 8;
-    speedFactor = 4;
+    builders = lib.genAttrs [ "laptop" "desktop" ] (_: {
+      user = "max";
+      port = 22;
+      tailscaleSsh = true;
+      systems = [ "aarch64-linux" ];
+      maxJobs = 8;
+      speedFactor = 4;
+    });
   };
 
   local.power = {

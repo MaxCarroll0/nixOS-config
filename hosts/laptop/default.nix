@@ -72,15 +72,16 @@
 
   local.build.client = {
     enable = true;
-    builderHost = "desktop";
-    builderUser = "max";
-    builderPort = 22;
-    tailscaleSsh = true;
-    systems = [
-      "x86_64-linux"
-      "aarch64-linux"
-    ];
-    maxJobs = 8;
-    speedFactor = 4;
+    builders.desktop = {
+      user = "max";
+      port = 22;
+      tailscaleSsh = true;
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+      maxJobs = 8;
+      speedFactor = 4;
+    };
   };
 }
