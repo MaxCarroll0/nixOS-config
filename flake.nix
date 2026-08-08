@@ -45,6 +45,11 @@
 
     nixos-hardware.url = "github:NixOS/nixos-hardware";
 
+    deploy-rs = {
+      url = "github:serokell/deploy-rs";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     # No nixpkgs follows: its cached kernel is keyed to its own revision.
     nixos-raspberrypi.url = "github:nvmd/nixos-raspberrypi/main";
   };
@@ -105,7 +110,10 @@
           inherit system;
           modules = [
             sops-nix.nixosModules.sops
-            { nixpkgs.overlays = [ emacs-overlay.overlay ]; nixpkgs.config.allowUnfree = true; }
+            {
+              nixpkgs.overlays = [ emacs-overlay.overlay ];
+              nixpkgs.config.allowUnfree = true;
+            }
             module
           ]
           ++ modules;
@@ -153,6 +161,32 @@
             anipySrc = inputs.anipy-cli;
           };
         };
+
+      mkNode =
+        name: hostname:
+        let
+          host = self.nixosConfigurations.${name};
+          system = host.config.nixpkgs.hostPlatform.system;
+          deployLib = inputs.deploy-rs.lib.${system};
+        in
+        {
+          inherit hostname;
+          sshOpts = [
+            "-p"
+            (toString host.config.local.server.ssh.port)
+          ];
+          profilesOrder = [
+            "system"
+            "home"
+          ];
+          profiles = {
+            system.path = deployLib.activate.nixos host;
+            home = {
+              user = "max";
+              path = deployLib.activate.home-manager self.homeConfigurations."max@${name}";
+            };
+          };
+        };
     in
     {
       nixosConfigurations = {
@@ -175,14 +209,31 @@
         max = mkHome { module = ./home/laptop.nix; };
       };
 
+      deploy = {
+        sshUser = "max";
+        user = "root";
+        interactiveSudo = true;
+        magicRollback = true;
+        autoRollback = true;
+        confirmTimeout = 120;
+        activationTimeout = 300;
+
+        nodes = {
+          laptop = mkNode "laptop" "100.112.109.20";
+          desktop = mkNode "desktop" "100.106.140.88";
+          pi = mkNode "pi" "100.117.13.66";
+        };
+      };
+
+      checks = lib.mapAttrs (_: deployLib: deployLib.deployChecks self.deploy) inputs.deploy-rs.lib;
+
       packages.aarch64-linux = lib.mapAttrs' (
         name: module:
-        lib.nameValuePair "${name}-image" (
-          mkPi {
+        lib.nameValuePair "${name}-image"
+          (mkPi {
             inherit module;
             modules = [ inputs.nixos-raspberrypi.nixosModules.sd-image ];
-          }
-        ).config.system.build.sdImage
+          }).config.system.build.sdImage
       ) piHosts;
     };
 
