@@ -50,6 +50,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     # No nixpkgs follows: its cached kernel is keyed to its own revision.
     nixos-raspberrypi.url = "github:nvmd/nixos-raspberrypi/main";
   };
@@ -227,7 +232,23 @@
 
       checks = lib.mapAttrs (_: deployLib: deployLib.deployChecks self.deploy) inputs.deploy-rs.lib;
 
-      packages.x86_64-linux.deploy-rs = inputs.deploy-rs.packages.x86_64-linux.default;
+      packages.x86_64-linux = {
+        deploy-rs = inputs.deploy-rs.packages.x86_64-linux.default;
+
+        installer-iso =
+          (lib.nixosSystem {
+            system = "x86_64-linux";
+            modules = [
+              "${nixpkgs}/nixos/modules/installer/cd-dvd/installation-cd-minimal.nix"
+              {
+                services.openssh.enable = true;
+                services.openssh.settings.PermitRootLogin = "prohibit-password";
+                users.users.root.openssh.authorizedKeys.keyFiles = [ ./keys/max.pub ];
+                users.users.nixos.openssh.authorizedKeys.keyFiles = [ ./keys/max.pub ];
+              }
+            ];
+          }).config.system.build.isoImage;
+      };
 
       packages.aarch64-linux = lib.mapAttrs' (
         name: module:

@@ -13,8 +13,17 @@ check:
 build host:
     nix build --no-link .#nixosConfigurations.{{host}}.config.system.build.toplevel
 
-switch host:
-    sudo nixos-rebuild switch --flake .#{{host}}
+# Activate this host.
+switch:
+    rebuild switch
+
+# Deploy a remote host with deploy-rs; reverts itself if it goes unreachable.
+deploy host action="switch":
+    rebuild --host {{host}} {{action}}
+
+# Deploy without activating, to prove it builds and copies.
+deploy-check host:
+    rebuild --host {{host}} dry-activate
 
 switch-home host="laptop":
     home-manager switch --flake .#max@{{host}}
@@ -44,3 +53,11 @@ pi-image host="pi":
 # Write an image to the SSD and inject that host's key.
 flash-pi host image device:
     scripts/flash-pi.sh {{host}} {{image}} {{device}}
+
+# Installer ISO trusting keys/max.pub, so nixos-anywhere can ssh straight in.
+installer-iso:
+    nix build --print-out-paths .#packages.x86_64-linux.installer-iso
+
+# Install onto a machine booted from that ISO, planting its sops host key.
+install host target:
+    scripts/bootstrap-anywhere.sh {{host}} {{target}}
