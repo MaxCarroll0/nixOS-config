@@ -1,6 +1,6 @@
 # AMD desktop: workstation plus remote builder, SSH host, and web origin.
 
-{ lib, ... }:
+{ lib, pkgs, ... }:
 
 {
   imports = [
@@ -10,6 +10,7 @@
     ../../modules/nixos/vpn.nix
     ../../modules/nixos/wake.nix
     ../../modules/nixos/power.nix
+    ../../modules/nixos/fancontrol.nix
     ../../modules/nixos/storage.nix
     ../../modules/nixos/wifi.nix
     ../../modules/nixos/server/ssh.nix
@@ -71,6 +72,33 @@
     spinDownRotational.enable = true;
     lazyMounts = { };
   };
+
+  local.fancontrol.enable = true;
+
+  systemd.services.schedutil-rate-limit = {
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${
+        pkgs.writeShellScript "schedutil-rate-limit" ''
+          echo 50000 > /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us
+        ''
+      }";
+    };
+  };
+
+  services.prometheus.scrapeConfigs = [
+    {
+      job_name = "node-pi";
+      static_configs = [
+        {
+          targets = [ "100.117.13.66:9100" ];
+          labels.instance = "pi";
+        }
+      ];
+    }
+  ];
 
   local.power = {
     monitoring.enable = true;
