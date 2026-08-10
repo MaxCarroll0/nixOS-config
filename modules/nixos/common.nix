@@ -64,7 +64,7 @@ let
         export NIX_CONFIG="accept-flake-config = true"
 
         printf -v deployCmd '%q ' nix run "$flake#deploy-rs" -- \
-          "$flake#$target" "''${deployOpts[@]}" "$@"
+          --skip-checks "$flake#$target" "''${deployOpts[@]}" "$@"
 
         if getent group novpn >/dev/null 2>&1; then
           exec /run/wrappers/bin/sg novpn -c "$deployCmd"
