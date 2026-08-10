@@ -73,7 +73,8 @@
     lazyMounts = { };
   };
 
-  local.fancontrol.enable = true;
+  # it87 can't probe this board's Super I/O chip and gigabyte_wmi has no pwm control; leave off until a fix turns up.
+  local.fancontrol.enable = false;
 
   systemd.services.schedutil-rate-limit = {
     wantedBy = [ "multi-user.target" ];
