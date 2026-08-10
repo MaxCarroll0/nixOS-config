@@ -683,6 +683,10 @@ in
           http_port = 3000;
         };
         settings.security.secret_key = "$__file{${config.sops.secrets."grafana-secret-key".path}}";
+        settings."auth.anonymous" = {
+          enabled = true;
+          org_role = "Admin";
+        };
 
         provision.datasources.settings = {
           apiVersion = 1;
