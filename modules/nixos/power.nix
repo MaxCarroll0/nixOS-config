@@ -636,7 +636,7 @@ in
 
       services.prometheus.exporters.node = {
         enable = true;
-        listenAddress = "127.0.0.1";
+        listenAddress = "0.0.0.0";
         enabledCollectors = [
           "hwmon"
           "cpufreq"
@@ -644,6 +644,10 @@ in
         ]
         ++ lib.optionals pkgs.stdenv.hostPlatform.isx86 [ "rapl" ];
       };
+
+      networking.firewall.interfaces.tailscale0.allowedTCPPorts = [
+        config.services.prometheus.exporters.node.port
+      ];
 
       services.prometheus = {
         enable = true;
@@ -653,7 +657,10 @@ in
           {
             job_name = "node";
             static_configs = [
-              { targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ]; }
+              {
+                targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ];
+                labels.instance = config.networking.hostName;
+              }
             ];
           }
         ];
@@ -667,10 +674,12 @@ in
         wants = [ "sops-install-secrets.service" ];
       };
 
+      networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 3000 ];
+
       services.grafana = {
         enable = true;
         settings.server = {
-          http_addr = "127.0.0.1";
+          http_addr = "0.0.0.0";
           http_port = 3000;
         };
         settings.security.secret_key = "$__file{${config.sops.secrets."grafana-secret-key".path}}";

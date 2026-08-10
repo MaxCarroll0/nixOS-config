@@ -16,6 +16,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "rate(node_rapl_package_joules_total[5m])",
+          "legendFormat": "{{instance}}",
           "refId": "A"
         }
       ]
@@ -31,6 +32,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "rate(node_rapl_core_joules_total[5m])",
+          "legendFormat": "{{instance}}",
           "refId": "A"
         }
       ]
@@ -46,6 +48,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "node_hwmon_power_watt",
+          "legendFormat": "{{instance}}",
           "refId": "A"
         }
       ]
@@ -61,6 +64,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "node_cpu_scaling_frequency_hertz",
+          "legendFormat": "{{instance}} {{cpu}}",
           "refId": "A"
         }
       ]
@@ -76,11 +80,13 @@
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "node_hwmon_temp_celsius",
+          "legendFormat": "{{instance}} {{chip}} {{sensor}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "node_thermal_zone_temp",
+          "legendFormat": "{{instance}} {{zone}}",
           "refId": "B"
         }
       ]
@@ -96,6 +102,23 @@
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "node_hwmon_fan_rpm",
+          "legendFormat": "{{instance}} {{chip}} {{sensor}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "CPU Tctl",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "celsius" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "node_hwmon_temp_celsius{chip=\"pci0000:00_0000:00:18_3\"}",
+          "legendFormat": "{{instance}} {{sensor}}",
           "refId": "A"
         }
       ]
