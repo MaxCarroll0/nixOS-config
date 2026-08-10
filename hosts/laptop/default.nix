@@ -18,6 +18,8 @@
 
   networking.hostName = "laptop";
 
+  networking.hosts."100.106.140.88" = [ "desktop.grafana" ];
+
   local.vpn = {
     configs.uk = "proton-wg";
     primary = "uk";

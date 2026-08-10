@@ -200,7 +200,7 @@ in
       clean = {
         enable = true;
         dates = "daily";
-        extraArgs = "--keep 10 --keep-since 14d --no-gcroots";
+        extraArgs = "--keep 10 --keep-since 14d";
       };
     };
 
