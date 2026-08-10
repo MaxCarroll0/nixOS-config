@@ -131,6 +131,7 @@
 
   home.sessionVariables = {
     EDITOR = "emacs";
+    SSH_AUTH_SOCK = "$XDG_RUNTIME_DIR/ssh-agent";
   };
 
   services.home-manager.autoUpgrade = {
