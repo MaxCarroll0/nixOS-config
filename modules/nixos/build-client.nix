@@ -172,6 +172,7 @@ in
   config = lib.mkIf cfg.enable {
     nix.distributedBuilds = true;
     nix.settings.builders-use-substitutes = true;
+    nix.settings.builders = "@/etc/nix/machines";
 
     nix.buildMachines = map (
       b:
