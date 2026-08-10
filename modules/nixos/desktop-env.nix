@@ -32,11 +32,29 @@ let
         status=$?
         unset password
       else
-        /run/wrappers/bin/sudo -k
-        SUDO_ASKPASS=${lib.getExe pkgs.kdePackages.ksshaskpass} /run/wrappers/bin/sudo --askpass --validate || exit
-        status=0
-        "$@" || status=$?
-        /run/wrappers/bin/sudo -k
+        nestedHost=""
+        args=("$@")
+        for i in "''${!args[@]}"; do
+          if [ "''${args[$i]}" = "--host" ] && [ $((i + 1)) -lt "''${#args[@]}" ]; then
+            nestedHost="''${args[$((i + 1))]}"
+            break
+          fi
+        done
+
+        if [ -n "$nestedHost" ]; then
+          printf -v command '%q ' "$@"
+          password="$(${lib.getExe pkgs.kdePackages.ksshaskpass} "Authorize sudo on $nestedHost: $command")" || exit
+          [ -n "$password" ] || exit 1
+          status=0
+          { while :; do printf '%s\n' "$password"; done; } | "$@" || status=$?
+          unset password
+        else
+          /run/wrappers/bin/sudo -k
+          SUDO_ASKPASS=${lib.getExe pkgs.kdePackages.ksshaskpass} /run/wrappers/bin/sudo --askpass --validate || exit
+          status=0
+          "$@" || status=$?
+          /run/wrappers/bin/sudo -k
+        fi
       fi
       exit "$status"
     '';
