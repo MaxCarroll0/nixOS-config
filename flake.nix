@@ -178,8 +178,10 @@
           inherit hostname;
           sshOpts = [
             "-A"
-            "-p"
-            (toString host.config.local.server.ssh.port)
+            "-o"
+            "StrictHostKeyChecking=no"
+            "-o"
+            "UserKnownHostsFile=/dev/null"
           ];
           profilesOrder = [
             "system"
