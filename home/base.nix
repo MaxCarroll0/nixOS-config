@@ -141,6 +141,8 @@
     preSwitchCommands = [ "nix flake update nixpkgs-unstable" ];
   };
 
+  services.ssh-agent.enable = true;
+
   programs.home-manager.enable = true;
 
   home.stateVersion = "25.05";

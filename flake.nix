@@ -177,6 +177,7 @@
         {
           inherit hostname;
           sshOpts = [
+            "-A"
             "-p"
             (toString host.config.local.server.ssh.port)
           ];

@@ -67,7 +67,7 @@ in
         PermitRootLogin = "no";
         MaxAuthTries = 3;
         X11Forwarding = false;
-        AllowAgentForwarding = false;
+        AllowAgentForwarding = true;
         AllowTcpForwarding = false;
         AllowUsers = cfg.allowUsers;
       };

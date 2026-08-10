@@ -14,6 +14,7 @@
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/server/build-host.nix
+    ../../modules/nixos/pam-ssh-agent-sudo.nix
   ];
 
   networking.hostName = "laptop";

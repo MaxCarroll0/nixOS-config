@@ -13,6 +13,7 @@
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/net-watchdog.nix
     ../../modules/nixos/build-client.nix
+    ../../modules/nixos/pam-ssh-agent-sudo.nix
   ];
 
   networking.hostName = "pi";

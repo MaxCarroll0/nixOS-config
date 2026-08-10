@@ -17,6 +17,7 @@
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/server/build-host.nix
     ../../modules/nixos/server/web.nix
+    ../../modules/nixos/pam-ssh-agent-sudo.nix
   ];
 
   networking.hostName = "desktop";
