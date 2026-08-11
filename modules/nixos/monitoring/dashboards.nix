@@ -119,6 +119,9 @@ let
         options = legendOptions;
       }
       // args
+      // {
+        overrides = hostGradientOverrides ++ (args.overrides or [ ]);
+      }
     );
   stat = args: panel "stat" ({ options = statOptions; } // args);
   barGauge =
@@ -152,6 +155,9 @@ let
         };
       }
       // args
+      // {
+        overrides = hostGradientOverrides ++ (args.overrides or [ ]);
+      }
     );
   table = args: panel "table" args;
   nodeGraph = args: panel "nodeGraph" args;
@@ -166,7 +172,7 @@ let
       }
       // args
     );
-  xy = args: panel "xychart" args;
+  xy = args: panel "xychart" (args // { overrides = hostGradientOverrides ++ (args.overrides or [ ]); });
 
   status =
     args:
@@ -256,6 +262,43 @@ let
       }
     ];
   };
+
+  fixedColor = pattern: color: {
+    matcher = {
+      id = "byRegexp";
+      options = pattern;
+    };
+    properties = [
+      {
+        id = "color";
+        value = {
+          mode = "fixed";
+          fixedColor = color;
+        };
+      }
+    ];
+  };
+
+  # A stable hue identifies the host everywhere. Semantic suffixes select a shade
+  # within that hue, so related series remain grouped without becoming identical.
+  hostGradientOverrides = [
+    (fixedColor "^desktop_new( .*)?$" "#5794F2")
+    (fixedColor "^desktop_new .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#1F60C4")
+    (fixedColor "^desktop_new .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#8AB8FF")
+    (fixedColor "^desktop_new .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#C7DCFF")
+    (fixedColor "^desktop_old( .*)?$" "#A352CC")
+    (fixedColor "^desktop_old .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#705DA0")
+    (fixedColor "^desktop_old .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#C58BE2")
+    (fixedColor "^desktop_old .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#E2C7F0")
+    (fixedColor "^laptop( .*)?$" "#FF9830")
+    (fixedColor "^laptop .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#C15C17")
+    (fixedColor "^laptop .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#FFB86B")
+    (fixedColor "^laptop .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#FFE0B2")
+    (fixedColor "^pi( .*)?$" "#73BF69")
+    (fixedColor "^pi .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#37872D")
+    (fixedColor "^pi .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#A4D99B")
+    (fixedColor "^pi .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#D4EDCF")
+  ];
 
   upMappings = [
     {
