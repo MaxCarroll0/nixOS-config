@@ -40,6 +40,7 @@
     port = 2222;
     allowUsers = [ "max" ];
     lanInterfaces = [
+      "enp5s0"
       "enp6s0"
       "wlp5s0"
     ];
