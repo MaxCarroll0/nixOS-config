@@ -34,6 +34,15 @@
     ];
   };
 
+  hardware.raspberry-pi.config.all = {
+    base-dt-params.pciex1.enable = true;
+    dt-overlays.pcie-32bit-dma-pi5.enable = true;
+    options.usb_max_current_enable = {
+      enable = true;
+      value = true;
+    };
+  };
+
   boot.initrd.availableKernelModules = [
     "xhci_pci"
     "usb-storage"

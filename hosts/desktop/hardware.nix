@@ -10,7 +10,7 @@
 
   boot.initrd.availableKernelModules = [ "nvme" "xhci_pci" "ahci" "usbhid" "sd_mod" ];
   boot.initrd.kernelModules = [ ];
-  boot.kernelModules = [ "kvm-amd" "it87" ];
+  boot.kernelModules = [ "kvm-amd" ];
   boot.extraModulePackages = [ ];
   # Gigabyte reserves the Super I/O's ports in ACPI; lax lets it87 claim them anyway.
   boot.kernelParams = [ "acpi_enforce_resources=lax" ];
