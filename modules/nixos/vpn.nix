@@ -178,6 +178,14 @@ in
       lib.nameValuePair "proton-${name}" {
         configFile = config.sops.secrets.${secret}.path;
         autostart = name == cfg.primary;
+        # wg-quick's catch-all rule (5209) outranks tailscaled's route table
+        # (52, priority 5270), blackholing unmarked tailnet traffic.
+        postUp = lib.optionalString config.services.tailscale.enable ''
+          ${pkgs.iproute2}/bin/ip rule add to 100.64.0.0/10 lookup 52 priority 5207
+        '';
+        preDown = lib.optionalString config.services.tailscale.enable ''
+          ${pkgs.iproute2}/bin/ip rule del to 100.64.0.0/10 lookup 52 priority 5207
+        '';
       }
     ) cfg.configs;
 

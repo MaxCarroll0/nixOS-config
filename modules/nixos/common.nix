@@ -24,6 +24,7 @@ let
       opts=()
 
       target=""
+      profile=""
       while true; do
         case "''${1:-}" in
           --local)
@@ -31,6 +32,9 @@ let
             shift ;;
           --host)
             target="''${2:?--host needs a node name}"
+            shift 2 ;;
+          --profile)
+            profile="''${2:?--profile needs system or home}"
             shift 2 ;;
           *) break ;;
         esac
@@ -63,8 +67,11 @@ let
 
         export NIX_CONFIG="accept-flake-config = true"
 
+        deployTarget="$flake#$target"
+        [ -n "$profile" ] && deployTarget="$flake#$target.$profile"
+
         printf -v deployCmd '%q ' nix run "$flake#deploy-rs" -- \
-          --skip-checks "$flake#$target" "''${deployOpts[@]}" "$@"
+          --skip-checks "$deployTarget" "''${deployOpts[@]}" "$@"
 
         if getent group novpn >/dev/null 2>&1; then
           exec /run/wrappers/bin/sg novpn -c "$deployCmd"

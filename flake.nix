@@ -222,7 +222,6 @@
       deploy = {
         sshUser = "max";
         user = "root";
-        interactiveSudo = true;
         magicRollback = true;
         autoRollback = true;
         confirmTimeout = 120;
