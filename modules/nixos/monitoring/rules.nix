@@ -16,7 +16,18 @@ let
     "sensor:fan_rpm" = named "node_hwmon_fan_rpm";
     "sensor:power_watt" = named "node_hwmon_power_watt";
     "sensor:volts" = named "node_hwmon_in_volts";
-    "sensor:pwm_percent" = "(${named "node_hwmon_pwm"}) * 100 / 255";
+    "fan:rpm" =
+      "fan2go_fan_rpm or "
+      + ''label_replace(${named "node_hwmon_fan_rpm"}, "id", "$1", "name", "(.*)")'';
+    "fan:pwm_percent" = "fan2go_fan_pwm * 100 / 255";
+    "temp:major_celsius" =
+      ''label_replace(max by (instance) (sensor:temp_celsius{name=~"CPU Tctl|CPU Tdie|CPU package|SoC"}), "component", "CPU", "", "")''
+      + " or "
+      + ''label_replace(max by (instance) (sensor:temp_celsius{name=~"GPU edge|GPU junction"}), "component", "GPU", "", "")''
+      + " or "
+      + ''label_replace(max by (instance) (sensor:temp_celsius{name=~"NVMe|Composite"}), "component", "Storage", "", "")''
+      + " or "
+      + ''label_replace(max by (instance) (sensor:temp_celsius{name=~"System 1|Ambient"}), "component", "Box", "", "")'';
   };
 
   # zenpower reports measured SVI2 rails; RAPL is the modelled fallback when it is absent.
@@ -35,11 +46,23 @@ let
     "pc:power_watts" =
       "(pc:cpu_power_watts + (pc:gpu_power_watts or pc:cpu_power_watts * 0)"
       + " + pc:baseline_watts) / pc:psu_efficiency";
+    "pc:psu_loss_watts" =
+      "clamp_min(pc:power_watts - pc:cpu_power_watts"
+      + " - (pc:gpu_power_watts or pc:cpu_power_watts * 0) - pc:baseline_watts, 0)";
   };
 
   systemRules = {
     "cpu:utilisation" = ''1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m]))'';
+    "cpu:core_utilisation" = ''1 - rate(node_cpu_seconds_total{mode="idle"}[15s])'';
+    "cpu:core_utilisation_min" =
+      ''min by (instance) (1 - rate(node_cpu_seconds_total{mode="idle"}[15s]))'';
+    "cpu:core_utilisation_avg" =
+      ''avg by (instance) (1 - rate(node_cpu_seconds_total{mode="idle"}[15s]))'';
+    "cpu:core_utilisation_max" =
+      ''max by (instance) (1 - rate(node_cpu_seconds_total{mode="idle"}[15s]))'';
     "cpu:hertz" = "avg by (instance) (node_cpu_scaling_frequency_hertz)";
+    "cpu:hertz_min" = "min by (instance) (node_cpu_scaling_frequency_hertz)";
+    "cpu:hertz_max" = "max by (instance) (node_cpu_scaling_frequency_hertz)";
     "cpu:throttled_ratio" =
       "1 - avg by (instance) (node_cpu_scaling_frequency_hertz)"
       + " / avg by (instance) (node_cpu_scaling_frequency_max_hertz)";
@@ -84,6 +107,14 @@ let
       ''sum by (instance, device) (rate(node_network_transmit_errs_total{device!="lo"}[1m]))'';
     "net:receive_drops" =
       ''sum by (instance, device) (rate(node_network_receive_drop_total{device!="lo"}[1m]))'';
+    "net:receive_bytes_by_transport" =
+      ''sum by (instance, transport) (label_replace(rate(node_network_receive_bytes_total{device=~"tailscale.*|proton.*|wg.*|tun.*"}[1m]), "transport", "VPN", "device", ".*"))''
+      + " or "
+      + ''sum by (instance, transport) (label_replace(rate(node_network_receive_bytes_total{device=~"en.*|eth.*|wl.*|ww.*|bond.*"}[1m]), "transport", "Non-VPN", "device", ".*"))'';
+    "net:transmit_bytes_by_transport" =
+      ''sum by (instance, transport) (label_replace(rate(node_network_transmit_bytes_total{device=~"tailscale.*|proton.*|wg.*|tun.*"}[1m]), "transport", "VPN", "device", ".*"))''
+      + " or "
+      + ''sum by (instance, transport) (label_replace(rate(node_network_transmit_bytes_total{device=~"en.*|eth.*|wl.*|ww.*|bond.*"}[1m]), "transport", "Non-VPN", "device", ".*"))'';
     "ts:peer_rx_bytes" = "rate(tailscale_peer_rx_bytes_total[1m])";
     "ts:peer_tx_bytes" = "rate(tailscale_peer_tx_bytes_total[1m])";
     "ts:peer_online" = "tailscale_peer_online";
@@ -117,15 +148,26 @@ let
       ];
     };
     fan_rpm = {
-      source = "sensor:fan_rpm";
+      source = "fan:rpm";
       aggs = [
         "avg"
         "max"
       ];
     };
-    pwm_percent = {
-      source = "sensor:pwm_percent";
-      aggs = [ "avg" ];
+    fan_pwm_percent = {
+      source = "fan:pwm_percent";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    major_temp_celsius = {
+      source = "temp:major_celsius";
+      aggs = [
+        "avg"
+        "max"
+        "min"
+      ];
     };
     sensor_power_watt = {
       source = "sensor:power_watt";
@@ -167,6 +209,10 @@ let
       source = "pc:baseline_watts";
       aggs = [ "avg" ];
     };
+    pc_psu_loss_watts = {
+      source = "pc:psu_loss_watts";
+      aggs = [ "avg" ];
+    };
     tariff_gbp_per_kwh = {
       source = "pc:tariff_gbp_per_kwh";
       aggs = [ "max" ];
@@ -184,6 +230,14 @@ let
         "avg"
         "max"
       ];
+    };
+    cpu_hertz_min = {
+      source = "cpu:hertz_min";
+      aggs = [ "min" ];
+    };
+    cpu_hertz_max = {
+      source = "cpu:hertz_max";
+      aggs = [ "max" ];
     };
     cpu_throttled_ratio = {
       source = "cpu:throttled_ratio";
@@ -317,6 +371,20 @@ let
         "max"
       ];
     };
+    net_receive_bytes_by_transport = {
+      source = "net:receive_bytes_by_transport";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    net_transmit_bytes_by_transport = {
+      source = "net:transmit_bytes_by_transport";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
     net_receive_errors = {
       source = "net:receive_errors";
       aggs = [ "avg" ];
@@ -429,7 +497,7 @@ in
   hourly = [
     {
       name = "hourly";
-      interval = "1h";
+      interval = "5m";
       rules = hourRollup;
     }
   ];
@@ -547,14 +615,14 @@ in
       (threshold {
         uid = "cpu-temp-high";
         title = "CPU temperature high";
-        expr = ''max by (instance) (sensor:temp_celsius{name=~"CPU Tctl|CPU Tdie"})'';
+        expr = ''temp:major_celsius{component="CPU"}'';
         value = cfg.alerts.cpuTempCelsius;
         summary = "CPU is above {{ $labels.instance }}'s warning threshold.";
       })
       (threshold {
         uid = "cpu-temp-critical";
         title = "CPU temperature critical";
-        expr = ''max by (instance) (sensor:temp_celsius{name=~"CPU Tctl|CPU Tdie"})'';
+        expr = ''temp:major_celsius{component="CPU"}'';
         value = cfg.alerts.cpuCriticalCelsius;
         for' = "1m";
         severity = "critical";
@@ -570,14 +638,14 @@ in
       (threshold {
         uid = "gpu-temp-high";
         title = "GPU temperature high";
-        expr = ''max by (instance) (sensor:temp_celsius{name=~"GPU.*|edge|junction"})'';
+        expr = ''temp:major_celsius{component="GPU"}'';
         value = cfg.alerts.gpuTempCelsius;
         summary = "GPU on {{ $labels.instance }} is running hot.";
       })
       (threshold {
         uid = "nvme-temp-high";
         title = "NVMe temperature high";
-        expr = ''max by (instance) (sensor:temp_celsius{name=~"NVMe|Composite"})'';
+        expr = ''temp:major_celsius{component="Storage"}'';
         value = cfg.alerts.nvmeTempCelsius;
         for' = "5m";
         summary = "NVMe on {{ $labels.instance }} is above its comfortable range.";
@@ -593,8 +661,8 @@ in
         uid = "fan-stalled-while-hot";
         title = "Fan stopped while hot";
         expr =
-          "count by (instance) (sensor:fan_rpm == 0)"
-          + " and on(instance) (max by (instance) (sensor:temp_celsius) > 60)";
+          "count by (instance) (fan:rpm == 0) and "
+          + ''on(instance) (temp:major_celsius{component="CPU"} > 60)'';
         value = 0;
         for' = "3m";
         severity = "critical";
@@ -639,6 +707,81 @@ in
         value = 0;
         for' = "5m";
         summary = "{{ $labels.instance }} has failed systemd units.";
+      })
+      (threshold {
+        uid = "cpu-pressure-warning";
+        title = "Sustained CPU pressure";
+        expr = "max by (instance) (psi:cpu_waiting)";
+        value = 0.1;
+        for' = "5m";
+        summary = "CPU work on {{ $labels.instance }} has spent over 10% of its time waiting.";
+      })
+      (threshold {
+        uid = "cpu-pressure-critical";
+        title = "Severe CPU pressure";
+        expr = "max by (instance) (psi:cpu_waiting)";
+        value = 0.5;
+        for' = "10m";
+        severity = "critical";
+        summary = "CPU work on {{ $labels.instance }} has spent over half its time waiting.";
+      })
+      (threshold {
+        uid = "io-pressure-warning";
+        title = "Sustained I/O pressure";
+        expr = "max by (instance) (psi:io_stalled)";
+        value = 0.02;
+        for' = "5m";
+        summary = "Tasks on {{ $labels.instance }} are repeatedly fully stalled on I/O.";
+      })
+      (threshold {
+        uid = "io-pressure-critical";
+        title = "Severe I/O pressure";
+        expr = "max by (instance) (psi:io_stalled)";
+        value = 0.15;
+        for' = "10m";
+        severity = "critical";
+        summary = "Tasks on {{ $labels.instance }} are severely stalled on I/O.";
+      })
+      (threshold {
+        uid = "memory-pressure-warning";
+        title = "Sustained memory pressure";
+        expr = "max by (instance) (psi:memory_stalled)";
+        value = 0.01;
+        for' = "3m";
+        summary = "Tasks on {{ $labels.instance }} are repeatedly fully stalled on memory.";
+      })
+      (threshold {
+        uid = "memory-pressure-critical";
+        title = "Severe memory pressure";
+        expr = "max by (instance) (psi:memory_stalled)";
+        value = 0.05;
+        for' = "5m";
+        severity = "critical";
+        summary = "Tasks on {{ $labels.instance }} are severely stalled on memory.";
+      })
+      (threshold {
+        uid = "network-errors";
+        title = "Sustained network errors";
+        expr = "sum by (instance, device) (net:receive_errors + net:transmit_errors)";
+        value = 0.1;
+        for' = "5m";
+        summary = "{{ $labels.device }} on {{ $labels.instance }} is reporting sustained packet errors.";
+      })
+      (threshold {
+        uid = "network-drops";
+        title = "Sustained network drops";
+        expr = "sum by (instance, device) (net:receive_drops)";
+        value = 1;
+        for' = "5m";
+        summary = "{{ $labels.device }} on {{ $labels.instance }} is dropping packets persistently.";
+      })
+      (threshold {
+        uid = "tailnet-relayed";
+        title = "Tailnet peer stuck on DERP";
+        expr = "max by (instance, peer) (ts:peer_online * (1 - ts:peer_direct))";
+        value = 0;
+        for' = "10m";
+        summary = "Traffic from {{ $labels.instance }} to {{ $labels.peer }} has remained relayed for ten minutes.";
       })
       (logThreshold {
         uid = "nix-rebuild-failed";

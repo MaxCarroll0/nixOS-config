@@ -205,6 +205,12 @@ in
       description = "Extra node_exporter instances to scrape, keyed by instance label.";
     };
 
+    fanTargets = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      description = "fan2go exporters to scrape, keyed by instance label.";
+    };
+
     totalPower = {
       baselineWatts = lib.mkOption {
         type = lib.types.number;
@@ -358,11 +364,25 @@ in
             scrape_interval = "15s";
             static_configs = [
               {
-                targets = [
-                  "127.0.0.1:${toString hiresPort}"
-                  "127.0.0.1:${toString longtermPort}"
-                  "127.0.0.1:${toString archivePort}"
-                ];
+                targets = [ "127.0.0.1:${toString hiresPort}" ];
+                labels = {
+                  instance = config.networking.hostName;
+                  tier = "hires";
+                };
+              }
+              {
+                targets = [ "127.0.0.1:${toString longtermPort}" ];
+                labels = {
+                  instance = config.networking.hostName;
+                  tier = "history";
+                };
+              }
+              {
+                targets = [ "127.0.0.1:${toString archivePort}" ];
+                labels = {
+                  instance = config.networking.hostName;
+                  tier = "archive";
+                };
               }
             ];
           }
@@ -375,7 +395,18 @@ in
               labels.instance = instance;
             }
           ];
-        }) cfg.targets;
+        }) cfg.targets
+        ++ lib.mapAttrsToList (instance: target: {
+          job_name = "fan2go-${instance}";
+          scrape_interval = "1s";
+          scrape_timeout = "900ms";
+          static_configs = [
+            {
+              targets = [ target ];
+              labels.instance = instance;
+            }
+          ];
+        }) cfg.fanTargets;
       };
 
       systemd.services.prometheus-longterm = mkTier {
@@ -427,6 +458,7 @@ in
           backend = "loki";
           loki_remote_url = "http://127.0.0.1:3100";
         };
+        settings.feature_toggles.enable = "alertingCentralAlertHistory";
         settings."auth.anonymous" = {
           enabled = true;
           org_role = "Admin";

@@ -160,6 +160,8 @@ in
           limits_config = {
             retention_period = cfg.journalRetention;
             allow_structured_metadata = true;
+            split_queries_by_interval = "24h";
+            max_query_parallelism = 32;
             retention_stream = [
               {
                 selector = ''{service_name="nix-observer-summary"}'';
