@@ -131,8 +131,7 @@ in
 
     local.vpn.bypassUnits = [
       "nix-daemon.service"
-    ]
-    ++ lib.optional config.services.tailscale.enable "tailscaled.service";
+    ];
 
     local.vpn.allowInterfaces = lib.optional config.services.tailscale.enable "tailscale0";
 
@@ -184,6 +183,9 @@ in
 
     systemd.services = lib.listToAttrs (map bypassService cfg.bypassUnits) // {
       nix-daemon.serviceConfig.Group = "novpn";
+    }
+    // lib.optionalAttrs config.services.tailscale.enable {
+      tailscaled.serviceConfig.Group = "novpn";
     }
     // lib.mapAttrs' (
       name: _:
