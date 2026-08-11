@@ -95,7 +95,7 @@
         "aarch64-linux"
       ];
       maxJobs = 8;
-      speedFactor = 4;
+      speedFactor = 20;
     };
   };
 }
