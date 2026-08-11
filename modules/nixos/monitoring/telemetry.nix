@@ -132,6 +132,7 @@ in
           server = {
             http_listen_address = "0.0.0.0";
             http_listen_port = 3100;
+            grpc_listen_port = 9096;
           };
           common = {
             path_prefix = "/var/lib/loki";
