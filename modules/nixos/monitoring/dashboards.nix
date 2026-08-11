@@ -282,22 +282,22 @@ let
   # A stable hue identifies the host everywhere. Semantic suffixes select a shade
   # within that hue, so related series remain grouped without becoming identical.
   hostGradientOverrides = [
-    (fixedColor "^desktop_new( .*)?$" "#5794F2")
-    (fixedColor "^desktop_new .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#1F60C4")
-    (fixedColor "^desktop_new .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#8AB8FF")
-    (fixedColor "^desktop_new .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#C7DCFF")
-    (fixedColor "^desktop_old( .*)?$" "#A352CC")
-    (fixedColor "^desktop_old .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#705DA0")
-    (fixedColor "^desktop_old .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#C58BE2")
-    (fixedColor "^desktop_old .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#E2C7F0")
-    (fixedColor "^laptop( .*)?$" "#FF9830")
-    (fixedColor "^laptop .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#C15C17")
-    (fixedColor "^laptop .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#FFB86B")
-    (fixedColor "^laptop .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#FFE0B2")
-    (fixedColor "^pi( .*)?$" "#73BF69")
-    (fixedColor "^pi .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#37872D")
-    (fixedColor "^pi .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#A4D99B")
-    (fixedColor "^pi .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#D4EDCF")
+    (fixedColor "^desktop_new( .*)?$" "#2171B5")
+    (fixedColor "^desktop_new .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#08306B")
+    (fixedColor "^desktop_new .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#6BAED6")
+    (fixedColor "^desktop_new .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#C6DBEF")
+    (fixedColor "^desktop_old( .*)?$" "#6A51A3")
+    (fixedColor "^desktop_old .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#3F007D")
+    (fixedColor "^desktop_old .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#9E9AC8")
+    (fixedColor "^desktop_old .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#DADAEB")
+    (fixedColor "^laptop( .*)?$" "#D94801")
+    (fixedColor "^laptop .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#7F2704")
+    (fixedColor "^laptop .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#FD8D3C")
+    (fixedColor "^laptop .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#FDD0A2")
+    (fixedColor "^pi( .*)?$" "#238B45")
+    (fixedColor "^pi .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#00441B")
+    (fixedColor "^pi .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#74C476")
+    (fixedColor "^pi .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#C7E9C0")
   ];
 
   upMappings = [
@@ -565,6 +565,21 @@ let
     })
   ];
 
+  overviewMajorTemperatureTargets = [
+    (target {
+      expr = ''max by (instance) (avg_over_time(temp:major_celsius{instance=~"$host"}[2m]))'';
+      legend = "{{instance}} hottest";
+    })
+    (target {
+      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[2m])'';
+      legend = "{{instance}} CPU";
+    })
+    (target {
+      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="Box"}[2m])'';
+      legend = "{{instance}} case";
+    })
+  ];
+
   smoothedMajorTemperatureTargets = [
     (target {
       expr = ''max by (instance) (avg_over_time(avg1m:major_temp_celsius{instance=~"$host"}[$smooth]))'';
@@ -638,7 +653,7 @@ let
     title = "Overview";
     datasource = "prometheus";
     from = "now-30m";
-    refresh = "15s";
+    refresh = "5s";
     tags = [ "home" ];
     variables = [ (fleetHostVariable "prometheus") ];
     links = [
@@ -696,11 +711,11 @@ let
       })
       (ts {
         title = "Major temperatures";
-        description = "Only the hottest major sensor, CPU and case/enclosure temperature are shown.";
+        description = "Two-minute moving averages for the hottest major sensor, CPU and case/enclosure temperature.";
         w = 10;
         h = 7;
         unit = "celsius";
-        targets = majorTemperatureTargets;
+        targets = overviewMajorTemperatureTargets;
       })
       (stat {
         title = "Uptime";
