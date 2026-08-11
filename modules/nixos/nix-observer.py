@@ -364,14 +364,33 @@ def add_log_options(argv):
     return argv + options
 
 
+def spawns_interactive_shell(command, argv):
+    if command == "nix-shell":
+        return not {"--run", "--command", "-i"} & set(argv)
+    if command != "nix":
+        return False
+    words = [arg for arg in argv if not arg.startswith("-")]
+    return (
+        bool(words)
+        and words[0] in {"develop", "shell", "repl"}
+        and not {"--command", "-c"} & set(argv)
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--command", required=True)
     parser.add_argument("--real", required=True)
     options, forwarded = parser.parse_known_args()
     observer = Observer(options.command, forwarded)
-    command_args = add_log_options(forwarded) if observer.has_build_intent() else forwarded
+    interactive = spawns_interactive_shell(options.command, forwarded)
+    command_args = (
+        add_log_options(forwarded) if observer.has_build_intent() and not interactive else forwarded
+    )
     command = [options.real, *command_args]
+    # Must precede the sg wrap: skgid 700 would bypass the killswitch session-wide.
+    if interactive:
+        os.execv(command[0], command)
     if os.environ.get("NIX_OBSERVER_NOVPN") == "1" and Path("/run/wrappers/bin/sg").exists():
         command = ["/run/wrappers/bin/sg", "novpn", "-c", "exec " + shlex.join(command)]
     nom = None
