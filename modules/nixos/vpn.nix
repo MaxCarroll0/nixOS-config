@@ -168,7 +168,9 @@ in
         };
       };
 
-    networking.networkmanager.unmanaged = map (n: "interface-name:proton-${n}") vpnNames;
+    networking.networkmanager.unmanaged =
+      map (n: "interface-name:proton-${n}") vpnNames
+      ++ lib.optional config.services.tailscale.enable "interface-name:tailscale0";
 
     sops.secrets = lib.mapAttrs' (_: secret: lib.nameValuePair secret { }) cfg.configs;
 
