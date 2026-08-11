@@ -161,6 +161,10 @@ in
       "flakes"
     ];
 
+    services.journald.extraConfig = ''
+      Storage=persistent
+    '';
+
     nix.settings.connect-timeout = 5;
     # rebuild evaluates the flake again under sudo, and git refuses a repo owned
     # by another user.
