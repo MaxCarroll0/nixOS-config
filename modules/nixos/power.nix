@@ -653,6 +653,10 @@ in
         enable = true;
         listenAddress = "127.0.0.1";
         retentionTime = "30d";
+        globalConfig = {
+          scrape_interval = "5s";
+          scrape_timeout = "4s";
+        };
         scrapeConfigs = [
           {
             job_name = "node";
