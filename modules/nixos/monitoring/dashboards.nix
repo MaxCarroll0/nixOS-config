@@ -111,16 +111,42 @@ let
     graphMode = "area";
   };
 
+  gradientSeriesFor = args:
+    let
+      instancePrefix = "{{instance}}";
+      suffixFor = seriesTarget:
+        let
+          legend = seriesTarget.legendFormat or "";
+          suffix = lib.removePrefix "${instancePrefix} " legend;
+        in
+        if legend == instancePrefix then
+          ""
+        else if lib.hasPrefix "${instancePrefix} " legend && !lib.hasInfix "{{" suffix then
+          suffix
+        else
+          null;
+      inferred = map suffixFor (args.targets or [ ]);
+    in
+    if args ? gradientSeries then
+      args.gradientSeries
+    else if builtins.all (suffix: suffix != null) inferred then
+      inferred
+    else
+      [ ];
+
   ts =
     args:
+    let
+      panelArgs = builtins.removeAttrs args [ "gradientSeries" ];
+    in
     panel "timeseries" (
       {
         custom = lineCustom;
         options = legendOptions;
       }
-      // args
+      // panelArgs
       // {
-        overrides = hostGradientOverrides ++ (args.overrides or [ ]);
+        overrides = hostGradientOverrides (gradientSeriesFor args) ++ (args.overrides or [ ]);
       }
     );
   stat = args: panel "stat" ({ options = statOptions; } // args);
@@ -144,6 +170,9 @@ let
     );
   bar =
     args:
+    let
+      panelArgs = builtins.removeAttrs args [ "gradientSeries" ];
+    in
     panel "barchart" (
       {
         options = legendOptions // {
@@ -154,9 +183,9 @@ let
           lineWidth = 1;
         };
       }
-      // args
+      // panelArgs
       // {
-        overrides = hostGradientOverrides ++ (args.overrides or [ ]);
+        overrides = hostGradientOverrides (gradientSeriesFor args) ++ (args.overrides or [ ]);
       }
     );
   table = args: panel "table" args;
@@ -172,7 +201,17 @@ let
       }
       // args
     );
-  xy = args: panel "xychart" (args // { overrides = hostGradientOverrides ++ (args.overrides or [ ]); });
+  xy =
+    args:
+    let
+      panelArgs = builtins.removeAttrs args [ "gradientSeries" ];
+    in
+    panel "xychart" (
+      panelArgs
+      // {
+        overrides = hostGradientOverrides (gradientSeriesFor args) ++ (args.overrides or [ ]);
+      }
+    );
 
   status =
     args:
@@ -279,26 +318,107 @@ let
     ];
   };
 
-  # A stable hue identifies the host everywhere. Semantic suffixes select a shade
-  # within that hue, so related series remain grouped without becoming identical.
-  hostGradientOverrides = [
-    (fixedColor "^desktop_new( .*)?$" "#2171B5")
-    (fixedColor "^desktop_new .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#08306B")
-    (fixedColor "^desktop_new .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#6BAED6")
-    (fixedColor "^desktop_new .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#C6DBEF")
-    (fixedColor "^desktop_old( .*)?$" "#6A51A3")
-    (fixedColor "^desktop_old .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#3F007D")
-    (fixedColor "^desktop_old .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#9E9AC8")
-    (fixedColor "^desktop_old .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#DADAEB")
-    (fixedColor "^laptop( .*)?$" "#D94801")
-    (fixedColor "^laptop .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#7F2704")
-    (fixedColor "^laptop .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#FD8D3C")
-    (fixedColor "^laptop .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#FDD0A2")
-    (fixedColor "^pi( .*)?$" "#238B45")
-    (fixedColor "^pi .*(hottest|max|peak|total|sent|transmit|out|tx)( .*)?$" "#00441B")
-    (fixedColor "^pi .*(case|min|floor|received|receive|in|rx|GPU)( .*)?$" "#74C476")
-    (fixedColor "^pi .*(capacity|cache|baseline|loss|free|storage)( .*)?$" "#C7E9C0")
-  ];
+  hostColorScales = {
+    desktop_new = [
+      [ 8 48 107 ]
+      [ 8 81 156 ]
+      [ 33 113 181 ]
+      [ 66 146 198 ]
+      [ 107 174 214 ]
+      [ 158 202 225 ]
+      [ 198 219 239 ]
+      [ 222 235 247 ]
+      [ 247 251 255 ]
+    ];
+    desktop_old = [
+      [ 63 0 125 ]
+      [ 84 39 143 ]
+      [ 106 81 163 ]
+      [ 128 125 186 ]
+      [ 158 154 200 ]
+      [ 188 189 220 ]
+      [ 218 218 235 ]
+      [ 239 237 245 ]
+      [ 252 251 253 ]
+    ];
+    laptop = [
+      [ 127 39 4 ]
+      [ 166 54 3 ]
+      [ 217 72 1 ]
+      [ 241 105 19 ]
+      [ 253 141 60 ]
+      [ 253 174 107 ]
+      [ 253 208 162 ]
+      [ 254 230 206 ]
+      [ 255 245 235 ]
+    ];
+    pi = [
+      [ 0 68 27 ]
+      [ 0 109 44 ]
+      [ 35 139 69 ]
+      [ 65 171 93 ]
+      [ 116 196 118 ]
+      [ 161 217 155 ]
+      [ 199 233 192 ]
+      [ 229 245 224 ]
+      [ 247 252 245 ]
+    ];
+  };
+
+  hexDigits = lib.stringToCharacters "0123456789ABCDEF";
+
+  remainder = numerator: denominator:
+    numerator - builtins.div numerator denominator * denominator;
+
+  byteToHex = value:
+    "${lib.elemAt hexDigits (builtins.div value 16)}${lib.elemAt hexDigits (remainder value 16)}";
+
+  rgbToHex = rgb: "#${lib.concatMapStrings byteToHex rgb}";
+
+  roundedDivide = numerator: denominator:
+    if numerator < 0 then
+      0 - builtins.div (0 - numerator + builtins.div denominator 2) denominator
+    else
+      builtins.div (numerator + builtins.div denominator 2) denominator;
+
+  interpolatedColor = scale: count: index:
+    let
+      lastScaleIndex = builtins.length scale - 1;
+      denominator = count - 1;
+      position = index * lastScaleIndex;
+      leftIndex = builtins.div position denominator;
+      rightIndex = lib.min (leftIndex + 1) lastScaleIndex;
+      fraction = remainder position denominator;
+      left = lib.elemAt scale leftIndex;
+      right = lib.elemAt scale rightIndex;
+      rgb = lib.imap0 (
+        channel: value:
+        value + roundedDivide ((lib.elemAt right channel - value) * fraction) denominator
+      ) left;
+    in
+    rgbToHex rgb;
+
+  middleColor = scale: rgbToHex (lib.elemAt scale (builtins.div (builtins.length scale - 1) 2));
+
+  hostGradientOverrides = seriesSuffixes:
+    let
+      count = builtins.length seriesSuffixes;
+      baseOverrides = lib.mapAttrsToList (
+        host: scale: fixedColor "^${host}( .*)?$" (middleColor scale)
+      ) hostColorScales;
+      seriesOverrides = lib.concatLists (
+        lib.imap0 (
+          index: suffix:
+          lib.mapAttrsToList (
+            host: scale:
+            fixedColor "^${host}${lib.optionalString (suffix != "") " ${suffix}"}$" (
+              if count <= 1 then middleColor scale else interpolatedColor scale count index
+            )
+          ) hostColorScales
+        ) seriesSuffixes
+      );
+    in
+    baseOverrides ++ seriesOverrides;
 
   upMappings = [
     {
@@ -387,6 +507,32 @@ let
           "1h"
           "6h"
           "1d"
+        ];
+  };
+
+  overviewSmoothVariable = {
+    name = "smooth";
+    label = "Smoothing";
+    type = "interval";
+    auto = false;
+    query = "15s,30s,1m,2m,5m";
+    current = {
+      text = "2m";
+      value = "2m";
+    };
+    options =
+      map
+        (v: {
+          text = v;
+          value = v;
+          selected = v == "2m";
+        })
+        [
+          "15s"
+          "30s"
+          "1m"
+          "2m"
+          "5m"
         ];
   };
 
@@ -567,15 +713,15 @@ let
 
   overviewMajorTemperatureTargets = [
     (target {
-      expr = ''max by (instance) (avg_over_time(temp:major_celsius{instance=~"$host"}[2m]))'';
+      expr = ''max by (instance) (avg_over_time(temp:major_celsius{instance=~"$host"}[$smooth]))'';
       legend = "{{instance}} hottest";
     })
     (target {
-      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[2m])'';
+      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[$smooth])'';
       legend = "{{instance}} CPU";
     })
     (target {
-      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="Box"}[2m])'';
+      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="Box"}[$smooth])'';
       legend = "{{instance}} case";
     })
   ];
@@ -655,7 +801,10 @@ let
     from = "now-30m";
     refresh = "5s";
     tags = [ "home" ];
-    variables = [ (fleetHostVariable "prometheus") ];
+    variables = [
+      (fleetHostVariable "prometheus")
+      overviewSmoothVariable
+    ];
     links = [
       (dashboardLink "System live" "live-system")
       (dashboardLink "Power live" "live-power")
@@ -711,7 +860,7 @@ let
       })
       (ts {
         title = "Major temperatures";
-        description = "Two-minute moving averages for the hottest major sensor, CPU and case/enclosure temperature.";
+        description = "Configurable moving averages for the hottest major sensor, CPU and case/enclosure temperature.";
         w = 10;
         h = 7;
         unit = "celsius";
@@ -760,7 +909,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = ''cpu:utilisation{instance=~"$host"}'';
+            expr = ''avg_over_time(cpu:utilisation{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
         ];
@@ -772,7 +921,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = ''mem:used_ratio{instance=~"$host"}'';
+            expr = ''avg_over_time(mem:used_ratio{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
         ];
@@ -780,9 +929,13 @@ let
       (ts {
         title = "Network received";
         unit = "Bps";
+        gradientSeries = [
+          "VPN"
+          "Non-VPN"
+        ];
         targets = [
           (target {
-            expr = ''net:receive_bytes_by_transport{instance=~"$host"}'';
+            expr = ''avg_over_time(net:receive_bytes_by_transport{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{transport}}";
           })
         ];
@@ -790,9 +943,13 @@ let
       (ts {
         title = "Network sent";
         unit = "Bps";
+        gradientSeries = [
+          "VPN"
+          "Non-VPN"
+        ];
         targets = [
           (target {
-            expr = ''net:transmit_bytes_by_transport{instance=~"$host"}'';
+            expr = ''avg_over_time(net:transmit_bytes_by_transport{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{transport}}";
           })
         ];
@@ -1459,6 +1616,10 @@ let
       (ts {
         title = "Network received";
         unit = "Bps";
+        gradientSeries = [
+          "VPN"
+          "Non-VPN"
+        ];
         targets = [
           (target {
             expr = ''net:receive_bytes_by_transport{instance=~"$host"}'';
@@ -1469,6 +1630,10 @@ let
       (ts {
         title = "Network sent";
         unit = "Bps";
+        gradientSeries = [
+          "VPN"
+          "Non-VPN"
+        ];
         targets = [
           (target {
             expr = ''net:transmit_bytes_by_transport{instance=~"$host"}'';
@@ -1725,6 +1890,10 @@ let
         w = 12;
         h = 9;
         unit = "Bps";
+        gradientSeries = [
+          "VPN"
+          "Non-VPN"
+        ];
         targets = [
           (target {
             expr = ''avg_over_time(avg1m:net_receive_bytes_by_transport{instance=~"$host"}[$smooth])'';
@@ -1737,6 +1906,10 @@ let
         w = 12;
         h = 9;
         unit = "Bps";
+        gradientSeries = [
+          "VPN"
+          "Non-VPN"
+        ];
         targets = [
           (target {
             expr = ''avg_over_time(avg1m:net_transmit_bytes_by_transport{instance=~"$host"}[$smooth])'';
