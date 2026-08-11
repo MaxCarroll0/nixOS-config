@@ -373,30 +373,40 @@ def main():
     command = [options.real, *add_log_options(forwarded)]
     if os.environ.get("NIX_OBSERVER_NOVPN") == "1" and Path("/run/wrappers/bin/sg").exists():
         command = ["/run/wrappers/bin/sg", "novpn", "-c", "exec " + shlex.join(command)]
-    nom = subprocess.Popen(
-        [os.environ.get("NIX_OBSERVER_NOM", "nom"), "--json"],
-        stdin=subprocess.PIPE,
-        text=True,
-    )
+    nom = None
+    if observer.has_build_intent():
+        nom_environment = os.environ.copy()
+        real_nix = os.environ.get("NIX_OBSERVER_REAL_NIX", options.real)
+        nom_environment["PATH"] = str(Path(real_nix).parent) + os.pathsep + nom_environment.get("PATH", "")
+        nom = subprocess.Popen(
+            [os.environ.get("NIX_OBSERVER_NOM", "nom"), "--json"],
+            stdin=subprocess.PIPE,
+            text=True,
+            env=nom_environment,
+        )
     child = subprocess.Popen(command, stderr=subprocess.PIPE, text=True, bufsize=1)
     try:
         for line in child.stderr:
             observer.parse(line.rstrip("\n"))
-            try:
-                nom.stdin.write(line)
-                nom.stdin.flush()
-            except BrokenPipeError:
+            if nom:
+                try:
+                    nom.stdin.write(line)
+                    nom.stdin.flush()
+                except BrokenPipeError:
+                    sys.stderr.write(line)
+            else:
                 sys.stderr.write(line)
         exit_code = child.wait()
     except KeyboardInterrupt:
         child.send_signal(2)
         exit_code = child.wait()
     finally:
-        try:
-            nom.stdin.close()
-        except (BrokenPipeError, AttributeError):
-            pass
-        nom.wait()
+        if nom:
+            try:
+                nom.stdin.close()
+            except (BrokenPipeError, AttributeError):
+                pass
+            nom.wait()
     observer.finish(exit_code)
     return exit_code
 
