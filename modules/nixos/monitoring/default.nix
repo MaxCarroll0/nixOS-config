@@ -227,6 +227,12 @@ in
   };
 
   config = lib.mkMerge [
+    {
+      warnings = lib.optional (
+        cfg.exporter.enable && cfg.sensorNames == { }
+      ) "local.monitoring.exporter is enabled with no sensorNames, so hwmon graphs will show raw chip:sensor labels.";
+    }
+
     (lib.mkIf cfg.exporter.enable {
       services.prometheus.exporters.node = {
         enable = true;

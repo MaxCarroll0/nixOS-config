@@ -199,7 +199,8 @@
     {
       nixosConfigurations = {
         laptop = mkHost { module = ./hosts/laptop; };
-        desktop = mkHost { module = ./hosts/desktop; };
+        desktop_new = mkHost { module = ./hosts/desktop_new; };
+        desktop_old = mkHost { module = ./hosts/desktop_old; };
       }
       // lib.mapAttrs (_: module: mkPi { inherit module; }) piHosts
       // {
@@ -209,7 +210,8 @@
 
       homeConfigurations = {
         "max@laptop" = mkHome { module = ./home/laptop.nix; };
-        "max@desktop" = mkHome { module = ./home/desktop.nix; };
+        "max@desktop_new" = mkHome { module = ./home/desktop.nix; };
+        "max@desktop_old" = mkHome { module = ./home/desktop.nix; };
         "max@pi" = mkHome {
           module = ./home/pi.nix;
           system = "aarch64-linux";
@@ -228,7 +230,7 @@
 
         nodes = {
           laptop = mkNode "laptop" "100.112.109.20";
-          desktop = mkNode "desktop" "100.106.140.88";
+          desktop_new = mkNode "desktop_new" "100.106.140.88";
           pi = mkNode "pi" "100.117.13.66";
         };
       };

@@ -31,8 +31,8 @@
     pskSecret = "wifi-psk";
   };
 
-  local.wake.peers.desktop = {
-    mac = "70:85:c2:54:c6:89";
+  local.wake.peers.desktop_new = {
+    mac = "b4:2e:99:92:d6:18";
     broadcast = "192.168.200.255";
     address = "192.168.200.204";
     timeoutSeconds = 90;
@@ -58,7 +58,7 @@
 
   local.build.client = {
     enable = true;
-    builders = lib.genAttrs [ "laptop" "desktop" ] (_: {
+    builders = lib.genAttrs [ "laptop" "desktop_new" ] (_: {
       user = "max";
       port = 22;
       tailscaleSsh = true;

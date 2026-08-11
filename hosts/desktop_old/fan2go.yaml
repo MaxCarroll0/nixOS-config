@@ -1,0 +1,33 @@
+tempSensorPollingRate: 2s
+tempRollingWindowSize: 20
+
+sensors:
+  - id: cpu
+    hwmon:
+      platform: k10temp
+      index: 1
+
+curves:
+  - id: cpu_curve
+    linear:
+      sensor: cpu
+      steps:
+        - 29: 0%
+        - 35: 20%
+        - 45: 50%
+        - 55: 80%
+        - 63: 100%
+
+fans:
+  - id: cpu_pump
+    hwmon:
+      platform: it87
+      rpmChannel: 1
+      pwmChannel: 1
+    neverStop: true
+    curve: cpu_curve
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 5
+    minPwm: 20
+    startPwm: 40

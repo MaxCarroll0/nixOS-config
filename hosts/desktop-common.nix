@@ -1,27 +1,24 @@
-# AMD desktop: workstation plus remote builder, SSH host, and web origin.
+# Shared by every AMD desktop host: workstation, remote builder, SSH host, web origin.
 
 { lib, pkgs, ... }:
 
 {
   imports = [
-    ./hardware.nix
-    ../../modules/nixos/common.nix
-    ../../modules/nixos/desktop-env.nix
-    ../../modules/nixos/vpn.nix
-    ../../modules/nixos/wake.nix
-    ../../modules/nixos/power.nix
-    ../../modules/nixos/monitoring
-    ../../modules/nixos/fancontrol.nix
-    ../../modules/nixos/storage.nix
-    ../../modules/nixos/wifi.nix
-    ../../modules/nixos/server/ssh.nix
-    ../../modules/nixos/server/tailscale.nix
-    ../../modules/nixos/server/build-host.nix
-    ../../modules/nixos/server/web.nix
-    ../../modules/nixos/pam-ssh-agent-sudo.nix
+    ../modules/nixos/common.nix
+    ../modules/nixos/desktop-env.nix
+    ../modules/nixos/vpn.nix
+    ../modules/nixos/wake.nix
+    ../modules/nixos/power.nix
+    ../modules/nixos/monitoring
+    ../modules/nixos/fancontrol.nix
+    ../modules/nixos/storage.nix
+    ../modules/nixos/wifi.nix
+    ../modules/nixos/server/ssh.nix
+    ../modules/nixos/server/tailscale.nix
+    ../modules/nixos/server/build-host.nix
+    ../modules/nixos/server/web.nix
+    ../modules/nixos/pam-ssh-agent-sudo.nix
   ];
-
-  networking.hostName = "desktop";
 
   local.vpn = {
     configs.nl = "proton-wg-2";
@@ -39,11 +36,6 @@
     enable = true;
     port = 2222;
     allowUsers = [ "max" ];
-    lanInterfaces = [
-      "enp5s0"
-      "enp6s0"
-      "wlp5s0"
-    ];
   };
   local.server.tailscale = {
     enable = true;
@@ -51,7 +43,7 @@
     authKeySecret = "tailscale-auth-key";
   };
 
-  users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
+  users.users.max.openssh.authorizedKeys.keyFiles = [ ../keys/max.pub ];
 
   local.wifi = {
     ssid = "Gigaclear_FA8E";
@@ -76,7 +68,6 @@
     lazyMounts = { };
   };
 
-  # it87 can't probe this board's Super I/O chip and gigabyte_wmi has no pwm control; leave off until a fix turns up.
   local.fancontrol.enable = false;
 
   systemd.services.schedutil-rate-limit = {
@@ -118,12 +109,6 @@
       "amdgpu:pwm1" = "GPU fan duty";
       "nvme:temp1" = "NVMe";
       "acpitz:temp1" = "Ambient";
-      "gigabyte_wmi:temp1" = "System 1";
-      "gigabyte_wmi:temp2" = "Chipset";
-      "gigabyte_wmi:temp3" = "CPU socket";
-      "gigabyte_wmi:temp4" = "PCIe x16";
-      "gigabyte_wmi:temp5" = "VRM MOS";
-      "gigabyte_wmi:temp6" = "VSoC MOS";
     };
   };
 
@@ -137,9 +122,5 @@
       22
       2222
     ];
-    wakeOnLan = {
-      interface = "enp6s0";
-      mac = "70:85:c2:54:c6:89";
-    };
   };
 }
