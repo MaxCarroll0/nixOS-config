@@ -507,6 +507,36 @@ let
     options = [ ];
   };
 
+  majorTemperatureTargets = [
+    (target {
+      expr = ''max by (instance) (temp:major_celsius{instance=~"$host"})'';
+      legend = "{{instance}} hottest";
+    })
+    (target {
+      expr = ''temp:major_celsius{instance=~"$host",component="CPU"}'';
+      legend = "{{instance}} CPU";
+    })
+    (target {
+      expr = ''temp:major_celsius{instance=~"$host",component="Box"}'';
+      legend = "{{instance}} case";
+    })
+  ];
+
+  smoothedMajorTemperatureTargets = [
+    (target {
+      expr = ''max by (instance) (avg_over_time(avg1m:major_temp_celsius{instance=~"$host"}[$smooth]))'';
+      legend = "{{instance}} hottest";
+    })
+    (target {
+      expr = ''avg_over_time(avg1m:major_temp_celsius{instance=~"$host",component="CPU"}[$smooth])'';
+      legend = "{{instance}} CPU";
+    })
+    (target {
+      expr = ''avg_over_time(avg1m:major_temp_celsius{instance=~"$host",component="Box"}[$smooth])'';
+      legend = "{{instance}} case";
+    })
+  ];
+
   dashboard =
     {
       uid,
@@ -621,18 +651,13 @@ let
           })
         ];
       })
-      (stat {
+      (ts {
         title = "Major temperatures";
-        w = 5;
-        h = 5;
+        description = "Only the hottest major sensor, CPU and case/enclosure temperature are shown.";
+        w = 10;
+        h = 7;
         unit = "celsius";
-        targets = [
-          (target {
-            expr = ''temp:major_celsius{instance=~"$host"}'';
-            legend = "{{instance}} {{component}}";
-            instant = true;
-          })
-        ];
+        targets = majorTemperatureTargets;
       })
       (stat {
         title = "Uptime";
@@ -679,16 +704,6 @@ let
           (target {
             expr = ''cpu:utilisation{instance=~"$host"}'';
             legend = "{{instance}}";
-          })
-        ];
-      })
-      (ts {
-        title = "Major temperatures";
-        unit = "celsius";
-        targets = [
-          (target {
-            expr = ''temp:major_celsius{instance=~"$host"}'';
-            legend = "{{instance}} {{component}}";
           })
         ];
       })
@@ -1091,14 +1106,9 @@ let
       })
       (ts {
         title = "Major temperatures";
-        description = "The main CPU, GPU, storage and enclosure sensors only; use the selectable sensor panel below for everything else.";
+        description = "The hottest major sensor, CPU and case/enclosure temperature; use the selectable panel below for individual sensors.";
         unit = "celsius";
-        targets = [
-          (target {
-            expr = ''temp:major_celsius{instance=~"$host"}'';
-            legend = "{{instance}} {{component}}";
-          })
-        ];
+        targets = majorTemperatureTargets;
       })
       (ts {
         title = "Selected temperatures";
@@ -1424,12 +1434,7 @@ let
         w = 24;
         h = 9;
         unit = "celsius";
-        targets = [
-          (target {
-            expr = ''temp:major_celsius{instance=~"$host"}'';
-            legend = "{{instance}} {{component}}";
-          })
-        ];
+        targets = majorTemperatureTargets;
       })
     ];
   };
@@ -1551,12 +1556,7 @@ let
         w = 24;
         h = 9;
         unit = "celsius";
-        targets = [
-          (target {
-            expr = ''avg_over_time(avg1m:major_temp_celsius{instance=~"$host"}[$smooth])'';
-            legend = "{{instance}} {{component}}";
-          })
-        ];
+        targets = smoothedMajorTemperatureTargets;
       })
       (ts {
         title = "Temperature envelope";
@@ -2305,12 +2305,7 @@ let
         w = 24;
         h = 9;
         unit = "celsius";
-        targets = [
-          (target {
-            expr = ''avg_over_time(avg1m:major_temp_celsius{instance=~"$host"}[$smooth])'';
-            legend = "{{instance}} {{component}}";
-          })
-        ];
+        targets = smoothedMajorTemperatureTargets;
       })
     ];
   };
