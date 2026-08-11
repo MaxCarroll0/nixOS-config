@@ -149,6 +149,18 @@ let
         overrides = hostGradientOverrides (gradientSeriesFor args) ++ (args.overrides or [ ]);
       }
     );
+
+  smoothLiveTarget = seriesTarget:
+    seriesTarget // { expr = "avg_over_time((${seriesTarget.expr})[$smooth:])"; };
+
+  livePanels = map (
+    panel:
+    if lib.elem panel.type [ "timeseries" "status-history" ] then
+      panel // { targets = map smoothLiveTarget panel.targets; }
+    else
+      panel
+  );
+
   stat = args: panel "stat" ({ options = statOptions; } // args);
   barGauge =
     args:
@@ -476,57 +488,54 @@ let
       panels
     ).placed;
 
-  smoothVariable = {
-    name = "smooth";
-    label = "Smoothing";
-    type = "interval";
-    auto = false;
-    query = "5m,15m,1h,6h,1d";
-    current = {
-      text = "1h";
-      value = "1h";
+  mkSmoothVariable =
+    default: values:
+    {
+      name = "smooth";
+      label = "Smoothing";
+      type = "interval";
+      auto = false;
+      query = lib.concatStringsSep "," values;
+      current = {
+        text = default;
+        value = default;
+      };
+      options =
+        map
+          (v: {
+            text = v;
+            value = v;
+            selected = v == default;
+          })
+          values;
     };
-    options =
-      map
-        (v: {
-          text = v;
-          value = v;
-          selected = v == "1h";
-        })
-        [
-          "5m"
-          "15m"
-          "1h"
-          "6h"
-          "1d"
-        ];
-  };
 
-  overviewSmoothVariable = {
-    name = "smooth";
-    label = "Smoothing";
-    type = "interval";
-    auto = false;
-    query = "15s,30s,1m,2m,5m";
-    current = {
-      text = "2m";
-      value = "2m";
-    };
-    options =
-      map
-        (v: {
-          text = v;
-          value = v;
-          selected = v == "2m";
-        })
-        [
-          "15s"
-          "30s"
-          "1m"
-          "2m"
-          "5m"
-        ];
-  };
+  smoothVariable = mkSmoothVariable "1h" [
+    "5m"
+    "15m"
+    "1h"
+    "6h"
+    "1d"
+  ];
+
+  overviewSmoothVariable = mkSmoothVariable "2m" [
+    "1s"
+    "15s"
+    "30s"
+    "1m"
+    "2m"
+    "5m"
+  ];
+
+  liveSmoothVariable = mkSmoothVariable "1s" [
+    "1s"
+    "5s"
+    "15s"
+    "30s"
+    "1m"
+    "2m"
+    "5m"
+  ];
 
   hostVariable =
     datasource:
@@ -1180,8 +1189,6 @@ let
     ];
   };
 
-  # Live folder: raw 1-second series, nothing smoothed.
-
   livePower = dashboard {
     uid = "live-power";
     title = "Power and thermals (live)";
@@ -1192,12 +1199,13 @@ let
     variables = [
       (hostVariable "prometheus")
       (sensorVariable "prometheus")
+      liveSmoothVariable
     ];
     links = [
       (dashboardLink "System" "live-system")
       (dashboardLink "History" "history-power")
     ];
-    panels = [
+    panels = livePanels [
       (stat {
         title = "Total draw";
         w = 6;
@@ -1340,7 +1348,7 @@ let
       })
       (ts {
         title = "Temperature against fan speed";
-        description = "Fans on the right axis. At one-second resolution the lag between a temperature rise and the fan responding is visible directly.";
+        description = "Fans on the right axis. Use the Smoothing picker to make the lag between a temperature rise and the fan response easier to inspect.";
         w = 24;
         h = 9;
         unit = "celsius";
@@ -1406,12 +1414,15 @@ let
     from = "now-15m";
     refresh = "5s";
     tags = [ "live" ];
-    variables = [ (hostVariable "prometheus") ];
+    variables = [
+      (hostVariable "prometheus")
+      liveSmoothVariable
+    ];
     links = [
       (dashboardLink "Power and thermals" "live-power")
       (dashboardLink "History" "history-system")
     ];
-    panels = [
+    panels = livePanels [
       (ts {
         title = "CPU core utilisation envelope";
         unit = "percentunit";
