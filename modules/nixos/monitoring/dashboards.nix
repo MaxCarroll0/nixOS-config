@@ -2802,7 +2802,7 @@ let
         unit = "s";
         targets = [
           (target {
-            expr = ''avg(avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | kind=~"rebuild|home-rebuild" | project=~"$project" | unwrap duration_seconds [$__range]))'';
+            expr = ''avg(avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_rebuild" | project=~"$project" | unwrap duration_seconds [$__range]))'';
             instant = true;
           })
         ];
@@ -2946,7 +2946,7 @@ let
             maxDataPoints = 100;
           })
           (target {
-            expr = ''avg by (host) (avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | kind=~"rebuild|home-rebuild" | project=~"$project" | unwrap duration_seconds [1d]))'';
+            expr = ''avg by (host) (avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_rebuild" | project=~"$project" | unwrap duration_seconds [1d]))'';
             legend = "{{host}} full rebuild mean";
             interval = "1d";
             maxDataPoints = 100;

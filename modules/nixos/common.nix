@@ -17,11 +17,29 @@ let
       pkgs.git
       pkgs.coreutils
       pkgs.getent
+      pkgs.util-linux
     ];
     text = ''
       host="${config.networking.hostName}"
       flake="${flakePath}"
       opts=()
+      rebuildStarted=$SECONDS
+      rebuildKind=rebuild
+      rebuildTarget="$host"
+      rebuildAction=switch
+
+      logRebuildCompletion() {
+        rebuildExit=$?
+        trap - EXIT
+        if [ "$rebuildExit" -eq 0 ]; then
+          rebuildStatus=success
+        else
+          rebuildStatus=failed
+        fi
+        logger -t nix-observer-summary -- "{\"event\":\"nix_rebuild\",\"status\":\"$rebuildStatus\",\"exit_code\":$rebuildExit,\"duration_seconds\":$((SECONDS - rebuildStarted)),\"host\":\"$host\",\"project\":\"nix\",\"kind\":\"$rebuildKind\",\"target\":\"$rebuildTarget\",\"action\":\"$rebuildAction\",\"alert_eligible\":true}"
+        exit "$rebuildExit"
+      }
+      trap logRebuildCompletion EXIT
 
       target=""
       profile=""
@@ -45,6 +63,8 @@ let
 
       export NIX_OBSERVER_KIND=rebuild
       export NIX_OBSERVER_TARGET="''${target:-$host}"
+      rebuildTarget="$NIX_OBSERVER_TARGET"
+      rebuildAction="$action"
 
       untracked=$(git -C "$flake" ls-files --others --exclude-standard -- '*.nix' 'secrets/*' || true)
       if [ -n "$untracked" ]; then
@@ -77,9 +97,11 @@ let
           --skip-checks "$deployTarget" "''${deployOpts[@]}" "$@"
 
         if getent group novpn >/dev/null 2>&1; then
-          exec /run/wrappers/bin/sg novpn -c "$deployCmd"
+          /run/wrappers/bin/sg novpn -c "$deployCmd"
+          exit $?
         fi
-        exec ${pkgs.bash}/bin/bash -c "$deployCmd"
+        ${pkgs.bash}/bin/bash -c "$deployCmd"
+        exit $?
       fi
 
       case "$action" in
@@ -94,14 +116,15 @@ let
       case "$action" in
         home)
           export NIX_OBSERVER_KIND=home-rebuild
-          exec home-manager switch --flake "$flake#max@$host" "''${opts[@]}" "$@" ;;
+          rebuildKind=home-rebuild
+          home-manager switch --flake "$flake#max@$host" "''${opts[@]}" "$@" ;;
         build|dry-build|repl)
-          exec nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
+          nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
         switch|boot|test|dry-activate)
           nixos-rebuild build --flake "$flake#$host" "''${opts[@]}" "$@"
           exec sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
         *)
-          exec sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
+          sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
       esac
     '';
   };
