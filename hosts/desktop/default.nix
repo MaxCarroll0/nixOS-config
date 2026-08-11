@@ -10,6 +10,7 @@
     ../../modules/nixos/vpn.nix
     ../../modules/nixos/wake.nix
     ../../modules/nixos/power.nix
+    ../../modules/nixos/monitoring
     ../../modules/nixos/fancontrol.nix
     ../../modules/nixos/storage.nix
     ../../modules/nixos/wifi.nix
@@ -82,30 +83,51 @@
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      ExecStart = "${
-        pkgs.writeShellScript "schedutil-rate-limit" ''
-          echo 50000 > /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us
-        ''
-      }";
+      ExecStart = "${pkgs.writeShellScript "schedutil-rate-limit" ''
+        echo 50000 > /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us
+      ''}";
     };
   };
 
-  services.prometheus.scrapeConfigs = [
-    {
-      job_name = "node-pi";
-      static_configs = [
-        {
-          targets = [ "100.117.13.66:9100" ];
-          labels.instance = "pi";
-        }
-      ];
-    }
-  ];
+  local.monitoring = {
+    exporter.enable = true;
+    server.enable = true;
+    grafana.enable = true;
+    userReadable = true;
+
+    targets = {
+      pi = "100.117.13.66:9100";
+      laptop = "100.112.109.20:9100";
+    };
+
+    totalPower = {
+      baselineWatts = 30;
+      psuEfficiency = 0.88;
+      tariffPencePerKwh = 25;
+    };
+
+    sensorNames = {
+      "k10temp:temp1" = "CPU Tctl";
+      "k10temp:temp3" = "CPU CCD1";
+      "k10temp:temp4" = "CPU CCD2";
+      "amdgpu:temp1" = "GPU edge";
+      "amdgpu:fan1" = "GPU fan";
+      "amdgpu:power1" = "GPU board power";
+      "amdgpu:in0" = "GPU core";
+      "amdgpu:pwm1" = "GPU fan duty";
+      "nvme:temp1" = "NVMe";
+      "acpitz:temp1" = "Ambient";
+      "gigabyte_wmi:temp1" = "System 1";
+      "gigabyte_wmi:temp2" = "Chipset";
+      "gigabyte_wmi:temp3" = "CPU socket";
+      "gigabyte_wmi:temp4" = "PCIe x16";
+      "gigabyte_wmi:temp5" = "VRM MOS";
+      "gigabyte_wmi:temp6" = "VSoC MOS";
+    };
+  };
 
   local.power = {
-    monitoring.enable = true;
-    monitoring.userReadable = true;
-    monitoring.grafana = true;
+    instrument = true;
     idle.optimise = true;
     idle.policy = "autosuspend";
     idle.autosuspend.idleMinutes = 30;

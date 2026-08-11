@@ -38,7 +38,7 @@ let
         else
           echo "no readable powercap domains." >&2
           echo "energy_uj is root-only since Linux 5.10; set" >&2
-          echo "local.power.monitoring.userReadable = true, or run this as root." >&2
+          echo "local.monitoring.userReadable = true, or run this as root." >&2
         fi
         exit 1
       fi
@@ -73,7 +73,7 @@ let
           --data-urlencode "start=$start" \
           --data-urlencode "end=$end" \
           --data-urlencode "step=60" \
-          http://127.0.0.1:9090/api/v1/query_range \
+          http://127.0.0.1:9091/api/v1/query_range \
           | jq -r '.data.result[0].values[]? | "\(.[0]) \(.[1])"' > "$report"; then
           echo "could not read historical $title data" >&2
           return
@@ -96,9 +96,9 @@ let
       EOF
       }
 
-      graph cpu-package "CPU package" "rate(node_rapl_package_joules_total[5m])"
-      graph cpu-cores "CPU cores" "rate(node_rapl_core_joules_total[5m])"
-      graph gpu "GPU" "node_hwmon_power_watt"
+      graph total "Total" "avg1m:pc_power_watts"
+      graph cpu "CPU" "avg1m:pc_cpu_power_watts"
+      graph gpu "GPU" "avg1m:pc_gpu_power_watts"
     '';
   };
 
@@ -112,9 +112,9 @@ let
     text = ''
       metric_query() {
         case "$1" in
-          cpu-package) echo 'rate(node_rapl_package_joules_total[5m])' ;;
-          cpu-cores) echo 'rate(node_rapl_core_joules_total[5m])' ;;
-          gpu) echo 'node_hwmon_power_watt' ;;
+          total) echo 'avg1m:pc_power_watts' ;;
+          cpu) echo 'avg1m:pc_cpu_power_watts' ;;
+          gpu) echo 'avg1m:pc_gpu_power_watts' ;;
         esac
       }
 
@@ -124,13 +124,13 @@ let
         range="$3"
         curl --fail --silent --show-error --get \
           --data-urlencode "query=''${agg}_over_time((''${query})[''${range}:1m])" \
-          http://127.0.0.1:9090/api/v1/query \
+          http://127.0.0.1:9091/api/v1/query \
           | jq -r '(.data.result[0].value[1] // "n/a") as $v
                    | if $v == "n/a" then $v else ($v | tonumber | (. * 100 | round) / 100 | tostring) end'
       }
 
       printf '%-12s %-6s %8s %8s %8s\n' metric range min avg max
-      for key in cpu-package cpu-cores gpu; do
+      for key in total cpu gpu; do
         query=$(metric_query "$key")
         for range in 24h 7d 30d; do
           min=$(stat min "$query" "$range")
@@ -282,17 +282,7 @@ in
 
 {
   options.local.power = {
-    monitoring.enable = lib.mkEnableOption "power and thermal metrics";
-
-    monitoring.grafana = lib.mkEnableOption "a local Grafana for the metrics";
-
-    # Linux 5.10 made these root-only over the PLATYPUS side channel; without
-    # this both power-report and the rapl collector see nothing.
-    monitoring.userReadable = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = "Relax RAPL energy counters to the powermon group.";
-    };
+    instrument = lib.mkEnableOption "below, powertop snapshots and the power CLI tools";
 
     idle.optimise = lib.mkOption {
       type = lib.types.bool;
@@ -577,33 +567,7 @@ in
       };
     })
 
-    # node_exporter runs as its own user, so it needs the group too.
-    (lib.mkIf cfg.monitoring.userReadable {
-      users.groups.powermon = { };
-      users.users.max.extraGroups = [ "powermon" ];
-
-      services.udev.extraRules = ''
-        SUBSYSTEM=="powercap", ACTION=="add", RUN+="${pkgs.coreutils}/bin/chgrp -R powermon /sys%p", RUN+="${pkgs.coreutils}/bin/chmod -R g=u /sys%p"
-      '';
-
-      systemd.services.powercap-permissions = {
-        description = "Allow the powermon group to read energy counters";
-        wantedBy = [ "multi-user.target" ];
-        after = [ "systemd-modules-load.service" ];
-        serviceConfig.Type = "oneshot";
-        script = ''
-          for energy in /sys/class/powercap/*/energy_uj; do
-            [ -e "$energy" ] || continue
-            chgrp powermon "$energy"
-            chmod g+r "$energy"
-          done
-        '';
-      };
-
-      systemd.services.prometheus-node-exporter.serviceConfig.SupplementaryGroups = [ "powermon" ];
-    })
-
-    (lib.mkIf cfg.monitoring.enable {
+    (lib.mkIf cfg.instrument {
       services.below = {
         enable = true;
         collect.ioStats = true;
@@ -633,92 +597,6 @@ in
       systemd.tmpfiles.rules = [
         "d /var/log/powertop 0750 root root 30d"
       ];
-
-      services.prometheus.exporters.node = {
-        enable = true;
-        listenAddress = "0.0.0.0";
-        enabledCollectors = [
-          "hwmon"
-          "cpufreq"
-          "thermal_zone"
-        ]
-        ++ lib.optionals pkgs.stdenv.hostPlatform.isx86 [ "rapl" ];
-      };
-
-      networking.firewall.interfaces.tailscale0.allowedTCPPorts = [
-        config.services.prometheus.exporters.node.port
-      ];
-
-      services.prometheus = {
-        enable = true;
-        listenAddress = "127.0.0.1";
-        retentionTime = "30d";
-        globalConfig = {
-          scrape_interval = "5s";
-          scrape_timeout = "4s";
-        };
-        scrapeConfigs = [
-          {
-            job_name = "node";
-            static_configs = [
-              {
-                targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ];
-                labels.instance = config.networking.hostName;
-              }
-            ];
-          }
-        ];
-      };
-    })
-
-    (lib.mkIf (cfg.monitoring.enable && cfg.monitoring.grafana) {
-      sops.secrets."grafana-secret-key".owner = "grafana";
-      systemd.services.grafana = {
-        after = [ "sops-install-secrets.service" ];
-        wants = [ "sops-install-secrets.service" ];
-      };
-
-      networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 3000 ];
-
-      services.grafana = {
-        enable = true;
-        settings.server = {
-          http_addr = "0.0.0.0";
-          http_port = 3000;
-        };
-        settings.security.secret_key = "$__file{${config.sops.secrets."grafana-secret-key".path}}";
-        settings."auth.anonymous" = {
-          enabled = true;
-          org_role = "Admin";
-        };
-
-        provision.datasources.settings = {
-          apiVersion = 1;
-          datasources = [
-            {
-              name = "Prometheus";
-              uid = "prometheus";
-              type = "prometheus";
-              access = "proxy";
-              url = "http://127.0.0.1:${toString config.services.prometheus.port}";
-              isDefault = true;
-            }
-          ];
-        };
-
-        provision.dashboards.settings = {
-          apiVersion = 1;
-          providers = [
-            {
-              name = "power";
-              orgId = 1;
-              folder = "Power";
-              type = "file";
-              options.path = ./power-dashboards;
-            }
-          ];
-        };
-      };
     })
   ];
 }

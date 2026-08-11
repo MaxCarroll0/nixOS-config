@@ -9,6 +9,7 @@
     ../../modules/nixos/wifi.nix
     ../../modules/nixos/wake.nix
     ../../modules/nixos/power.nix
+    ../../modules/nixos/monitoring
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/net-watchdog.nix
@@ -67,9 +68,16 @@
     });
   };
 
+  local.monitoring = {
+    exporter.enable = true;
+    userReadable = true;
+    sensorNames = {
+      "cpu_thermal:temp1" = "SoC";
+    };
+  };
+
   local.power = {
-    monitoring.enable = true;
-    monitoring.userReadable = true;
+    instrument = true;
     idle.optimise = false;
   };
 

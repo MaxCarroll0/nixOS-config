@@ -9,6 +9,7 @@
     ../../modules/nixos/desktop-env.nix
     ../../modules/nixos/vpn.nix
     ../../modules/nixos/wake.nix
+    ../../modules/nixos/monitoring
     ../../modules/nixos/build-client.nix
     ../../modules/nixos/torrent.nix
     ../../modules/nixos/server/ssh.nix
@@ -20,6 +21,16 @@
   networking.hostName = "laptop";
 
   networking.hosts."100.106.140.88" = [ "desktop.grafana" ];
+
+  local.monitoring = {
+    exporter.enable = true;
+    userReadable = true;
+    sensorNames = {
+      "coretemp:temp1" = "CPU package";
+      "nvme:temp1" = "NVMe";
+      "acpitz:temp1" = "Ambient";
+    };
+  };
 
   local.vpn = {
     configs.uk = "proton-wg";
