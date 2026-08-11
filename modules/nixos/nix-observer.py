@@ -368,10 +368,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--command", required=True)
     parser.add_argument("--real", required=True)
-    parser.add_argument("args", nargs=argparse.REMAINDER)
-    options = parser.parse_args()
-    observer = Observer(options.command, options.args)
-    command = [options.real, *add_log_options(options.args)]
+    options, forwarded = parser.parse_known_args()
+    observer = Observer(options.command, forwarded)
+    command = [options.real, *add_log_options(forwarded)]
     if os.environ.get("NIX_OBSERVER_NOVPN") == "1" and Path("/run/wrappers/bin/sg").exists():
         command = ["/run/wrappers/bin/sg", "novpn", "-c", "exec " + shlex.join(command)]
     nom = subprocess.Popen(
