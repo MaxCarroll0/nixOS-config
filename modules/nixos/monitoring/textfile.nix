@@ -33,36 +33,47 @@ let
       '';
     };
 
-  sensorNames = writeCollector "sensor-names" [ pkgs.gnused ] ''
-    echo '# HELP node_sensor_name Friendly name for a hwmon sensor, keyed by chip name and sensor.'
-    echo '# TYPE node_sensor_name gauge'
-    for chip in /sys/class/hwmon/hwmon*; do
-      chip_name=$(cat "$chip/name" 2>/dev/null) || continue
-      for input in "$chip"/*_input; do
-        [ -e "$input" ] || continue
-        sensor=$(basename "$input" _input)
-        name=$(sed -n "s|^$chip_name:$sensor\t||p" ${sensorNameTable} | head -1)
-        if [ -z "$name" ] && [ -r "$chip/''${sensor}_label" ]; then
-          name=$(cat "$chip/''${sensor}_label")
-        fi
-        [ -n "$name" ] || name="$chip_name $sensor"
-        name=''${name//\\/}
-        name=''${name//\"/}
-        printf 'node_sensor_name{chip_name="%s",sensor="%s",name="%s"} 1\n' \
-          "$chip_name" "$sensor" "$name"
-      done
-    done
+  sensorNames =
+    writeCollector "sensor-names"
+      [
+        pkgs.gawk
+        pkgs.gnused
+      ]
+      ''
+        echo '# HELP node_sensor_name Friendly name for a hwmon sensor, keyed by chip name and sensor.'
+        echo '# TYPE node_sensor_name gauge'
+        for chip in /sys/class/hwmon/hwmon*; do
+          chip_name=$(cat "$chip/name" 2>/dev/null) || continue
+          for input in "$chip"/*_input; do
+            [ -e "$input" ] || continue
+            sensor=$(basename "$input" _input)
+            name=$(sed -n "s|^$chip_name:$sensor\t||p" ${sensorNameTable} | head -1)
+            if [ -z "$name" ] && [ -r "$chip/''${sensor}_label" ]; then
+              name=$(cat "$chip/''${sensor}_label")
+            fi
+            [ -n "$name" ] || name="$chip_name $sensor"
+            name=''${name//\\/}
+            name=''${name//\"/}
+            printf 'node_sensor_name{chip_name="%s",sensor="%s",name="%s"} 1\n' \
+              "$chip_name" "$sensor" "$name"
+          done
+        done
 
-    echo '# HELP pc_power_baseline_watts Modelled draw of parts with no telemetry.'
-    echo '# TYPE pc_power_baseline_watts gauge'
-    echo 'pc_power_baseline_watts ${toString cfg.totalPower.baselineWatts}'
-    echo '# HELP pc_power_psu_efficiency Assumed PSU conversion efficiency.'
-    echo '# TYPE pc_power_psu_efficiency gauge'
-    echo 'pc_power_psu_efficiency ${toString cfg.totalPower.psuEfficiency}'
-    echo '# HELP pc_power_tariff_gbp_per_kwh Electricity price used for cost panels.'
-    echo '# TYPE pc_power_tariff_gbp_per_kwh gauge'
-    echo 'pc_power_tariff_gbp_per_kwh ${toString (cfg.totalPower.tariffPencePerKwh / 100.0)}'
-  '';
+        echo '# HELP pc_power_baseline_watts Modelled draw of parts with no telemetry.'
+        echo '# TYPE pc_power_baseline_watts gauge'
+        echo 'pc_power_baseline_watts ${toString cfg.totalPower.baselineWatts}'
+        echo '# HELP pc_power_psu_efficiency Assumed PSU conversion efficiency.'
+        echo '# TYPE pc_power_psu_efficiency gauge'
+        echo 'pc_power_psu_efficiency ${toString cfg.totalPower.psuEfficiency}'
+        echo '# HELP pc_power_tariff_gbp_per_kwh Electricity price used for cost panels.'
+        echo '# TYPE pc_power_tariff_gbp_per_kwh gauge'
+        echo 'pc_power_tariff_gbp_per_kwh ${toString (cfg.totalPower.tariffPencePerKwh / 100.0)}'
+        memory_kib=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)
+        memory_gib=$(( (memory_kib + 524288) / 1048576 ))
+        echo '# HELP pc_memory_capacity_info Installed memory capacity group.'
+        echo '# TYPE pc_memory_capacity_info gauge'
+        printf 'pc_memory_capacity_info{capacity="%s GiB"} 1\n' "$memory_gib"
+      '';
 
   tailscaleMetrics =
     writeCollector "tailscale"

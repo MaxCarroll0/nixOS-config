@@ -96,7 +96,56 @@ let
     access = "proxy";
     url = "http://127.0.0.1:${toString port}";
     isDefault = uid == "prometheus-lt";
-    jsonData.timeInterval = if uid == "prometheus" then "1s" else "1m";
+    jsonData = {
+      timeInterval = if uid == "prometheus" then "1s" else "1m";
+      prometheusType = "Prometheus";
+    };
+  };
+
+  lokiDatasource = {
+    name = "Loki";
+    uid = "loki";
+    type = "loki";
+    access = "proxy";
+    url = "http://127.0.0.1:3100";
+    jsonData = {
+      manageAlerts = true;
+      maxLines = 5000;
+      derivedFields = [
+        {
+          name = "TraceID";
+          matcherRegex = ''"trace_id":"([0-9a-f]{32})"'';
+          datasourceUid = "tempo";
+          url = "\${__value.raw}";
+          urlDisplayLabel = "View build trace";
+        }
+      ];
+    };
+  };
+
+  tempoDatasource = {
+    name = "Tempo";
+    uid = "tempo";
+    type = "tempo";
+    access = "proxy";
+    url = "http://127.0.0.1:3200";
+    jsonData = {
+      nodeGraph.enabled = true;
+      search.hide = false;
+      streamingEnabled = {
+        search = true;
+        metrics = true;
+      };
+      tracesToLogsV2 = {
+        datasourceUid = "loki";
+        spanStartTimeShift = "-2s";
+        spanEndTimeShift = "2s";
+        filterByTraceID = true;
+        filterBySpanID = false;
+        customQuery = true;
+        query = ''{service_name=~"nix-observer.*"} | json | trace_id="''${__trace.traceId}"'';
+      };
+    };
   };
 
   dashboardDir =
@@ -118,7 +167,10 @@ let
 in
 
 {
-  imports = [ ./textfile.nix ];
+  imports = [
+    ./telemetry.nix
+    ./textfile.nix
+  ];
 
   options.local.monitoring = {
     exporter.enable = lib.mkEnableOption "node_exporter and its textfile collectors";
@@ -228,9 +280,9 @@ in
 
   config = lib.mkMerge [
     {
-      warnings = lib.optional (
-        cfg.exporter.enable && cfg.sensorNames == { }
-      ) "local.monitoring.exporter is enabled with no sensorNames, so hwmon graphs will show raw chip:sensor labels.";
+      warnings =
+        lib.optional (cfg.exporter.enable && cfg.sensorNames == { })
+          "local.monitoring.exporter is enabled with no sensorNames, so hwmon graphs will show raw chip:sensor labels.";
     }
 
     (lib.mkIf cfg.exporter.enable {
@@ -282,6 +334,7 @@ in
     (lib.mkIf cfg.server.enable {
       services.prometheus = {
         enable = true;
+        extraFlags = [ "--web.enable-remote-write-receiver" ];
         listenAddress = "127.0.0.1";
         retentionTime = cfg.retention.hires;
         globalConfig = {
@@ -358,11 +411,22 @@ in
 
       services.grafana = {
         enable = true;
+        declarativePlugins = [
+          pkgs.grafanaPlugins.grafana-exploretraces-app
+          pkgs.grafanaPlugins.grafana-lokiexplore-app
+          pkgs.grafanaPlugins.grafana-metricsdrilldown-app
+        ];
         settings.server = {
           http_addr = "0.0.0.0";
           http_port = 3000;
         };
+        settings.dashboards.default_home_dashboard_path = "${dashboardDir "overview"}/home.json";
         settings.security.secret_key = "$__file{${config.sops.secrets."grafana-secret-key".path}}";
+        settings."unified_alerting.state_history" = {
+          enabled = true;
+          backend = "loki";
+          loki_remote_url = "http://127.0.0.1:3100";
+        };
         settings."auth.anonymous" = {
           enabled = true;
           org_role = "Admin";
@@ -374,15 +438,19 @@ in
             (datasource "Prometheus (1s)" "prometheus" hiresPort)
             (datasource "Prometheus (1m)" "prometheus-lt" longtermPort)
             (datasource "Prometheus (1h)" "prometheus-archive" archivePort)
+            lokiDatasource
+            tempoDatasource
           ];
         };
 
         provision.dashboards.settings = {
           apiVersion = 1;
           providers = [
+            (dashboardProvider "overview" "Overview")
             (dashboardProvider "live" "Live")
             (dashboardProvider "history" "History")
             (dashboardProvider "archive" "Archive")
+            (dashboardProvider "observability" "Observability")
           ];
         };
 

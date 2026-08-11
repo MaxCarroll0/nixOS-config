@@ -79,6 +79,7 @@
   local.monitoring = {
     exporter.enable = true;
     userReadable = true;
+    telemetry.collector.enable = true;
     sensorNames = {
       "cpu_thermal:temp1" = "SoC";
     };

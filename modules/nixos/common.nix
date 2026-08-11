@@ -43,6 +43,9 @@ let
       action="''${1:-switch}"
       [ $# -gt 0 ] && shift
 
+      export NIX_OBSERVER_KIND=rebuild
+      export NIX_OBSERVER_TARGET="''${target:-$host}"
+
       untracked=$(git -C "$flake" ls-files --others --exclude-standard -- '*.nix' 'secrets/*' || true)
       if [ -n "$untracked" ]; then
         mapfile -t untrackedFiles <<< "$untracked"
@@ -90,6 +93,7 @@ let
 
       case "$action" in
         home)
+          export NIX_OBSERVER_KIND=home-rebuild
           exec home-manager switch --flake "$flake#max@$host" "''${opts[@]}" "$@" ;;
         build|dry-build|repl)
           exec nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
@@ -126,6 +130,8 @@ let
 in
 
 {
+  imports = [ ./nix-observer.nix ];
+
   options.local.users.sopsPasswords = lib.mkOption {
     type = lib.types.attrsOf lib.types.str;
     default = { };
@@ -167,6 +173,8 @@ in
       "nix-command"
       "flakes"
     ];
+
+    local.monitoring.nixBuilds.enable = true;
 
     services.journald.extraConfig = ''
       Storage=persistent

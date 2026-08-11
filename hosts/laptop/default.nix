@@ -25,6 +25,7 @@
   local.monitoring = {
     exporter.enable = true;
     userReadable = true;
+    telemetry.collector.enable = true;
     sensorNames = {
       "coretemp:temp1" = "CPU package";
       "nvme:temp1" = "NVMe";

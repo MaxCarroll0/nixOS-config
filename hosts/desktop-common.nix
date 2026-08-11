@@ -87,6 +87,11 @@
     grafana.enable = true;
     userReadable = true;
 
+    telemetry = {
+      collector.enable = true;
+      server.enable = true;
+    };
+
     targets = {
       pi = "100.117.13.66:9100";
       laptop = "100.112.109.20:9100";

@@ -14,36 +14,6 @@ let
     inherit pkgs;
     nixPackage = config.nix.package;
   };
-  nixClientCommands = [
-    "nix"
-    "nix-build"
-    "nix-channel"
-    "nix-collect-garbage"
-    "nix-copy-closure"
-    "nix-env"
-    "nix-hash"
-    "nix-instantiate"
-    "nix-prefetch-url"
-    "nix-shell"
-    "nix-store"
-  ];
-
-  # Nix drops any inherited setgid privilege at startup (getgid() !=
-  # getegid() triggers a defensive setresgid back to the real gid), so a
-  # plain setgid bit on these binaries is a no-op. Route through sg instead,
-  # which sets the *real* gid, so Nix has nothing to drop and the whole
-  # process tree it spawns (including an entered nix-shell and everything
-  # run inside it) keeps skgid 700.
-  novpnWrapper =
-    name: bin:
-    pkgs.writeShellApplication {
-      name = "${name}-novpn";
-      text = ''
-        args=$(printf '%q ' "$@")
-        exec /run/wrappers/bin/sg novpn -c "exec ${bin} $args"
-      '';
-    };
-
   unitTableName = unit: "novpn-" + lib.replaceStrings [ "." "@" "\\" ] [ "-" "-" "-" ] unit;
 
   bypassRules =
@@ -118,6 +88,13 @@ in
     description = "Interface suffix to sops secret, one set per host.";
   };
 
+  options.local.vpn.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = true;
+    readOnly = true;
+    description = "Whether the Proton split tunnel module is present.";
+  };
+
   options.local.vpn.bypassUnits = lib.mkOption {
     type = lib.types.listOf lib.types.str;
     default = [ ];
@@ -153,36 +130,6 @@ in
 
     environment.systemPackages = [ nixDaemonNovpn ];
 
-    security.wrappers =
-      lib.genAttrs nixClientCommands (command: {
-        source = "${novpnWrapper command "${config.nix.package}/bin/${command}"}/bin/${command}-novpn";
-        owner = "root";
-        group = "root";
-        permissions = "u+rx,g+rx,o+rx";
-      })
-      // {
-        nixos-rebuild = {
-          source = "${novpnWrapper "nixos-rebuild" "${pkgs.nixos-rebuild-ng}/bin/nixos-rebuild"}/bin/nixos-rebuild-novpn";
-          owner = "root";
-          group = "root";
-          permissions = "u+rx,g+rx,o+rx";
-        };
-        nh = {
-          source = "${novpnWrapper "nh" "${pkgs.nh}/bin/nh"}/bin/nh-novpn";
-          owner = "root";
-          group = "root";
-          permissions = "u+rx,g+rx,o+rx";
-        };
-        home-manager = {
-          source = "${novpnWrapper "home-manager" "${
-            inputs.home-manager.packages.${pkgs.stdenv.hostPlatform.system}.default
-          }/bin/home-manager"}/bin/home-manager-novpn";
-          owner = "root";
-          group = "root";
-          permissions = "u+rx,g+rx,o+rx";
-        };
-      };
-
     networking.networkmanager.unmanaged =
       map (n: "interface-name:proton-${n}") vpnNames
       ++ lib.optional config.services.tailscale.enable "interface-name:tailscale0";
@@ -197,21 +144,23 @@ in
       }
     ) cfg.configs;
 
-    systemd.services = lib.listToAttrs (map bypassService cfg.bypassUnits) // {
-      nix-daemon.serviceConfig.Group = "novpn";
-    }
-    // lib.optionalAttrs config.services.tailscale.enable {
-      tailscaled.serviceConfig.Group = "novpn";
-    }
-    // lib.optionalAttrs config.services.tailscale.enable (
-      lib.listToAttrs (map tailnetRouteService vpnNames)
-    )
-    // lib.mapAttrs' (
-      name: _:
-      lib.nameValuePair "wg-quick-proton-${name}" {
-        conflicts = map (o: "wg-quick-proton-${o}.service") (lib.remove name vpnNames);
+    systemd.services =
+      lib.listToAttrs (map bypassService cfg.bypassUnits)
+      // {
+        nix-daemon.serviceConfig.Group = "novpn";
       }
-    ) cfg.configs;
+      // lib.optionalAttrs config.services.tailscale.enable {
+        tailscaled.serviceConfig.Group = "novpn";
+      }
+      // lib.optionalAttrs config.services.tailscale.enable (
+        lib.listToAttrs (map tailnetRouteService vpnNames)
+      )
+      // lib.mapAttrs' (
+        name: _:
+        lib.nameValuePair "wg-quick-proton-${name}" {
+          conflicts = map (o: "wg-quick-proton-${o}.service") (lib.remove name vpnNames);
+        }
+      ) cfg.configs;
 
     assertions = [
       {
@@ -263,7 +212,9 @@ in
         chain postrouting {
           type nat hook postrouting priority srcnat; policy accept;
 
-          meta mark 0xca6c oifname != { "lo", ${lib.concatMapStringsSep ", " (n: "\"proton-${n}\"") vpnNames} } masquerade
+          meta mark 0xca6c oifname != { "lo", ${
+            lib.concatMapStringsSep ", " (n: "\"proton-${n}\"") vpnNames
+          } } masquerade
         }
       '';
     };

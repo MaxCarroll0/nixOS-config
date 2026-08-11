@@ -39,6 +39,11 @@ let
       min ? null,
       decimals ? null,
       transformations ? [ ],
+      links ? [ ],
+      repeat ? null,
+      repeatDirection ? null,
+      maxPerRow ? null,
+      datasource ? null,
     }:
     {
       inherit
@@ -48,6 +53,7 @@ let
         h
         options
         transformations
+        links
         ;
       targets = withRefIds targets;
       fieldConfig = {
@@ -61,6 +67,10 @@ let
         inherit overrides;
       };
     }
+    // lib.optionalAttrs (repeat != null) { inherit repeat; }
+    // lib.optionalAttrs (repeatDirection != null) { inherit repeatDirection; }
+    // lib.optionalAttrs (maxPerRow != null) { inherit maxPerRow; }
+    // lib.optionalAttrs (datasource != null) { inherit datasource; }
     // lib.optionalAttrs (description != null) { inherit description; };
 
   lineCustom = {
@@ -105,6 +115,24 @@ let
       // args
     );
   stat = args: panel "stat" ({ options = statOptions; } // args);
+  barGauge =
+    args:
+    panel "bargauge" (
+      {
+        options = {
+          displayMode = "gradient";
+          orientation = "horizontal";
+          reduceOptions = {
+            calcs = [ "lastNotNull" ];
+            fields = "";
+            values = false;
+          };
+          showUnfilled = true;
+          valueMode = "color";
+        };
+      }
+      // args
+    );
   bar =
     args:
     panel "barchart" (
@@ -132,6 +160,47 @@ let
       // args
     );
   xy = args: panel "xychart" args;
+
+  status =
+    args:
+    panel "status-history" (
+      {
+        options = {
+          showValue = "never";
+          rowHeight = 0.8;
+          colWidth = 0.9;
+          legend = {
+            displayMode = "hidden";
+            placement = "bottom";
+          };
+          tooltip.mode = "multi";
+        };
+        custom = {
+          fillOpacity = 90;
+          lineWidth = 0;
+        };
+      }
+      // args
+    );
+
+  alertList = args: panel "alertlist" args;
+  logs =
+    args:
+    panel "logs" (
+      {
+        options = {
+          showTime = true;
+          showLabels = true;
+          showCommonLabels = false;
+          wrapLogMessage = true;
+          prettifyLogMessage = false;
+          enableLogDetails = true;
+          dedupStrategy = "none";
+          sortOrder = "Descending";
+        };
+      }
+      // args
+    );
 
   rightAxis = pattern: {
     matcher = {
@@ -271,6 +340,165 @@ let
         ];
   };
 
+  hostVariable =
+    datasource:
+    let
+      metric =
+        if datasource == "prometheus" then
+          "host:up"
+        else if datasource == "prometheus-lt" then
+          "avg1m:up"
+        else
+          "avg1h:up";
+    in
+    {
+      name = "host";
+      label = "Host";
+      type = "query";
+      datasource = {
+        type = "prometheus";
+        uid = datasource;
+      };
+      query = {
+        query = "label_values(${metric}, instance)";
+        refId = "StandardVariableQuery";
+      };
+      definition = "label_values(${metric}, instance)";
+      refresh = 1;
+      sort = 1;
+      multi = true;
+      includeAll = true;
+      allValue = ".*";
+      current = {
+        text = "desktop_new";
+        value = [ "desktop_new" ];
+        selected = true;
+      };
+      options = [ ];
+    };
+
+  sensorVariable =
+    datasource:
+    let
+      metric =
+        if datasource == "prometheus" then
+          "sensor:temp_celsius"
+        else if datasource == "prometheus-lt" then
+          "avg1m:temp_celsius"
+        else
+          "avg1h:temp_celsius";
+    in
+    {
+      name = "sensor";
+      label = "Sensors";
+      type = "query";
+      datasource = {
+        type = "prometheus";
+        uid = datasource;
+      };
+      query = {
+        query = ''label_values(${metric}{instance=~"$host"}, name)'';
+        refId = "StandardVariableQuery";
+      };
+      definition = ''label_values(${metric}{instance=~"$host"}, name)'';
+      refresh = 1;
+      sort = 1;
+      multi = true;
+      includeAll = true;
+      allValue = ".*";
+      current = {
+        text = "All";
+        value = "$__all";
+        selected = true;
+      };
+      options = [ ];
+    };
+
+  capacityVariable =
+    datasource:
+    let
+      metric =
+        if datasource == "prometheus-archive" then "max1h:mem_capacity_info" else "max1m:mem_capacity_info";
+    in
+    {
+      name = "capacity";
+      label = "RAM capacity";
+      type = "query";
+      datasource = {
+        type = "prometheus";
+        uid = datasource;
+      };
+      query = {
+        query = "label_values(${metric}, capacity)";
+        refId = "StandardVariableQuery";
+      };
+      definition = "label_values(${metric}, capacity)";
+      refresh = 1;
+      sort = 3;
+      multi = true;
+      includeAll = true;
+      current = {
+        text = "All";
+        value = "$__all";
+        selected = true;
+      };
+      options = [ ];
+    };
+
+  fleetHostVariable =
+    datasource:
+    (hostVariable datasource)
+    // {
+      current = {
+        text = "All";
+        value = "$__all";
+        selected = true;
+      };
+    };
+
+  dashboardLink = title: uid: {
+    inherit title;
+    type = "link";
+    url = "/d/${uid}";
+    includeVars = true;
+    keepTime = true;
+    targetBlank = false;
+  };
+
+  textboxVariable = name: label: value: {
+    inherit name label;
+    type = "textbox";
+    query = value;
+    current = {
+      text = value;
+      inherit value;
+      selected = true;
+    };
+    options = [ ];
+  };
+
+  logHostVariable = {
+    name = "host";
+    label = "Host";
+    type = "query";
+    datasource = {
+      type = "loki";
+      uid = "loki";
+    };
+    query = ''label_values({source="journal"}, host)'';
+    definition = ''label_values({source="journal"}, host)'';
+    refresh = 1;
+    multi = true;
+    includeAll = true;
+    allValue = ".*";
+    current = {
+      text = "All";
+      value = "$__all";
+      selected = true;
+    };
+    options = [ ];
+  };
+
   dashboard =
     {
       uid,
@@ -281,18 +509,28 @@ let
       panels,
       variables ? [ ],
       tags ? [ ],
+      links ? [ ],
     }:
     let
       ds = {
-        type = "prometheus";
+        type =
+          if datasource == "loki" then
+            "loki"
+          else if datasource == "tempo" then
+            "tempo"
+          else
+            "prometheus";
         uid = datasource;
       };
       attach =
         p:
+        let
+          panelDatasource = p.datasource or ds;
+        in
         p
         // {
-          datasource = ds;
-          targets = map (t: t // { datasource = ds; }) (p.targets or [ ]);
+          datasource = panelDatasource;
+          targets = map (t: t // { datasource = t.datasource or panelDatasource; }) (p.targets or [ ]);
         };
     in
     {
@@ -301,6 +539,7 @@ let
         title
         refresh
         tags
+        links
         ;
       schemaVersion = 39;
       timezone = "browser";
@@ -313,6 +552,298 @@ let
       panels = lib.imap1 (i: p: attach (p // { id = i; })) (layout panels);
     };
 
+  overview = dashboard {
+    uid = "overview";
+    title = "Overview";
+    datasource = "prometheus";
+    from = "now-30m";
+    refresh = "5s";
+    tags = [ "home" ];
+    variables = [ (fleetHostVariable "prometheus") ];
+    links = [
+      (dashboardLink "System live" "live-system")
+      (dashboardLink "Power live" "live-power")
+      (dashboardLink "Fleet" "history-fleet")
+      (dashboardLink "Network" "history-network")
+      (dashboardLink "Alerts" "alerts")
+      (dashboardLink "Nix builds" "nix-builds")
+      (dashboardLink "Logs" "logs")
+      (dashboardLink "Energy history" "archive-energy")
+      (dashboardLink "Uptime history" "archive-uptime")
+    ];
+    panels = [
+      (stat {
+        title = "Nix builds (24h)";
+        w = 4;
+        h = 5;
+        datasource = {
+          type = "loki";
+          uid = "loki";
+        };
+        targets = [
+          (target {
+            expr = ''sum(count_over_time({service_name="nix-observer-summary"} | json | event="nix_build" [24h]))'';
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Failed rebuilds (24h)";
+        w = 4;
+        h = 5;
+        datasource = {
+          type = "loki";
+          uid = "loki";
+        };
+        targets = [
+          (target {
+            expr = ''sum(count_over_time({service_name="nix-observer-summary"} | json | event="nix_build" | status="failed" | alert_eligible="true" [24h]))'';
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Hosts up";
+        w = 4;
+        h = 5;
+        targets = [
+          (target {
+            expr = ''count(host:up{instance=~"$host"} == 1)'';
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "CPU utilisation";
+        w = 5;
+        h = 5;
+        unit = "percentunit";
+        min = 0;
+        max = 1;
+        targets = [
+          (target {
+            expr = ''cpu:utilisation{instance=~"$host"}'';
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Memory used";
+        w = 5;
+        h = 5;
+        unit = "percentunit";
+        min = 0;
+        max = 1;
+        targets = [
+          (target {
+            expr = ''mem:used_ratio{instance=~"$host"}'';
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Major temperature";
+        w = 5;
+        h = 5;
+        unit = "celsius";
+        targets = [
+          (target {
+            expr = ''max by (instance) (sensor:temp_celsius{instance=~"$host",name=~"CPU Tctl|CPU Tdie|CPU package|GPU edge|GPU junction|NVMe|Composite|Ambient|SoC"})'';
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Uptime";
+        w = 5;
+        h = 5;
+        unit = "s";
+        decimals = 1;
+        targets = [
+          (target {
+            expr = ''time() - max by (instance) (host:boot_time_seconds{instance=~"$host"})'';
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (alertList {
+        title = "Active alerts";
+        w = 24;
+        h = 7;
+        options = {
+          alertName = "";
+          dashboardAlerts = false;
+          groupBy = [ "severity" ];
+          groupMode = "custom";
+          maxItems = 20;
+          sortOrder = 1;
+          stateFilter = {
+            alerting = true;
+            error = true;
+            noData = true;
+            normal = false;
+            pending = true;
+            recovering = true;
+          };
+          viewMode = "list";
+        };
+      })
+      (ts {
+        title = "CPU utilisation";
+        unit = "percentunit";
+        min = 0;
+        max = 1;
+        targets = [
+          (target {
+            expr = ''cpu:utilisation{instance=~"$host"}'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Major temperatures";
+        unit = "celsius";
+        targets = [
+          (target {
+            expr = ''sensor:temp_celsius{instance=~"$host",name=~"CPU Tctl|CPU Tdie|CPU package|GPU edge|GPU junction|NVMe|Composite|Ambient|SoC"}'';
+            legend = "{{instance}} {{name}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Memory used";
+        unit = "percentunit";
+        min = 0;
+        max = 1;
+        targets = [
+          (target {
+            expr = ''mem:used_ratio{instance=~"$host"}'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Network throughput";
+        unit = "Bps";
+        targets = [
+          (target {
+            expr = ''sum by (instance) (net:receive_bytes{instance=~"$host"})'';
+            legend = "{{instance}} in";
+          })
+          (target {
+            expr = ''sum by (instance) (net:transmit_bytes{instance=~"$host"})'';
+            legend = "{{instance}} out";
+          })
+        ];
+      })
+    ];
+  };
+
+  alerts = dashboard {
+    uid = "alerts";
+    title = "Alerts and triage";
+    datasource = "prometheus-lt";
+    from = "now-7d";
+    refresh = "1m";
+    tags = [ "alerts" ];
+    variables = [ (fleetHostVariable "prometheus-lt") ];
+    links = [
+      {
+        title = "Open Grafana Alerting";
+        type = "link";
+        url = "/alerting/list";
+        targetBlank = false;
+      }
+      (dashboardLink "Overview" "overview")
+      (dashboardLink "Fleet" "history-fleet")
+    ];
+    panels = [
+      (alertList {
+        title = "Firing, pending and unhealthy rules";
+        w = 24;
+        h = 10;
+        options = {
+          alertName = "";
+          dashboardAlerts = false;
+          groupBy = [
+            "severity"
+            "instance"
+          ];
+          groupMode = "custom";
+          maxItems = 100;
+          sortOrder = 1;
+          stateFilter = {
+            alerting = true;
+            error = true;
+            noData = true;
+            normal = false;
+            pending = true;
+            recovering = true;
+          };
+          viewMode = "list";
+        };
+      })
+      (status {
+        title = "Alert activity";
+        description = "State changes are written by Grafana into Prometheus and retained through the one-minute and hourly tiers.";
+        w = 24;
+        h = 10;
+        targets = [
+          (target {
+            expr = ''max1m:grafana_alerts{alertstate=~"firing|pending"}'';
+            legend = "{{alertname}} — {{instance}}";
+          })
+        ];
+      })
+      (timeline {
+        title = "Host reachability";
+        mappings = upMappings;
+        targets = [
+          (target {
+            expr = ''avg1m:up{instance=~"$host"}'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Thermal context";
+        unit = "celsius";
+        targets = [
+          (target {
+            expr = ''max by (instance) (avg1m:temp_celsius{instance=~"$host",name=~"CPU Tctl|CPU Tdie|CPU package|GPU edge|GPU junction|NVMe|Composite|Ambient|SoC"})'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Filesystem headroom";
+        unit = "percentunit";
+        min = 0;
+        max = 1;
+        targets = [
+          (target {
+            expr = ''min1m:fs_free_ratio{instance=~"$host"}'';
+            legend = "{{instance}} {{mountpoint}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Failed systemd units";
+        decimals = 0;
+        targets = [
+          (target {
+            expr = ''max1m:systemd_failed_units{instance=~"$host"}'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+    ];
+  };
+
   # Live folder: raw 1-second series, nothing smoothed.
 
   livePower = dashboard {
@@ -322,6 +853,14 @@ let
     from = "now-15m";
     refresh = "1s";
     tags = [ "live" ];
+    variables = [
+      (hostVariable "prometheus")
+      (sensorVariable "prometheus")
+    ];
+    links = [
+      (dashboardLink "System" "live-system")
+      (dashboardLink "History" "history-power")
+    ];
     panels = [
       (stat {
         title = "Total draw";
@@ -331,7 +870,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "pc:power_watts";
+            expr = ''pc:power_watts{instance=~"$host"}'';
             legend = "{{instance}}";
           })
         ];
@@ -344,7 +883,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "pc:cpu_power_watts";
+            expr = ''pc:cpu_power_watts{instance=~"$host"}'';
             legend = "{{instance}}";
           })
         ];
@@ -357,7 +896,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "pc:gpu_power_watts";
+            expr = ''pc:gpu_power_watts{instance=~"$host"}'';
             legend = "{{instance}}";
           })
         ];
@@ -370,7 +909,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''max by (instance) (sensor:temp_celsius{name=~"CPU Tctl|CPU Tdie"})'';
+            expr = ''max by (instance) (sensor:temp_celsius{instance=~"$host",name=~"CPU Tctl|CPU Tdie|CPU package|SoC"})'';
             legend = "{{instance}}";
           })
         ];
@@ -390,25 +929,37 @@ let
         };
         targets = [
           (target {
-            expr = "pc:cpu_power_watts";
+            expr = ''pc:cpu_power_watts{instance=~"$host"}'';
             legend = "{{instance}} CPU";
           })
           (target {
-            expr = "pc:gpu_power_watts";
+            expr = ''pc:gpu_power_watts{instance=~"$host"}'';
             legend = "{{instance}} GPU";
           })
           (target {
-            expr = "pc:baseline_watts";
+            expr = ''pc:baseline_watts{instance=~"$host"}'';
             legend = "{{instance}} baseline";
           })
         ];
       })
       (ts {
-        title = "Temperatures";
+        title = "Major temperatures";
+        description = "The main CPU, GPU, storage and enclosure sensors only; use the selectable sensor panel below for everything else.";
         unit = "celsius";
         targets = [
           (target {
-            expr = "sensor:temp_celsius";
+            expr = ''sensor:temp_celsius{instance=~"$host",name=~"CPU Tctl|CPU Tdie|CPU package|GPU edge|GPU junction|NVMe|Composite|Ambient|SoC"}'';
+            legend = "{{instance}} {{name}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Selected temperatures";
+        description = "Use the Sensors picker above to keep only the entries you want; click a legend entry to isolate it temporarily.";
+        unit = "celsius";
+        targets = [
+          (target {
+            expr = ''sensor:temp_celsius{instance=~"$host",name=~"$sensor"}'';
             legend = "{{instance}} {{name}}";
           })
         ];
@@ -418,7 +969,7 @@ let
         unit = "rotrpm";
         targets = [
           (target {
-            expr = "sensor:fan_rpm";
+            expr = ''sensor:fan_rpm{instance=~"$host"}'';
             legend = "{{instance}} {{name}}";
           })
         ];
@@ -432,11 +983,11 @@ let
         overrides = [ (rightAxis ".*rpm.*") ];
         targets = [
           (target {
-            expr = "sensor:temp_celsius";
+            expr = ''sensor:temp_celsius{instance=~"$host",name=~"$sensor"}'';
             legend = "{{instance}} {{name}}";
           })
           (target {
-            expr = "sensor:fan_rpm";
+            expr = ''sensor:fan_rpm{instance=~"$host"}'';
             legend = "{{instance}} {{name}} rpm";
           })
         ];
@@ -446,7 +997,7 @@ let
         unit = "hertz";
         targets = [
           (target {
-            expr = "node_cpu_scaling_frequency_hertz";
+            expr = ''node_cpu_scaling_frequency_hertz{instance=~"$host"}'';
             legend = "{{instance}} cpu{{cpu}}";
           })
         ];
@@ -456,7 +1007,7 @@ let
         unit = "watt";
         targets = [
           (target {
-            expr = "sensor:power_watt";
+            expr = ''sensor:power_watt{instance=~"$host"}'';
             legend = "{{instance}} {{name}}";
           })
         ];
@@ -467,7 +1018,7 @@ let
         unit = "volt";
         targets = [
           (target {
-            expr = "sensor:volts";
+            expr = ''sensor:volts{instance=~"$host"}'';
             legend = "{{instance}} {{name}}";
           })
         ];
@@ -479,7 +1030,7 @@ let
         min = 0;
         targets = [
           (target {
-            expr = "sensor:pwm_percent";
+            expr = ''sensor:pwm_percent{instance=~"$host"}'';
             legend = "{{instance}} {{name}}";
           })
         ];
@@ -494,6 +1045,11 @@ let
     from = "now-15m";
     refresh = "1s";
     tags = [ "live" ];
+    variables = [ (hostVariable "prometheus") ];
+    links = [
+      (dashboardLink "Power and thermals" "live-power")
+      (dashboardLink "History" "history-system")
+    ];
     panels = [
       (ts {
         title = "CPU utilisation";
@@ -502,19 +1058,22 @@ let
         min = 0;
         targets = [
           (target {
-            expr = "cpu:utilisation";
+            expr = ''cpu:utilisation{instance=~"$host"}'';
             legend = "{{instance}}";
           })
         ];
       })
-      (ts {
-        title = "CPU utilisation per core";
+      (status {
+        title = "CPU core heatmap";
+        description = "One row per logical core. Colour shows utilisation over time without trying to draw every core as an overlapping line.";
+        w = 24;
+        h = 10;
         unit = "percentunit";
         max = 1;
         min = 0;
         targets = [
           (target {
-            expr = ''1 - rate(node_cpu_seconds_total{mode="idle"}[5s])'';
+            expr = ''1 - rate(node_cpu_seconds_total{instance=~"$host",mode="idle"}[5s])'';
             legend = "{{instance}} cpu{{cpu}}";
           })
         ];
@@ -527,7 +1086,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "mem:total_bytes";
+            expr = ''mem:total_bytes{instance=~"$host"}'';
             legend = "{{instance}}";
           })
         ];
@@ -541,7 +1100,7 @@ let
         min = 0;
         targets = [
           (target {
-            expr = "mem:used_ratio";
+            expr = ''mem:used_ratio{instance=~"$host"}'';
             legend = "{{instance}}";
           })
         ];
@@ -556,15 +1115,15 @@ let
         overrides = [ (dimmed ".*(capacity|cache)$") ];
         targets = [
           (target {
-            expr = "mem:used_bytes";
+            expr = ''mem:used_bytes{instance=~"$host"}'';
             legend = "{{instance}} used";
           })
           (target {
-            expr = "mem:cached_bytes";
+            expr = ''mem:cached_bytes{instance=~"$host"}'';
             legend = "{{instance}} cache";
           })
           (target {
-            expr = "mem:total_bytes";
+            expr = ''mem:total_bytes{instance=~"$host"}'';
             legend = "{{instance}} capacity";
           })
         ];
@@ -575,7 +1134,7 @@ let
         min = 0;
         targets = [
           (target {
-            expr = "mem:swap_used_bytes";
+            expr = ''mem:swap_used_bytes{instance=~"$host"}'';
             legend = "{{instance}}";
           })
         ];
@@ -586,15 +1145,15 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = "psi:cpu_waiting";
+            expr = ''psi:cpu_waiting{instance=~"$host"}'';
             legend = "{{instance}} cpu";
           })
           (target {
-            expr = "psi:io_stalled";
+            expr = ''psi:io_stalled{instance=~"$host"}'';
             legend = "{{instance}} io";
           })
           (target {
-            expr = "psi:memory_stalled";
+            expr = ''psi:memory_stalled{instance=~"$host"}'';
             legend = "{{instance}} memory";
           })
         ];
@@ -604,11 +1163,11 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = "disk:read_bytes";
+            expr = ''disk:read_bytes{instance=~"$host"}'';
             legend = "{{instance}} {{device}} read";
           })
           (target {
-            expr = "disk:written_bytes";
+            expr = ''disk:written_bytes{instance=~"$host"}'';
             legend = "{{instance}} {{device}} write";
           })
         ];
@@ -618,7 +1177,7 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = "disk:io_time";
+            expr = ''disk:io_time{instance=~"$host"}'';
             legend = "{{instance}} {{device}}";
           })
         ];
@@ -628,11 +1187,11 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = "net:receive_bytes";
+            expr = ''net:receive_bytes{instance=~"$host"}'';
             legend = "{{instance}} {{device}} in";
           })
           (target {
-            expr = "net:transmit_bytes";
+            expr = ''net:transmit_bytes{instance=~"$host"}'';
             legend = "{{instance}} {{device}} out";
           })
         ];
@@ -641,8 +1200,21 @@ let
         title = "Load average";
         targets = [
           (target {
-            expr = "load:load1";
+            expr = ''load:load1{instance=~"$host"}'';
             legend = "{{instance}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Major temperatures";
+        description = "Thermals alongside utilisation make load, throttling and cooling response easy to correlate.";
+        w = 24;
+        h = 9;
+        unit = "celsius";
+        targets = [
+          (target {
+            expr = ''sensor:temp_celsius{instance=~"$host",name=~"CPU Tctl|CPU Tdie|CPU package|GPU edge|GPU junction|NVMe|Composite|Ambient|SoC"}'';
+            legend = "{{instance}} {{name}}";
           })
         ];
       })
@@ -658,7 +1230,16 @@ let
     from = "now-7d";
     refresh = "1m";
     tags = [ "history" ];
-    variables = [ smoothVariable ];
+    variables = [
+      (hostVariable "prometheus-lt")
+      (sensorVariable "prometheus-lt")
+      smoothVariable
+    ];
+    links = [
+      (dashboardLink "Live" "live-power")
+      (dashboardLink "System" "history-system")
+      (dashboardLink "Thermal archive" "archive-thermal")
+    ];
     panels = [
       (stat {
         title = "Mean draw";
@@ -668,7 +1249,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:pc_power_watts[$__range])";
+            expr = ''avg_over_time(avg1m:pc_power_watts{instance=~"$host"}[$__range])'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -682,7 +1263,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "max_over_time(max1m:pc_power_watts[$__range])";
+            expr = ''max_over_time(max1m:pc_power_watts{instance=~"$host"}[$__range])'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -696,7 +1277,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = "sum_over_time(avg1m:pc_power_watts[$__range]) / 60 / 1000";
+            expr = ''sum_over_time(avg1m:pc_power_watts{instance=~"$host"}[$__range]) / 60 / 1000'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -710,7 +1291,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = "sum_over_time(avg1m:pc_power_watts[$__range]) / 60 / 1000 * on(instance) group_left() max1m:tariff_gbp_per_kwh";
+            expr = ''sum_over_time(avg1m:pc_power_watts{instance=~"$host"}[$__range]) / 60 / 1000 * on(instance) group_left() max1m:tariff_gbp_per_kwh{instance=~"$host"}'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -725,15 +1306,15 @@ let
         overrides = [ (dimmed ".*(peak|floor)$") ];
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:pc_power_watts[$smooth])";
+            expr = ''avg_over_time(avg1m:pc_power_watts{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
           (target {
-            expr = "max_over_time(max1m:pc_power_watts[$smooth])";
+            expr = ''max_over_time(max1m:pc_power_watts{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} peak";
           })
           (target {
-            expr = "min_over_time(min1m:pc_power_watts[$smooth])";
+            expr = ''min_over_time(min1m:pc_power_watts{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} floor";
           })
         ];
@@ -743,27 +1324,32 @@ let
         unit = "watt";
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:pc_cpu_power_watts[$smooth])";
+            expr = ''avg_over_time(avg1m:pc_cpu_power_watts{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} CPU";
           })
           (target {
-            expr = "avg_over_time(avg1m:pc_gpu_power_watts[$smooth])";
+            expr = ''avg_over_time(avg1m:pc_gpu_power_watts{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} GPU";
           })
         ];
       })
       (ts {
-        title = "Temperatures";
+        title = "Temperature envelope";
+        description = "For one or two selected sensors this acts as a sausage plot: the solid mean sits between the true minimum and maximum for each smoothing window.";
         unit = "celsius";
-        overrides = [ (dimmed ".*peak$") ];
+        overrides = [ (dimmed ".*(peak|floor)$") ];
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:temp_celsius[$smooth])";
+            expr = ''avg_over_time(avg1m:temp_celsius{instance=~"$host",name=~"$sensor"}[$smooth])'';
             legend = "{{instance}} {{name}}";
           })
           (target {
-            expr = "max_over_time(max1m:temp_celsius[$smooth])";
+            expr = ''max_over_time(max1m:temp_celsius{instance=~"$host",name=~"$sensor"}[$smooth])'';
             legend = "{{instance}} {{name}} peak";
+          })
+          (target {
+            expr = ''min_over_time(min1m:temp_celsius{instance=~"$host",name=~"$sensor"}[$smooth])'';
+            legend = "{{instance}} {{name}} floor";
           })
         ];
       })
@@ -775,11 +1361,11 @@ let
         overrides = [ (rightAxis ".*rpm.*") ];
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:temp_celsius[$smooth])";
+            expr = ''avg_over_time(avg1m:temp_celsius{instance=~"$host",name=~"$sensor"}[$smooth])'';
             legend = "{{instance}} {{name}}";
           })
           (target {
-            expr = "avg_over_time(avg1m:fan_rpm[$smooth])";
+            expr = ''avg_over_time(avg1m:fan_rpm{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{name}} rpm";
           })
         ];
@@ -799,11 +1385,11 @@ let
         ];
         targets = [
           (target {
-            expr = "max by (instance) (avg_over_time(avg1m:fan_rpm[$smooth]))";
+            expr = ''max by (instance) (avg_over_time(avg1m:fan_rpm{instance=~"$host"}[$smooth]))'';
             legend = "{{instance}} fan";
           })
           (target {
-            expr = "max by (instance) (avg_over_time(avg1m:temp_celsius[$smooth]))";
+            expr = ''max by (instance) (avg_over_time(avg1m:temp_celsius{instance=~"$host",name=~"$sensor"}[$smooth]))'';
             legend = "{{instance}} temp";
           })
         ];
@@ -827,7 +1413,7 @@ let
         ];
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:temp_celsius[$smooth])";
+            expr = ''avg_over_time(avg1m:temp_celsius{instance=~"$host",name=~"$sensor"}[$smooth])'';
             legend = "{{instance}} {{name}}";
           })
         ];
@@ -842,7 +1428,14 @@ let
     from = "now-7d";
     refresh = "1m";
     tags = [ "history" ];
-    variables = [ smoothVariable ];
+    variables = [
+      (hostVariable "prometheus-lt")
+      smoothVariable
+    ];
+    links = [
+      (dashboardLink "Fleet" "history-fleet")
+      (dashboardLink "System" "history-system")
+    ];
     panels = [
       (ts {
         title = "Interface throughput";
@@ -851,12 +1444,26 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:net_receive_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:net_receive_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{device}} in";
           })
           (target {
-            expr = "avg_over_time(avg1m:net_transmit_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:net_transmit_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{device}} out";
+          })
+        ];
+      })
+      (status {
+        title = "Traffic between hosts";
+        description = "A heatmap-like matrix over time: each row is a source → destination tailnet pair and colour is throughput. This is total peer traffic; protocol-level splits such as SSH need flow telemetry that node_exporter and Tailscale do not expose.";
+        w = 24;
+        h = 11;
+        unit = "Bps";
+        min = 0;
+        targets = [
+          (target {
+            expr = "avg_over_time(avg1m:ts_peer_tx_bytes[$smooth])";
+            legend = "{{instance}} → {{peer}}";
           })
         ];
       })
@@ -894,7 +1501,7 @@ let
         ];
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:ts_peer_tx_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:ts_peer_tx_bytes{instance=~"$host"}[$smooth])'';
             format = "table";
             instant = true;
           })
@@ -907,11 +1514,11 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:ts_peer_tx_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:ts_peer_tx_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} to {{peer}}";
           })
           (target {
-            expr = "avg_over_time(avg1m:ts_peer_rx_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:ts_peer_rx_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} from {{peer}}";
           })
         ];
@@ -922,7 +1529,7 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:ts_path_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:ts_path_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{path}}";
           })
         ];
@@ -932,7 +1539,7 @@ let
         mappings = directMappings;
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:ts_peer_direct[$smooth])";
+            expr = ''avg_over_time(avg1m:ts_peer_direct{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} to {{peer}}";
           })
         ];
@@ -942,15 +1549,15 @@ let
         unit = "pps";
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:net_receive_errors[$smooth])";
+            expr = ''avg_over_time(avg1m:net_receive_errors{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{device}} rx errors";
           })
           (target {
-            expr = "avg_over_time(avg1m:net_transmit_errors[$smooth])";
+            expr = ''avg_over_time(avg1m:net_transmit_errors{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{device}} tx errors";
           })
           (target {
-            expr = "avg_over_time(avg1m:net_receive_drops[$smooth])";
+            expr = ''avg_over_time(avg1m:net_receive_drops{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{device}} drops";
           })
         ];
@@ -961,7 +1568,7 @@ let
         unit = "s";
         targets = [
           (target {
-            expr = "max_over_time(max1m:wg_handshake_age_seconds[$smooth])";
+            expr = ''max_over_time(max1m:wg_handshake_age_seconds{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{interface}}";
           })
         ];
@@ -971,11 +1578,11 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:wg_rx_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:wg_rx_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{interface}} in";
           })
           (target {
-            expr = "avg_over_time(avg1m:wg_tx_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:wg_tx_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{interface}} out";
           })
         ];
@@ -990,7 +1597,15 @@ let
     from = "now-7d";
     refresh = "1m";
     tags = [ "history" ];
-    variables = [ smoothVariable ];
+    variables = [
+      (fleetHostVariable "prometheus-lt")
+      smoothVariable
+    ];
+    links = [
+      (dashboardLink "System" "history-system")
+      (dashboardLink "Network" "history-network")
+      (dashboardLink "Uptime archive" "archive-uptime")
+    ];
     panels = [
       (stat {
         title = "Hosts up";
@@ -1014,7 +1629,7 @@ let
           })
         ];
       })
-      (stat {
+      (barGauge {
         title = "Uptime";
         w = 12;
         h = 5;
@@ -1022,7 +1637,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = "time() - max by (instance) (max1m:boot_time_seconds)";
+            expr = ''time() - max by (instance) (max1m:boot_time_seconds{instance=~"$host"})'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1030,17 +1645,75 @@ let
       })
       (table {
         title = "Devices";
-        w = 12;
+        description = "Current tailnet inventory, ordered with offline devices first. Online state is colour-coded and handshake age highlights stale peers.";
+        w = 24;
         h = 9;
-        mappings = upMappings;
+        options = {
+          showHeader = true;
+          cellHeight = "sm";
+          footer.show = false;
+        };
+        overrides = [
+          {
+            matcher = {
+              id = "byName";
+              options = "Online";
+            };
+            properties = [
+              {
+                id = "mappings";
+                value = upMappings;
+              }
+              {
+                id = "custom.cellOptions";
+                value = {
+                  type = "color-background";
+                  mode = "basic";
+                };
+              }
+              {
+                id = "custom.width";
+                value = 100;
+              }
+            ];
+          }
+          {
+            matcher = {
+              id = "byName";
+              options = "Handshake age";
+            };
+            properties = [
+              {
+                id = "unit";
+                value = "s";
+              }
+              {
+                id = "custom.cellOptions";
+                value = {
+                  type = "gauge";
+                  mode = "gradient";
+                  valueDisplayMode = "text";
+                };
+              }
+            ];
+          }
+        ];
         transformations = [
+          {
+            id = "joinByField";
+            options = {
+              byField = "peer";
+              mode = "outer";
+            };
+          }
           {
             id = "organize";
             options.renameByName = {
               peer = "Device";
               peer_os = "OS";
               relay = "Relay";
-              Value = "Online";
+              "Value #A" = "Online";
+              "Value #B" = "Handshake age";
             };
             options.excludeByName = {
               Time = true;
@@ -1048,6 +1721,15 @@ let
               job = true;
               instance = true;
             };
+          }
+          {
+            id = "sortBy";
+            options.sort = [
+              {
+                field = "Online";
+                desc = false;
+              }
+            ];
           }
         ];
         targets = [
@@ -1056,31 +1738,6 @@ let
             format = "table";
             instant = true;
           })
-        ];
-      })
-      (table {
-        title = "Last handshake";
-        w = 12;
-        h = 9;
-        unit = "s";
-        transformations = [
-          {
-            id = "organize";
-            options.renameByName = {
-              peer = "Device";
-              Value = "Age";
-            };
-            options.excludeByName = {
-              Time = true;
-              __name__ = true;
-              job = true;
-              instance = true;
-              peer_os = true;
-              relay = true;
-            };
-          }
-        ];
-        targets = [
           (target {
             expr = "max by (peer) (max1m:ts_handshake_age_seconds)";
             format = "table";
@@ -1095,7 +1752,7 @@ let
         mappings = upMappings;
         targets = [
           (target {
-            expr = "avg1m:up";
+            expr = ''avg1m:up{instance=~"$host"}'';
             legend = "{{instance}}";
           })
         ];
@@ -1107,7 +1764,7 @@ let
         unit = "s";
         targets = [
           (target {
-            expr = "time() - max by (instance) (max1m:boot_time_seconds)";
+            expr = ''time() - max by (instance) (max1m:boot_time_seconds{instance=~"$host"})'';
             legend = "{{instance}}";
           })
         ];
@@ -1122,7 +1779,16 @@ let
     from = "now-7d";
     refresh = "1m";
     tags = [ "history" ];
-    variables = [ smoothVariable ];
+    variables = [
+      (hostVariable "prometheus-lt")
+      (capacityVariable "prometheus-lt")
+      smoothVariable
+    ];
+    links = [
+      (dashboardLink "Live" "live-system")
+      (dashboardLink "Power and thermals" "history-power")
+      (dashboardLink "Capacity archive" "archive-capacity")
+    ];
     panels = [
       (ts {
         title = "CPU utilisation";
@@ -1132,11 +1798,11 @@ let
         overrides = [ (dimmed ".*peak$") ];
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:cpu_utilisation[$smooth])";
+            expr = ''avg_over_time(avg1m:cpu_utilisation{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
           (target {
-            expr = "max_over_time(max1m:cpu_utilisation[$smooth])";
+            expr = ''max_over_time(max1m:cpu_utilisation{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} peak";
           })
         ];
@@ -1145,7 +1811,7 @@ let
         title = "Load average";
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:load1[$smooth])";
+            expr = ''avg_over_time(avg1m:load1{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
         ];
@@ -1158,7 +1824,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "max1m:mem_total_bytes";
+            expr = ''max1m:mem_total_bytes{instance=~"$host"}'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1171,7 +1837,7 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = "max_over_time(max1m:mem_used_ratio[$__range])";
+            expr = ''max_over_time(max1m:mem_used_ratio{instance=~"$host"}[$__range])'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1187,16 +1853,37 @@ let
         overrides = [ (dimmed ".*capacity$") ];
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:mem_used_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:mem_used_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} used";
           })
           (target {
-            expr = "max_over_time(max1m:mem_used_bytes[$smooth])";
+            expr = ''max_over_time(max1m:mem_used_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} peak";
           })
           (target {
-            expr = "max1m:mem_total_bytes";
+            expr = ''max1m:mem_total_bytes{instance=~"$host"}'';
             legend = "{{instance}} capacity";
+          })
+        ];
+      })
+      (ts {
+        title = "Memory — $capacity machines";
+        description = "Fleet comparison is grouped by installed capacity so the byte scale remains meaningful.";
+        w = 12;
+        h = 8;
+        unit = "bytes";
+        min = 0;
+        repeat = "capacity";
+        repeatDirection = "h";
+        maxPerRow = 2;
+        targets = [
+          (target {
+            expr = ''avg_over_time(avg1m:mem_used_bytes[$smooth]) * on(instance) group_left(capacity) max1m:mem_capacity_info{capacity="$capacity"}'';
+            legend = "{{instance}}";
+          })
+          (target {
+            expr = ''max_over_time(max1m:mem_used_bytes[$smooth]) * on(instance) group_left(capacity) max1m:mem_capacity_info{capacity="$capacity"}'';
+            legend = "{{instance}} peak";
           })
         ];
       })
@@ -1208,11 +1895,11 @@ let
         overrides = [ (dimmed ".*peak$") ];
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:mem_used_ratio[$smooth])";
+            expr = ''avg_over_time(avg1m:mem_used_ratio{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
           (target {
-            expr = "max_over_time(max1m:mem_used_ratio[$smooth])";
+            expr = ''max_over_time(max1m:mem_used_ratio{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} peak";
           })
         ];
@@ -1224,11 +1911,11 @@ let
         overrides = [ (dimmed ".*capacity$") ];
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:mem_swap_used_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:mem_swap_used_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
           (target {
-            expr = "max1m:mem_swap_total_bytes";
+            expr = ''max1m:mem_swap_total_bytes{instance=~"$host"}'';
             legend = "{{instance}} capacity";
           })
         ];
@@ -1238,15 +1925,15 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:psi_cpu_waiting[$smooth])";
+            expr = ''avg_over_time(avg1m:psi_cpu_waiting{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} cpu";
           })
           (target {
-            expr = "avg_over_time(avg1m:psi_io_stalled[$smooth])";
+            expr = ''avg_over_time(avg1m:psi_io_stalled{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} io";
           })
           (target {
-            expr = "avg_over_time(avg1m:psi_memory_stalled[$smooth])";
+            expr = ''avg_over_time(avg1m:psi_memory_stalled{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} memory";
           })
         ];
@@ -1256,11 +1943,11 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:disk_read_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:disk_read_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{device}} read";
           })
           (target {
-            expr = "avg_over_time(avg1m:disk_written_bytes[$smooth])";
+            expr = ''avg_over_time(avg1m:disk_written_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{device}} write";
           })
         ];
@@ -1271,7 +1958,7 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = "avg_over_time(avg1m:cpu_throttled_ratio[$smooth])";
+            expr = ''avg_over_time(avg1m:cpu_throttled_ratio{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
         ];
@@ -1283,7 +1970,7 @@ let
         min = 0;
         targets = [
           (target {
-            expr = "min_over_time(min1m:fs_free_ratio[$smooth])";
+            expr = ''min_over_time(min1m:fs_free_ratio{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{mountpoint}}";
           })
         ];
@@ -1295,7 +1982,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = "predict_linear(min1m:fs_avail_bytes[7d], 0) / -deriv(min1m:fs_avail_bytes[7d]) / 86400";
+            expr = ''predict_linear(min1m:fs_avail_bytes{instance=~"$host"}[7d], 0) / -deriv(min1m:fs_avail_bytes{instance=~"$host"}[7d]) / 86400'';
             legend = "{{instance}} {{mountpoint}}";
             instant = true;
           })
@@ -1306,7 +1993,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "max_over_time(max1m:systemd_failed_units[$smooth])";
+            expr = ''max_over_time(max1m:systemd_failed_units{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
         ];
@@ -1335,6 +2022,24 @@ let
           })
         ];
       })
+      (ts {
+        title = "Major temperatures";
+        description = "Use this beside CPU, memory and I/O charts to correlate workload with thermal response.";
+        w = 24;
+        h = 9;
+        unit = "celsius";
+        overrides = [ (dimmed ".*peak$") ];
+        targets = [
+          (target {
+            expr = ''avg_over_time(avg1m:temp_celsius{instance=~"$host",name=~"CPU Tctl|CPU Tdie|CPU package|GPU edge|GPU junction|NVMe|Composite|Ambient|SoC"}[$smooth])'';
+            legend = "{{instance}} {{name}}";
+          })
+          (target {
+            expr = ''max_over_time(max1m:temp_celsius{instance=~"$host",name=~"CPU Tctl|CPU Tdie|CPU package|GPU edge|GPU junction|NVMe|Composite|Ambient|SoC"}[$smooth])'';
+            legend = "{{instance}} {{name}} peak";
+          })
+        ];
+      })
     ];
   };
 
@@ -1347,6 +2052,11 @@ let
     from = "now-1y";
     refresh = "15m";
     tags = [ "archive" ];
+    variables = [ (fleetHostVariable "prometheus-archive") ];
+    links = [
+      (dashboardLink "Power history" "history-power")
+      (dashboardLink "Overview" "overview")
+    ];
     panels = [
       (stat {
         title = "Energy over range";
@@ -1356,7 +2066,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = "sum_over_time(avg1h:pc_power_watts[$__range]) / 1000";
+            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[$__range]) / 1000'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1370,7 +2080,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = "sum_over_time(avg1h:pc_power_watts[$__range]) / 1000 * on(instance) group_left() max1h:tariff_gbp_per_kwh";
+            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[$__range]) / 1000 * on(instance) group_left() max1h:tariff_gbp_per_kwh{instance=~"$host"}'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1384,7 +2094,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "avg_over_time(avg1h:pc_power_watts[$__range])";
+            expr = ''avg_over_time(avg1h:pc_power_watts{instance=~"$host"}[$__range])'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1399,7 +2109,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = "sum_over_time(avg1h:pc_power_watts[1d]) / 1000";
+            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[1d]) / 1000'';
             legend = "{{instance}}";
             interval = "1d";
           })
@@ -1413,7 +2123,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = "sum_over_time(avg1h:pc_power_watts[1d]) / 1000 * on(instance) group_left() max1h:tariff_gbp_per_kwh";
+            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[1d]) / 1000 * on(instance) group_left() max1h:tariff_gbp_per_kwh{instance=~"$host"}'';
             legend = "{{instance}}";
             interval = "1d";
           })
@@ -1427,7 +2137,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = "sum_over_time(avg1h:pc_power_watts[30d]) / 1000";
+            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[30d]) / 1000'';
             legend = "{{instance}}";
             interval = "30d";
           })
@@ -1441,12 +2151,12 @@ let
         overrides = [ (dimmed ".*peak$") ];
         targets = [
           (target {
-            expr = "avg_over_time(avg1h:pc_power_watts[1d])";
+            expr = ''avg_over_time(avg1h:pc_power_watts{instance=~"$host"}[1d])'';
             legend = "{{instance}}";
             interval = "1d";
           })
           (target {
-            expr = "max_over_time(max1h:pc_power_watts[1d])";
+            expr = ''max_over_time(max1h:pc_power_watts{instance=~"$host"}[1d])'';
             legend = "{{instance}} peak";
             interval = "1d";
           })
@@ -1462,6 +2172,11 @@ let
     from = "now-1y";
     refresh = "15m";
     tags = [ "archive" ];
+    variables = [ (fleetHostVariable "prometheus-archive") ];
+    links = [
+      (dashboardLink "Fleet" "history-fleet")
+      (dashboardLink "Overview" "overview")
+    ];
     panels = [
       (stat {
         title = "Availability over range";
@@ -1471,7 +2186,7 @@ let
         decimals = 4;
         targets = [
           (target {
-            expr = "avg_over_time(avg1h:up[$__range])";
+            expr = ''avg_over_time(avg1h:up{instance=~"$host"}[$__range])'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1485,7 +2200,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "(1 - avg_over_time(avg1h:up[$__range])) * $__range_s";
+            expr = ''(1 - avg_over_time(avg1h:up{instance=~"$host"}[$__range])) * $__range_s'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1502,7 +2217,7 @@ let
         decimals = 3;
         targets = [
           (target {
-            expr = "avg_over_time(avg1h:up[1d])";
+            expr = ''avg_over_time(avg1h:up{instance=~"$host"}[1d])'';
             legend = "{{instance}}";
             interval = "1d";
           })
@@ -1518,7 +2233,7 @@ let
         decimals = 4;
         targets = [
           (target {
-            expr = "avg_over_time(avg1h:up[30d])";
+            expr = ''avg_over_time(avg1h:up{instance=~"$host"}[30d])'';
             legend = "{{instance}}";
             interval = "30d";
           })
@@ -1531,7 +2246,7 @@ let
         mappings = upMappings;
         targets = [
           (target {
-            expr = "avg1h:up";
+            expr = ''avg1h:up{instance=~"$host"}'';
             legend = "{{instance}}";
           })
         ];
@@ -1546,6 +2261,11 @@ let
     from = "now-1y";
     refresh = "15m";
     tags = [ "archive" ];
+    variables = [ (capacityVariable "prometheus-archive") ];
+    links = [
+      (dashboardLink "System history" "history-system")
+      (dashboardLink "Overview" "overview")
+    ];
     panels = [
       (stat {
         title = "RAM installed";
@@ -1614,6 +2334,29 @@ let
           })
         ];
       })
+      (ts {
+        title = "Memory — $capacity machines";
+        description = "Long-range mean and peak are separated by installed capacity so machines with unlike RAM sizes do not share a misleading byte scale.";
+        w = 12;
+        h = 9;
+        unit = "bytes";
+        min = 0;
+        repeat = "capacity";
+        repeatDirection = "h";
+        maxPerRow = 2;
+        targets = [
+          (target {
+            expr = ''avg_over_time(avg1h:mem_used_bytes[1d]) * on(instance) group_left(capacity) max1h:mem_capacity_info{capacity="$capacity"}'';
+            legend = "{{instance}}";
+            interval = "1d";
+          })
+          (target {
+            expr = ''max_over_time(max1h:mem_used_bytes[1d]) * on(instance) group_left(capacity) max1h:mem_capacity_info{capacity="$capacity"}'';
+            legend = "{{instance}} peak";
+            interval = "1d";
+          })
+        ];
+      })
       (bar {
         title = "Peak memory use per day";
         w = 24;
@@ -1660,6 +2403,14 @@ let
     from = "now-1y";
     refresh = "15m";
     tags = [ "archive" ];
+    variables = [
+      (hostVariable "prometheus-archive")
+      (sensorVariable "prometheus-archive")
+    ];
+    links = [
+      (dashboardLink "Thermal history" "history-power")
+      (dashboardLink "Overview" "overview")
+    ];
     panels = [
       (ts {
         title = "Daily temperature envelope";
@@ -1670,17 +2421,17 @@ let
         overrides = [ (dimmed ".*(peak|floor)$") ];
         targets = [
           (target {
-            expr = "avg_over_time(avg1h:temp_celsius[1d])";
+            expr = ''avg_over_time(avg1h:temp_celsius{instance=~"$host",name=~"$sensor"}[1d])'';
             legend = "{{instance}} {{name}}";
             interval = "1d";
           })
           (target {
-            expr = "max_over_time(max1h:temp_celsius[1d])";
+            expr = ''max_over_time(max1h:temp_celsius{instance=~"$host",name=~"$sensor"}[1d])'';
             legend = "{{instance}} {{name}} peak";
             interval = "1d";
           })
           (target {
-            expr = "min_over_time(min1h:temp_celsius[1d])";
+            expr = ''min_over_time(min1h:temp_celsius{instance=~"$host",name=~"$sensor"}[1d])'';
             legend = "{{instance}} {{name}} floor";
             interval = "1d";
           })
@@ -1694,7 +2445,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "max_over_time(max1h:temp_celsius[1d])";
+            expr = ''max_over_time(max1h:temp_celsius{instance=~"$host",name=~"$sensor"}[1d])'';
             legend = "{{instance}} {{name}}";
             interval = "1d";
           })
@@ -1707,7 +2458,7 @@ let
         unit = "rotrpm";
         targets = [
           (target {
-            expr = "avg_over_time(avg1h:fan_rpm[1d])";
+            expr = ''avg_over_time(avg1h:fan_rpm{instance=~"$host"}[1d])'';
             legend = "{{instance}} {{name}}";
             interval = "1d";
           })
@@ -1720,9 +2471,259 @@ let
         h = 8;
         targets = [
           (target {
-            expr = "max by (instance) (avg_over_time(avg1h:fan_rpm[1d])) / max by (instance) (avg_over_time(avg1h:temp_celsius[1d]))";
+            expr = ''max by (instance) (avg_over_time(avg1h:fan_rpm{instance=~"$host"}[1d])) / max by (instance) (avg_over_time(avg1h:temp_celsius{instance=~"$host",name=~"$sensor"}[1d]))'';
             legend = "{{instance}}";
             interval = "1d";
+          })
+        ];
+      })
+    ];
+  };
+
+  nixBuilds = dashboard {
+    uid = "nix-builds";
+    title = "Nix Builds";
+    datasource = "loki";
+    from = "now-30d";
+    refresh = "30s";
+    tags = [
+      "nix"
+      "builds"
+    ];
+    variables = [
+      logHostVariable
+      (textboxVariable "project" "Project regex" ".*")
+    ];
+    links = [
+      (dashboardLink "Build detail" "nix-build-detail")
+      (dashboardLink "Logs" "logs")
+      (dashboardLink "Alerts" "alerts")
+      (dashboardLink "Overview" "overview")
+    ];
+    panels = [
+      (stat {
+        title = "Builds";
+        w = 4;
+        h = 5;
+        targets = [
+          (target {
+            expr = ''sum(count_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" [$__range]))'';
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Failures";
+        w = 4;
+        h = 5;
+        targets = [
+          (target {
+            expr = ''sum(count_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | status="failed" [$__range]))'';
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Mean duration";
+        w = 4;
+        h = 5;
+        unit = "s";
+        targets = [
+          (target {
+            expr = ''avg(avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap duration_seconds [$__range]))'';
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Compiled derivations";
+        w = 4;
+        h = 5;
+        targets = [
+          (target {
+            expr = ''sum(sum_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap compiled [$__range]))'';
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Substituted paths";
+        w = 4;
+        h = 5;
+        targets = [
+          (target {
+            expr = ''sum(sum_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap substituted [$__range]))'';
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Cache ratio";
+        w = 4;
+        h = 5;
+        unit = "percentunit";
+        min = 0;
+        max = 1;
+        targets = [
+          (target {
+            expr = ''sum(sum_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap substituted [$__range])) / sum(sum_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap required [$__range]))'';
+            instant = true;
+          })
+        ];
+      })
+      (ts {
+        title = "Build duration";
+        w = 24;
+        h = 9;
+        unit = "s";
+        targets = [
+          (target {
+            expr = ''avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap duration_seconds [$__interval])'';
+            legend = "{{host}} {{project}} {{kind}} {{status}}";
+          })
+        ];
+      })
+      (logs {
+        title = "Build and rebuild history";
+        w = 24;
+        h = 13;
+        targets = [
+          (target {
+            expr = ''{service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | line_format "{{.status}}  {{.project}}  {{.kind}}  {{.duration_seconds}}s  required={{.required}} compiled={{.compiled}} substituted={{.substituted}} closure={{.closure_paths}}/{{.closure_nar_bytes}}B failed={{.failed_package}} trace={{.trace_id}}"'';
+          })
+        ];
+      })
+      (logs {
+        title = "Failed package output";
+        w = 24;
+        h = 12;
+        targets = [
+          (target {
+            expr = ''{service_name="nix-observer",host=~"$host"} | json | event="nix_build_log" | project=~"$project" | line_format "{{.project}} {{.package}}: {{.message}} trace={{.trace_id}}"'';
+          })
+        ];
+      })
+    ];
+  };
+
+  nixBuildDetail = dashboard {
+    uid = "nix-build-detail";
+    title = "Nix Build Detail";
+    datasource = "loki";
+    from = "now-6h";
+    refresh = "10s";
+    tags = [
+      "nix"
+      "builds"
+    ];
+    variables = [ (textboxVariable "trace" "Trace ID" ".*") ];
+    links = [
+      (dashboardLink "All builds" "nix-builds")
+      (dashboardLink "System" "live-system")
+      (dashboardLink "Logs" "logs")
+    ];
+    panels = [
+      (logs {
+        title = "Invocation";
+        w = 24;
+        h = 6;
+        targets = [
+          (target {
+            expr = ''{service_name="nix-observer-summary"} | json | event="nix_build" | trace_id=~"$trace"'';
+          })
+        ];
+      })
+      (logs {
+        title = "Required workset — compiled and substituted";
+        w = 24;
+        h = 14;
+        targets = [
+          (target {
+            expr = ''{service_name="nix-observer"} | json | event="nix_derivation" | trace_id=~"$trace" | line_format "{{.status}}  {{.classification}}  {{.package}}  {{.duration_seconds}}s  phase={{.phase}}  {{.derivation}}"'';
+          })
+        ];
+      })
+      (logs {
+        title = "Failure output";
+        w = 24;
+        h = 16;
+        targets = [
+          (target {
+            expr = ''{service_name="nix-observer"} | json | event="nix_build_log" | trace_id=~"$trace" | line_format "{{.package}}: {{.message}}"'';
+          })
+        ];
+      })
+    ];
+  };
+
+  logsExplorer = dashboard {
+    uid = "logs";
+    title = "Fleet Logs";
+    datasource = "loki";
+    from = "now-6h";
+    refresh = "10s";
+    tags = [ "logs" ];
+    variables = [
+      logHostVariable
+      (textboxVariable "search" "Message regex" ".*")
+    ];
+    links = [
+      (dashboardLink "Nix builds" "nix-builds")
+      (dashboardLink "Alerts" "alerts")
+      (dashboardLink "Overview" "overview")
+    ];
+    panels = [
+      (stat {
+        title = "Errors and worse";
+        w = 6;
+        h = 5;
+        targets = [
+          (target {
+            expr = ''sum(count_over_time({source="journal",host=~"$host",level=~"emerg|alert|crit|err"} [$__range]))'';
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "OOM / kernel failures";
+        w = 6;
+        h = 5;
+        targets = [
+          (target {
+            expr = ''sum(count_over_time({source="journal",host=~"$host"} |~ "(?i)out of memory|oom-kill|kernel panic" [$__range]))'';
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Tailscale / VPN failures";
+        w = 6;
+        h = 5;
+        targets = [
+          (target {
+            expr = ''sum(count_over_time({source="journal",host=~"$host",unit=~"tailscaled.service|wg-quick-.*"} |~ "(?i)error|failed|timeout|disconnected" [$__range]))'';
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Failed Nix builds";
+        w = 6;
+        h = 5;
+        targets = [
+          (target {
+            expr = ''sum(count_over_time({service_name="nix-observer-summary",host=~"$host"} | json | status="failed" [$__range]))'';
+            instant = true;
+          })
+        ];
+      })
+      (logs {
+        title = "Journal";
+        w = 24;
+        h = 20;
+        targets = [
+          (target {
+            expr = ''{source="journal",host=~"$host"} |~ "$search"'';
           })
         ];
       })
@@ -1731,6 +2732,11 @@ let
 in
 
 {
+  overview = {
+    "home.json" = overview;
+    "alerts.json" = alerts;
+  };
+
   live = {
     "power.json" = livePower;
     "system.json" = liveSystem;
@@ -1748,5 +2754,11 @@ in
     "uptime.json" = archiveUptime;
     "thermal.json" = archiveThermal;
     "capacity.json" = archiveCapacity;
+  };
+
+  observability = {
+    "nix-builds.json" = nixBuilds;
+    "nix-build-detail.json" = nixBuildDetail;
+    "logs.json" = logsExplorer;
   };
 }

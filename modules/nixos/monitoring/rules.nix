@@ -67,6 +67,7 @@ let
   # so a value that changes only when the machine is opened up costs nothing.
   capacityRules = {
     "mem:total_bytes" = "node_memory_MemTotal_bytes";
+    "mem:capacity_info" = "pc_memory_capacity_info";
     "mem:swap_total_bytes" = "node_memory_SwapTotal_bytes";
     "fs:size_bytes" = ''node_filesystem_size_bytes{fstype!~"tmpfs|ramfs"}'';
     "cpu:cores" = ''count by (instance) (node_cpu_seconds_total{mode="idle"})'';
@@ -215,6 +216,10 @@ let
     };
     mem_total_bytes = {
       source = "mem:total_bytes";
+      aggs = [ "max" ];
+    };
+    mem_capacity_info = {
+      source = "mem:capacity_info";
       aggs = [ "max" ];
     };
     mem_swap_total_bytes = {
@@ -366,6 +371,10 @@ let
       source = "wg:tx_bytes";
       aggs = [ "avg" ];
     };
+    grafana_alerts = {
+      source = "GRAFANA_ALERTS";
+      aggs = [ "max" ];
+    };
   };
 
   toRules = lib.mapAttrsToList (
@@ -478,6 +487,61 @@ in
             }
           ];
         };
+      logThreshold =
+        {
+          uid,
+          title,
+          expr,
+          summary,
+          severity ? "warning",
+        }:
+        {
+          inherit uid title;
+          condition = "C";
+          for = "0s";
+          labels = { inherit severity; };
+          annotations = { inherit summary; };
+          noDataState = "OK";
+          execErrState = "OK";
+          data = [
+            {
+              refId = "A";
+              relativeTimeRange = {
+                from = 300;
+                to = 0;
+              };
+              datasourceUid = "loki";
+              model = {
+                refId = "A";
+                inherit expr;
+                editorMode = "code";
+                queryType = "instant";
+                instant = true;
+                datasource = {
+                  type = "loki";
+                  uid = "loki";
+                };
+              };
+            }
+            {
+              refId = "C";
+              datasourceUid = "__expr__";
+              model = {
+                refId = "C";
+                type = "threshold";
+                expression = "A";
+                conditions = [
+                  {
+                    evaluator = {
+                      type = "gt";
+                      params = [ 0 ];
+                    };
+                  }
+                ];
+              };
+            }
+          ];
+        };
     in
     [
       (threshold {
@@ -575,6 +639,13 @@ in
         value = 0;
         for' = "5m";
         summary = "{{ $labels.instance }} has failed systemd units.";
+      })
+      (logThreshold {
+        uid = "nix-rebuild-failed";
+        title = "Nix rebuild failed";
+        expr = ''sum by (host, project, failed_package, trace_id) (count_over_time({service_name="nix-observer-summary"} | json | event="nix_build" | status="failed" | alert_eligible="true" [5m]))'';
+        severity = "critical";
+        summary = "{{ $labels.project }} failed on {{ $labels.host }} at {{ $labels.failed_package }} (trace {{ $labels.trace_id }}).";
       })
     ];
 }
