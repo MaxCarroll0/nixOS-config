@@ -370,7 +370,8 @@ def main():
     parser.add_argument("--real", required=True)
     options, forwarded = parser.parse_known_args()
     observer = Observer(options.command, forwarded)
-    command = [options.real, *add_log_options(forwarded)]
+    command_args = add_log_options(forwarded) if observer.has_build_intent() else forwarded
+    command = [options.real, *command_args]
     if os.environ.get("NIX_OBSERVER_NOVPN") == "1" and Path("/run/wrappers/bin/sg").exists():
         command = ["/run/wrappers/bin/sg", "novpn", "-c", "exec " + shlex.join(command)]
     nom = None
