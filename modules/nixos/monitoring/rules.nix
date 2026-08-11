@@ -45,6 +45,8 @@ let
       + " / avg by (instance) (node_cpu_scaling_frequency_max_hertz)";
     "mem:used_bytes" = "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes";
     "mem:used_ratio" = "1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes";
+    "mem:cached_bytes" = "node_memory_Cached_bytes + node_memory_Buffers_bytes";
+    "mem:swap_used_bytes" = "node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes";
     "load:load1" = "node_load1";
     "psi:cpu_waiting" = "rate(node_pressure_cpu_waiting_seconds_total[1m])";
     "psi:io_stalled" = "rate(node_pressure_io_stalled_seconds_total[1m])";
@@ -59,6 +61,15 @@ let
     "systemd:failed_units" = ''sum by (instance) (node_systemd_unit_state{state="failed"})'';
     "host:up" = ''up{job=~"node.*"}'';
     "host:boot_time_seconds" = "node_boot_time_seconds";
+  };
+
+  # Installed hardware, not a workload signal: evaluated on its own slow group
+  # so a value that changes only when the machine is opened up costs nothing.
+  capacityRules = {
+    "mem:total_bytes" = "node_memory_MemTotal_bytes";
+    "mem:swap_total_bytes" = "node_memory_SwapTotal_bytes";
+    "fs:size_bytes" = ''node_filesystem_size_bytes{fstype!~"tmpfs|ramfs"}'';
+    "cpu:cores" = ''count by (instance) (node_cpu_seconds_total{mode="idle"})'';
   };
 
   networkRules = {
@@ -190,6 +201,33 @@ let
         "avg"
         "max"
       ];
+    };
+    mem_cached_bytes = {
+      source = "mem:cached_bytes";
+      aggs = [ "avg" ];
+    };
+    mem_swap_used_bytes = {
+      source = "mem:swap_used_bytes";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    mem_total_bytes = {
+      source = "mem:total_bytes";
+      aggs = [ "max" ];
+    };
+    mem_swap_total_bytes = {
+      source = "mem:swap_total_bytes";
+      aggs = [ "max" ];
+    };
+    fs_size_bytes = {
+      source = "fs:size_bytes";
+      aggs = [ "max" ];
+    };
+    cpu_cores = {
+      source = "cpu:cores";
+      aggs = [ "max" ];
     };
     load1 = {
       source = "load:load1";
@@ -366,6 +404,11 @@ in
       name = "system";
       interval = "15s";
       rules = toRules (systemRules // networkRules);
+    }
+    {
+      name = "capacity";
+      interval = "5m";
+      rules = toRules capacityRules;
     }
     {
       name = "downsample";

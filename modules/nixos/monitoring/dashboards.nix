@@ -519,12 +519,63 @@ let
           })
         ];
       })
-      (ts {
-        title = "Memory used";
+      (stat {
+        title = "RAM installed";
+        w = 6;
+        h = 5;
         unit = "bytes";
+        decimals = 0;
+        targets = [
+          (target {
+            expr = "mem:total_bytes";
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (stat {
+        title = "RAM in use";
+        w = 6;
+        h = 5;
+        unit = "percentunit";
+        max = 1;
+        min = 0;
+        targets = [
+          (target {
+            expr = "mem:used_ratio";
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Memory";
+        description = "Used excludes reclaimable cache, so it tracks what the machine actually needs. The dashed line is installed capacity.";
+        w = 12;
+        h = 8;
+        unit = "bytes";
+        min = 0;
+        overrides = [ (dimmed ".*(capacity|cache)$") ];
         targets = [
           (target {
             expr = "mem:used_bytes";
+            legend = "{{instance}} used";
+          })
+          (target {
+            expr = "mem:cached_bytes";
+            legend = "{{instance}} cache";
+          })
+          (target {
+            expr = "mem:total_bytes";
+            legend = "{{instance}} capacity";
+          })
+        ];
+      })
+      (ts {
+        title = "Swap used";
+        unit = "bytes";
+        min = 0;
+        targets = [
+          (target {
+            expr = "mem:swap_used_bytes";
             legend = "{{instance}}";
           })
         ];
@@ -1099,15 +1150,86 @@ let
           })
         ];
       })
+      (stat {
+        title = "RAM installed";
+        w = 6;
+        h = 5;
+        unit = "bytes";
+        decimals = 0;
+        targets = [
+          (target {
+            expr = "max1m:mem_total_bytes";
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Peak RAM used";
+        w = 6;
+        h = 5;
+        unit = "percentunit";
+        targets = [
+          (target {
+            expr = "max_over_time(max1m:mem_used_ratio[$__range])";
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (ts {
+        title = "Memory";
+        description = "Solid is memory in use, dashed is installed capacity. Headroom is the gap between them.";
+        w = 12;
+        h = 8;
+        unit = "bytes";
+        min = 0;
+        overrides = [ (dimmed ".*capacity$") ];
+        targets = [
+          (target {
+            expr = "avg_over_time(avg1m:mem_used_bytes[$smooth])";
+            legend = "{{instance}} used";
+          })
+          (target {
+            expr = "max_over_time(max1m:mem_used_bytes[$smooth])";
+            legend = "{{instance}} peak";
+          })
+          (target {
+            expr = "max1m:mem_total_bytes";
+            legend = "{{instance}} capacity";
+          })
+        ];
+      })
       (ts {
         title = "Memory used";
         unit = "percentunit";
         max = 1;
         min = 0;
+        overrides = [ (dimmed ".*peak$") ];
         targets = [
           (target {
             expr = "avg_over_time(avg1m:mem_used_ratio[$smooth])";
             legend = "{{instance}}";
+          })
+          (target {
+            expr = "max_over_time(max1m:mem_used_ratio[$smooth])";
+            legend = "{{instance}} peak";
+          })
+        ];
+      })
+      (ts {
+        title = "Swap used";
+        unit = "bytes";
+        min = 0;
+        overrides = [ (dimmed ".*capacity$") ];
+        targets = [
+          (target {
+            expr = "avg_over_time(avg1m:mem_swap_used_bytes[$smooth])";
+            legend = "{{instance}}";
+          })
+          (target {
+            expr = "max1m:mem_swap_total_bytes";
+            legend = "{{instance}} capacity";
           })
         ];
       })
@@ -1417,6 +1539,120 @@ let
     ];
   };
 
+  archiveCapacity = dashboard {
+    uid = "archive-capacity";
+    title = "Capacity";
+    datasource = "prometheus-archive";
+    from = "now-1y";
+    refresh = "15m";
+    tags = [ "archive" ];
+    panels = [
+      (stat {
+        title = "RAM installed";
+        w = 8;
+        h = 5;
+        unit = "bytes";
+        decimals = 0;
+        targets = [
+          (target {
+            expr = "max1h:mem_total_bytes";
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "CPU cores";
+        w = 8;
+        h = 5;
+        decimals = 0;
+        targets = [
+          (target {
+            expr = "max1h:cpu_cores";
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Disk installed";
+        w = 8;
+        h = 5;
+        unit = "bytes";
+        decimals = 0;
+        targets = [
+          (target {
+            expr = ''sum by (instance) (max1h:fs_size_bytes{mountpoint="/"})'';
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (ts {
+        title = "Memory used against installed";
+        description = "Daily mean and peak against capacity. Over a year this is what tells you whether the machine is growing into its RAM.";
+        w = 24;
+        h = 10;
+        unit = "bytes";
+        min = 0;
+        overrides = [ (dimmed ".*(capacity|peak)$") ];
+        targets = [
+          (target {
+            expr = "avg_over_time(avg1h:mem_used_bytes[1d])";
+            legend = "{{instance}} used";
+            interval = "1d";
+          })
+          (target {
+            expr = "max_over_time(max1h:mem_used_bytes[1d])";
+            legend = "{{instance}} peak";
+            interval = "1d";
+          })
+          (target {
+            expr = "max_over_time(max1h:mem_total_bytes[1d])";
+            legend = "{{instance}} capacity";
+            interval = "1d";
+          })
+        ];
+      })
+      (bar {
+        title = "Peak memory use per day";
+        w = 24;
+        h = 9;
+        unit = "percentunit";
+        max = 1;
+        min = 0;
+        decimals = 2;
+        targets = [
+          (target {
+            expr = "max_over_time(max1h:mem_used_ratio[1d])";
+            legend = "{{instance}}";
+            interval = "1d";
+          })
+        ];
+      })
+      (ts {
+        title = "Filesystem free against size";
+        w = 24;
+        h = 9;
+        unit = "bytes";
+        min = 0;
+        overrides = [ (dimmed ".*size$") ];
+        targets = [
+          (target {
+            expr = "min_over_time(min1h:fs_avail_bytes[1d])";
+            legend = "{{instance}} {{mountpoint}} free";
+            interval = "1d";
+          })
+          (target {
+            expr = "max_over_time(max1h:fs_size_bytes[1d])";
+            legend = "{{instance}} {{mountpoint}} size";
+            interval = "1d";
+          })
+        ];
+      })
+    ];
+  };
+
   archiveThermal = dashboard {
     uid = "archive-thermal";
     title = "Thermal history";
@@ -1511,5 +1747,6 @@ in
     "energy.json" = archiveEnergy;
     "uptime.json" = archiveUptime;
     "thermal.json" = archiveThermal;
+    "capacity.json" = archiveCapacity;
   };
 }
