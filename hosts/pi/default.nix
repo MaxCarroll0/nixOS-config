@@ -33,8 +33,8 @@
 
   local.wake.peers.desktop_new = {
     mac = "b4:2e:99:92:d6:18";
-    broadcast = "192.168.200.255";
-    address = "192.168.200.204";
+    broadcast = "192.168.0.255";
+    address = "192.168.0.161";
     timeoutSeconds = 90;
   };
 
