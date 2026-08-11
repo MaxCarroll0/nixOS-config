@@ -1,11 +1,6 @@
 # AMD desktop: workstation plus remote builder, SSH host, and web origin.
 
-{
-  config,
-  lib,
-  pkgs,
-  ...
-}:
+{ lib, pkgs, ... }:
 
 {
   imports = [
@@ -27,21 +22,6 @@
   ];
 
   networking.hostName = "desktop";
-
-  boot.extraModulePackages = with config.boot.kernelPackages; [
-    it87
-    zenpower
-  ];
-  boot.kernelModules = [
-    "it87"
-    "zenpower"
-  ];
-  # zenpower and k10temp bind the same SMN device, and only one can win.
-  boot.blacklistedKernelModules = [ "k10temp" ];
-  # This board is an IT8686E, which the driver cannot detect unaided.
-  boot.extraModprobeConfig = ''
-    options it87 force_id=0x8686 ignore_resource_conflict=1
-  '';
 
   local.vpn = {
     configs.nl = "proton-wg-2";
@@ -130,13 +110,6 @@
       "k10temp:temp1" = "CPU Tctl";
       "k10temp:temp3" = "CPU CCD1";
       "k10temp:temp4" = "CPU CCD2";
-      "zenpower:temp1" = "CPU Tdie";
-      "zenpower:temp2" = "CPU Tctl";
-      "zenpower:temp3" = "CPU CCD1";
-      "zenpower:power1" = "CPU core power";
-      "zenpower:power2" = "CPU SoC power";
-      "zenpower:in1" = "CPU core";
-      "zenpower:curr1" = "CPU core current";
       "amdgpu:temp1" = "GPU edge";
       "amdgpu:fan1" = "GPU fan";
       "amdgpu:power1" = "GPU board power";
