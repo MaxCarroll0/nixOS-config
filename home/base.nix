@@ -118,6 +118,9 @@
 
     bashrcExtra = /* bash */ ''
       set -o vi
+
+      # home.sessionVariables only reaches login shells; sudo's PAM key auth needs this everywhere.
+      export SSH_AUTH_SOCK="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ssh-agent"
     '';
   };
 
