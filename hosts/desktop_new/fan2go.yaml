@@ -1,10 +1,6 @@
 tempSensorPollingRate: 2s
 tempRollingWindowSize: 20
 
-statistics:
-  enabled: true
-  port: 9000
-
 sensors:
   - id: cpu
     hwmon:

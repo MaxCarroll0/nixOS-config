@@ -205,12 +205,6 @@ in
       description = "Extra node_exporter instances to scrape, keyed by instance label.";
     };
 
-    fanTargets = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { };
-      description = "fan2go exporters to scrape, keyed by instance label.";
-    };
-
     totalPower = {
       baselineWatts = lib.mkOption {
         type = lib.types.number;
@@ -395,18 +389,7 @@ in
               labels.instance = instance;
             }
           ];
-        }) cfg.targets
-        ++ lib.mapAttrsToList (instance: target: {
-          job_name = "fan2go-${instance}";
-          scrape_interval = "1s";
-          scrape_timeout = "900ms";
-          static_configs = [
-            {
-              targets = [ target ];
-              labels.instance = instance;
-            }
-          ];
-        }) cfg.fanTargets;
+        }) cfg.targets;
       };
 
       systemd.services.prometheus-longterm = mkTier {

@@ -1,6 +1,6 @@
 # Shared by every AMD desktop host: workstation, remote builder, SSH host, web origin.
 
-{ config, lib, pkgs, ... }:
+{ lib, pkgs, ... }:
 
 {
   imports = [
@@ -68,7 +68,7 @@
     lazyMounts = { };
   };
 
-  local.fancontrol.enable = true;
+  local.fancontrol.enable = false;
 
   systemd.services.schedutil-rate-limit = {
     wantedBy = [ "multi-user.target" ];
@@ -86,7 +86,6 @@
     server.enable = true;
     grafana.enable = true;
     userReadable = true;
-    fanTargets.${config.networking.hostName} = "127.0.0.1:9000";
 
     telemetry = {
       collector.enable = true;

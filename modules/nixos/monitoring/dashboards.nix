@@ -1116,7 +1116,7 @@ let
         unit = "rotrpm";
         targets = [
           (target {
-            expr = ''fan:rpm{instance=~"$host"}'';
+            expr = ''fan:rpm{instance=~"$host"} > 0'';
             legend = "{{instance}} {{id}}";
           })
         ];
@@ -1134,7 +1134,7 @@ let
             legend = "{{instance}} CPU";
           })
           (target {
-            expr = ''fan:rpm{instance=~"$host"}'';
+            expr = ''fan:rpm{instance=~"$host"} > 0'';
             legend = "{{instance}} {{id}} rpm";
           })
         ];
@@ -1176,18 +1176,6 @@ let
             legend = "{{instance}} {{name}}";
             format = "table";
             instant = true;
-          })
-        ];
-      })
-      (ts {
-        title = "Fan PWM duty";
-        unit = "percent";
-        max = 100;
-        min = 0;
-        targets = [
-          (target {
-            expr = ''fan:pwm_percent{instance=~"$host"}'';
-            legend = "{{instance}} {{id}}";
           })
         ];
       })
@@ -2808,13 +2796,13 @@ let
         ];
       })
       (stat {
-        title = "Mean duration";
+        title = "Mean full rebuild time";
         w = 4;
         h = 5;
         unit = "s";
         targets = [
           (target {
-            expr = ''avg(avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap duration_seconds [$__range]))'';
+            expr = ''avg(avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | kind=~"rebuild|home-rebuild" | project=~"$project" | unwrap duration_seconds [$__range]))'';
             instant = true;
           })
         ];
@@ -2954,6 +2942,12 @@ let
           (target {
             expr = ''max by (host) (max_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap duration_seconds [1d]))'';
             legend = "{{host}} max";
+            interval = "1d";
+            maxDataPoints = 100;
+          })
+          (target {
+            expr = ''avg by (host) (avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | kind=~"rebuild|home-rebuild" | project=~"$project" | unwrap duration_seconds [1d]))'';
+            legend = "{{host}} full rebuild mean";
             interval = "1d";
             maxDataPoints = 100;
           })

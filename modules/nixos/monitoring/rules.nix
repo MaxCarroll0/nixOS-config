@@ -17,9 +17,7 @@ let
     "sensor:power_watt" = named "node_hwmon_power_watt";
     "sensor:volts" = named "node_hwmon_in_volts";
     "fan:rpm" =
-      "fan2go_fan_rpm or "
-      + ''label_replace(${named "node_hwmon_fan_rpm"}, "id", "$1", "name", "(.*)")'';
-    "fan:pwm_percent" = "fan2go_fan_pwm * 100 / 255";
+      ''label_replace(${named "node_hwmon_fan_rpm"}, "id", "$1", "name", "(.*)")'';
     "temp:major_celsius" =
       ''label_replace(max by (instance) (sensor:temp_celsius{name=~"CPU Tctl|CPU Tdie|CPU package|SoC"}), "component", "CPU", "", "")''
       + " or "
@@ -149,13 +147,6 @@ let
     };
     fan_rpm = {
       source = "fan:rpm";
-      aggs = [
-        "avg"
-        "max"
-      ];
-    };
-    fan_pwm_percent = {
-      source = "fan:pwm_percent";
       aggs = [
         "avg"
         "max"
