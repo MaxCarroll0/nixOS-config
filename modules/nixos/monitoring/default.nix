@@ -19,6 +19,23 @@ let
   hiresPort = config.services.prometheus.port;
   longtermPort = 9091;
   archivePort = 9092;
+  powerStatePort = 9093;
+
+  powerStateReporter = pkgs.writeShellApplication {
+    name = "report-power-state";
+    runtimeInputs = [ pkgs.curl ];
+    text = ''
+      state="$1"
+      case "$state" in
+        running|S3|S5) ;;
+        *) exit 2 ;;
+      esac
+      printf 'host_power_state{state="%s"} 1\n' "$state" \
+        | curl --fail --silent --show-error --max-time 5 --retry 2 \
+          --data-binary @- \
+          "http://${config.local.monitoring.telemetry.serverAddress}:${toString powerStatePort}/metrics/job/host_power_state/instance/${config.networking.hostName}"
+    '';
+  };
 
   ruleFile = name: groups: yaml.generate "${name}.yml" { inherit groups; };
 
@@ -208,7 +225,7 @@ in
     totalPower = {
       baselineWatts = lib.mkOption {
         type = lib.types.number;
-        default = 25;
+        default = 20.88;
         description = "Modelled draw of RAM, drives, fans and board with no telemetry.";
       };
 
@@ -303,6 +320,33 @@ in
       networking.firewall.interfaces.tailscale0.allowedTCPPorts = [
         config.services.prometheus.exporters.node.port
       ];
+
+      environment.etc."systemd/system-sleep/report-power-state" = {
+        mode = "0755";
+        source = pkgs.writeShellScript "report-power-state-sleep" ''
+          case "$1" in
+            pre) ${powerStateReporter}/bin/report-power-state S3 ;;
+            post) ${powerStateReporter}/bin/report-power-state running ;;
+          esac
+        '';
+      };
+
+      systemd.services.report-power-state-running = {
+        description = "Report that this host is running";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "network-online.target" "tailscaled.service" ];
+        wants = [ "network-online.target" ];
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${powerStateReporter}/bin/report-power-state running";
+          Restart = "on-failure";
+          RestartSec = "15s";
+        };
+      };
+
+      powerManagement.powerDownCommands = lib.mkAfter ''
+        ${powerStateReporter}/bin/report-power-state S5 || true
+      '';
     })
 
     # node_exporter runs as its own user, so it needs the group too.
@@ -344,6 +388,11 @@ in
         };
         ruleFiles = [ (ruleFile "hires-rules" rules.hires) ];
         scrapeConfigs = [
+          {
+            job_name = "power-state";
+            honor_labels = true;
+            static_configs = [ { targets = [ "127.0.0.1:${toString powerStatePort}" ]; } ];
+          }
           {
             job_name = "node";
             static_configs = [
@@ -391,6 +440,14 @@ in
           ];
         }) cfg.targets;
       };
+
+      services.prometheus.pushgateway = {
+        enable = true;
+        persistMetrics = true;
+        web.listen-address = "0.0.0.0:${toString powerStatePort}";
+      };
+
+      networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ powerStatePort ];
 
       systemd.services.prometheus-longterm = mkTier {
         name = "longterm";

@@ -88,7 +88,7 @@ in
 
     serverAddress = lib.mkOption {
       type = lib.types.str;
-      default = "100.106.140.88";
+      default = "100.117.13.66";
       description = "Tailnet address of the telemetry server.";
     };
 

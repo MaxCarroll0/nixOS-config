@@ -20,7 +20,7 @@
 
   networking.hostName = "laptop";
 
-  networking.hosts."100.106.140.88" = [ "desktop.grafana" ];
+  networking.hosts."100.117.13.66" = [ "observatory" "grafana" "pi.grafana" ];
 
   local.monitoring = {
     exporter.enable = true;

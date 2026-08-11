@@ -42,7 +42,7 @@ let
     "pc:tariff_gbp_per_kwh" = "max by (instance) (pc_power_tariff_gbp_per_kwh)";
 
     "pc:power_watts" =
-      "(pc:cpu_power_watts + (pc:gpu_power_watts or pc:cpu_power_watts * 0)"
+      "((pc:cpu_power_watts or pc:baseline_watts * 0) + (pc:gpu_power_watts or pc:baseline_watts * 0)"
       + " + pc:baseline_watts) / pc:psu_efficiency";
     "pc:psu_loss_watts" =
       "clamp_min(pc:power_watts - pc:cpu_power_watts"
@@ -69,6 +69,7 @@ let
     "mem:cached_bytes" = "node_memory_Cached_bytes + node_memory_Buffers_bytes";
     "mem:swap_used_bytes" = "node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes";
     "load:load1" = "node_load1";
+    "load:pressure_ratio" = ''node_load1 / on(instance) count by (instance) (node_cpu_seconds_total{mode="idle"})'';
     "psi:cpu_waiting" = "rate(node_pressure_cpu_waiting_seconds_total[1m])";
     "psi:io_stalled" = "rate(node_pressure_io_stalled_seconds_total[1m])";
     "psi:memory_stalled" = "rate(node_pressure_memory_stalled_seconds_total[1m])";
@@ -80,7 +81,7 @@ let
       ''node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs"}''
       + ''/ node_filesystem_size_bytes{fstype!~"tmpfs|ramfs"}'';
     "systemd:failed_units" = ''sum by (instance) (node_systemd_unit_state{state="failed"})'';
-    "host:up" = ''up{job=~"node.*"}'';
+    "host:up" = ''up{job=~"node.*", instance!~"127[.]0[.]0[.]1(:[0-9]+)?"}'';
     "host:boot_time_seconds" = "node_boot_time_seconds";
   };
 
@@ -281,6 +282,13 @@ let
     };
     load1 = {
       source = "load:load1";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    load_pressure_ratio = {
+      source = "load:pressure_ratio";
       aggs = [
         "avg"
         "max"

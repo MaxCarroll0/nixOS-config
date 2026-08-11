@@ -10,6 +10,11 @@
 
   networking.hostName = "desktop_new";
 
+  fileSystems."/boot".options = [
+    "nofail"
+    "x-systemd.automount"
+  ];
+
   local.server.ssh.lanInterfaces = [ "enp5s0" ];
 
   local.fancontrol.configFile = ./fan2go.yaml;

@@ -20,10 +20,16 @@
     ../modules/nixos/pam-ssh-agent-sudo.nix
   ];
 
+  networking.hosts."100.117.13.66" = [ "observatory" "grafana" "pi.grafana" ];
+
   local.vpn = {
     configs.nl = "proton-wg-2";
     primary = "nl";
   };
+
+  boot.loader.timeout = 0;
+
+  systemd.services.tailscaled.after = lib.mkForce [ "sops-install-secrets.service" ];
 
   swapDevices = lib.mkForce [
     {
@@ -48,6 +54,12 @@
   local.wifi = {
     ssid = "Gigaclear_FA8E";
     pskSecret = "wifi-psk";
+    fallbacks = [
+      {
+        ssid = "VM5077073";
+        pskSecret = "wifi-psk-vm5077073";
+      }
+    ];
   };
 
   # Enable once the laptop's root key exists; see TODO.md.
@@ -83,13 +95,13 @@
 
   local.monitoring = {
     exporter.enable = true;
-    server.enable = true;
-    grafana.enable = true;
+    server.enable = false;
+    grafana.enable = false;
     userReadable = true;
 
     telemetry = {
       collector.enable = true;
-      server.enable = true;
+      server.enable = false;
     };
 
     targets = {
@@ -100,7 +112,7 @@
     totalPower = {
       baselineWatts = 30;
       psuEfficiency = 0.88;
-      tariffPencePerKwh = 25;
+      tariffPencePerKwh = 20.88;
     };
 
     sensorNames = {

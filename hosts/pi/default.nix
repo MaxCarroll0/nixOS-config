@@ -18,6 +18,19 @@
   ];
 
   networking.hostName = "pi";
+  networking.hosts."100.117.13.66" = [ "observatory" "grafana" "pi.grafana" ];
+
+  # Grafana remains on its private service port. This tailnet-only proxy gives
+  # it a memorable, port-free browser address: http://observatory.
+  services.nginx = {
+    enable = true;
+    recommendedProxySettings = true;
+    virtualHosts.observatory.locations."/" = {
+      proxyPass = "http://127.0.0.1:3000";
+      proxyWebsockets = true;
+    };
+  };
+  networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 80 ];
 
   swapDevices = lib.mkForce [
     {
@@ -29,6 +42,12 @@
   local.wifi = {
     ssid = "Gigaclear_FA8E";
     pskSecret = "wifi-psk";
+    fallbacks = [
+      {
+        ssid = "VM5077073";
+        pskSecret = "wifi-psk-vm5077073";
+      }
+    ];
   };
 
   local.wake.peers.desktop_new = {
@@ -78,8 +97,17 @@
 
   local.monitoring = {
     exporter.enable = true;
+    server.enable = true;
+    grafana.enable = true;
     userReadable = true;
-    telemetry.collector.enable = true;
+    telemetry = {
+      collector.enable = true;
+      server.enable = true;
+    };
+    targets = {
+      desktop_new = "100.106.140.88:9100";
+      laptop = "100.112.109.20:9100";
+    };
     sensorNames = {
       "cpu_thermal:temp1" = "SoC";
     };
