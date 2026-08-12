@@ -562,81 +562,53 @@ let
       panels
     ).placed;
 
-  mkSmoothVariable =
-    default: values:
-    {
-      name = "smooth";
-      label = "Smoothing";
-      type = "interval";
-      auto = false;
-      query = lib.concatStringsSep "," values;
-      current = {
-        text = default;
-        value = default;
-      };
-      options =
-        map
-          (v: {
-            text = v;
-            value = v;
-            selected = v == default;
-          })
-          values;
-    };
+  smoothValues = [
+    "1s" "2s" "5s" "10s" "15s" "20s" "30s" "45s"
+    "1m" "2m" "5m" "10m" "15m" "20m" "30m" "45m"
+    "1h" "90m" "2h" "3h" "6h" "12h"
+    "1d" "2d" "84h" "7d" "14d" "30d" "180d" "1y"
+  ];
 
-  adaptiveSmoothVariable = {
+  autoSmoothDivisor = 30;
+
+  smoothVariable = {
     name = "smooth";
     label = "Smoothing";
     type = "interval";
     auto = true;
-    auto_count = 30;
+    auto_count = autoSmoothDivisor;
     auto_min = "1s";
-    query = lib.concatStringsSep "," [
-      "1s" "2s" "5s" "10s" "15s" "20s" "30s" "45s"
-      "1m" "2m" "5m" "10m" "15m" "20m" "30m" "45m"
-      "1h" "90m" "2h" "3h" "6h" "12h"
-      "1d" "2d" "84h" "7d" "14d" "30d" "180d" "1y"
-    ];
+    query = lib.concatStringsSep "," smoothValues;
     current = {
-      text = "auto";
+      text = "auto (range/${toString autoSmoothDivisor})";
       value = "$__auto_interval_smooth";
       selected = true;
     };
     options = [
       {
-        text = "auto";
+        text = "auto (range/${toString autoSmoothDivisor})";
         value = "$__auto_interval_smooth";
         selected = true;
       }
-    ];
+    ]
+    ++ map (v: {
+      text = v;
+      value = v;
+      selected = false;
+    }) smoothValues;
   };
 
-  smoothVariable = mkSmoothVariable "1h" [
-    "5m"
-    "15m"
-    "1h"
-    "6h"
-    "1d"
-  ];
-
-  overviewSmoothVariable = mkSmoothVariable "2m" [
-    "1s"
-    "15s"
-    "30s"
-    "1m"
-    "2m"
-    "5m"
-  ];
-
-  liveSmoothVariable = mkSmoothVariable "1s" [
-    "1s"
-    "5s"
-    "15s"
-    "30s"
-    "1m"
-    "2m"
-    "5m"
-  ];
+  smoothBanner = {
+    type = "text";
+    title = "";
+    w = 24;
+    h = 2;
+    transparent = true;
+    options = {
+      mode = "markdown";
+      content = "Smoothing window: **$smooth** (every series here is averaged over it).";
+    };
+  };
 
   tariffVariable = textboxVariable "tariff" "Electricity (p/kWh)" "20.88";
 
@@ -907,19 +879,21 @@ let
         to = "now";
       };
       templating.list = variables;
-      panels = lib.imap1 (i: p: attach (p // { id = i; })) (layout panels);
+      panels = lib.imap1 (i: p: attach (p // { id = i; })) (
+        layout (lib.optional (lib.any (v: v.name == "smooth") variables) smoothBanner ++ panels)
+      );
     };
 
   overview = dashboard {
     uid = "overview";
     title = "Overview";
     datasource = "prometheus";
-    from = "now-30m";
+    from = "now-15m";
     refresh = "5s";
     tags = [ "home" ];
     variables = [
       (fleetHostVariable "prometheus")
-      overviewSmoothVariable
+      smoothVariable
       tariffVariable
     ];
     links = [
@@ -1706,7 +1680,7 @@ let
     variables = [
       (hostVariable "prometheus")
       (sensorVariable "prometheus")
-      liveSmoothVariable
+      smoothVariable
     ];
     links = [
       (presetLink "Live" "live-power" "now-15m" "5s")
@@ -1977,7 +1951,7 @@ let
     variables = [
       (hostVariable "prometheus")
       (capacityVariable "prometheus")
-      liveSmoothVariable
+      smoothVariable
     ];
     links = [
       (presetLink "Live" "live-system" "now-15m" "5s")
@@ -2246,7 +2220,7 @@ let
     variables = [
       (hostVariable "prometheus-lt")
       (sensorVariable "prometheus-lt")
-      adaptiveSmoothVariable
+      smoothVariable
       tariffVariable
     ];
     links = [
@@ -2515,7 +2489,7 @@ let
     tags = [ "history" ];
     variables = [
       (hostVariable "prometheus-lt")
-      adaptiveSmoothVariable
+      smoothVariable
     ];
     links = [
       (presetLink "Live" "history-network" "now-15m" "5s")
@@ -2733,7 +2707,7 @@ let
     tags = [ "history" ];
     variables = [
       (fleetHostVariable "prometheus-lt")
-      adaptiveSmoothVariable
+      smoothVariable
     ];
     links = [
       (presetLink "Live" "history-fleet" "now-15m" "5s")
@@ -2912,7 +2886,7 @@ let
     variables = [
       (hostVariable "prometheus-lt")
       (capacityVariable "prometheus-lt")
-      adaptiveSmoothVariable
+      smoothVariable
     ];
     links = [
       (presetLink "Live" "live-system" "now-15m" "5s")
@@ -3201,13 +3175,7 @@ let
     tags = [ "archive" ];
     variables = [
       (fleetHostVariable "prometheus-archive")
-      (mkSmoothVariable "1h" [
-        "1h"
-        "6h"
-        "1d"
-        "7d"
-        "30d"
-      ])
+      smoothVariable
       tariffVariable
     ];
     links = [
