@@ -377,14 +377,11 @@ in
       services.vmagent = {
         enable = true;
         remoteWrite.url = "http://${cfg.telemetry.serverAddress}:${toString hiresPort}/api/v1/write";
-        extraArgs = [
-          "-remoteWrite.maxDiskUsagePerURL=2GB"
-          "-remoteWrite.flushInterval=5s"
-        ];
+        extraArgs = [ "-remoteWrite.maxDiskUsagePerURL=2GB" ];
         prometheusConfig = {
           global = {
-            scrape_interval = "1s";
-            scrape_timeout = "900ms";
+            scrape_interval = "5s";
+            scrape_timeout = "4s";
           };
           scrape_configs = [
             {
