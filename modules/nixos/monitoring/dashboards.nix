@@ -415,7 +415,7 @@ let
   };
 
   hostColorScales = {
-    desktop_new = [
+    desktopnew = [
       [ 24 70 128 ]
       [ 8 81 156 ]
       [ 33 113 181 ]
@@ -424,7 +424,7 @@ let
       [ 158 202 225 ]
       [ 198 219 239 ]
     ];
-    desktop_old = [
+    desktopold = [
       [ 84 35 145 ]
       [ 84 39 143 ]
       [ 106 81 163 ]

@@ -118,7 +118,9 @@ let
     url = "http://127.0.0.1:${toString port}";
     isDefault = uid == "prometheus-lt";
     jsonData = {
-      timeInterval = if uid == "prometheus" then "1s" else "1m";
+      # Remote hosts push every 5s; querying finer repeats each sample and the
+      # line draws as a staircase.
+      timeInterval = if uid == "prometheus" then "5s" else "1m";
       prometheusType = "Prometheus";
     };
   };
