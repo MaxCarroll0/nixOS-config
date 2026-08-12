@@ -118,9 +118,7 @@ let
     url = "http://127.0.0.1:${toString port}";
     isDefault = uid == "prometheus-lt";
     jsonData = {
-      # Remote hosts push every 5s; querying finer repeats each sample and the
-      # line draws as a staircase.
-      timeInterval = if uid == "prometheus" then "5s" else "1m";
+      timeInterval = if uid == "prometheus" then "1s" else "1m";
       prometheusType = "Prometheus";
     };
   };
@@ -379,11 +377,14 @@ in
       services.vmagent = {
         enable = true;
         remoteWrite.url = "http://${cfg.telemetry.serverAddress}:${toString hiresPort}/api/v1/write";
-        extraArgs = [ "-remoteWrite.maxDiskUsagePerURL=2GB" ];
+        extraArgs = [
+          "-remoteWrite.maxDiskUsagePerURL=2GB"
+          "-remoteWrite.flushInterval=5s"
+        ];
         prometheusConfig = {
           global = {
-            scrape_interval = "5s";
-            scrape_timeout = "4s";
+            scrape_interval = "1s";
+            scrape_timeout = "900ms";
           };
           scrape_configs = [
             {
