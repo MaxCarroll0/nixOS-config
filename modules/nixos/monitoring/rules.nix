@@ -103,6 +103,27 @@ let
     "cpu:cores" = ''count by (instance) (node_cpu_seconds_total{mode="idle"})'';
   };
 
+  # Tunnelled bytes cross the physical NIC a second time as encapsulated
+  # packets, so the untunnelled share is the wire total minus the tunnels.
+  byTransport =
+    direction:
+    let
+      counter = ''node_network_${direction}_bytes_total'';
+      tunnels = ''{device=~"proton.*|wg.*|tun.*"}'';
+      tailnet = ''{device=~"tailscale.*"}'';
+      physical = ''{device=~"en.*|eth.*|wl.*|ww.*|bond.*"}'';
+      rated = selector: ''sum by (instance) (rate(${counter}${selector}[1m]))'';
+      tagged = name: expr: ''label_replace(${expr}, "transport", "${name}", "", "")'';
+      zero = ''(0 * ${rated physical})'';
+      orZero = expr: ''((${expr}) or ${zero})'';
+      direct = ''clamp_min(${rated physical} - ${orZero (rated tunnels)} - ${orZero (rated tailnet)}, 0)'';
+    in
+    lib.concatStringsSep " or " [
+      (tagged "VPN" (rated tunnels))
+      (tagged "Tailnet" (rated tailnet))
+      (tagged "Direct" direct)
+    ];
+
   networkRules = {
     "net:receive_bytes" =
       ''sum by (instance, device) (rate(node_network_receive_bytes_total{device!="lo"}[1m]))'';
@@ -114,14 +135,8 @@ let
       ''sum by (instance, device) (rate(node_network_transmit_errs_total{device!="lo"}[1m]))'';
     "net:receive_drops" =
       ''sum by (instance, device) (rate(node_network_receive_drop_total{device!="lo"}[1m]))'';
-    "net:receive_bytes_by_transport" =
-      ''sum by (instance, transport) (label_replace(rate(node_network_receive_bytes_total{device=~"tailscale.*|proton.*|wg.*|tun.*"}[1m]), "transport", "VPN", "device", ".*"))''
-      + " or "
-      + ''sum by (instance, transport) (label_replace(rate(node_network_receive_bytes_total{device=~"en.*|eth.*|wl.*|ww.*|bond.*"}[1m]), "transport", "Non-VPN", "device", ".*"))'';
-    "net:transmit_bytes_by_transport" =
-      ''sum by (instance, transport) (label_replace(rate(node_network_transmit_bytes_total{device=~"tailscale.*|proton.*|wg.*|tun.*"}[1m]), "transport", "VPN", "device", ".*"))''
-      + " or "
-      + ''sum by (instance, transport) (label_replace(rate(node_network_transmit_bytes_total{device=~"en.*|eth.*|wl.*|ww.*|bond.*"}[1m]), "transport", "Non-VPN", "device", ".*"))'';
+    "net:receive_bytes_by_transport" = byTransport "receive";
+    "net:transmit_bytes_by_transport" = byTransport "transmit";
     "ts:peer_rx_bytes" = "rate(tailscale_peer_rx_bytes_total[1m])";
     "ts:peer_tx_bytes" = "rate(tailscale_peer_tx_bytes_total[1m])";
     "ts:peer_online" = "tailscale_peer_online";

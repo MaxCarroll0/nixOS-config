@@ -1412,7 +1412,8 @@ let
         unit = "Bps";
         gradientSeries = [
           "VPN"
-          "Non-VPN"
+          "Tailnet"
+          "Direct"
         ];
         targets = [
           (target {
@@ -1426,7 +1427,8 @@ let
         unit = "Bps";
         gradientSeries = [
           "VPN"
-          "Non-VPN"
+          "Tailnet"
+          "Direct"
         ];
         targets = [
           (target {
@@ -2180,7 +2182,8 @@ let
         unit = "Bps";
         gradientSeries = [
           "VPN"
-          "Non-VPN"
+          "Tailnet"
+          "Direct"
         ];
         targets = [
           (target {
@@ -2194,7 +2197,8 @@ let
         unit = "Bps";
         gradientSeries = [
           "VPN"
-          "Non-VPN"
+          "Tailnet"
+          "Direct"
         ];
         targets = [
           (target {
@@ -2524,7 +2528,8 @@ let
         unit = "Bps";
         gradientSeries = [
           "VPN"
-          "Non-VPN"
+          "Tailnet"
+          "Direct"
         ];
         targets = [
           (target {
@@ -2540,7 +2545,8 @@ let
         unit = "Bps";
         gradientSeries = [
           "VPN"
-          "Non-VPN"
+          "Tailnet"
+          "Direct"
         ];
         targets = [
           (target {
