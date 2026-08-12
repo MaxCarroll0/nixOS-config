@@ -13,6 +13,9 @@ let
   rules = import ./rules.nix { inherit config lib; };
   dashboards = import ./dashboards.nix { inherit lib; };
 
+  # host:up names hosts after their tailnet peer, which carries no underscore.
+  instanceName = lib.replaceStrings [ "_" ] [ "" ] config.networking.hostName;
+
   yaml = pkgs.formats.yaml { };
   json = pkgs.formats.json { };
 
@@ -33,7 +36,7 @@ let
       printf 'host_power_state{state="%s"} 1\n' "$state" \
         | curl --fail --silent --show-error --max-time 5 --retry 2 \
           --data-binary @- \
-          "http://${config.local.monitoring.telemetry.serverAddress}:${toString powerStatePort}/metrics/job/host_power_state/instance/${config.networking.hostName}"
+          "http://${config.local.monitoring.telemetry.serverAddress}:${toString powerStatePort}/metrics/job/host_power_state/instance/${instanceName}"
     '';
   };
 
@@ -385,7 +388,7 @@ in
               static_configs = [
                 {
                   targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ];
-                  labels.instance = config.networking.hostName;
+                  labels.instance = instanceName;
                 }
               ];
             }
@@ -443,7 +446,7 @@ in
             static_configs = [
               {
                 targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ];
-                labels.instance = config.networking.hostName;
+                labels.instance = instanceName;
               }
             ];
           }
@@ -454,21 +457,21 @@ in
               {
                 targets = [ "127.0.0.1:${toString hiresPort}" ];
                 labels = {
-                  instance = config.networking.hostName;
+                  instance = instanceName;
                   tier = "hires";
                 };
               }
               {
                 targets = [ "127.0.0.1:${toString longtermPort}" ];
                 labels = {
-                  instance = config.networking.hostName;
+                  instance = instanceName;
                   tier = "history";
                 };
               }
               {
                 targets = [ "127.0.0.1:${toString archivePort}" ];
                 labels = {
-                  instance = config.networking.hostName;
+                  instance = instanceName;
                   tier = "archive";
                 };
               }
