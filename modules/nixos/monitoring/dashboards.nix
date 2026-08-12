@@ -1634,7 +1634,7 @@ let
         mappings = upMappings;
         targets = [
           (target {
-            expr = ''avg1m:up{instance=~"$host"}'';
+            expr = ''max by (instance) (avg1m:up{instance=~"$host"})'';
             legend = "{{instance}}";
           })
         ];
@@ -2866,19 +2866,7 @@ let
         mappings = upMappings;
         targets = [
           (target {
-            expr = ''avg1m:up{instance=~"$host"}'';
-            legend = "{{instance}}";
-          })
-        ];
-      })
-      (ts {
-        title = "System uptime";
-        w = 24;
-        h = 8;
-        unit = "s";
-        targets = [
-          (target {
-            expr = ''time() - max by (instance) (max1m:boot_time_seconds{instance=~"$host"})'';
+            expr = ''max by (instance) (avg1m:up{instance=~"$host"})'';
             legend = "{{instance}}";
           })
         ];
