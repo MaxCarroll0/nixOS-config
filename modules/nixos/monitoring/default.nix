@@ -439,7 +439,9 @@ in
         globalConfig = {
           scrape_interval = "1s";
           scrape_timeout = "900ms";
-          evaluation_interval = "15s";
+          # Recording-rule output is what the panels plot, so this and not the
+          # scrape interval sets how fine a live line can be.
+          evaluation_interval = "5s";
         };
         ruleFiles = [ (ruleFile "hires-rules" rules.hires) ];
         scrapeConfigs = [
