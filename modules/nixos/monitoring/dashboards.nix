@@ -518,6 +518,17 @@ let
         "1".color = "green";
       };
     }
+    {
+      type = "range";
+      options = {
+        from = 0;
+        to = 1;
+        result = {
+          text = "Partial";
+          color = "orange";
+        };
+      };
+    }
   ];
 
   directMappings = [
