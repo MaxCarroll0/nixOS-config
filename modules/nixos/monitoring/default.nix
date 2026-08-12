@@ -102,6 +102,7 @@ let
           "--storage.tsdb.retention.size=0"
           "--web.listen-address=127.0.0.1:${toString port}"
           "--web.enable-lifecycle"
+          "--web.enable-admin-api"
         ];
         DynamicUser = true;
         StateDirectory = "prometheus-${name}";
@@ -426,7 +427,10 @@ in
     (lib.mkIf cfg.server.enable {
       services.prometheus = {
         enable = true;
-        extraFlags = [ "--web.enable-remote-write-receiver" ];
+        extraFlags = [
+          "--web.enable-remote-write-receiver"
+          "--web.enable-admin-api"
+        ];
         listenAddress = "0.0.0.0";
         retentionTime = cfg.retention.hires;
         globalConfig = {

@@ -9,7 +9,7 @@
 
 let
   cfg = config.local.monitoring.telemetry;
-  host = config.networking.hostName;
+  host = lib.replaceStrings [ "_" ] [ "" ] config.networking.hostName;
   server = if cfg.server.enable then "127.0.0.1" else cfg.serverAddress;
   alloyConfig = pkgs.writeText "alloy-${host}.alloy" ''
     logging {

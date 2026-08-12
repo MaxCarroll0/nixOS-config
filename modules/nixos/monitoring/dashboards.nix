@@ -917,7 +917,7 @@ let
       (dashboardLink "Energy history" "archive-energy")
       (dashboardLink "Tailscale uptime history" "archive-uptime")
     ];
-    panels = [
+    panels = livePanels [
       (stat {
         title = "Hosts up";
         w = 8;
