@@ -22,8 +22,6 @@ let
       format = format;
     }
     // lib.optionalAttrs (interval != null) { inherit interval; }
-    # Querying a 1m/1h aggregate faster than it is recorded repeats each value,
-    # which draws as a staircase.
     // lib.optionalAttrs (interval == null && !instant && lib.hasInfix "[$smooth]" expr) {
       interval = "$smooth";
     }
@@ -307,8 +305,6 @@ let
       // args
     );
 
-  # Grafana state history labels the host as either instance or host, and the
-  # instance form predates the desktop_new -> desktopnew relabelling.
   alertHostFilter = hostFilter:
     ''| json | label_format alertHost="{{ or .labels_instance .labels_host | replace \"_\" \"\" }}" | alertHost=~"(${hostFilter})|"'';
 
@@ -523,6 +519,8 @@ let
   upColor = {
     mode = "continuous-RdYlGr";
   };
+
+  upSelector = ''{instance=~"$host",instance!~"127[.]0[.]0[.]1(:[0-9]+)?"}'';
 
   directMappings = [
     {
@@ -1227,7 +1225,7 @@ let
         description = "Current continuous session, maximum session and observed system uptime over 7 days.";
         w = 24;
         h = 7;
-        unit = "s";
+        unit = "dtdurations";
         decimals = 0;
         options = {
           showHeader = true;
@@ -1278,6 +1276,14 @@ let
                 };
               }
               {
+                id = "min";
+                value = 0;
+              }
+              {
+                id = "max";
+                value = 172800;
+              }
+              {
                 # A down host has no running session; keep that cell neutral
                 # rather than treating zero as the worst uptime.
                 id = "mappings";
@@ -1317,8 +1323,17 @@ let
               {
                 id = "color";
                 value = {
-                  mode = "continuous-RdYlGr";
+                  mode = "fixed";
+                  fixedColor = "green";
                 };
+              }
+              {
+                id = "min";
+                value = 0;
+              }
+              {
+                id = "max";
+                value = 604800;
               }
             ];
           }
@@ -1643,7 +1658,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = ''max by (instance) (avg1m:up{instance=~"$host"})'';
+            expr = ''max by (instance) (avg1m:up${upSelector})'';
             legend = "{{instance}}";
           })
         ];
@@ -2882,7 +2897,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = ''max by (instance) (avg1m:up{instance=~"$host"})'';
+            expr = ''max by (instance) (avg1m:up${upSelector})'';
             legend = "{{instance}}";
           })
         ];
@@ -3381,7 +3396,11 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[1d]) / 1000 * ($tariff / 100)'';
+            datasource = {
+              type = "prometheus";
+              uid = "prometheus-lt";
+            };
+            expr = ''sum_over_time(avg1m:pc_power_watts{instance=~"$host"}[1d]) / 60 / 1000 * ($tariff / 100)'';
             legend = "{{instance}}";
             interval = "1d";
           })
@@ -3395,7 +3414,11 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[30d]) / 1000'';
+            datasource = {
+              type = "prometheus";
+              uid = "prometheus-lt";
+            };
+            expr = ''sum_over_time(avg1m:pc_power_watts{instance=~"$host"}[30d]) / 60 / 1000'';
             legend = "{{instance}}";
             interval = "30d";
           })
@@ -3444,7 +3467,7 @@ let
         decimals = 4;
         targets = [
           (target {
-            expr = ''avg_over_time(avg1h:up{instance=~"$host"}[$__range])'';
+            expr = ''max by (instance) (avg_over_time(avg1h:up${upSelector}[$__range]))'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3458,7 +3481,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''(1 - avg_over_time(avg1h:up{instance=~"$host"}[$__range])) * $__range_s'';
+            expr = ''(1 - max by (instance) (avg_over_time(avg1h:up${upSelector}[$__range]))) * $__range_s'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3475,7 +3498,7 @@ let
         decimals = 3;
         targets = [
           (target {
-            expr = ''avg_over_time(avg1h:up{instance=~"$host"}[1d])'';
+            expr = ''max by (instance) (avg_over_time(avg1h:up${upSelector}[1d]))'';
             legend = "{{instance}}";
             interval = "1d";
           })
@@ -3491,7 +3514,7 @@ let
         decimals = 4;
         targets = [
           (target {
-            expr = ''avg_over_time(avg1h:up{instance=~"$host"}[30d])'';
+            expr = ''max by (instance) (avg_over_time(avg1h:up${upSelector}[30d]))'';
             legend = "{{instance}}";
             interval = "30d";
           })
@@ -3507,7 +3530,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = ''avg1h:up{instance=~"$host"}'';
+            expr = ''max by (instance) (avg1h:up${upSelector})'';
             legend = "{{instance}}";
           })
         ];

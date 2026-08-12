@@ -88,8 +88,12 @@ let
       + ''/ node_filesystem_size_bytes{fstype!~"tmpfs|ramfs"}'';
     "systemd:failed_units" = ''sum by (instance) (node_systemd_unit_state{state="failed"})'';
     "host:up" =
-      ''label_replace(max by (peer) (tailscale_peer_online{instance="pi"}), "instance", "$1", "peer", "(.+)")''
-      + '' or max by (instance) (up{job="node", instance="pi"})'';
+      ''clamp_max(count by (instance) (present_over_time(up{job="node"}[1m])), 1)''
+      + '' * on(instance) group_left() ''
+      + ''(label_replace(max by (peer) (tailscale_peer_online{instance="pi"}), "instance", "$1", "peer", "(.+)")''
+      + '' or max by (instance) (up{job="node", instance="pi"}))''
+      + '' or (max by (instance) (last_over_time(up{job="node"}[7d])) * 0)''
+      + '' or max by (instance) (label_replace(max by (peer) (last_over_time(tailscale_peer_online{instance="pi"}[7d])) * 0, "instance", "$1", "peer", "(.+)"))'';
     "host:boot_time_seconds" = "node_boot_time_seconds";
   };
 
@@ -103,8 +107,6 @@ let
     "cpu:cores" = ''count by (instance) (node_cpu_seconds_total{mode="idle"})'';
   };
 
-  # Tunnelled bytes cross the physical NIC a second time as encapsulated
-  # packets, so the untunnelled share is the wire total minus the tunnels.
   byTransport =
     direction:
     let
@@ -730,7 +732,10 @@ in
       (threshold {
         uid = "host-down";
         title = "Host down";
-        expr = "1 - max by (instance) (host:up)";
+        expr =
+          ''clamp_min((1 - max by (instance) (host:up))''
+          + '' - (clamp_max(max by (instance) (host_power_state{state=~"S3|S5"}), 1)''
+          + '' or (0 * max by (instance) (host:up))), 0)'';
         value = 0;
         for' = "5m";
         summary = "{{ $labels.instance }} has stopped responding to scrapes.";

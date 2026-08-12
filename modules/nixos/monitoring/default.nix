@@ -13,7 +13,6 @@ let
   rules = import ./rules.nix { inherit config lib; };
   dashboards = import ./dashboards.nix { inherit lib; };
 
-  # host:up names hosts after their tailnet peer, which carries no underscore.
   instanceName = lib.replaceStrings [ "_" ] [ "" ] config.networking.hostName;
 
   yaml = pkgs.formats.yaml { };
@@ -364,8 +363,6 @@ in
     })
 
     (lib.mkIf (cfg.exporter.enable && !cfg.server.enable) {
-      # vmagent panics and exits on a full disk; without this a transient ENOSPC
-      # trips the start limit and telemetry stays dead until someone notices.
       systemd.services.vmagent = {
         startLimitIntervalSec = 0;
         serviceConfig = {
@@ -433,57 +430,58 @@ in
         ];
         listenAddress = "0.0.0.0";
         retentionTime = cfg.retention.hires;
-        globalConfig = {
-          scrape_interval = "1s";
-          scrape_timeout = "900ms";
-          # Recording-rule output is what the panels plot, so this and not the
-          # scrape interval sets how fine a live line can be.
-          evaluation_interval = "5s";
+        configText = builtins.toJSON {
+          global = {
+            scrape_interval = "1s";
+            scrape_timeout = "900ms";
+            evaluation_interval = "5s";
+          };
+          rule_files = [ "${ruleFile "hires-rules" rules.hires}" ];
+          storage.tsdb.out_of_order_time_window = "1h";
+          scrape_configs = [
+            {
+              job_name = "power-state";
+              honor_labels = true;
+              static_configs = [ { targets = [ "127.0.0.1:${toString powerStatePort}" ]; } ];
+            }
+            {
+              job_name = "node";
+              static_configs = [
+                {
+                  targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ];
+                  labels.instance = instanceName;
+                }
+              ];
+            }
+            {
+              job_name = "prometheus";
+              scrape_interval = "15s";
+              static_configs = [
+                {
+                  targets = [ "127.0.0.1:${toString hiresPort}" ];
+                  labels = {
+                    instance = instanceName;
+                    tier = "hires";
+                  };
+                }
+                {
+                  targets = [ "127.0.0.1:${toString longtermPort}" ];
+                  labels = {
+                    instance = instanceName;
+                    tier = "history";
+                  };
+                }
+                {
+                  targets = [ "127.0.0.1:${toString archivePort}" ];
+                  labels = {
+                    instance = instanceName;
+                    tier = "archive";
+                  };
+                }
+              ];
+            }
+          ];
         };
-        ruleFiles = [ (ruleFile "hires-rules" rules.hires) ];
-        scrapeConfigs = [
-          {
-            job_name = "power-state";
-            honor_labels = true;
-            static_configs = [ { targets = [ "127.0.0.1:${toString powerStatePort}" ]; } ];
-          }
-          {
-            job_name = "node";
-            static_configs = [
-              {
-                targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ];
-                labels.instance = instanceName;
-              }
-            ];
-          }
-          {
-            job_name = "prometheus";
-            scrape_interval = "15s";
-            static_configs = [
-              {
-                targets = [ "127.0.0.1:${toString hiresPort}" ];
-                labels = {
-                  instance = instanceName;
-                  tier = "hires";
-                };
-              }
-              {
-                targets = [ "127.0.0.1:${toString longtermPort}" ];
-                labels = {
-                  instance = instanceName;
-                  tier = "history";
-                };
-              }
-              {
-                targets = [ "127.0.0.1:${toString archivePort}" ];
-                labels = {
-                  instance = instanceName;
-                  tier = "archive";
-                };
-              }
-            ];
-          }
-        ];
       };
 
       services.prometheus.pushgateway = {
