@@ -360,6 +360,16 @@ in
     })
 
     (lib.mkIf (cfg.exporter.enable && !cfg.server.enable) {
+      # vmagent panics and exits on a full disk; without this a transient ENOSPC
+      # trips the start limit and telemetry stays dead until someone notices.
+      systemd.services.vmagent = {
+        startLimitIntervalSec = 0;
+        serviceConfig = {
+          Restart = lib.mkForce "always";
+          RestartSec = "30s";
+        };
+      };
+
       services.vmagent = {
         enable = true;
         remoteWrite.url = "http://${cfg.telemetry.serverAddress}:${toString hiresPort}/api/v1/write";

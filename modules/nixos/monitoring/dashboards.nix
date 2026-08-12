@@ -22,6 +22,11 @@ let
       format = format;
     }
     // lib.optionalAttrs (interval != null) { inherit interval; }
+    # Querying a 1m/1h aggregate faster than it is recorded repeats each value,
+    # which draws as a staircase.
+    // lib.optionalAttrs (interval == null && !instant && lib.hasInfix "[$smooth]" expr) {
+      interval = "$smooth";
+    }
     // lib.optionalAttrs (maxDataPoints != null) { inherit maxDataPoints; }
     // lib.optionalAttrs (refId != null) { inherit refId; }
     // lib.optionalAttrs (datasource != null) { inherit datasource; };
@@ -288,7 +293,7 @@ let
       {
         options = {
           showTime = true;
-          showLabels = true;
+          showLabels = false;
           showCommonLabels = false;
           wrapLogMessage = true;
           prettifyLogMessage = false;
@@ -299,6 +304,11 @@ let
       }
       // args
     );
+
+  # Grafana state history labels the host as either instance or host, and the
+  # instance form predates the desktop_new -> desktopnew relabelling.
+  alertHostFilter = hostFilter:
+    ''| json | label_format alertHost="{{ or .labels_instance .labels_host | replace \"_\" \"\" }}" | alertHost=~"(${hostFilter})|"'';
 
   recentAlerts = {
     hostFilter,
@@ -317,7 +327,7 @@ let
       };
       targets = [
         (target {
-          expr = ''{from="state-history"} | json | labels_instance=~"${hostFilter}" | labels_severity=~"${severityFilter}" | ruleTitle=~"${ruleFilter}" | current=~"${stateFilter}" | line_format "{{.ruleTitle}}  {{.labels_instance}}  {{.labels_severity}}  {{.previous}} → {{.current}}"'';
+          expr = ''{from="state-history"} ${alertHostFilter hostFilter} | labels_severity=~"${severityFilter}" | ruleTitle=~"${ruleFilter}" | current=~"${stateFilter}" | line_format "{{.ruleTitle}}  {{.alertHost}}  {{.labels_severity}}  {{.previous}} → {{.current}}"'';
           maxDataPoints = 30;
         })
       ];
@@ -1571,7 +1581,7 @@ let
         };
         targets = [
           (target {
-            expr = ''{from="state-history"} | json | labels_instance=~"$host" | labels_severity=~"$severity" | ruleTitle=~"$rule" | current=~"$state" | line_format "{{.ruleTitle}}  {{.labels_instance}}  {{.labels_severity}}  {{.previous}} → {{.current}}  value={{.values}}"'';
+            expr = ''{from="state-history"} ${alertHostFilter "$host"} | labels_severity=~"$severity" | ruleTitle=~"$rule" | current=~"$state" | line_format "{{.ruleTitle}}  {{.alertHost}}  {{.labels_severity}}  {{.previous}} → {{.current}}  value={{.values}}"'';
           })
         ];
       })
@@ -1585,7 +1595,7 @@ let
         };
         targets = [
           (target {
-            expr = ''sum(count_over_time({from="state-history"} | json | labels_instance=~"$host" | labels_severity=~"$severity" | ruleTitle=~"$rule" | current=~"$state" [1h]))'';
+            expr = ''sum(count_over_time({from="state-history"} ${alertHostFilter "$host"} | labels_severity=~"$severity" | ruleTitle=~"$rule" | current=~"$state" [1h]))'';
             interval = "1h";
             maxDataPoints = 200;
           })
@@ -1601,7 +1611,7 @@ let
         };
         targets = [
           (target {
-            expr = ''{from="state-history"} | json | labels_instance=~"$host" | current=~"Alerting.*|Error.*|NoData.*" | line_format "{{.ruleTitle}}  {{.labels_instance}}  {{.previous}} → {{.current}}  {{.values}}"'';
+            expr = ''{from="state-history"} ${alertHostFilter "$host"} | current=~"Alerting.*|Error.*|NoData.*" | line_format "{{.ruleTitle}}  {{.alertHost}}  {{.previous}} → {{.current}}  {{.values}}"'';
           })
         ];
       })
@@ -1615,7 +1625,7 @@ let
         };
         targets = [
           (target {
-            expr = ''{from="state-history"} | json | labels_instance=~"$host" | previous=~"Alerting.*|Error.*|NoData.*" | current=~"Normal.*" | line_format "{{.ruleTitle}}  {{.labels_instance}}  {{.previous}} → {{.current}}"'';
+            expr = ''{from="state-history"} ${alertHostFilter "$host"} | previous=~"Alerting.*|Error.*|NoData.*" | current=~"Normal.*" | line_format "{{.ruleTitle}}  {{.alertHost}}  {{.previous}} → {{.current}}"'';
           })
         ];
       })
