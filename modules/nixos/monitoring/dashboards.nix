@@ -57,6 +57,7 @@ let
       repeatDirection ? null,
       maxPerRow ? null,
       datasource ? null,
+      color ? null,
     }:
     {
       inherit
@@ -76,6 +77,7 @@ let
         }
         // lib.optionalAttrs (max != null) { inherit max; }
         // lib.optionalAttrs (min != null) { inherit min; }
+        // lib.optionalAttrs (color != null) { inherit color; }
         // lib.optionalAttrs (decimals != null) { inherit decimals; };
         inherit overrides;
       };
@@ -513,23 +515,14 @@ let
       type = "value";
       options = {
         "0".text = "Down";
-        "0".color = "red";
         "1".text = "Up";
-        "1".color = "green";
-      };
-    }
-    {
-      type = "range";
-      options = {
-        from = 0;
-        to = 1;
-        result = {
-          text = "Partial";
-          color = "orange";
-        };
       };
     }
   ];
+
+  upColor = {
+    mode = "continuous-RdYlGr";
+  };
 
   directMappings = [
     {
@@ -1643,6 +1636,9 @@ let
       (timeline {
         title = "Host reachability";
         mappings = upMappings;
+        color = upColor;
+        min = 0;
+        max = 1;
         targets = [
           (target {
             expr = ''max by (instance) (avg1m:up{instance=~"$host"})'';
@@ -2875,6 +2871,9 @@ let
         w = 24;
         h = 8;
         mappings = upMappings;
+        color = upColor;
+        min = 0;
+        max = 1;
         targets = [
           (target {
             expr = ''max by (instance) (avg1m:up{instance=~"$host"})'';
@@ -3497,6 +3496,9 @@ let
         w = 12;
         h = 8;
         mappings = upMappings;
+        color = upColor;
+        min = 0;
+        max = 1;
         targets = [
           (target {
             expr = ''avg1h:up{instance=~"$host"}'';
