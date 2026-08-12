@@ -22,8 +22,11 @@
 
   networking.hosts."100.117.13.66" = [ "observatory" "grafana" "pi.grafana" ];
 
+  services.thermald.enable = true;
+
   local.monitoring = {
     exporter.enable = true;
+    laptopTelemetry.enable = true;
     userReadable = true;
     telemetry.collector.enable = true;
     sensorNames = {

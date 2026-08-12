@@ -168,14 +168,14 @@
         };
 
       mkNode =
-        name: hostname:
+        name: hostname: remoteBuild:
         let
           host = self.nixosConfigurations.${name};
           system = host.config.nixpkgs.hostPlatform.system;
           deployLib = inputs.deploy-rs.lib.${system};
         in
         {
-          inherit hostname;
+          inherit hostname remoteBuild;
           sshOpts = [
             "-A"
             "-o"
@@ -228,9 +228,9 @@
         activationTimeout = 300;
 
         nodes = {
-          laptop = mkNode "laptop" "100.112.109.20";
-          desktop_new = mkNode "desktop_new" "100.106.140.88";
-          pi = mkNode "pi" "100.117.13.66";
+          laptop = mkNode "laptop" "100.112.109.20" false;
+          desktop_new = mkNode "desktop_new" "100.106.140.88" false;
+          pi = mkNode "pi" "100.117.13.66" true;
         };
       };
 

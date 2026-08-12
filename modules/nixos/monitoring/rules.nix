@@ -32,21 +32,27 @@ let
   powerRules = {
     "pc:cpu_power_watts" =
       ''sum by (instance) (node_hwmon_power_watt and on(instance, chip) node_hwmon_chip_names{chip_name="zenpower"})''
-      + " or sum by (instance) (rate(node_rapl_package_joules_total[1m]))";
+      + " or sum by (instance) (rate(node_rapl_package_joules_total[1m]))"
+      + '' or pi:pmic_rail_watts{rail="VDD_CORE"}'';
+
+    "pc:platform_power_watts" = "sum by (instance) (rate(node_rapl_psys_joules_total[1m]))";
 
     "pc:gpu_power_watts" =
       ''sum by (instance) (node_hwmon_power_watt and on(instance, chip) node_hwmon_chip_names{chip_name="amdgpu"})'';
 
     "pc:baseline_watts" = "max by (instance) (pc_power_baseline_watts)";
+    "pc:wall_estimate_watts" = "max by (instance) (pc_power_wall_estimate_watts)";
     "pc:psu_efficiency" = "max by (instance) (pc_power_psu_efficiency)";
     "pc:tariff_gbp_per_kwh" = "max by (instance) (pc_power_tariff_gbp_per_kwh)";
 
     "pc:power_watts" =
-      "((pc:cpu_power_watts or pc:baseline_watts * 0) + (pc:gpu_power_watts or pc:baseline_watts * 0)"
-      + " + pc:baseline_watts) / pc:psu_efficiency";
+      "pc:wall_estimate_watts or pc:platform_power_watts or (((pc:cpu_power_watts or pc:baseline_watts * 0) + (pc:gpu_power_watts or pc:baseline_watts * 0)"
+      + " + pc:baseline_watts) / pc:psu_efficiency)";
     "pc:psu_loss_watts" =
       "clamp_min(pc:power_watts - pc:cpu_power_watts"
       + " - (pc:gpu_power_watts or pc:cpu_power_watts * 0) - pc:baseline_watts, 0)";
+    "pi:pmic_rail_watts" =
+      "pi_pmic_current_amps * on(instance, rail) pi_pmic_voltage_volts";
   };
 
   systemRules = {
@@ -81,7 +87,9 @@ let
       ''node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs"}''
       + ''/ node_filesystem_size_bytes{fstype!~"tmpfs|ramfs"}'';
     "systemd:failed_units" = ''sum by (instance) (node_systemd_unit_state{state="failed"})'';
-    "host:up" = ''up{job=~"node.*", instance!~"127[.]0[.]0[.]1(:[0-9]+)?"}'';
+    "host:up" =
+      ''label_replace(max by (peer) (tailscale_peer_online{instance="pi"}), "instance", "$1", "peer", "(.+)")''
+      + '' or max by (instance) (up{job="node", instance="pi"})'';
     "host:boot_time_seconds" = "node_boot_time_seconds";
   };
 
@@ -189,6 +197,35 @@ let
         "avg"
         "max"
       ];
+    };
+    pc_platform_power_watts = {
+      source = "pc:platform_power_watts";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    pi_pmic_rail_watts = {
+      source = "pi:pmic_rail_watts";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    laptop_battery_power_watts = {
+      source = "laptop_battery_power_watts";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    laptop_battery_energy_watt_hours = {
+      source = "laptop_battery_energy_watt_hours";
+      aggs = [ "avg" ];
+    };
+    laptop_battery_health_ratio = {
+      source = "laptop_battery_health_ratio";
+      aggs = [ "avg" ];
     };
     pc_gpu_power_watts = {
       source = "pc:gpu_power_watts";

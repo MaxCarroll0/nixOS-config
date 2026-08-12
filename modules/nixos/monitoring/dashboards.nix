@@ -300,6 +300,29 @@ let
       // args
     );
 
+  recentAlerts = {
+    hostFilter,
+    severityFilter ? ".*",
+    ruleFilter ? ".*",
+    stateFilter ? ".*",
+  }:
+    logs {
+      title = "Recent alerts";
+      description = "Latest alert state changes.";
+      w = 24;
+      h = 10;
+      datasource = {
+        type = "loki";
+        uid = "loki";
+      };
+      targets = [
+        (target {
+          expr = ''{from="state-history"} | json | labels_instance=~"${hostFilter}" | labels_severity=~"${severityFilter}" | ruleTitle=~"${ruleFilter}" | current=~"${stateFilter}" | line_format "{{.ruleTitle}}  {{.labels_instance}}  {{.labels_severity}}  {{.previous}} → {{.current}}"'';
+          maxDataPoints = 30;
+        })
+      ];
+    };
+
   rightAxis = pattern: {
     matcher = {
       id = "byRegexp";
@@ -317,6 +340,23 @@ let
       {
         id = "custom.fillOpacity";
         value = 0;
+      }
+    ];
+  };
+
+  rightAxisUnit = pattern: unit: {
+    matcher = {
+      id = "byRegexp";
+      options = pattern;
+    };
+    properties = [
+      {
+        id = "custom.axisPlacement";
+        value = "right";
+      }
+      {
+        id = "unit";
+        value = unit;
       }
     ];
   };
@@ -544,6 +584,33 @@ let
           values;
     };
 
+  adaptiveSmoothVariable = {
+    name = "smooth";
+    label = "Smoothing";
+    type = "interval";
+    auto = true;
+    auto_count = 30;
+    auto_min = "1s";
+    query = lib.concatStringsSep "," [
+      "1s" "2s" "5s" "10s" "15s" "20s" "30s" "45s"
+      "1m" "2m" "5m" "10m" "15m" "20m" "30m" "45m"
+      "1h" "90m" "2h" "3h" "6h" "12h"
+      "1d" "2d" "84h" "7d" "14d" "30d" "180d" "1y"
+    ];
+    current = {
+      text = "auto";
+      value = "$__auto_interval_smooth";
+      selected = true;
+    };
+    options = [
+      {
+        text = "auto";
+        value = "$__auto_interval_smooth";
+        selected = true;
+      }
+    ];
+  };
+
   smoothVariable = mkSmoothVariable "1h" [
     "5m"
     "15m"
@@ -606,8 +673,8 @@ let
       includeAll = true;
       allValue = ".*";
       current = {
-        text = "desktop_new";
-        value = [ "desktop_new" ];
+        text = "All";
+        value = "$__all";
         selected = true;
       };
       options = [ ];
@@ -699,6 +766,15 @@ let
     url = "/d/${uid}";
     includeVars = true;
     keepTime = true;
+    targetBlank = false;
+  };
+
+  presetLink = title: uid: from: refresh: {
+    inherit title;
+    type = "link";
+    url = "/d/${uid}?from=${from}&to=now&var-smooth=%24__auto_interval_smooth&refresh=${refresh}";
+    includeVars = false;
+    keepTime = false;
     targetBlank = false;
   };
 
@@ -848,14 +924,14 @@ let
     ];
     links = [
       (dashboardLink "Alerts and triage" "alerts")
-      (dashboardLink "System live" "live-system")
-      (dashboardLink "Power live" "live-power")
+      (dashboardLink "System" "live-system")
+      (dashboardLink "Power and thermals" "live-power")
       (dashboardLink "Fleet" "history-fleet")
       (dashboardLink "Network" "history-network")
       (dashboardLink "Nix builds" "nix-builds")
       (dashboardLink "Logs" "logs")
       (dashboardLink "Energy history" "archive-energy")
-      (dashboardLink "Uptime history" "archive-uptime")
+      (dashboardLink "Tailscale uptime history" "archive-uptime")
     ];
     panels = [
       (stat {
@@ -931,6 +1007,27 @@ let
             expr = ''mem:used_ratio{instance=~"$host"}'';
             legend = "{{instance}}";
             instant = true;
+          })
+        ];
+      })
+      (ts {
+        title = "Pressure stall";
+        description = "The share of time tasks were unable to run because CPU, I/O, or memory was unavailable.";
+        w = 24;
+        h = 6;
+        unit = "percentunit";
+        targets = [
+          (target {
+            expr = ''psi:cpu_waiting{instance=~"$host"}'';
+            legend = "{{instance}} CPU";
+          })
+          (target {
+            expr = ''psi:io_stalled{instance=~"$host"}'';
+            legend = "{{instance}} I/O";
+          })
+          (target {
+            expr = ''psi:memory_stalled{instance=~"$host"}'';
+            legend = "{{instance}} memory";
           })
         ];
       })
@@ -1138,8 +1235,8 @@ let
         ];
       })
       (table {
-        title = "Uptime summary";
-        description = "Current continuous uptime, maximum session and observed uptime over 7 days.";
+        title = "System session summary";
+        description = "Current continuous session, maximum session and observed system uptime over 7 days.";
         w = 24;
         h = 7;
         unit = "s";
@@ -1256,7 +1353,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''sum_over_time((avg1m:up{instance=~"$host"})[7d:]) * 60'';
+            expr = ''max by (instance) (sum_over_time((avg1m:up{instance=~"$host"})[7d:]) * 60 or ((time() - max by (instance) (max1m:boot_time_seconds{instance=~"$host"})) and on(instance) (avg1m:up == 1)))'';
             legend = "{{instance}} total uptime (7d)";
             format = "table";
             instant = true;
@@ -1388,6 +1485,7 @@ let
           })
         ];
       })
+      (recentAlerts { hostFilter = "$host"; })
     ];
   };
 
@@ -1589,12 +1687,18 @@ let
           })
         ];
       })
+      (recentAlerts {
+        hostFilter = "$host";
+        severityFilter = "$severity";
+        ruleFilter = "$rule";
+        stateFilter = "$state";
+      })
     ];
   };
 
   livePower = dashboard {
     uid = "live-power";
-    title = "Power and thermals (live)";
+    title = "Power and thermals";
     datasource = "prometheus";
     from = "now-15m";
     refresh = "5s";
@@ -1605,8 +1709,12 @@ let
       liveSmoothVariable
     ];
     links = [
+      (presetLink "Live" "live-power" "now-15m" "5s")
+      (presetLink "24h" "history-power" "now-24h" "1m")
+      (presetLink "7d" "history-power" "now-7d" "5m")
+      (presetLink "30d" "history-power" "now-30d" "5m")
       (dashboardLink "System" "live-system")
-      (dashboardLink "History" "history-power")
+      (dashboardLink "Overview" "overview")
     ];
     panels = livePanels [
       (stat {
@@ -1662,8 +1770,8 @@ let
         ];
       })
       (ts {
-        title = "Total PC power, broken down";
-        description = "Modelled, not measured: this board has no PSU telemetry. CPU comes from zenpower's SVI2 rails when present and RAPL otherwise, GPU from the amdgpu board sensor, and the baseline is the configured allowance for RAM, drives, fans and board. The sum is divided by the assumed PSU efficiency to give an estimate at the wall.";
+        title = "Total device power, broken down";
+        description = "Desktop is a modelled wall estimate, laptop uses RAPL platform energy, and Pi uses its configured wall estimate. Hardware-specific measured rails are shown separately.";
         w = 24;
         h = 9;
         unit = "watt";
@@ -1719,6 +1827,55 @@ let
           (target {
             expr = ''pc:power_watts{instance=~"$host"}'';
             legend = "{{instance}} total";
+          })
+        ];
+      })
+      (ts {
+        title = "Pi PMIC rail power";
+        description = "Measured PMIC output rails; this excludes USB and other direct 5 V loads, so it is not wall power.";
+        w = 12;
+        h = 8;
+        unit = "watt";
+        targets = [
+          (target {
+            expr = ''pi:pmic_rail_watts{instance=~"$host"}'';
+            legend = "{{instance}} {{rail}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Pi supply and firmware health";
+        w = 12;
+        h = 8;
+        unit = "volt";
+        targets = [
+          (target {
+            expr = ''pi_pmic_voltage_volts{instance=~"$host",rail="EXT5V"}'';
+            legend = "{{instance}} 5 V supply";
+          })
+        ];
+      })
+      (ts {
+        title = "Laptop battery power";
+        w = 12;
+        h = 8;
+        unit = "watt";
+        targets = [
+          (target {
+            expr = ''laptop_battery_power_watts{instance=~"$host"}'';
+            legend = "{{instance}} {{battery}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Laptop battery energy";
+        w = 12;
+        h = 8;
+        unit = "watth";
+        targets = [
+          (target {
+            expr = ''laptop_battery_energy_watt_hours{instance=~"$host"}'';
+            legend = "{{instance}} {{kind}}";
           })
         ];
       })
@@ -1812,18 +1969,23 @@ let
 
   liveSystem = dashboard {
     uid = "live-system";
-    title = "System (live)";
+    title = "System";
     datasource = "prometheus";
     from = "now-15m";
     refresh = "5s";
     tags = [ "live" ];
     variables = [
       (hostVariable "prometheus")
+      (capacityVariable "prometheus")
       liveSmoothVariable
     ];
     links = [
+      (presetLink "Live" "live-system" "now-15m" "5s")
+      (presetLink "24h" "history-system" "now-24h" "1m")
+      (presetLink "7d" "history-system" "now-7d" "5m")
+      (presetLink "30d" "history-system" "now-30d" "5m")
       (dashboardLink "Power and thermals" "live-power")
-      (dashboardLink "History" "history-system")
+      (dashboardLink "Overview" "overview")
     ];
     panels = livePanels [
       (ts {
@@ -1943,24 +2105,27 @@ let
         ];
       })
       (ts {
-        title = "Memory";
+        title = "Memory — $capacity machines";
         description = "Used excludes reclaimable cache, so it tracks what the machine actually needs. The dashed line is installed capacity.";
-        w = 12;
+        w = 8;
         h = 8;
         unit = "bytes";
         min = 0;
+        repeat = "capacity";
+        repeatDirection = "h";
+        maxPerRow = 3;
         overrides = [ (dimmed ".*(capacity|cache)$") ];
         targets = [
           (target {
-            expr = ''mem:used_bytes{instance=~"$host"}'';
+            expr = ''mem:used_bytes{instance=~"$host"} * on(instance) group_left(capacity) max1m:mem_capacity_info{capacity=~"$capacity"}'';
             legend = "{{instance}} used";
           })
           (target {
-            expr = ''mem:cached_bytes{instance=~"$host"}'';
+            expr = ''mem:cached_bytes{instance=~"$host"} * on(instance) group_left(capacity) max1m:mem_capacity_info{capacity=~"$capacity"}'';
             legend = "{{instance}} cache";
           })
           (target {
-            expr = ''node_memory_MemTotal_bytes{instance=~"$host"}'';
+            expr = ''node_memory_MemTotal_bytes{instance=~"$host"} * on(instance) group_left(capacity) max1m:mem_capacity_info{capacity=~"$capacity"}'';
             legend = "{{instance}} capacity";
           })
         ];
@@ -2081,11 +2246,14 @@ let
     variables = [
       (hostVariable "prometheus-lt")
       (sensorVariable "prometheus-lt")
-      smoothVariable
+      adaptiveSmoothVariable
       tariffVariable
     ];
     links = [
-      (dashboardLink "Live" "live-power")
+      (presetLink "Live" "live-power" "now-15m" "5s")
+      (presetLink "24h" "history-power" "now-24h" "1m")
+      (presetLink "7d" "history-power" "now-7d" "5m")
+      (presetLink "30d" "history-power" "now-30d" "5m")
       (dashboardLink "System" "history-system")
       (dashboardLink "Thermal archive" "archive-thermal")
     ];
@@ -2170,6 +2338,70 @@ let
         ];
       })
       (ts {
+        title = "Energy use over time";
+        w = 24;
+        h = 9;
+        unit = "kwatth";
+        decimals = 2;
+        custom = lineCustom // {
+          fillOpacity = 45;
+          lineWidth = 1;
+          stacking = {
+            mode = "normal";
+            group = "A";
+          };
+        };
+        targets = [
+          (target {
+            expr = ''sum_over_time(avg1m:pc_power_watts{instance=~"$host"}[$smooth]) / 60 / 1000'';
+            legend = "{{instance}}";
+            interval = "$smooth";
+          })
+        ];
+      })
+      (bar {
+        title = "Daily energy and cost";
+        description = "Energy is on the left axis; cost is on the right.";
+        w = 24;
+        h = 8;
+        unit = "kwatth";
+        decimals = 2;
+        overrides = [ (rightAxisUnit "Cost" "currencyGBP") ];
+        targets = [
+          (target {
+            expr = ''sum(sum_over_time(avg1m:pc_power_watts{instance=~"$host"}[1d])) / 60 / 1000'';
+            legend = "Energy";
+            interval = "1d";
+          })
+          (target {
+            expr = ''sum(sum_over_time(avg1m:pc_power_watts{instance=~"$host"}[1d])) / 60 / 1000 * ($tariff / 100)'';
+            legend = "Cost";
+            interval = "1d";
+          })
+        ];
+      })
+      (bar {
+        title = "Monthly energy and cost";
+        description = "Energy is on the left axis; cost is on the right.";
+        w = 24;
+        h = 8;
+        unit = "kwatth";
+        decimals = 2;
+        overrides = [ (rightAxisUnit "Cost" "currencyGBP") ];
+        targets = [
+          (target {
+            expr = ''sum(sum_over_time(avg1m:pc_power_watts{instance=~"$host"}[30d])) / 60 / 1000'';
+            legend = "Energy";
+            interval = "30d";
+          })
+          (target {
+            expr = ''sum(sum_over_time(avg1m:pc_power_watts{instance=~"$host"}[30d])) / 60 / 1000 * ($tariff / 100)'';
+            legend = "Cost";
+            interval = "30d";
+          })
+        ];
+      })
+      (ts {
         title = "CPU against GPU power";
         unit = "watt";
         targets = [
@@ -2216,14 +2448,10 @@ let
         h = 9;
         unit = "celsius";
         overrides = [ (rightAxis ".*rpm.*") ];
-        targets = [
+        targets = smoothedMajorTemperatureTargets ++ [
           (target {
-            expr = ''avg_over_time(avg1m:major_temp_celsius{instance=~"$host",component="CPU"}[$smooth])'';
-            legend = "{{instance}} CPU";
-          })
-          (target {
-            expr = ''avg_over_time(avg1m:fan_rpm{instance=~"$host"}[$smooth])'';
-            legend = "{{instance}} {{id}} rpm";
+            expr = ''max by (instance) (avg_over_time(avg1m:fan_rpm{instance=~"$host"}[$smooth]))'';
+            legend = "{{instance}} fan rpm";
           })
         ];
       })
@@ -2287,9 +2515,13 @@ let
     tags = [ "history" ];
     variables = [
       (hostVariable "prometheus-lt")
-      smoothVariable
+      adaptiveSmoothVariable
     ];
     links = [
+      (presetLink "Live" "history-network" "now-15m" "5s")
+      (presetLink "24h" "history-network" "now-24h" "1m")
+      (presetLink "7d" "history-network" "now-7d" "5m")
+      (presetLink "30d" "history-network" "now-30d" "5m")
       (dashboardLink "Fleet" "history-fleet")
       (dashboardLink "System" "history-system")
     ];
@@ -2501,9 +2733,13 @@ let
     tags = [ "history" ];
     variables = [
       (fleetHostVariable "prometheus-lt")
-      smoothVariable
+      adaptiveSmoothVariable
     ];
     links = [
+      (presetLink "Live" "history-fleet" "now-15m" "5s")
+      (presetLink "24h" "history-fleet" "now-24h" "1m")
+      (presetLink "7d" "history-fleet" "now-7d" "5m")
+      (presetLink "30d" "history-fleet" "now-30d" "5m")
       (dashboardLink "System" "history-system")
       (dashboardLink "Network" "history-network")
       (dashboardLink "Uptime archive" "archive-uptime")
@@ -2532,7 +2768,7 @@ let
         ];
       })
       (stat {
-        title = "Uptime";
+        title = "System uptime";
         w = 12;
         h = 5;
         unit = "s";
@@ -2652,7 +2888,7 @@ let
         ];
       })
       (ts {
-        title = "Uptime";
+        title = "System uptime";
         w = 24;
         h = 8;
         unit = "s";
@@ -2668,7 +2904,7 @@ let
 
   historySystem = dashboard {
     uid = "history-system";
-    title = "System health";
+    title = "System";
     datasource = "prometheus-lt";
     from = "now-7d";
     refresh = "5m";
@@ -2676,10 +2912,13 @@ let
     variables = [
       (hostVariable "prometheus-lt")
       (capacityVariable "prometheus-lt")
-      smoothVariable
+      adaptiveSmoothVariable
     ];
     links = [
-      (dashboardLink "Live" "live-system")
+      (presetLink "Live" "live-system" "now-15m" "5s")
+      (presetLink "24h" "history-system" "now-24h" "1m")
+      (presetLink "7d" "history-system" "now-7d" "5m")
+      (presetLink "30d" "history-system" "now-30d" "5m")
       (dashboardLink "Power and thermals" "history-power")
       (dashboardLink "Capacity archive" "archive-capacity")
     ];
@@ -2962,6 +3201,13 @@ let
     tags = [ "archive" ];
     variables = [
       (fleetHostVariable "prometheus-archive")
+      (mkSmoothVariable "1h" [
+        "1h"
+        "6h"
+        "1d"
+        "7d"
+        "30d"
+      ])
       tariffVariable
     ];
     links = [
@@ -2969,6 +3215,117 @@ let
       (dashboardLink "Overview" "overview")
     ];
     panels = [
+      (bar {
+        title = "Power draw";
+        w = 24;
+        h = 8;
+        unit = "watt";
+        decimals = 0;
+        options = {
+          xField = "category";
+          stacking = "normal";
+          showValue = "never";
+          xTickLabelRotation = 0;
+          legend = {
+            displayMode = "list";
+            placement = "bottom";
+            showLegend = true;
+            calcs = [ ];
+          };
+          tooltip.mode = "multi";
+          tooltip.sort = "desc";
+        };
+        transformations = [
+          {
+            id = "labelsToFields";
+            options = {
+              keepLabels = [
+                "instance"
+                "category"
+              ];
+              valueLabel = "instance";
+            };
+          }
+          {
+            id = "merge";
+            options = { };
+          }
+        ];
+        custom = {
+          fillOpacity = 80;
+          lineWidth = 1;
+        };
+        targets = [
+          (target {
+            expr = ''label_replace(last_over_time(avg1h:pc_power_watts{instance=~"$host"}[2h]), "category", "Latest (1h)", "__name__", ".*")'';
+            instant = true;
+          })
+          (target {
+            expr = ''label_replace(avg_over_time(avg1h:pc_power_watts{instance=~"$host"}[24h]), "category", "Mean (24h)", "__name__", ".*")'';
+            instant = true;
+          })
+          (target {
+            expr = ''label_replace(max_over_time(max1h:pc_power_watts{instance=~"$host"}[24h]), "category", "Max (24h)", "__name__", ".*")'';
+            instant = true;
+          })
+        ];
+      })
+      (pie {
+        title = "Energy (24h)";
+        w = 6;
+        h = 5;
+        unit = "kwatth";
+        decimals = 1;
+        targets = [
+          (target {
+            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[24h]) / 1000'';
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (pie {
+        title = "Energy (7d)";
+        w = 6;
+        h = 5;
+        unit = "kwatth";
+        decimals = 1;
+        targets = [
+          (target {
+            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[7d]) / 1000'';
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (pie {
+        title = "Cost (24h)";
+        w = 6;
+        h = 5;
+        unit = "currencyGBP";
+        decimals = 2;
+        targets = [
+          (target {
+            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[24h]) / 1000 * ($tariff / 100)'';
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (pie {
+        title = "Cost (7d)";
+        w = 6;
+        h = 5;
+        unit = "currencyGBP";
+        decimals = 2;
+        targets = [
+          (target {
+            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[7d]) / 1000 * ($tariff / 100)'';
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
       (stat {
         title = "Energy over range";
         w = 8;
@@ -3011,18 +3368,26 @@ let
           })
         ];
       })
-      (bar {
-        title = "Energy per day";
-        description = "Each hourly point is a mean wattage covering exactly one hour, so summing a day's points gives watt-hours directly. Bars align to calendar days.";
+      (ts {
+        title = "Energy use over time";
+        description = "Energy use per smoothing interval, stacked by host.";
         w = 24;
         h = 9;
         unit = "kwatth";
         decimals = 2;
+        custom = lineCustom // {
+          fillOpacity = 45;
+          lineWidth = 1;
+          stacking = {
+            mode = "normal";
+            group = "A";
+          };
+        };
         targets = [
           (target {
-            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[1d]) / 1000'';
+            expr = ''sum_over_time(avg1h:pc_power_watts{instance=~"$host"}[$smooth]) / 1000'';
             legend = "{{instance}}";
-            interval = "1d";
+            interval = "$smooth";
           })
         ];
       })
@@ -3078,7 +3443,7 @@ let
 
   archiveUptime = dashboard {
     uid = "archive-uptime";
-    title = "Uptime";
+    title = "Tailscale uptime";
     datasource = "prometheus-archive";
     from = "now-1y";
     refresh = "";
@@ -3118,7 +3483,7 @@ let
         ];
       })
       (bar {
-        title = "Uptime per day";
+        title = "Tailscale uptime per day";
         description = "Same geometry as the energy-per-day bars, so the two line up when read side by side.";
         w = 24;
         h = 9;
@@ -3135,7 +3500,7 @@ let
         ];
       })
       (bar {
-        title = "Uptime per month";
+        title = "Tailscale uptime per month";
         w = 12;
         h = 8;
         unit = "percentunit";
@@ -3634,7 +3999,7 @@ let
     variables = [ (textboxVariable "trace" "Trace ID" ".*") ];
     links = [
       (dashboardLink "All builds" "nix-builds")
-      (dashboardLink "System" "live-system")
+      (dashboardLink "System" "history-system")
       (dashboardLink "Logs" "logs")
     ];
     panels = [

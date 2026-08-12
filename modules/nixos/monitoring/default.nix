@@ -196,6 +196,10 @@ in
 
     grafana.enable = lib.mkEnableOption "Grafana with the provisioned dashboards";
 
+    piFirmware.enable = lib.mkEnableOption "Raspberry Pi firmware and PMIC telemetry";
+
+    laptopTelemetry.enable = lib.mkEnableOption "laptop battery and platform telemetry";
+
     # Linux 5.10 made these root-only over the PLATYPUS side channel; without
     # this the rapl collector sees nothing.
     userReadable = lib.mkOption {
@@ -223,6 +227,12 @@ in
     };
 
     totalPower = {
+      wallEstimateWatts = lib.mkOption {
+        type = lib.types.nullOr lib.types.number;
+        default = null;
+        description = "Explicit estimated wall draw when no whole-device meter exists.";
+      };
+
       baselineWatts = lib.mkOption {
         type = lib.types.number;
         default = 20.88;
@@ -349,6 +359,31 @@ in
       '';
     })
 
+    (lib.mkIf (cfg.exporter.enable && !cfg.server.enable) {
+      services.vmagent = {
+        enable = true;
+        remoteWrite.url = "http://${cfg.telemetry.serverAddress}:${toString hiresPort}/api/v1/write";
+        extraArgs = [ "-remoteWrite.maxDiskUsagePerURL=2GB" ];
+        prometheusConfig = {
+          global = {
+            scrape_interval = "5s";
+            scrape_timeout = "4s";
+          };
+          scrape_configs = [
+            {
+              job_name = "node";
+              static_configs = [
+                {
+                  targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ];
+                  labels.instance = config.networking.hostName;
+                }
+              ];
+            }
+          ];
+        };
+      };
+    })
+
     # node_exporter runs as its own user, so it needs the group too.
     (lib.mkIf cfg.userReadable {
       users.groups.powermon = { };
@@ -379,7 +414,7 @@ in
       services.prometheus = {
         enable = true;
         extraFlags = [ "--web.enable-remote-write-receiver" ];
-        listenAddress = "127.0.0.1";
+        listenAddress = "0.0.0.0";
         retentionTime = cfg.retention.hires;
         globalConfig = {
           scrape_interval = "1s";
@@ -429,16 +464,7 @@ in
               }
             ];
           }
-        ]
-        ++ lib.mapAttrsToList (instance: target: {
-          job_name = "node-${instance}";
-          static_configs = [
-            {
-              targets = [ target ];
-              labels.instance = instance;
-            }
-          ];
-        }) cfg.targets;
+        ];
       };
 
       services.prometheus.pushgateway = {
@@ -447,7 +473,10 @@ in
         web.listen-address = "0.0.0.0:${toString powerStatePort}";
       };
 
-      networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ powerStatePort ];
+      networking.firewall.interfaces.tailscale0.allowedTCPPorts = [
+        config.services.prometheus.port
+        powerStatePort
+      ];
 
       systemd.services.prometheus-longterm = mkTier {
         name = "longterm";
@@ -469,6 +498,7 @@ in
         interval = "1h";
         match = ''{__name__=~"(avg|max|min)1h:.*"}'';
       };
+
     })
 
     (lib.mkIf cfg.grafana.enable {

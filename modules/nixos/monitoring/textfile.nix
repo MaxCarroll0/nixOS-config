@@ -62,6 +62,10 @@ let
         echo '# HELP pc_power_baseline_watts Modelled draw of parts with no telemetry.'
         echo '# TYPE pc_power_baseline_watts gauge'
         echo 'pc_power_baseline_watts ${toString cfg.totalPower.baselineWatts}'
+        ${lib.optionalString (cfg.totalPower.wallEstimateWatts != null) ''
+          echo '# TYPE pc_power_wall_estimate_watts gauge'
+          echo 'pc_power_wall_estimate_watts ${toString cfg.totalPower.wallEstimateWatts}'
+        ''}
         echo '# HELP pc_power_psu_efficiency Assumed PSU conversion efficiency.'
         echo '# TYPE pc_power_psu_efficiency gauge'
         echo 'pc_power_psu_efficiency ${toString cfg.totalPower.psuEfficiency}'
@@ -73,6 +77,71 @@ let
         echo '# HELP pc_memory_capacity_info Installed memory capacity group.'
         echo '# TYPE pc_memory_capacity_info gauge'
         printf 'pc_memory_capacity_info{capacity="%s GiB"} 1\n' "$memory_gib"
+      '';
+
+  piFirmwareMetrics =
+    writeCollector "pi-firmware"
+      [
+        pkgs.raspberrypi-utils
+        pkgs.gawk
+      ]
+      ''
+        echo '# TYPE pi_pmic_current_amps gauge'
+        echo '# TYPE pi_pmic_voltage_volts gauge'
+        vcgencmd pmic_read_adc | awk '
+          match($0, /^[[:space:]]*([^[:space:]]+)[[:space:]]+(current|volt)\([0-9]+\)=([0-9.]+)(A|V)$/, fields) {
+            rail = fields[1]
+            sub(/_[AV]$/, "", rail)
+            if (fields[2] == "current")
+              printf "pi_pmic_current_amps{rail=\"%s\"} %s\n", rail, fields[3]
+            else
+              printf "pi_pmic_voltage_volts{rail=\"%s\"} %s\n", rail, fields[3]
+          }
+        '
+        flags=$(vcgencmd get_throttled 2>/dev/null | sed -n 's/.*0x//p')
+        [ -n "$flags" ] || flags=0
+        value=$((16#$flags))
+        for entry in under_voltage:0 frequency_capped:1 throttled:2 soft_temp_limit:3 under_voltage_since_boot:16 frequency_capped_since_boot:17 throttled_since_boot:18 soft_temp_limit_since_boot:19; do
+          name=''${entry%%:*}
+          bit=''${entry##*:}
+          printf 'pi_firmware_flag{flag="%s"} %s\n' "$name" "$(( (value >> bit) & 1 ))"
+        done
+      '';
+
+  laptopBatteryMetrics =
+    writeCollector "laptop-battery"
+      [ pkgs.gawk ]
+      ''
+        echo '# TYPE laptop_battery_energy_watt_hours gauge'
+        echo '# TYPE laptop_battery_power_watts gauge'
+        echo '# TYPE laptop_battery_health_ratio gauge'
+        for battery in /sys/class/power_supply/BAT*; do
+          [ -d "$battery" ] || continue
+          name=$(basename "$battery")
+          read_value() { cat "$battery/$1" 2>/dev/null || echo 0; }
+          energy_now=$(read_value energy_now)
+          energy_full=$(read_value energy_full)
+          energy_design=$(read_value energy_full_design)
+          power_now=$(read_value power_now)
+          voltage_now=$(read_value voltage_now)
+          current_now=$(read_value current_now)
+          capacity=$(read_value capacity)
+          cycles=$(read_value cycle_count)
+          status=$(read_value status | tr -cd '[:alnum:]_-')
+          [ "$power_now" -gt 0 ] 2>/dev/null || power_now=$(( voltage_now * current_now / 1000000 ))
+          awk -v name="$name" -v now="$energy_now" -v full="$energy_full" -v design="$energy_design" -v power="$power_now" -v capacity="$capacity" -v cycles="$cycles" -v status="$status" '
+            BEGIN {
+              printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"current\"} %.6f\n", name, now / 1000000
+              printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"full\"} %.6f\n", name, full / 1000000
+              printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"design\"} %.6f\n", name, design / 1000000
+              printf "laptop_battery_power_watts{battery=\"%s\"} %.6f\n", name, power / 1000000
+              if (design > 0) printf "laptop_battery_health_ratio{battery=\"%s\"} %.6f\n", name, full / design
+              printf "laptop_battery_capacity_ratio{battery=\"%s\"} %.6f\n", name, capacity / 100
+              printf "laptop_battery_cycles{battery=\"%s\"} %s\n", name, cycles
+              printf "laptop_battery_status_info{battery=\"%s\",status=\"%s\"} 1\n", name, status
+            }
+          '
+        done
       '';
 
   tailscaleMetrics =
@@ -140,6 +209,7 @@ let
       '';
 
   collectorService = collector: {
+    unitConfig.StartLimitIntervalSec = 0;
     serviceConfig = {
       Type = "oneshot";
       ExecStart = lib.getExe collector;
@@ -175,6 +245,7 @@ in
         restartTriggers = [
           sensorNameTable
           (toString cfg.totalPower.baselineWatts)
+          (toString cfg.totalPower.wallEstimateWatts)
         ];
       }
     ];
@@ -198,5 +269,23 @@ in
     );
 
     systemd.timers.textfile-wireguard = lib.mkIf hasWireguard (collectorTimer "30s");
+
+    systemd.services.textfile-pi-firmware = lib.mkIf cfg.piFirmware.enable (
+      lib.mkMerge [
+        (collectorService piFirmwareMetrics)
+        { description = "Publish Raspberry Pi firmware and PMIC telemetry"; }
+      ]
+    );
+
+    systemd.timers.textfile-pi-firmware = lib.mkIf cfg.piFirmware.enable (collectorTimer "1s");
+
+    systemd.services.textfile-laptop-battery = lib.mkIf cfg.laptopTelemetry.enable (
+      lib.mkMerge [
+        (collectorService laptopBatteryMetrics)
+        { description = "Publish laptop battery telemetry"; }
+      ]
+    );
+
+    systemd.timers.textfile-laptop-battery = lib.mkIf cfg.laptopTelemetry.enable (collectorTimer "5s");
   };
 }

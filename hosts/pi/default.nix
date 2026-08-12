@@ -18,6 +18,7 @@
   ];
 
   networking.hostName = "pi";
+  boot.kernelParams = [ "psi=1" ];
   networking.hosts."100.117.13.66" = [ "observatory" "grafana" "pi.grafana" ];
 
   # Grafana remains on its private service port. This tailnet-only proxy gives
@@ -97,6 +98,7 @@
 
   local.monitoring = {
     exporter.enable = true;
+    piFirmware.enable = true;
     server.enable = true;
     grafana.enable = true;
     userReadable = true;
@@ -110,6 +112,12 @@
     };
     sensorNames = {
       "cpu_thermal:temp1" = "SoC";
+    };
+    totalPower = {
+      wallEstimateWatts = 6;
+      baselineWatts = 6;
+      psuEfficiency = 1;
+      tariffPencePerKwh = 20.88;
     };
   };
 

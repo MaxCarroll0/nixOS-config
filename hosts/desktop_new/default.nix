@@ -10,6 +10,10 @@
 
   networking.hostName = "desktop_new";
 
+  # Headless: no connector is plugged in, so amdgpu exposes no CRTC and any GL or
+  # Vulkan client fails to create a surface. Force one on.
+  boot.kernelParams = [ "video=HDMI-A-1:1920x1080@60e" ];
+
   fileSystems."/boot".options = [
     "nofail"
     "x-systemd.automount"

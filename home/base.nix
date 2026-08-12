@@ -120,7 +120,8 @@
       set -o vi
 
       # home.sessionVariables only reaches login shells; sudo's PAM key auth needs this everywhere.
-      export SSH_AUTH_SOCK="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ssh-agent"
+      # An agent forwarded by ssh -A must win, or remote sudo (deploy-rs) loses the key.
+      export SSH_AUTH_SOCK="''${SSH_AUTH_SOCK:-''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ssh-agent}"
     '';
   };
 
