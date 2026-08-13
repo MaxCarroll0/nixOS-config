@@ -527,12 +527,12 @@ in
   hires = [
     {
       name = "sensors";
-      interval = "15s";
+      interval = "1s";
       rules = toRules (sensorRules // powerRules);
     }
     {
       name = "system";
-      interval = "15s";
+      interval = "1s";
       rules = toRules (systemRules // networkRules);
     }
     {
