@@ -67,7 +67,7 @@ let
             source_labels = [ "__name__" ];
             regex = "(.*):${window}${suffix}";
             target_label = "__name__";
-            replacement = "$1${suffix}";
+            replacement = "\${1}${suffix}";
           }) [ "" "_max" "_min" ];
         }
       ];
