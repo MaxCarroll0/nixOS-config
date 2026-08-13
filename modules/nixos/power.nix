@@ -205,6 +205,7 @@ let
     name = "session-activity";
     runtimeInputs = with pkgs; [
       coreutils
+      gawk
       procps
       systemd
     ];
@@ -228,6 +229,20 @@ let
         esac
         atime=$(stat -c %X "$pty" 2>/dev/null || echo 0)
         if [ "$atime" -gt "$threshold" ]; then
+          exit 0
+        fi
+      done
+
+      # logind never sets IdleHint under Wayland, so ask KDE instead.
+      for session in $(loginctl list-sessions --no-legend | awk '{print $1}'); do
+        [ "$(loginctl show-session "$session" -p Class --value)" = user ] || continue
+        [ -n "$(loginctl show-session "$session" -p Seat --value)" ] || continue
+        runtime="/run/user/$(loginctl show-session "$session" -p User --value)"
+        [ -S "$runtime/bus" ] || continue
+        away=$(XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+          busctl --user call org.kde.screensaver /ScreenSaver \
+            org.freedesktop.ScreenSaver GetActive 2>/dev/null || true)
+        if [ "$away" != "b true" ]; then
           exit 0
         fi
       done
@@ -262,14 +277,6 @@ let
 
         sleep 60
         echo 0 > "$alarm"
-
-        for session in $(loginctl list-sessions --no-legend | awk '{print $1}'); do
-          seat=$(loginctl show-session "$session" -p Seat --value 2>/dev/null || true)
-          class=$(loginctl show-session "$session" -p Class --value 2>/dev/null || true)
-          if [ -n "$seat" ] && [ "$class" = user ]; then
-            exec systemctl suspend
-          fi
-        done
 
         if ${lib.getExe sessionActivity}; then
           exit 0
@@ -328,7 +335,7 @@ in
     idle.autosuspend.watchPorts = lib.mkOption {
       type = lib.types.listOf lib.types.port;
       default = [ 22 ];
-      description = "An established connection to any of these counts as activity.";
+      description = "A direct connection to any of these counts as activity; Tailscale SSH is invisible here.";
     };
 
     idle.autosuspend.powerOffAfterHours = lib.mkOption {
@@ -559,10 +566,19 @@ in
             class = "ExternalCommand";
             command = lib.getExe sessionActivity;
           };
-          LogindSessionsIdle.class = "LogindSessionsIdle";
+          LogindSessionsIdle = {
+            class = "LogindSessionsIdle";
+            types = "tty";
+          };
           Load = {
             class = "Load";
             threshold = cfg.idle.autosuspend.loadThreshold;
+          };
+        }
+        // lib.optionalAttrs (cfg.idle.autosuspend.watchPorts != [ ]) {
+          SshConnections = {
+            class = "ActiveConnection";
+            ports = lib.concatMapStringsSep "," toString cfg.idle.autosuspend.watchPorts;
           };
         };
       };

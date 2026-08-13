@@ -160,4 +160,15 @@
       AutoSuspendAction=0
     '';
   };
+
+  # autosuspend reads the lock state as its "user is away" signal, so this
+  # timeout must stay below local.power.idle.autosuspend.idleMinutes.
+  xdg.configFile."kscreenlockerrc" = {
+    force = true;
+    text = ''
+      [Daemon]
+      Autolock=true
+      Timeout=10
+    '';
+  };
 }
