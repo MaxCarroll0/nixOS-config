@@ -22,8 +22,8 @@ let
       format = format;
     }
     // lib.optionalAttrs (interval != null) { inherit interval; }
-    // lib.optionalAttrs (interval == null && !instant && lib.hasInfix "[\${smooth}s]" expr) {
-      interval = "\${smooth}s";
+    // lib.optionalAttrs (interval == null && !instant && lib.hasInfix "[$smooth]" expr) {
+      interval = "$smooth";
     }
     // lib.optionalAttrs (maxDataPoints != null) { inherit maxDataPoints; }
     // lib.optionalAttrs (refId != null) { inherit refId; }
@@ -158,13 +158,13 @@ let
     );
 
   boundedAverage = upMetric: expression:
-    ''avg_over_time((${expression})[''${smooth}s:]) ''
+    ''avg_over_time((${expression})[$smooth:]) ''
     + ''and (${expression}) ''
-    + ''and (count_over_time((${expression})[1m:] offset ''${smooth}s) > 0) ''
-    + ''and on(instance) (min_over_time(${upMetric}{instance=~"$host"}[''${smooth}s:]) == 1)'';
+    + ''and (count_over_time((${expression})[1m:] offset $smooth) > 0) ''
+    + ''and on(instance) (min_over_time(${upMetric}{instance=~"$host"}[$smooth:]) == 1)'';
 
   smoothLiveTarget = seriesTarget:
-    if lib.hasInfix "\${smooth}s" seriesTarget.expr then
+    if lib.hasInfix "$smooth" seriesTarget.expr then
       seriesTarget
     else
       seriesTarget // { expr = boundedAverage "host:up" seriesTarget.expr; };
@@ -585,27 +585,57 @@ let
   historyDivisor = 30;
 
   smoothBuckets = [
-    1 2 5 10 15 20 30 45
-    60 120 300 600 900 1200 1800 2700
-    3600 5400 7200 10800 21600 43200
-    86400 172800 302400 604800 1209600 2592000 15552000 31536000
+    { s = 1; t = "1s"; }
+    { s = 2; t = "2s"; }
+    { s = 5; t = "5s"; }
+    { s = 10; t = "10s"; }
+    { s = 15; t = "15s"; }
+    { s = 20; t = "20s"; }
+    { s = 30; t = "30s"; }
+    { s = 45; t = "45s"; }
+    { s = 60; t = "1m"; }
+    { s = 120; t = "2m"; }
+    { s = 300; t = "5m"; }
+    { s = 600; t = "10m"; }
+    { s = 900; t = "15m"; }
+    { s = 1200; t = "20m"; }
+    { s = 1800; t = "30m"; }
+    { s = 2700; t = "45m"; }
+    { s = 3600; t = "1h"; }
+    { s = 5400; t = "90m"; }
+    { s = 7200; t = "2h"; }
+    { s = 10800; t = "3h"; }
+    { s = 21600; t = "6h"; }
+    { s = 43200; t = "12h"; }
+    { s = 86400; t = "1d"; }
+    { s = 172800; t = "2d"; }
+    { s = 302400; t = "84h"; }
+    { s = 604800; t = "7d"; }
+    { s = 1209600; t = "14d"; }
+    { s = 2592000; t = "30d"; }
+    { s = 15552000; t = "180d"; }
+    { s = 31536000; t = "1y"; }
   ];
 
   rawSmoothSeconds =
     ''(''${__range_s} <= bool ${toString liveRangeSeconds}) * ''${__range_s} / ${toString liveDivisor}''
     + '' + (''${__range_s} > bool ${toString liveRangeSeconds}) * ''${__range_s} / ${toString historyDivisor}'';
 
+  labelled = b: ''label_replace(vector(${toString b.s}), "w", "${b.t}", "", "")'';
+
   smoothSeconds =
-    lib.concatStringsSep " or " (
-      map (b: "(vector(${toString b}) and (vector(${rawSmoothSeconds}) >= ${toString b}))") (
+    "topk(1, "
+    + lib.concatStringsSep " or " (
+      map (b: "(${labelled b} and on() (vector(${rawSmoothSeconds}) >= ${toString b.s}))") (
         lib.reverseList smoothBuckets
       )
-      ++ [ "vector(1)" ]
-    );
+      ++ [ (labelled (lib.head smoothBuckets)) ]
+    )
+    + ")";
 
   smoothVariable = {
     name = "smooth";
-    label = "Smoothing (s)";
+    label = "Smoothing";
     type = "query";
     datasource = {
       type = "prometheus";
@@ -613,18 +643,18 @@ let
     };
     definition = "query_result(${smoothSeconds})";
     query = "query_result(${smoothSeconds})";
-    regex = ''/([0-9]+)/'';
+    regex = ''/w="([^"]+)"/'';
     refresh = 2;
     sort = 0;
     current = {
-      text = "60";
-      value = "60";
+      text = "1m";
+      value = "1m";
       selected = true;
     };
     options = [
       {
-        text = "60";
-        value = "60";
+        text = "1m";
+        value = "1m";
         selected = true;
       }
     ];
@@ -638,7 +668,7 @@ let
     transparent = true;
     options = {
       mode = "markdown";
-      content = "Smoothing window: **\${smooth}s** (every series here is averaged over it).";
+      content = "Smoothing window: **$smooth** (every series here is averaged over it).";
     };
   };
 
@@ -862,15 +892,15 @@ let
 
   smoothedMajorTemperatureTargets = [
     (target {
-      expr = ''max by (instance) (avg_over_time(temp:major_celsius{instance=~"$host"}[''${smooth}s]))'';
+      expr = ''max by (instance) (avg_over_time(temp:major_celsius{instance=~"$host"}[$smooth]))'';
       legend = "{{instance}} hottest";
     })
     (target {
-      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[''${smooth}s])'';
+      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[$smooth])'';
       legend = "{{instance}} CPU";
     })
     (target {
-      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="Box"}[''${smooth}s])'';
+      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="Box"}[$smooth])'';
       legend = "{{instance}} case";
     })
   ];
@@ -2370,15 +2400,15 @@ let
         overrides = [ (dimmed ".*(peak|floor)$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(pc:power_watts{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(pc:power_watts{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[''${smooth}s:])'';
+            expr = ''max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[$smooth:])'';
             legend = "{{instance}} peak";
           })
           (target {
-            expr = ''min_over_time((pc:power_watts_min{instance=~"$host"} or pc:power_watts{instance=~"$host"})[''${smooth}s:])'';
+            expr = ''min_over_time((pc:power_watts_min{instance=~"$host"} or pc:power_watts{instance=~"$host"})[$smooth:])'';
             legend = "{{instance}} floor";
           })
         ];
@@ -2399,9 +2429,9 @@ let
         };
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[''${smooth}s]) / 60 / 1000'';
+            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[$smooth]) / 60 / 1000'';
             legend = "{{instance}}";
-            interval = "\${smooth}s";
+            interval = "$smooth";
           })
         ];
       })
@@ -2452,11 +2482,11 @@ let
         unit = "watt";
         targets = [
           (target {
-            expr = ''avg_over_time(pc:cpu_power_watts{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(pc:cpu_power_watts{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} CPU";
           })
           (target {
-            expr = ''avg_over_time(pc:gpu_power_watts{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(pc:gpu_power_watts{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} GPU";
           })
         ];
@@ -2475,15 +2505,15 @@ let
         overrides = [ (dimmed ".*(peak|floor)$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(sensor:temp_celsius{instance=~"$host",name=~"$sensor"}[''${smooth}s])'';
+            expr = ''avg_over_time(sensor:temp_celsius{instance=~"$host",name=~"$sensor"}[$smooth])'';
             legend = "{{instance}} {{name}}";
           })
           (target {
-            expr = ''max_over_time((sensor:temp_celsius_max{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[''${smooth}s:])'';
+            expr = ''max_over_time((sensor:temp_celsius_max{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[$smooth:])'';
             legend = "{{instance}} {{name}} peak";
           })
           (target {
-            expr = ''min_over_time((sensor:temp_celsius_min{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[''${smooth}s:])'';
+            expr = ''min_over_time((sensor:temp_celsius_min{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[$smooth:])'';
             legend = "{{instance}} {{name}} floor";
           })
         ];
@@ -2496,7 +2526,7 @@ let
         overrides = [ (rightAxis ".*rpm.*") ];
         targets = smoothedMajorTemperatureTargets ++ [
           (target {
-            expr = ''max by (instance) (avg_over_time(fan:rpm{instance=~"$host"}[''${smooth}s]))'';
+            expr = ''max by (instance) (avg_over_time(fan:rpm{instance=~"$host"}[$smooth]))'';
             legend = "{{instance}} fan rpm";
           })
         ];
@@ -2516,11 +2546,11 @@ let
         ];
         targets = [
           (target {
-            expr = ''max by (instance) (avg_over_time(fan:rpm{instance=~"$host"}[''${smooth}s]))'';
+            expr = ''max by (instance) (avg_over_time(fan:rpm{instance=~"$host"}[$smooth]))'';
             legend = "{{instance}} fan";
           })
           (target {
-            expr = ''max by (instance) (avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[''${smooth}s]))'';
+            expr = ''max by (instance) (avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[$smooth]))'';
             legend = "{{instance}} temp";
           })
         ];
@@ -2544,7 +2574,7 @@ let
         ];
         targets = [
           (target {
-            expr = ''avg_over_time(sensor:temp_celsius{instance=~"$host",name=~"$sensor"}[''${smooth}s])'';
+            expr = ''avg_over_time(sensor:temp_celsius{instance=~"$host",name=~"$sensor"}[$smooth])'';
             legend = "{{instance}} {{name}}";
           })
         ];
@@ -2584,7 +2614,7 @@ let
         ];
         targets = [
           (target {
-            expr = ''avg_over_time(net:receive_bytes_by_transport{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(net:receive_bytes_by_transport{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{transport}}";
           })
         ];
@@ -2601,7 +2631,7 @@ let
         ];
         targets = [
           (target {
-            expr = ''avg_over_time(net:transmit_bytes_by_transport{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(net:transmit_bytes_by_transport{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{transport}}";
           })
         ];
@@ -2693,7 +2723,7 @@ let
         ];
         targets = [
           (target {
-            expr = ''avg_over_time(ts:peer_tx_bytes{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(ts:peer_tx_bytes{instance=~"$host"}[$smooth])'';
             format = "table";
             instant = true;
           })
@@ -2706,11 +2736,11 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = ''avg_over_time(ts:peer_tx_bytes{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(ts:peer_tx_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} to {{peer}}";
           })
           (target {
-            expr = ''avg_over_time(ts:peer_rx_bytes{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(ts:peer_rx_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} from {{peer}}";
           })
         ];
@@ -2721,7 +2751,7 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = ''avg_over_time(ts:path_bytes{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(ts:path_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{path}}";
           })
         ];
@@ -2731,7 +2761,7 @@ let
         mappings = directMappings;
         targets = [
           (target {
-            expr = ''avg_over_time(ts:peer_direct{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(ts:peer_direct{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} to {{peer}}";
           })
         ];
@@ -2754,7 +2784,7 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = ''avg_over_time(wg:rx_bytes{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(wg:rx_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{interface}}";
           })
         ];
@@ -2764,7 +2794,7 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = ''avg_over_time(wg:tx_bytes{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(wg:tx_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{interface}}";
           })
         ];
@@ -2971,11 +3001,11 @@ let
         overrides = [ (dimmed ".*peak$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(cpu:utilisation{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(cpu:utilisation{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time((cpu:utilisation_max{instance=~"$host"} or cpu:utilisation{instance=~"$host"})[''${smooth}s:])'';
+            expr = ''max_over_time((cpu:utilisation_max{instance=~"$host"} or cpu:utilisation{instance=~"$host"})[$smooth:])'';
             legend = "{{instance}} peak";
           })
         ];
@@ -2986,7 +3016,7 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = ''avg_over_time(load:pressure_ratio{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(load:pressure_ratio{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
         ];
@@ -3028,11 +3058,11 @@ let
         overrides = [ (dimmed ".*capacity$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(mem:used_bytes{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(mem:used_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} used";
           })
           (target {
-            expr = ''max_over_time((mem:used_bytes_max{instance=~"$host"} or mem:used_bytes{instance=~"$host"})[''${smooth}s:])'';
+            expr = ''max_over_time((mem:used_bytes_max{instance=~"$host"} or mem:used_bytes{instance=~"$host"})[$smooth:])'';
             legend = "{{instance}} peak";
           })
           (target {
@@ -3052,11 +3082,11 @@ let
         maxPerRow = 2;
         targets = [
           (target {
-            expr = ''avg_over_time(mem:used_bytes[''${smooth}s]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
+            expr = ''avg_over_time(mem:used_bytes[$smooth]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time((mem:used_bytes_max or mem:used_bytes)[''${smooth}s:]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
+            expr = ''max_over_time((mem:used_bytes_max or mem:used_bytes)[$smooth:]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}} peak";
           })
         ];
@@ -3069,11 +3099,11 @@ let
         overrides = [ (dimmed ".*peak$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(mem:used_ratio{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(mem:used_ratio{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time((mem:used_ratio_max{instance=~"$host"} or mem:used_ratio{instance=~"$host"})[''${smooth}s:])'';
+            expr = ''max_over_time((mem:used_ratio_max{instance=~"$host"} or mem:used_ratio{instance=~"$host"})[$smooth:])'';
             legend = "{{instance}} peak";
           })
         ];
@@ -3088,7 +3118,7 @@ let
         overrides = [ (dimmed ".*capacity$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(mem:swap_used_bytes[''${smooth}s]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
+            expr = ''avg_over_time(mem:swap_used_bytes[$smooth]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}}";
           })
           (target {
@@ -3102,15 +3132,15 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = ''avg_over_time(psi:cpu_waiting{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(psi:cpu_waiting{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} cpu";
           })
           (target {
-            expr = ''avg_over_time(psi:io_stalled{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(psi:io_stalled{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} io";
           })
           (target {
-            expr = ''avg_over_time(psi:memory_stalled{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(psi:memory_stalled{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} memory";
           })
         ];
@@ -3120,11 +3150,11 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = ''avg_over_time(disk:read_bytes{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(disk:read_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{device}} read";
           })
           (target {
-            expr = ''avg_over_time(disk:written_bytes{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(disk:written_bytes{instance=~"$host"}[$smooth])'';
             legend = "{{instance}} {{device}} write";
           })
         ];
@@ -3135,7 +3165,7 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = ''avg_over_time(cpu:throttled_ratio{instance=~"$host"}[''${smooth}s])'';
+            expr = ''avg_over_time(cpu:throttled_ratio{instance=~"$host"}[$smooth])'';
             legend = "{{instance}}";
           })
         ];
@@ -3147,7 +3177,7 @@ let
         min = 0;
         targets = [
           (target {
-            expr = ''min_over_time((fs:free_ratio_min{instance=~"$host"} or fs:free_ratio{instance=~"$host"})[''${smooth}s:])'';
+            expr = ''min_over_time((fs:free_ratio_min{instance=~"$host"} or fs:free_ratio{instance=~"$host"})[$smooth:])'';
             legend = "{{instance}} {{mountpoint}}";
           })
         ];
@@ -3182,7 +3212,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''max_over_time((systemd:failed_units_max{instance=~"$host"} or systemd:failed_units{instance=~"$host"})[''${smooth}s:])'';
+            expr = ''max_over_time((systemd:failed_units_max{instance=~"$host"} or systemd:failed_units{instance=~"$host"})[$smooth:])'';
             legend = "{{instance}}";
           })
         ];
@@ -3545,9 +3575,9 @@ let
         };
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[''${smooth}s]) / 1000'';
+            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[$smooth]) / 1000'';
             legend = "{{instance}}";
-            interval = "\${smooth}s";
+            interval = "$smooth";
           })
         ];
       })
