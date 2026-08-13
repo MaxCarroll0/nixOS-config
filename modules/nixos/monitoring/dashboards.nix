@@ -165,9 +165,7 @@ let
   boundedAverage =
     upMetric: expression:
     "avg_over_time((${expression})[\${smoothspan}:] offset -\${smooth}) "
-    + "and (${expression}) "
-    + "and (count_over_time((${expression})[1m:] offset $smooth) > 0) "
-    + ''and on(instance) (min_over_time(${upMetric}{instance=~"$host"}[''${smoothspan}:] offset -''${smooth}) == 1)'';
+    + ''and on(instance) (max_over_time(${upMetric}{instance=~"$host"}[''${smoothspan}:] offset -''${smooth}) == 1)'';
 
   smoothLiveTarget =
     seriesTarget:

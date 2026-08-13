@@ -148,6 +148,29 @@
 
   services.ssh-agent.enable = true;
 
+  # Activation restarts the agent, which drops every key; without this, sudo by
+  # key and deploy-rs stay broken until someone runs ssh-add by hand.
+  systemd.user.services.ssh-add-keys = {
+    Unit = {
+      Description = "Load the SSH key into the agent";
+      After = [ "ssh-agent.service" ];
+      Requires = [ "ssh-agent.service" ];
+      PartOf = [ "ssh-agent.service" ];
+    };
+    Service = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      Environment = [
+        "SSH_AUTH_SOCK=%t/ssh-agent"
+        "SSH_ASKPASS=${pkgs.kdePackages.ksshaskpass}/bin/ksshaskpass"
+        "SSH_ASKPASS_REQUIRE=force"
+        "DISPLAY=:0"
+      ];
+      ExecStart = "${pkgs.openssh}/bin/ssh-add %h/.ssh/id_ed25519";
+    };
+    Install.WantedBy = [ "default.target" ];
+  };
+
   programs.home-manager.enable = true;
 
   home.stateVersion = "25.05";

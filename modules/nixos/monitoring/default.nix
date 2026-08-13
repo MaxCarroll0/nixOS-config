@@ -56,6 +56,7 @@ let
         evaluation_interval = interval;
       };
       rule_files = lib.optional (groups != [ ]) "${ruleFile "tier-rules" groups}";
+      storage.tsdb.out_of_order_time_window = "6h";
       scrape_configs = [
         {
           job_name = "federate";
@@ -267,7 +268,7 @@ in
     retention = {
       hires = lib.mkOption {
         type = lib.types.str;
-        default = "3h";
+        default = "24h";
         description = "How long the 1-second tier is kept.";
       };
 
@@ -449,7 +450,7 @@ in
             evaluation_interval = "1s";
           };
           rule_files = [ "${ruleFile "hires-rules" rules.hires}" ];
-          storage.tsdb.out_of_order_time_window = "1h";
+          storage.tsdb.out_of_order_time_window = "6h";
           scrape_configs = [
             {
               job_name = "power-state";
