@@ -612,12 +612,8 @@ let
       uid = "prometheus";
     };
     definition = "query_result(${smoothSeconds})";
-    query = {
-      qryType = 3;
-      expr = smoothSeconds;
-      refId = "PrometheusVariableQueryEditor-VariableQuery";
-    };
-    regex = ''/}\s+([0-9.]+)/'';
+    query = "query_result(${smoothSeconds})";
+    regex = ''/([0-9]+)/'';
     refresh = 2;
     sort = 0;
     current = {
