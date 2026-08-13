@@ -581,24 +581,22 @@ let
     "1d" "2d" "84h" "7d" "14d" "30d" "180d" "1y"
   ];
 
-  autoSmoothDivisor = 30;
-
-  smoothVariable = {
+  mkSmoothVariable = divisor: {
     name = "smooth";
     label = "Smoothing";
     type = "interval";
     auto = true;
-    auto_count = autoSmoothDivisor;
-    auto_min = "1s";
+    auto_count = divisor;
+    auto_min = "5s";
     query = lib.concatStringsSep "," smoothValues;
     current = {
-      text = "auto (range/${toString autoSmoothDivisor})";
+      text = "auto (range/${toString divisor})";
       value = "$__auto_interval_smooth";
       selected = true;
     };
     options = [
       {
-        text = "auto (range/${toString autoSmoothDivisor})";
+        text = "auto (range/${toString divisor})";
         value = "$__auto_interval_smooth";
         selected = true;
       }
@@ -609,6 +607,10 @@ let
       selected = false;
     }) smoothValues;
   };
+
+  smoothVariable = mkSmoothVariable 30;
+
+  liveSmoothVariable = mkSmoothVariable 60;
 
   smoothBanner = {
     type = "text";
@@ -905,7 +907,7 @@ let
     tags = [ "home" ];
     variables = [
       (fleetHostVariable "prometheus")
-      smoothVariable
+      liveSmoothVariable
       tariffVariable
     ];
     links = [
@@ -1714,7 +1716,7 @@ let
     variables = [
       (hostVariable "prometheus")
       (sensorVariable "prometheus")
-      smoothVariable
+      liveSmoothVariable
     ];
     links = [
       (presetLink "Live" "live-power" "now-15m" "5s")
@@ -1985,7 +1987,7 @@ let
     variables = [
       (hostVariable "prometheus")
       (capacityVariable "prometheus")
-      smoothVariable
+      liveSmoothVariable
     ];
     links = [
       (presetLink "Live" "live-system" "now-15m" "5s")
