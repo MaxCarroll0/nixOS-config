@@ -587,7 +587,7 @@ let
     type = "interval";
     auto = true;
     auto_count = divisor;
-    auto_min = "5s";
+    auto_min = "1s";
     query = lib.concatStringsSep "," smoothValues;
     current = {
       text = "auto (range/${toString divisor})";
@@ -610,7 +610,7 @@ let
 
   smoothVariable = mkSmoothVariable 30;
 
-  liveSmoothVariable = mkSmoothVariable 60;
+  liveSmoothVariable = mkSmoothVariable 300;
 
   smoothBanner = {
     type = "text";
