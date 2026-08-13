@@ -504,14 +504,16 @@ let
     }
   );
 
+  aggSuffix = agg: if agg == "avg" then "" else "_${agg}";
+
   rollup =
     window: sourceOf:
     lib.flatten (
       lib.mapAttrsToList (
         metric:
-        { aggs, ... }:
+        { source, aggs, ... }:
         map (agg: {
-          record = "${agg}${window}:${metric}";
+          record = "${source}:${window}${aggSuffix agg}";
           expr = "${aggregations.${agg}}(${sourceOf metric agg}[${window}])";
         }) aggs
       ) downsampled
@@ -520,7 +522,7 @@ let
   minuteRollup = rollup "1m" (metric: _agg: downsampled.${metric}.source);
 
   # The hourly hop reads the matching minute aggregate, so maxima stay maxima.
-  hourRollup = rollup "1h" (metric: agg: "${agg}1m:${metric}");
+  hourRollup = rollup "1h" (metric: agg: "${downsampled.${metric}.source}${aggSuffix agg}");
 in
 
 {

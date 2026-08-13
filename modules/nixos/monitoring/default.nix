@@ -46,6 +46,7 @@ let
       from,
       match,
       interval,
+      window,
       groups,
     }:
     yaml.generate "prometheus-${toString from}-federate.yml" {
@@ -62,6 +63,12 @@ let
           metrics_path = "/federate";
           params."match[]" = [ match ];
           static_configs = [ { targets = [ "127.0.0.1:${toString from}" ]; } ];
+          metric_relabel_configs = map (suffix: {
+            source_labels = [ "__name__" ];
+            regex = "(.*):${window}${suffix}";
+            target_label = "__name__";
+            replacement = "$1${suffix}";
+          }) [ "" "_max" "_min" ];
         }
       ];
     };
@@ -74,6 +81,7 @@ let
       from,
       match,
       interval,
+      window,
       groups ? [ ],
     }:
     {
@@ -92,6 +100,7 @@ let
                 from
                 match
                 interval
+                window
                 groups
                 ;
             }
@@ -504,7 +513,8 @@ in
         retention = cfg.retention.longterm;
         from = hiresPort;
         interval = "60s";
-        match = ''{__name__=~"(avg|max|min)1m:.*"}'';
+        window = "1m";
+        match = ''{__name__=~".*:1m(_max|_min)?"}'';
         groups = rules.hourly;
       };
 
@@ -516,7 +526,8 @@ in
         retention = "100y";
         from = longtermPort;
         interval = "1h";
-        match = ''{__name__=~"(avg|max|min)1h:.*"}'';
+        window = "1h";
+        match = ''{__name__=~".*:1h(_max|_min)?"}'';
       };
 
     })
