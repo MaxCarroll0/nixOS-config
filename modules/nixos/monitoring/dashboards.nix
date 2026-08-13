@@ -164,7 +164,10 @@ let
     + ''and on(instance) (min_over_time(${upMetric}{instance=~"$host"}[''${smooth}s:]) == 1)'';
 
   smoothLiveTarget = seriesTarget:
-    seriesTarget // { expr = boundedAverage "host:up" seriesTarget.expr; };
+    if lib.hasInfix "\${smooth}s" seriesTarget.expr then
+      seriesTarget
+    else
+      seriesTarget // { expr = boundedAverage "host:up" seriesTarget.expr; };
 
   livePanels = map (
     panel:
@@ -617,8 +620,18 @@ let
     regex = ''/}\s+([0-9.]+)/'';
     refresh = 2;
     sort = 0;
-    current = { };
-    options = [ ];
+    current = {
+      text = "60";
+      value = "60";
+      selected = true;
+    };
+    options = [
+      {
+        text = "60";
+        value = "60";
+        selected = true;
+      }
+    ];
   };
 
   smoothBanner = {
