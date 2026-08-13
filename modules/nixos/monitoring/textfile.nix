@@ -207,10 +207,19 @@ let
 
   # Kernel uptime counts time spent suspended, so boot time cannot answer
   # "how long has this host been awake".
-  awakeSince = writeCollector "awake-since" [ ] ''
+  awakeSince = writeCollector "awake-since" [ pkgs.gawk ] ''
+    if [ "''${1:-}" = resume ]; then
+      since=$(date +%s)
+    else
+      since=$(awk '/^btime/ { print $2 }' /proc/stat)
+      previous=$(awk '/^node_awake_since_seconds/ { print $2 }' "$out" 2>/dev/null || true)
+      if [ -n "$previous" ] && [ "$previous" -gt "$since" ]; then
+        since=$previous
+      fi
+    fi
     echo '# HELP node_awake_since_seconds Unix time of the last boot or resume.'
     echo '# TYPE node_awake_since_seconds gauge'
-    printf 'node_awake_since_seconds %s\n' "$(date +%s)"
+    printf 'node_awake_since_seconds %s\n' "$since"
   '';
 
   collectorService = collector: {
@@ -253,7 +262,7 @@ in
       mode = "0755";
       source = pkgs.writeShellScript "textfile-awake-since-sleep" ''
         if [ "$1" = post ]; then
-          ${lib.getExe awakeSince}
+          ${lib.getExe awakeSince} resume
         fi
         exit 0
       '';
