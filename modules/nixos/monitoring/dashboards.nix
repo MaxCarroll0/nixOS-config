@@ -633,23 +633,58 @@ let
     )
     + ")";
 
-  defaultSmooth = "2s";
+  defaultSmooth = "\${autosmooth}";
+
+  autoSmoothVariable = {
+    name = "autosmooth";
+    label = "Auto smoothing";
+    type = "query";
+    hide = 2;
+    datasource = {
+      type = "prometheus";
+      uid = "prometheus";
+    };
+    definition = "query_result(${smoothSeconds})";
+    query = "query_result(${smoothSeconds})";
+    regex = ''/w="([^"]+)"/'';
+    refresh = 2;
+    sort = 0;
+    current = {
+      text = "1m";
+      value = "1m";
+      selected = true;
+    };
+    options = [
+      {
+        text = "1m";
+        value = "1m";
+        selected = true;
+      }
+    ];
+  };
 
   smoothVariable = {
     name = "smooth";
     label = "Smoothing";
     type = "custom";
-    query = lib.concatMapStringsSep "," (b: b.t) smoothBuckets;
+    query = lib.concatStringsSep "," ([ "auto : \${autosmooth}" ] ++ map (b: b.t) smoothBuckets);
     allowCustomValue = true;
     current = {
-      text = defaultSmooth;
+      text = "auto";
       value = defaultSmooth;
       selected = true;
     };
-    options = map (b: {
+    options = [
+      {
+        text = "auto";
+        value = defaultSmooth;
+        selected = true;
+      }
+    ]
+    ++ map (b: {
       text = b.t;
       value = b.t;
-      selected = b.t == defaultSmooth;
+      selected = false;
     }) smoothBuckets;
   };
 
@@ -974,6 +1009,7 @@ let
     tags = [ "home" ];
     variables = [
       (fleetHostVariable "prometheus")
+      autoSmoothVariable
       smoothVariable
       tariffVariable
     ];
@@ -1784,6 +1820,7 @@ let
     variables = [
       (hostVariable "prometheus")
       (sensorVariable "prometheus")
+      autoSmoothVariable
       smoothVariable
     ];
     links = [
@@ -2055,6 +2092,7 @@ let
     variables = [
       (hostVariable "prometheus")
       (capacityVariable "prometheus")
+      autoSmoothVariable
       smoothVariable
     ];
     links = [
@@ -2327,6 +2365,7 @@ let
     variables = [
       (hostVariable "prometheus-lt")
       (sensorVariable "prometheus-lt")
+      autoSmoothVariable
       smoothVariable
       tariffVariable
     ];
@@ -2596,6 +2635,7 @@ let
     tags = [ "history" ];
     variables = [
       (hostVariable "prometheus-lt")
+      autoSmoothVariable
       smoothVariable
     ];
     links = [
@@ -2816,6 +2856,7 @@ let
     tags = [ "history" ];
     variables = [
       (fleetHostVariable "prometheus-lt")
+      autoSmoothVariable
       smoothVariable
     ];
     links = [
@@ -2986,6 +3027,7 @@ let
     variables = [
       (hostVariable "prometheus-lt")
       (capacityVariable "prometheus-lt")
+      autoSmoothVariable
       smoothVariable
     ];
     links = [
@@ -3318,6 +3360,7 @@ let
       resolutionVariable
       (hostVariable "prometheus")
       (sensorVariable "prometheus")
+      autoSmoothVariable
       smoothVariable
       tariffVariable
     ];
@@ -3341,6 +3384,7 @@ let
       resolutionVariable
       (hostVariable "prometheus")
       (capacityVariable "prometheus")
+      autoSmoothVariable
       smoothVariable
     ];
     links = tierLinks "system" ++ [
@@ -3364,6 +3408,7 @@ let
     variables = [
       resolutionVariable
       (hostVariable "prometheus")
+      autoSmoothVariable
       smoothVariable
     ];
     links = tierLinks "network" ++ [
@@ -3402,6 +3447,7 @@ let
     tags = [ "archive" ];
     variables = [
       (fleetHostVariable "prometheus-archive")
+      autoSmoothVariable
       smoothVariable
       tariffVariable
     ];
