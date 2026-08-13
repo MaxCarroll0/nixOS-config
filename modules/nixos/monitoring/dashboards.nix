@@ -633,32 +633,37 @@ let
     )
     + ")";
 
+  defaultSmooth = "2s";
+
   smoothVariable = {
     name = "smooth";
     label = "Smoothing";
-    type = "query";
-    datasource = {
-      type = "prometheus";
-      uid = "prometheus";
-    };
-    definition = "query_result(${smoothSeconds})";
-    query = "query_result(${smoothSeconds})";
-    regex = ''/w="([^"]+)"/'';
-    refresh = 2;
-    sort = 0;
+    type = "custom";
+    query = lib.concatMapStringsSep "," (b: b.t) smoothBuckets;
+    allowCustomValue = true;
     current = {
-      text = "1m";
-      value = "1m";
+      text = defaultSmooth;
+      value = defaultSmooth;
       selected = true;
     };
-    options = [
-      {
-        text = "1m";
-        value = "1m";
-        selected = true;
-      }
-    ];
+    options = map (b: {
+      text = b.t;
+      value = b.t;
+      selected = b.t == defaultSmooth;
+    }) smoothBuckets;
   };
+
+  smoothFor =
+    rangeSeconds:
+    let
+      raw =
+        if rangeSeconds <= liveRangeSeconds then
+          rangeSeconds / liveDivisor
+        else
+          rangeSeconds / historyDivisor;
+      fits = lib.filter (b: b.s <= raw) smoothBuckets;
+    in
+    if fits == [ ] then (lib.head smoothBuckets).t else (lib.last fits).t;
 
   smoothBanner = {
     type = "text";
@@ -820,7 +825,7 @@ let
   presetLink = title: uid: from: refresh: {
     inherit title;
     type = "link";
-    url = "/d/${uid}?from=${from}&to=now&var-smooth=%24__auto_interval_smooth&refresh=${refresh}";
+    url = "/d/${uid}?from=${from}&to=now&refresh=${refresh}";
     includeVars = false;
     keepTime = false;
     targetBlank = false;
@@ -3285,21 +3290,21 @@ let
     in
     map (reflow "prometheus") livePanelSet ++ map (reflow "prometheus-lt") extra;
 
-  tierLink = title: uid: from: refresh: res: {
+  tierLink = title: uid: from: seconds: refresh: res: {
     inherit title;
     type = "link";
-    url = "/d/${uid}?from=${from}&to=now&var-res=${res}&refresh=${refresh}";
+    url = "/d/${uid}?from=${from}&to=now&var-res=${res}&var-smooth=${smoothFor seconds}&refresh=${refresh}";
     includeVars = false;
     keepTime = false;
     targetBlank = false;
   };
 
   tierLinks = uid: [
-    (tierLink "Live" uid "now-15m" "5s" "prometheus")
-    (tierLink "24h" uid "now-24h" "1m" "prometheus-lt")
-    (tierLink "7d" uid "now-7d" "5m" "prometheus-lt")
-    (tierLink "30d" uid "now-30d" "5m" "prometheus-lt")
-    (tierLink "1y" uid "now-1y" "" "prometheus-archive")
+    (tierLink "Live" uid "now-15m" 900 "5s" "prometheus")
+    (tierLink "24h" uid "now-24h" 86400 "1m" "prometheus-lt")
+    (tierLink "7d" uid "now-7d" 604800 "5m" "prometheus-lt")
+    (tierLink "30d" uid "now-30d" 2592000 "5m" "prometheus-lt")
+    (tierLink "1y" uid "now-1y" 31536000 "" "prometheus-archive")
   ];
 
   mergedPower = dashboard {
