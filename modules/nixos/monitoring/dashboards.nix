@@ -22,9 +22,12 @@ let
       format = format;
     }
     // lib.optionalAttrs (interval != null) { inherit interval; }
-    // lib.optionalAttrs (interval == null && !instant && lib.hasInfix "[$smooth]" expr) {
-      interval = "$smooth";
-    }
+    //
+      lib.optionalAttrs
+        (interval == null && !instant && lib.hasInfix "[\${smoothspan}] offset -\${smooth}" expr)
+        {
+          interval = "\${smooth}";
+        }
     // lib.optionalAttrs (maxDataPoints != null) { inherit maxDataPoints; }
     // lib.optionalAttrs (refId != null) { inherit refId; }
     // lib.optionalAttrs (datasource != null) { inherit datasource; };
@@ -118,10 +121,12 @@ let
     graphMode = "area";
   };
 
-  gradientSeriesFor = args:
+  gradientSeriesFor =
+    args:
     let
       instancePrefix = "{{instance}}";
-      suffixFor = seriesTarget:
+      suffixFor =
+        seriesTarget:
         let
           legend = seriesTarget.legendFormat or "";
           suffix = lib.removePrefix "${instancePrefix} " legend;
@@ -157,13 +162,15 @@ let
       }
     );
 
-  boundedAverage = upMetric: expression:
-    ''avg_over_time((${expression})[$smooth:]) ''
-    + ''and (${expression}) ''
-    + ''and (count_over_time((${expression})[1m:] offset $smooth) > 0) ''
-    + ''and on(instance) (min_over_time(${upMetric}{instance=~"$host"}[$smooth:]) == 1)'';
+  boundedAverage =
+    upMetric: expression:
+    "avg_over_time((${expression})[\${smoothspan}:] offset -\${smooth}) "
+    + "and (${expression}) "
+    + "and (count_over_time((${expression})[1m:] offset $smooth) > 0) "
+    + ''and on(instance) (min_over_time(${upMetric}{instance=~"$host"}[''${smoothspan}:] offset -''${smooth}) == 1)'';
 
-  smoothLiveTarget = seriesTarget:
+  smoothLiveTarget =
+    seriesTarget:
     if lib.hasInfix "$smooth" seriesTarget.expr then
       seriesTarget
     else
@@ -171,7 +178,12 @@ let
 
   livePanels = map (
     panel:
-    if lib.elem panel.type [ "timeseries" "status-history" ] then
+    if
+      lib.elem panel.type [
+        "timeseries"
+        "status-history"
+      ]
+    then
       panel // { targets = map smoothLiveTarget panel.targets; }
     else
       panel
@@ -311,15 +323,17 @@ let
       // args
     );
 
-  alertHostFilter = hostFilter:
+  alertHostFilter =
+    hostFilter:
     ''| json | label_format alertHost="{{ or .labels_instance .labels_host | replace \"_\" \"\" }}" | alertHost=~"(${hostFilter})|"'';
 
-  recentAlerts = {
-    hostFilter,
-    severityFilter ? ".*",
-    ruleFilter ? ".*",
-    stateFilter ? ".*",
-  }:
+  recentAlerts =
+    {
+      hostFilter,
+      severityFilter ? ".*",
+      ruleFilter ? ".*",
+      stateFilter ? ".*",
+    }:
     logs {
       title = "Recent alerts";
       description = "Latest alert state changes.";
@@ -420,60 +434,174 @@ let
 
   hostColorScales = {
     desktopnew = [
-      [ 24 70 128 ]
-      [ 8 81 156 ]
-      [ 33 113 181 ]
-      [ 66 146 198 ]
-      [ 107 174 214 ]
-      [ 158 202 225 ]
-      [ 198 219 239 ]
+      [
+        24
+        70
+        128
+      ]
+      [
+        8
+        81
+        156
+      ]
+      [
+        33
+        113
+        181
+      ]
+      [
+        66
+        146
+        198
+      ]
+      [
+        107
+        174
+        214
+      ]
+      [
+        158
+        202
+        225
+      ]
+      [
+        198
+        219
+        239
+      ]
     ];
     desktopold = [
-      [ 84 35 145 ]
-      [ 84 39 143 ]
-      [ 106 81 163 ]
-      [ 128 125 186 ]
-      [ 158 154 200 ]
-      [ 188 189 220 ]
-      [ 218 218 235 ]
+      [
+        84
+        35
+        145
+      ]
+      [
+        84
+        39
+        143
+      ]
+      [
+        106
+        81
+        163
+      ]
+      [
+        128
+        125
+        186
+      ]
+      [
+        158
+        154
+        200
+      ]
+      [
+        188
+        189
+        220
+      ]
+      [
+        218
+        218
+        235
+      ]
     ];
     laptop = [
-      [ 150 58 16 ]
-      [ 166 54 3 ]
-      [ 217 72 1 ]
-      [ 241 105 19 ]
-      [ 253 141 60 ]
-      [ 253 174 107 ]
-      [ 253 208 162 ]
+      [
+        150
+        58
+        16
+      ]
+      [
+        166
+        54
+        3
+      ]
+      [
+        217
+        72
+        1
+      ]
+      [
+        241
+        105
+        19
+      ]
+      [
+        253
+        141
+        60
+      ]
+      [
+        253
+        174
+        107
+      ]
+      [
+        253
+        208
+        162
+      ]
     ];
     pi = [
-      [ 18 92 43 ]
-      [ 0 109 44 ]
-      [ 35 139 69 ]
-      [ 65 171 93 ]
-      [ 116 196 118 ]
-      [ 161 217 155 ]
-      [ 199 233 192 ]
+      [
+        18
+        92
+        43
+      ]
+      [
+        0
+        109
+        44
+      ]
+      [
+        35
+        139
+        69
+      ]
+      [
+        65
+        171
+        93
+      ]
+      [
+        116
+        196
+        118
+      ]
+      [
+        161
+        217
+        155
+      ]
+      [
+        199
+        233
+        192
+      ]
     ];
   };
 
   hexDigits = lib.stringToCharacters "0123456789ABCDEF";
 
-  remainder = numerator: denominator:
-    numerator - builtins.div numerator denominator * denominator;
+  remainder = numerator: denominator: numerator - builtins.div numerator denominator * denominator;
 
-  byteToHex = value:
+  byteToHex =
+    value:
     "${lib.elemAt hexDigits (builtins.div value 16)}${lib.elemAt hexDigits (remainder value 16)}";
 
   rgbToHex = rgb: "#${lib.concatMapStrings byteToHex rgb}";
 
-  roundedDivide = numerator: denominator:
+  roundedDivide =
+    numerator: denominator:
     if numerator < 0 then
       0 - builtins.div (0 - numerator + builtins.div denominator 2) denominator
     else
       builtins.div (numerator + builtins.div denominator 2) denominator;
 
-  interpolatedColor = scale: count: index:
+  interpolatedColor =
+    scale: count: index:
     let
       lastScaleIndex = builtins.length scale - 1;
       denominator = count - 1;
@@ -484,15 +612,15 @@ let
       left = lib.elemAt scale leftIndex;
       right = lib.elemAt scale rightIndex;
       rgb = lib.imap0 (
-        channel: value:
-        value + roundedDivide ((lib.elemAt right channel - value) * fraction) denominator
+        channel: value: value + roundedDivide ((lib.elemAt right channel - value) * fraction) denominator
       ) left;
     in
     rgbToHex rgb;
 
   middleColor = scale: rgbToHex (lib.elemAt scale (builtins.div (builtins.length scale - 1) 2));
 
-  hostGradientOverrides = seriesSuffixes:
+  hostGradientOverrides =
+    seriesSuffixes:
     let
       count = builtins.length seriesSuffixes;
       baseOverrides = lib.mapAttrsToList (
@@ -585,41 +713,131 @@ let
   historyDivisor = 30;
 
   smoothBuckets = [
-    { s = 1; t = "1s"; }
-    { s = 2; t = "2s"; }
-    { s = 5; t = "5s"; }
-    { s = 10; t = "10s"; }
-    { s = 15; t = "15s"; }
-    { s = 20; t = "20s"; }
-    { s = 30; t = "30s"; }
-    { s = 45; t = "45s"; }
-    { s = 60; t = "1m"; }
-    { s = 120; t = "2m"; }
-    { s = 300; t = "5m"; }
-    { s = 600; t = "10m"; }
-    { s = 900; t = "15m"; }
-    { s = 1200; t = "20m"; }
-    { s = 1800; t = "30m"; }
-    { s = 2700; t = "45m"; }
-    { s = 3600; t = "1h"; }
-    { s = 5400; t = "90m"; }
-    { s = 7200; t = "2h"; }
-    { s = 10800; t = "3h"; }
-    { s = 21600; t = "6h"; }
-    { s = 43200; t = "12h"; }
-    { s = 86400; t = "1d"; }
-    { s = 172800; t = "2d"; }
-    { s = 302400; t = "84h"; }
-    { s = 604800; t = "7d"; }
-    { s = 1209600; t = "14d"; }
-    { s = 2592000; t = "30d"; }
-    { s = 15552000; t = "180d"; }
-    { s = 31536000; t = "1y"; }
+    {
+      s = 1;
+      t = "1s";
+    }
+    {
+      s = 2;
+      t = "2s";
+    }
+    {
+      s = 5;
+      t = "5s";
+    }
+    {
+      s = 10;
+      t = "10s";
+    }
+    {
+      s = 15;
+      t = "15s";
+    }
+    {
+      s = 20;
+      t = "20s";
+    }
+    {
+      s = 30;
+      t = "30s";
+    }
+    {
+      s = 45;
+      t = "45s";
+    }
+    {
+      s = 60;
+      t = "1m";
+    }
+    {
+      s = 120;
+      t = "2m";
+    }
+    {
+      s = 300;
+      t = "5m";
+    }
+    {
+      s = 600;
+      t = "10m";
+    }
+    {
+      s = 900;
+      t = "15m";
+    }
+    {
+      s = 1200;
+      t = "20m";
+    }
+    {
+      s = 1800;
+      t = "30m";
+    }
+    {
+      s = 2700;
+      t = "45m";
+    }
+    {
+      s = 3600;
+      t = "1h";
+    }
+    {
+      s = 5400;
+      t = "90m";
+    }
+    {
+      s = 7200;
+      t = "2h";
+    }
+    {
+      s = 10800;
+      t = "3h";
+    }
+    {
+      s = 21600;
+      t = "6h";
+    }
+    {
+      s = 43200;
+      t = "12h";
+    }
+    {
+      s = 86400;
+      t = "1d";
+    }
+    {
+      s = 172800;
+      t = "2d";
+    }
+    {
+      s = 302400;
+      t = "84h";
+    }
+    {
+      s = 604800;
+      t = "7d";
+    }
+    {
+      s = 1209600;
+      t = "14d";
+    }
+    {
+      s = 2592000;
+      t = "30d";
+    }
+    {
+      s = 15552000;
+      t = "180d";
+    }
+    {
+      s = 31536000;
+      t = "1y";
+    }
   ];
 
   rawSmoothSeconds =
-    ''(''${__range_s} <= bool ${toString liveRangeSeconds}) * ''${__range_s} / ${toString liveDivisor}''
-    + '' + (''${__range_s} > bool ${toString liveRangeSeconds}) * ''${__range_s} / ${toString historyDivisor}'';
+    "(\${__range_s} <= bool ${toString liveRangeSeconds}) * \${__range_s} / ${toString liveDivisor}"
+    + "+ (\${__range_s} > bool ${toString liveRangeSeconds}) * \${__range_s} / ${toString historyDivisor}";
 
   labelled = b: ''label_replace(vector(${toString b.s}), "w", "${b.t}", "", "")'';
 
@@ -658,6 +876,52 @@ let
       {
         text = "1m";
         value = "1m";
+        selected = true;
+      }
+    ];
+  };
+
+  durationText =
+    seconds:
+    if seconds >= 86400 && seconds / 86400 * 86400 == seconds then
+      "${toString (seconds / 86400)}d"
+    else if seconds >= 3600 && seconds / 3600 * 3600 == seconds then
+      "${toString (seconds / 3600)}h"
+    else if seconds >= 60 && seconds / 60 * 60 == seconds then
+      "${toString (seconds / 60)}m"
+    else
+      "${toString seconds}s";
+
+  srcToSpan =
+    b:
+    ''label_replace(label_replace(vector(1), "src", "${b.t}", "", ""), "w", "${durationText (2 * b.s)}", "", "")'';
+
+  smoothSpanVariable = {
+    name = "smoothspan";
+    label = "Smoothing span";
+    type = "query";
+    hide = 2;
+    datasource = {
+      type = "prometheus";
+      uid = "prometheus";
+    };
+    definition = "smoothing span";
+    query =
+      "query_result(sum by (w) (("
+      + lib.concatMapStringsSep " or " srcToSpan smoothBuckets
+      + '') and on(src) label_replace(vector(1), "src", "$smooth", "", "")))'';
+    regex = ''/w="([^"]+)"/'';
+    refresh = 2;
+    sort = 0;
+    current = {
+      text = "2m";
+      value = "2m";
+      selected = true;
+    };
+    options = [
+      {
+        text = "2m";
+        value = "2m";
         selected = true;
       }
     ];
@@ -809,7 +1073,10 @@ let
     datasource:
     let
       metric =
-        if datasource == "prometheus-archive" then "(mem:capacity_info_max or mem:capacity_info)" else "(mem:capacity_info_max or mem:capacity_info)";
+        if datasource == "prometheus-archive" then
+          "(mem:capacity_info_max or mem:capacity_info)"
+        else
+          "(mem:capacity_info_max or mem:capacity_info)";
     in
     {
       name = "capacity";
@@ -917,7 +1184,7 @@ let
 
   overviewMajorTemperatureTargets = [
     (target {
-      expr = ''max by (instance) (${boundedAverage "host:up" ''temp:major_celsius{instance=~"$host"}''})'';
+      expr = "max by (instance) (${boundedAverage "host:up" ''temp:major_celsius{instance=~"$host"}''})";
       legend = "{{instance}} hottest";
     })
     (target {
@@ -932,15 +1199,15 @@ let
 
   smoothedMajorTemperatureTargets = [
     (target {
-      expr = ''max by (instance) (avg_over_time(temp:major_celsius{instance=~"$host"}[$smooth]))'';
+      expr = ''max by (instance) (avg_over_time(temp:major_celsius{instance=~"$host"}[''${smoothspan}] offset -''${smooth}))'';
       legend = "{{instance}} hottest";
     })
     (target {
-      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[$smooth])'';
+      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[''${smoothspan}] offset -''${smooth})'';
       legend = "{{instance}} CPU";
     })
     (target {
-      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="Box"}[$smooth])'';
+      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="Box"}[''${smoothspan}] offset -''${smooth})'';
       legend = "{{instance}} case";
     })
   ];
@@ -1011,6 +1278,7 @@ let
       (fleetHostVariable "prometheus")
       autoSmoothVariable
       smoothVariable
+      smoothSpanVariable
       tariffVariable
     ];
     links = [
@@ -1037,15 +1305,42 @@ let
           {
             type = "value";
             options = {
-              "1" = { text = "0 / 1"; color = "red"; };
-              "11" = { text = "1 / 1"; color = "green"; };
-              "2" = { text = "0 / 2"; color = "red"; };
-              "12" = { text = "1 / 2"; color = "red"; };
-              "22" = { text = "2 / 2"; color = "green"; };
-              "3" = { text = "0 / 3"; color = "red"; };
-              "13" = { text = "1 / 3"; color = "red"; };
-              "23" = { text = "2 / 3"; color = "yellow"; };
-              "33" = { text = "3 / 3"; color = "green"; };
+              "1" = {
+                text = "0 / 1";
+                color = "red";
+              };
+              "11" = {
+                text = "1 / 1";
+                color = "green";
+              };
+              "2" = {
+                text = "0 / 2";
+                color = "red";
+              };
+              "12" = {
+                text = "1 / 2";
+                color = "red";
+              };
+              "22" = {
+                text = "2 / 2";
+                color = "green";
+              };
+              "3" = {
+                text = "0 / 3";
+                color = "red";
+              };
+              "13" = {
+                text = "1 / 3";
+                color = "red";
+              };
+              "23" = {
+                text = "2 / 3";
+                color = "yellow";
+              };
+              "33" = {
+                text = "3 / 3";
+                color = "green";
+              };
             };
           }
         ];
@@ -1327,7 +1622,7 @@ let
       })
       (table {
         title = "System session summary";
-        description = "Current continuous session, maximum session and observed system uptime over 7 days.";
+        description = "Current awake session, maximum session and observed reachable time over 7 days; suspend ends a session.";
         w = 24;
         h = 7;
         unit = "dtdurations";
@@ -1445,13 +1740,13 @@ let
         ];
         targets = [
           (target {
-            expr = ''(time() - max by (instance) (host:boot_time_seconds{instance=~"$host"}) and on(instance) (host:up == 1)) or on(instance) (-2 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S3"})) or on(instance) (-3 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S5"})) or on(instance) ((host:up == 0) * -1)'';
+            expr = ''(time() - max by (instance) (host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}) and on(instance) (host:up == 1)) or on(instance) (-2 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S3"})) or on(instance) (-3 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S5"})) or on(instance) ((host:up == 0) * -1)'';
             legend = "{{instance}} current";
             format = "table";
             instant = true;
           })
           (target {
-            expr = ''max_over_time((time() - max by (instance) (host:boot_time_seconds{instance=~"$host"}))[$__range:])'';
+            expr = ''max_over_time((time() - max by (instance) (host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))[$__range:])'';
             legend = "{{instance}} maximum session";
             format = "table";
             instant = true;
@@ -1461,7 +1756,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''max by (instance) (sum_over_time((host:up{instance=~"$host"})[7d:]) * 60 or ((time() - max by (instance) ((host:boot_time_seconds_max{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))) and on(instance) (host:up == 1)))'';
+            expr = ''max by (instance) (sum_over_time((host:up{instance=~"$host"})[7d:]) * 60 or ((time() - max by (instance) ((host:awake_since_seconds_max{instance=~"$host"} or host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds_max{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))) and on(instance) (host:up == 1)))'';
             legend = "{{instance}} total uptime (7d)";
             format = "table";
             instant = true;
@@ -1764,7 +2059,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = ''max by (instance) (host:up${upSelector})'';
+            expr = "max by (instance) (host:up${upSelector})";
             legend = "{{instance}}";
           })
         ];
@@ -1822,6 +2117,7 @@ let
       (sensorVariable "prometheus")
       autoSmoothVariable
       smoothVariable
+      smoothSpanVariable
     ];
     links = [
       (presetLink "Live" "power" "now-15m" "5s")
@@ -2094,6 +2390,7 @@ let
       (capacityVariable "prometheus")
       autoSmoothVariable
       smoothVariable
+      smoothSpanVariable
     ];
     links = [
       (presetLink "Live" "system" "now-15m" "5s")
@@ -2367,6 +2664,7 @@ let
       (sensorVariable "prometheus-lt")
       autoSmoothVariable
       smoothVariable
+      smoothSpanVariable
       tariffVariable
     ];
     links = [
@@ -2444,15 +2742,15 @@ let
         overrides = [ (dimmed ".*(peak|floor)$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(pc:power_watts{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(pc:power_watts{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[$smooth:])'';
+            expr = ''max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[''${smoothspan}:] offset -''${smooth})'';
             legend = "{{instance}} peak";
           })
           (target {
-            expr = ''min_over_time((pc:power_watts_min{instance=~"$host"} or pc:power_watts{instance=~"$host"})[$smooth:])'';
+            expr = ''min_over_time((pc:power_watts_min{instance=~"$host"} or pc:power_watts{instance=~"$host"})[''${smoothspan}:] offset -''${smooth})'';
             legend = "{{instance}} floor";
           })
         ];
@@ -2473,7 +2771,7 @@ let
         };
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[$smooth]) / 60 / 1000'';
+            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[''${smoothspan}] offset -''${smooth}) / 60 / 1000'';
             legend = "{{instance}}";
             interval = "$smooth";
           })
@@ -2526,11 +2824,11 @@ let
         unit = "watt";
         targets = [
           (target {
-            expr = ''avg_over_time(pc:cpu_power_watts{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(pc:cpu_power_watts{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} CPU";
           })
           (target {
-            expr = ''avg_over_time(pc:gpu_power_watts{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(pc:gpu_power_watts{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} GPU";
           })
         ];
@@ -2549,15 +2847,15 @@ let
         overrides = [ (dimmed ".*(peak|floor)$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(sensor:temp_celsius{instance=~"$host",name=~"$sensor"}[$smooth])'';
+            expr = ''avg_over_time(sensor:temp_celsius{instance=~"$host",name=~"$sensor"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} {{name}}";
           })
           (target {
-            expr = ''max_over_time((sensor:temp_celsius_max{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[$smooth:])'';
+            expr = ''max_over_time((sensor:temp_celsius_max{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[''${smoothspan}:] offset -''${smooth})'';
             legend = "{{instance}} {{name}} peak";
           })
           (target {
-            expr = ''min_over_time((sensor:temp_celsius_min{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[$smooth:])'';
+            expr = ''min_over_time((sensor:temp_celsius_min{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[''${smoothspan}:] offset -''${smooth})'';
             legend = "{{instance}} {{name}} floor";
           })
         ];
@@ -2570,7 +2868,7 @@ let
         overrides = [ (rightAxis ".*rpm.*") ];
         targets = smoothedMajorTemperatureTargets ++ [
           (target {
-            expr = ''max by (instance) (avg_over_time(fan:rpm{instance=~"$host"}[$smooth]))'';
+            expr = ''max by (instance) (avg_over_time(fan:rpm{instance=~"$host"}[''${smoothspan}] offset -''${smooth}))'';
             legend = "{{instance}} fan rpm";
           })
         ];
@@ -2590,11 +2888,11 @@ let
         ];
         targets = [
           (target {
-            expr = ''max by (instance) (avg_over_time(fan:rpm{instance=~"$host"}[$smooth]))'';
+            expr = ''max by (instance) (avg_over_time(fan:rpm{instance=~"$host"}[''${smoothspan}] offset -''${smooth}))'';
             legend = "{{instance}} fan";
           })
           (target {
-            expr = ''max by (instance) (avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[$smooth]))'';
+            expr = ''max by (instance) (avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[''${smoothspan}] offset -''${smooth}))'';
             legend = "{{instance}} temp";
           })
         ];
@@ -2618,7 +2916,7 @@ let
         ];
         targets = [
           (target {
-            expr = ''avg_over_time(sensor:temp_celsius{instance=~"$host",name=~"$sensor"}[$smooth])'';
+            expr = ''avg_over_time(sensor:temp_celsius{instance=~"$host",name=~"$sensor"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} {{name}}";
           })
         ];
@@ -2637,6 +2935,7 @@ let
       (hostVariable "prometheus-lt")
       autoSmoothVariable
       smoothVariable
+      smoothSpanVariable
     ];
     links = [
       (presetLink "Live" "network" "now-15m" "5s")
@@ -2659,7 +2958,7 @@ let
         ];
         targets = [
           (target {
-            expr = ''avg_over_time(net:receive_bytes_by_transport{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(net:receive_bytes_by_transport{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} {{transport}}";
           })
         ];
@@ -2676,7 +2975,7 @@ let
         ];
         targets = [
           (target {
-            expr = ''avg_over_time(net:transmit_bytes_by_transport{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(net:transmit_bytes_by_transport{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} {{transport}}";
           })
         ];
@@ -2768,7 +3067,7 @@ let
         ];
         targets = [
           (target {
-            expr = ''avg_over_time(ts:peer_tx_bytes{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(ts:peer_tx_bytes{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             format = "table";
             instant = true;
           })
@@ -2781,11 +3080,11 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = ''avg_over_time(ts:peer_tx_bytes{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(ts:peer_tx_bytes{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} to {{peer}}";
           })
           (target {
-            expr = ''avg_over_time(ts:peer_rx_bytes{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(ts:peer_rx_bytes{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} from {{peer}}";
           })
         ];
@@ -2796,7 +3095,7 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = ''avg_over_time(ts:path_bytes{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(ts:path_bytes{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} {{path}}";
           })
         ];
@@ -2806,7 +3105,7 @@ let
         mappings = directMappings;
         targets = [
           (target {
-            expr = ''avg_over_time(ts:peer_direct{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(ts:peer_direct{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} to {{peer}}";
           })
         ];
@@ -2829,7 +3128,7 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = ''avg_over_time(wg:rx_bytes{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(wg:rx_bytes{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} {{interface}}";
           })
         ];
@@ -2839,7 +3138,7 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = ''avg_over_time(wg:tx_bytes{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(wg:tx_bytes{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} {{interface}}";
           })
         ];
@@ -2858,6 +3157,7 @@ let
       (fleetHostVariable "prometheus-lt")
       autoSmoothVariable
       smoothVariable
+      smoothSpanVariable
     ];
     links = [
       (presetLink "Live" "fleet" "now-15m" "5s")
@@ -2892,14 +3192,15 @@ let
         ];
       })
       (stat {
-        title = "System uptime";
+        title = "Awake since";
+        description = "Time since the last boot or resume; suspended time is not counted.";
         w = 12;
         h = 5;
         unit = "s";
         decimals = 1;
         targets = [
           (target {
-            expr = ''time() - max by (instance) ((host:boot_time_seconds_max{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))'';
+            expr = ''time() - max by (instance) ((host:awake_since_seconds_max{instance=~"$host"} or host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds_max{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3009,7 +3310,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = ''max by (instance) (host:up${upSelector})'';
+            expr = "max by (instance) (host:up${upSelector})";
             legend = "{{instance}}";
           })
         ];
@@ -3029,6 +3330,7 @@ let
       (capacityVariable "prometheus-lt")
       autoSmoothVariable
       smoothVariable
+      smoothSpanVariable
     ];
     links = [
       (presetLink "Live" "system" "now-15m" "5s")
@@ -3048,11 +3350,11 @@ let
         overrides = [ (dimmed ".*peak$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(cpu:utilisation{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(cpu:utilisation{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time((cpu:utilisation_max{instance=~"$host"} or cpu:utilisation{instance=~"$host"})[$smooth:])'';
+            expr = ''max_over_time((cpu:utilisation_max{instance=~"$host"} or cpu:utilisation{instance=~"$host"})[''${smoothspan}:] offset -''${smooth})'';
             legend = "{{instance}} peak";
           })
         ];
@@ -3063,7 +3365,7 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = ''avg_over_time(load:pressure_ratio{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(load:pressure_ratio{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}}";
           })
         ];
@@ -3105,11 +3407,11 @@ let
         overrides = [ (dimmed ".*capacity$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(mem:used_bytes{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(mem:used_bytes{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} used";
           })
           (target {
-            expr = ''max_over_time((mem:used_bytes_max{instance=~"$host"} or mem:used_bytes{instance=~"$host"})[$smooth:])'';
+            expr = ''max_over_time((mem:used_bytes_max{instance=~"$host"} or mem:used_bytes{instance=~"$host"})[''${smoothspan}:] offset -''${smooth})'';
             legend = "{{instance}} peak";
           })
           (target {
@@ -3129,11 +3431,11 @@ let
         maxPerRow = 2;
         targets = [
           (target {
-            expr = ''avg_over_time(mem:used_bytes[$smooth]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
+            expr = ''avg_over_time(mem:used_bytes[''${smoothspan}] offset -''${smooth}) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time((mem:used_bytes_max or mem:used_bytes)[$smooth:]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
+            expr = ''max_over_time((mem:used_bytes_max or mem:used_bytes)[''${smoothspan}:] offset -''${smooth}) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}} peak";
           })
         ];
@@ -3146,11 +3448,11 @@ let
         overrides = [ (dimmed ".*peak$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(mem:used_ratio{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(mem:used_ratio{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time((mem:used_ratio_max{instance=~"$host"} or mem:used_ratio{instance=~"$host"})[$smooth:])'';
+            expr = ''max_over_time((mem:used_ratio_max{instance=~"$host"} or mem:used_ratio{instance=~"$host"})[''${smoothspan}:] offset -''${smooth})'';
             legend = "{{instance}} peak";
           })
         ];
@@ -3165,7 +3467,7 @@ let
         overrides = [ (dimmed ".*capacity$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(mem:swap_used_bytes[$smooth]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
+            expr = ''avg_over_time(mem:swap_used_bytes[''${smoothspan}] offset -''${smooth}) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}}";
           })
           (target {
@@ -3179,15 +3481,15 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = ''avg_over_time(psi:cpu_waiting{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(psi:cpu_waiting{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} cpu";
           })
           (target {
-            expr = ''avg_over_time(psi:io_stalled{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(psi:io_stalled{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} io";
           })
           (target {
-            expr = ''avg_over_time(psi:memory_stalled{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(psi:memory_stalled{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} memory";
           })
         ];
@@ -3197,11 +3499,11 @@ let
         unit = "Bps";
         targets = [
           (target {
-            expr = ''avg_over_time(disk:read_bytes{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(disk:read_bytes{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} {{device}} read";
           })
           (target {
-            expr = ''avg_over_time(disk:written_bytes{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(disk:written_bytes{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}} {{device}} write";
           })
         ];
@@ -3212,7 +3514,7 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = ''avg_over_time(cpu:throttled_ratio{instance=~"$host"}[$smooth])'';
+            expr = ''avg_over_time(cpu:throttled_ratio{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
             legend = "{{instance}}";
           })
         ];
@@ -3224,7 +3526,7 @@ let
         min = 0;
         targets = [
           (target {
-            expr = ''min_over_time((fs:free_ratio_min{instance=~"$host"} or fs:free_ratio{instance=~"$host"})[$smooth:])'';
+            expr = ''min_over_time((fs:free_ratio_min{instance=~"$host"} or fs:free_ratio{instance=~"$host"})[''${smoothspan}:] offset -''${smooth})'';
             legend = "{{instance}} {{mountpoint}}";
           })
         ];
@@ -3259,7 +3561,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''max_over_time((systemd:failed_units_max{instance=~"$host"} or systemd:failed_units{instance=~"$host"})[$smooth:])'';
+            expr = ''max_over_time((systemd:failed_units_max{instance=~"$host"} or systemd:failed_units{instance=~"$host"})[''${smoothspan}:] offset -''${smooth})'';
             legend = "{{instance}}";
           })
         ];
@@ -3309,16 +3611,50 @@ let
 
   # Archive folder: hourly aggregates, kept indefinitely.
 
+  # The hires tier only keeps three hours, so anything reaching further back has
+  # to stay pinned to the minute tier whatever resolution is selected.
+  longLookback =
+    expr:
+    lib.any (w: lib.hasInfix "[${w}]" expr) [
+      "3h"
+      "6h"
+      "12h"
+      "24h"
+      "1d"
+      "2d"
+      "7d"
+      "14d"
+      "30d"
+      "90d"
+      "180d"
+      "1y"
+    ];
+
   reflow =
     ownUid: p:
     let
-      shed = x: if (x.datasource.uid or null) == ownUid then removeAttrs x [ "datasource" ] else x;
+      shed =
+        x:
+        if (x ? expr) && longLookback x.expr then
+          x
+          // {
+            datasource = {
+              type = "prometheus";
+              uid = "prometheus-lt";
+            };
+          }
+        else if (x.datasource.uid or null) == ownUid then
+          removeAttrs x [ "datasource" ]
+        else
+          x;
     in
     (removeAttrs (shed p) [
       "gridPos"
       "id"
     ])
-    // { inherit (p.gridPos) w h; }
+    // {
+      inherit (p.gridPos) w h;
+    }
     // lib.optionalAttrs (p ? targets) { targets = map shed p.targets; };
 
   withoutBanner = lib.filter (p: p.type != "text");
@@ -3362,6 +3698,7 @@ let
       (sensorVariable "prometheus")
       autoSmoothVariable
       smoothVariable
+      smoothSpanVariable
       tariffVariable
     ];
     links = tierLinks "power" ++ [
@@ -3386,6 +3723,7 @@ let
       (capacityVariable "prometheus")
       autoSmoothVariable
       smoothVariable
+      smoothSpanVariable
     ];
     links = tierLinks "system" ++ [
       (dashboardLink "Power and thermals" "power")
@@ -3410,6 +3748,7 @@ let
       (hostVariable "prometheus")
       autoSmoothVariable
       smoothVariable
+      smoothSpanVariable
     ];
     links = tierLinks "network" ++ [
       (dashboardLink "System" "system")
@@ -3449,6 +3788,7 @@ let
       (fleetHostVariable "prometheus-archive")
       autoSmoothVariable
       smoothVariable
+      smoothSpanVariable
       tariffVariable
     ];
     links = [
@@ -3626,7 +3966,7 @@ let
         };
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[$smooth]) / 1000'';
+            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[''${smoothspan}] offset -''${smooth}) / 1000'';
             legend = "{{instance}}";
             interval = "$smooth";
           })
@@ -3711,7 +4051,7 @@ let
         decimals = 4;
         targets = [
           (target {
-            expr = ''max by (instance) (avg_over_time(host:up${upSelector}[$__range]))'';
+            expr = "max by (instance) (avg_over_time(host:up${upSelector}[$__range]))";
             legend = "{{instance}}";
             instant = true;
           })
@@ -3725,7 +4065,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''(1 - max by (instance) (avg_over_time(host:up${upSelector}[$__range]))) * $__range_s'';
+            expr = "(1 - max by (instance) (avg_over_time(host:up${upSelector}[$__range]))) * $__range_s";
             legend = "{{instance}}";
             instant = true;
           })
@@ -3742,7 +4082,7 @@ let
         decimals = 3;
         targets = [
           (target {
-            expr = ''max by (instance) (avg_over_time(host:up${upSelector}[1d]))'';
+            expr = "max by (instance) (avg_over_time(host:up${upSelector}[1d]))";
             legend = "{{instance}}";
             interval = "1d";
           })
@@ -3758,7 +4098,7 @@ let
         decimals = 4;
         targets = [
           (target {
-            expr = ''max by (instance) (avg_over_time(host:up${upSelector}[30d]))'';
+            expr = "max by (instance) (avg_over_time(host:up${upSelector}[30d]))";
             legend = "{{instance}}";
             interval = "30d";
           })
@@ -3774,7 +4114,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = ''max by (instance) (host:up${upSelector})'';
+            expr = "max by (instance) (host:up${upSelector})";
             legend = "{{instance}}";
           })
         ];

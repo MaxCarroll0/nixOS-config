@@ -108,41 +108,38 @@ let
         done
       '';
 
-  laptopBatteryMetrics =
-    writeCollector "laptop-battery"
-      [ pkgs.gawk ]
-      ''
-        echo '# TYPE laptop_battery_energy_watt_hours gauge'
-        echo '# TYPE laptop_battery_power_watts gauge'
-        echo '# TYPE laptop_battery_health_ratio gauge'
-        for battery in /sys/class/power_supply/BAT*; do
-          [ -d "$battery" ] || continue
-          name=$(basename "$battery")
-          read_value() { cat "$battery/$1" 2>/dev/null || echo 0; }
-          energy_now=$(read_value energy_now)
-          energy_full=$(read_value energy_full)
-          energy_design=$(read_value energy_full_design)
-          power_now=$(read_value power_now)
-          voltage_now=$(read_value voltage_now)
-          current_now=$(read_value current_now)
-          capacity=$(read_value capacity)
-          cycles=$(read_value cycle_count)
-          status=$(read_value status | tr -cd '[:alnum:]_-')
-          [ "$power_now" -gt 0 ] 2>/dev/null || power_now=$(( voltage_now * current_now / 1000000 ))
-          awk -v name="$name" -v now="$energy_now" -v full="$energy_full" -v design="$energy_design" -v power="$power_now" -v capacity="$capacity" -v cycles="$cycles" -v status="$status" '
-            BEGIN {
-              printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"current\"} %.6f\n", name, now / 1000000
-              printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"full\"} %.6f\n", name, full / 1000000
-              printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"design\"} %.6f\n", name, design / 1000000
-              printf "laptop_battery_power_watts{battery=\"%s\"} %.6f\n", name, power / 1000000
-              if (design > 0) printf "laptop_battery_health_ratio{battery=\"%s\"} %.6f\n", name, full / design
-              printf "laptop_battery_capacity_ratio{battery=\"%s\"} %.6f\n", name, capacity / 100
-              printf "laptop_battery_cycles{battery=\"%s\"} %s\n", name, cycles
-              printf "laptop_battery_status_info{battery=\"%s\",status=\"%s\"} 1\n", name, status
-            }
-          '
-        done
-      '';
+  laptopBatteryMetrics = writeCollector "laptop-battery" [ pkgs.gawk ] ''
+    echo '# TYPE laptop_battery_energy_watt_hours gauge'
+    echo '# TYPE laptop_battery_power_watts gauge'
+    echo '# TYPE laptop_battery_health_ratio gauge'
+    for battery in /sys/class/power_supply/BAT*; do
+      [ -d "$battery" ] || continue
+      name=$(basename "$battery")
+      read_value() { cat "$battery/$1" 2>/dev/null || echo 0; }
+      energy_now=$(read_value energy_now)
+      energy_full=$(read_value energy_full)
+      energy_design=$(read_value energy_full_design)
+      power_now=$(read_value power_now)
+      voltage_now=$(read_value voltage_now)
+      current_now=$(read_value current_now)
+      capacity=$(read_value capacity)
+      cycles=$(read_value cycle_count)
+      status=$(read_value status | tr -cd '[:alnum:]_-')
+      [ "$power_now" -gt 0 ] 2>/dev/null || power_now=$(( voltage_now * current_now / 1000000 ))
+      awk -v name="$name" -v now="$energy_now" -v full="$energy_full" -v design="$energy_design" -v power="$power_now" -v capacity="$capacity" -v cycles="$cycles" -v status="$status" '
+        BEGIN {
+          printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"current\"} %.6f\n", name, now / 1000000
+          printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"full\"} %.6f\n", name, full / 1000000
+          printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"design\"} %.6f\n", name, design / 1000000
+          printf "laptop_battery_power_watts{battery=\"%s\"} %.6f\n", name, power / 1000000
+          if (design > 0) printf "laptop_battery_health_ratio{battery=\"%s\"} %.6f\n", name, full / design
+          printf "laptop_battery_capacity_ratio{battery=\"%s\"} %.6f\n", name, capacity / 100
+          printf "laptop_battery_cycles{battery=\"%s\"} %s\n", name, cycles
+          printf "laptop_battery_status_info{battery=\"%s\",status=\"%s\"} 1\n", name, status
+        }
+      '
+    done
+  '';
 
   tailscaleMetrics =
     writeCollector "tailscale"
@@ -208,6 +205,14 @@ let
         }'
       '';
 
+  # Kernel uptime counts time spent suspended, so boot time cannot answer
+  # "how long has this host been awake".
+  awakeSince = writeCollector "awake-since" [ ] ''
+    echo '# HELP node_awake_since_seconds Unix time of the last boot or resume.'
+    echo '# TYPE node_awake_since_seconds gauge'
+    printf 'node_awake_since_seconds %s\n' "$(date +%s)"
+  '';
+
   collectorService = collector: {
     unitConfig.StartLimitIntervalSec = 0;
     serviceConfig = {
@@ -235,6 +240,24 @@ in
     services.prometheus.exporters.node.extraFlags = [
       "--collector.textfile.directory=${textfileDir}"
     ];
+
+    systemd.services.textfile-awake-since = lib.mkMerge [
+      (collectorService awakeSince)
+      {
+        description = "Publish the last boot or resume time";
+        wantedBy = [ "multi-user.target" ];
+      }
+    ];
+
+    environment.etc."systemd/system-sleep/textfile-awake-since" = {
+      mode = "0755";
+      source = pkgs.writeShellScript "textfile-awake-since-sleep" ''
+        if [ "$1" = post ]; then
+          ${lib.getExe awakeSince}
+        fi
+        exit 0
+      '';
+    };
 
     systemd.services.textfile-sensor-names = lib.mkMerge [
       (collectorService sensorNames)

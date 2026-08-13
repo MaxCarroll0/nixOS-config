@@ -16,8 +16,7 @@ let
     "sensor:fan_rpm" = named "node_hwmon_fan_rpm";
     "sensor:power_watt" = named "node_hwmon_power_watt";
     "sensor:volts" = named "node_hwmon_in_volts";
-    "fan:rpm" =
-      ''label_replace(${named "node_hwmon_fan_rpm"}, "id", "$1", "name", "(.*)")'';
+    "fan:rpm" = ''label_replace(${named "node_hwmon_fan_rpm"}, "id", "$1", "name", "(.*)")'';
     "temp:major_celsius" =
       ''label_replace(max by (instance) (sensor:temp_celsius{name=~"CPU Tctl|CPU Tdie|CPU package|SoC"}), "component", "CPU", "", "")''
       + " or "
@@ -33,7 +32,7 @@ let
     "pc:cpu_power_watts" =
       ''sum by (instance) (node_hwmon_power_watt and on(instance, chip) node_hwmon_chip_names{chip_name="zenpower"})''
       + " or sum by (instance) (rate(node_rapl_package_joules_total[1m]))"
-      + '' or pi:pmic_rail_watts{rail="VDD_CORE"}'';
+      + ''or pi:pmic_rail_watts{rail="VDD_CORE"}'';
 
     "pc:platform_power_watts" = "sum by (instance) (rate(node_rapl_psys_joules_total[1m]))";
 
@@ -51,8 +50,7 @@ let
     "pc:psu_loss_watts" =
       "clamp_min(pc:power_watts - pc:cpu_power_watts"
       + " - (pc:gpu_power_watts or pc:cpu_power_watts * 0) - pc:baseline_watts, 0)";
-    "pi:pmic_rail_watts" =
-      "pi_pmic_current_amps * on(instance, rail) pi_pmic_voltage_volts";
+    "pi:pmic_rail_watts" = "pi_pmic_current_amps * on(instance, rail) pi_pmic_voltage_volts";
   };
 
   systemRules = {
@@ -75,7 +73,8 @@ let
     "mem:cached_bytes" = "node_memory_Cached_bytes + node_memory_Buffers_bytes";
     "mem:swap_used_bytes" = "node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes";
     "load:load1" = "node_load1";
-    "load:pressure_ratio" = ''node_load1 / on(instance) count by (instance) (node_cpu_seconds_total{mode="idle"})'';
+    "load:pressure_ratio" =
+      ''node_load1 / on(instance) count by (instance) (node_cpu_seconds_total{mode="idle"})'';
     "psi:cpu_waiting" = "rate(node_pressure_cpu_waiting_seconds_total[1m])";
     "psi:io_stalled" = "rate(node_pressure_io_stalled_seconds_total[1m])";
     "psi:memory_stalled" = "rate(node_pressure_memory_stalled_seconds_total[1m])";
@@ -89,12 +88,13 @@ let
     "systemd:failed_units" = ''sum by (instance) (node_systemd_unit_state{state="failed"})'';
     "host:up" =
       ''clamp_max(count by (instance) (present_over_time(up{job="node"}[1m])), 1)''
-      + '' * on(instance) group_left() ''
+      + "* on(instance) group_left() "
       + ''(label_replace(max by (peer) (tailscale_peer_online{instance="pi"}), "instance", "$1", "peer", "(.+)")''
-      + '' or max by (instance) (up{job="node", instance="pi"}))''
-      + '' or (max by (instance) (last_over_time(up{job="node"}[7d])) * 0)''
-      + '' or max by (instance) (label_replace(max by (peer) (last_over_time(tailscale_peer_online{instance="pi"}[7d])) * 0, "instance", "$1", "peer", "(.+)"))'';
+      + ''or max by (instance) (up{job="node", instance="pi"}))''
+      + ''or (max by (instance) (last_over_time(up{job="node"}[7d])) * 0)''
+      + ''or max by (instance) (label_replace(max by (peer) (last_over_time(tailscale_peer_online{instance="pi"}[7d])) * 0, "instance", "$1", "peer", "(.+)"))'';
     "host:boot_time_seconds" = "node_boot_time_seconds";
+    "host:awake_since_seconds" = "node_awake_since_seconds";
   };
 
   # Installed hardware, not a workload signal: evaluated on its own slow group
@@ -110,15 +110,15 @@ let
   byTransport =
     direction:
     let
-      counter = ''node_network_${direction}_bytes_total'';
+      counter = "node_network_${direction}_bytes_total";
       tunnels = ''{device=~"proton.*|wg.*|tun.*"}'';
       tailnet = ''{device=~"tailscale.*"}'';
       physical = ''{device=~"en.*|eth.*|wl.*|ww.*|bond.*"}'';
-      rated = selector: ''sum by (instance) (rate(${counter}${selector}[1m]))'';
+      rated = selector: "sum by (instance) (rate(${counter}${selector}[1m]))";
       tagged = name: expr: ''label_replace(${expr}, "transport", "${name}", "", "")'';
-      zero = ''(0 * ${rated physical})'';
-      orZero = expr: ''((${expr}) or ${zero})'';
-      direct = ''clamp_min(${rated physical} - ${orZero (rated tunnels)} - ${orZero (rated tailnet)}, 0)'';
+      zero = "(0 * ${rated physical})";
+      orZero = expr: "((${expr}) or ${zero})";
+      direct = "clamp_min(${rated physical} - ${orZero (rated tunnels)} - ${orZero (rated tailnet)}, 0)";
     in
     lib.concatStringsSep " or " [
       (tagged "VPN" (rated tunnels))
@@ -408,6 +408,10 @@ let
     };
     boot_time_seconds = {
       source = "host:boot_time_seconds";
+      aggs = [ "max" ];
+    };
+    awake_since_seconds = {
+      source = "host:awake_since_seconds";
       aggs = [ "max" ];
     };
     net_receive_bytes = {
@@ -735,9 +739,9 @@ in
         uid = "host-down";
         title = "Host down";
         expr =
-          ''clamp_min((1 - max by (instance) (host:up))''
-          + '' - (clamp_max(max by (instance) (host_power_state{state=~"S3|S5"}), 1)''
-          + '' or (0 * max by (instance) (host:up))), 0)'';
+          "clamp_min((1 - max by (instance) (host:up))"
+          + ''- (clamp_max(max by (instance) (host_power_state{state=~"S3|S5"}), 1)''
+          + "or (0 * max by (instance) (host:up))), 0)";
         value = 0;
         for' = "5m";
         summary = "{{ $labels.instance }} has stopped responding to scrapes.";
