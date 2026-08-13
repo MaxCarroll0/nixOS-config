@@ -648,6 +648,20 @@ let
 
   tariffVariable = textboxVariable "tariff" "Electricity (p/kWh)" "20.88";
 
+  resolutionVariable = {
+    name = "res";
+    label = "Resolution";
+    type = "datasource";
+    query = "prometheus";
+    refresh = 1;
+    current = {
+      text = "Prometheus";
+      value = "prometheus";
+      selected = true;
+    };
+    options = [ ];
+  };
+
   hostVariable =
     datasource:
     let
@@ -729,7 +743,7 @@ let
     datasource:
     let
       metric =
-        if datasource == "prometheus-archive" then "mem:capacity_info_max" else "mem:capacity_info_max";
+        if datasource == "prometheus-archive" then "(mem:capacity_info_max or mem:capacity_info)" else "(mem:capacity_info_max or mem:capacity_info)";
     in
     {
       name = "capacity";
@@ -934,10 +948,10 @@ let
     ];
     links = [
       (dashboardLink "Alerts and triage" "alerts")
-      (dashboardLink "System" "live-system")
-      (dashboardLink "Power and thermals" "live-power")
-      (dashboardLink "Fleet" "history-fleet")
-      (dashboardLink "Network" "history-network")
+      (dashboardLink "System" "system")
+      (dashboardLink "Power and thermals" "power")
+      (dashboardLink "Fleet" "fleet")
+      (dashboardLink "Network" "network")
       (dashboardLink "Nix builds" "nix-builds")
       (dashboardLink "Logs" "logs")
       (dashboardLink "Energy history" "archive-energy")
@@ -1099,7 +1113,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''label_replace(max_over_time(pc:power_watts_max{instance=~"$host"}[24h]), "category", "Max (24h)", "__name__", ".*")'';
+            expr = ''label_replace(max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[24h:]), "category", "Max (24h)", "__name__", ".*")'';
             instant = true;
           })
         ];
@@ -1380,7 +1394,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''max by (instance) (sum_over_time((host:up{instance=~"$host"})[7d:]) * 60 or ((time() - max by (instance) (host:boot_time_seconds_max{instance=~"$host"})) and on(instance) (host:up == 1)))'';
+            expr = ''max by (instance) (sum_over_time((host:up{instance=~"$host"})[7d:]) * 60 or ((time() - max by (instance) ((host:boot_time_seconds_max{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))) and on(instance) (host:up == 1)))'';
             legend = "{{instance}} total uptime (7d)";
             format = "table";
             instant = true;
@@ -1546,7 +1560,7 @@ let
         targetBlank = false;
       }
       (dashboardLink "Overview" "overview")
-      (dashboardLink "Fleet" "history-fleet")
+      (dashboardLink "Fleet" "fleet")
     ];
     panels = [
       (stat {
@@ -1705,7 +1719,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = ''fs:free_ratio_min{instance=~"$host"}'';
+            expr = ''(fs:free_ratio_min{instance=~"$host"} or fs:free_ratio{instance=~"$host"})'';
             legend = "{{instance}} {{mountpoint}}";
           })
         ];
@@ -1715,7 +1729,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''systemd:failed_units_max{instance=~"$host"}'';
+            expr = ''(systemd:failed_units_max{instance=~"$host"} or systemd:failed_units{instance=~"$host"})'';
             legend = "{{instance}}";
           })
         ];
@@ -1730,7 +1744,7 @@ let
   };
 
   livePower = dashboard {
-    uid = "live-power";
+    uid = "power";
     title = "Power and thermals";
     datasource = "prometheus";
     from = "now-15m";
@@ -1742,11 +1756,11 @@ let
       smoothVariable
     ];
     links = [
-      (presetLink "Live" "live-power" "now-15m" "5s")
-      (presetLink "24h" "history-power" "now-24h" "1m")
-      (presetLink "7d" "history-power" "now-7d" "5m")
-      (presetLink "30d" "history-power" "now-30d" "5m")
-      (dashboardLink "System" "live-system")
+      (presetLink "Live" "power" "now-15m" "5s")
+      (presetLink "24h" "power" "now-24h" "1m")
+      (presetLink "7d" "power" "now-7d" "5m")
+      (presetLink "30d" "power" "now-30d" "5m")
+      (dashboardLink "System" "system")
       (dashboardLink "Overview" "overview")
     ];
     panels = livePanels [
@@ -1962,7 +1976,7 @@ let
         unit = "hertz";
         targets = [
           (target {
-            expr = ''cpu:hertz_min{instance=~"$host"}'';
+            expr = ''(cpu:hertz_min{instance=~"$host"} or cpu:hertz{instance=~"$host"})'';
             legend = "{{instance}} min";
           })
           (target {
@@ -1970,7 +1984,7 @@ let
             legend = "{{instance}} mean";
           })
           (target {
-            expr = ''cpu:hertz_max{instance=~"$host"}'';
+            expr = ''(cpu:hertz_max{instance=~"$host"} or cpu:hertz{instance=~"$host"})'';
             legend = "{{instance}} max";
           })
         ];
@@ -2001,7 +2015,7 @@ let
   };
 
   liveSystem = dashboard {
-    uid = "live-system";
+    uid = "system";
     title = "System";
     datasource = "prometheus";
     from = "now-15m";
@@ -2013,11 +2027,11 @@ let
       smoothVariable
     ];
     links = [
-      (presetLink "Live" "live-system" "now-15m" "5s")
-      (presetLink "24h" "history-system" "now-24h" "1m")
-      (presetLink "7d" "history-system" "now-7d" "5m")
-      (presetLink "30d" "history-system" "now-30d" "5m")
-      (dashboardLink "Power and thermals" "live-power")
+      (presetLink "Live" "system" "now-15m" "5s")
+      (presetLink "24h" "system" "now-24h" "1m")
+      (presetLink "7d" "system" "now-7d" "5m")
+      (presetLink "30d" "system" "now-30d" "5m")
+      (dashboardLink "Power and thermals" "power")
       (dashboardLink "Overview" "overview")
     ];
     panels = livePanels [
@@ -2151,15 +2165,15 @@ let
         overrides = [ (dimmed ".*(capacity|cache)$") ];
         targets = [
           (target {
-            expr = ''mem:used_bytes{instance=~"$host"} * on(instance) group_left(capacity) mem:capacity_info_max{capacity=~"$capacity"}'';
+            expr = ''mem:used_bytes{instance=~"$host"} * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}} used";
           })
           (target {
-            expr = ''mem:cached_bytes{instance=~"$host"} * on(instance) group_left(capacity) mem:capacity_info_max{capacity=~"$capacity"}'';
+            expr = ''mem:cached_bytes{instance=~"$host"} * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}} cache";
           })
           (target {
-            expr = ''node_memory_MemTotal_bytes{instance=~"$host"} * on(instance) group_left(capacity) mem:capacity_info_max{capacity=~"$capacity"}'';
+            expr = ''node_memory_MemTotal_bytes{instance=~"$host"} * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}} capacity";
           })
         ];
@@ -2273,7 +2287,7 @@ let
   # History folder: 1-minute aggregates, smoothed by the $smooth variable.
 
   historyPower = dashboard {
-    uid = "history-power";
+    uid = "power";
     title = "Power and thermals";
     datasource = "prometheus-lt";
     from = "now-7d";
@@ -2286,11 +2300,11 @@ let
       tariffVariable
     ];
     links = [
-      (presetLink "Live" "live-power" "now-15m" "5s")
-      (presetLink "24h" "history-power" "now-24h" "1m")
-      (presetLink "7d" "history-power" "now-7d" "5m")
-      (presetLink "30d" "history-power" "now-30d" "5m")
-      (dashboardLink "System" "history-system")
+      (presetLink "Live" "power" "now-15m" "5s")
+      (presetLink "24h" "power" "now-24h" "1m")
+      (presetLink "7d" "power" "now-7d" "5m")
+      (presetLink "30d" "power" "now-30d" "5m")
+      (dashboardLink "System" "system")
       (dashboardLink "Thermal archive" "archive-thermal")
     ];
     panels = [
@@ -2307,7 +2321,7 @@ let
             instant = true;
           })
           (target {
-            expr = ''max_over_time(pc:power_watts_max{instance=~"$host"}[$__range])'';
+            expr = ''max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[$__range:])'';
             legend = "{{instance}} max";
             instant = true;
           })
@@ -2364,11 +2378,11 @@ let
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time(pc:power_watts_max{instance=~"$host"}[''${smooth}s])'';
+            expr = ''max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[''${smooth}s:])'';
             legend = "{{instance}} peak";
           })
           (target {
-            expr = ''min_over_time(pc:power_watts_min{instance=~"$host"}[''${smooth}s])'';
+            expr = ''min_over_time((pc:power_watts_min{instance=~"$host"} or pc:power_watts{instance=~"$host"})[''${smooth}s:])'';
             legend = "{{instance}} floor";
           })
         ];
@@ -2469,11 +2483,11 @@ let
             legend = "{{instance}} {{name}}";
           })
           (target {
-            expr = ''max_over_time(sensor:temp_celsius_max{instance=~"$host",name=~"$sensor"}[''${smooth}s])'';
+            expr = ''max_over_time((sensor:temp_celsius_max{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[''${smooth}s:])'';
             legend = "{{instance}} {{name}} peak";
           })
           (target {
-            expr = ''min_over_time(sensor:temp_celsius_min{instance=~"$host",name=~"$sensor"}[''${smooth}s])'';
+            expr = ''min_over_time((sensor:temp_celsius_min{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[''${smooth}s:])'';
             legend = "{{instance}} {{name}} floor";
           })
         ];
@@ -2543,7 +2557,7 @@ let
   };
 
   historyNetwork = dashboard {
-    uid = "history-network";
+    uid = "network";
     title = "Network and tailnet";
     datasource = "prometheus-lt";
     from = "now-7d";
@@ -2554,12 +2568,12 @@ let
       smoothVariable
     ];
     links = [
-      (presetLink "Live" "history-network" "now-15m" "5s")
-      (presetLink "24h" "history-network" "now-24h" "1m")
-      (presetLink "7d" "history-network" "now-7d" "5m")
-      (presetLink "30d" "history-network" "now-30d" "5m")
-      (dashboardLink "Fleet" "history-fleet")
-      (dashboardLink "System" "history-system")
+      (presetLink "Live" "network" "now-15m" "5s")
+      (presetLink "24h" "network" "now-24h" "1m")
+      (presetLink "7d" "network" "now-7d" "5m")
+      (presetLink "30d" "network" "now-30d" "5m")
+      (dashboardLink "Fleet" "fleet")
+      (dashboardLink "System" "system")
     ];
     panels = [
       (ts {
@@ -2732,7 +2746,7 @@ let
         unit = "s";
         targets = [
           (target {
-            expr = ''wg:handshake_age_seconds_max{instance=~"$host"}'';
+            expr = ''(wg:handshake_age_seconds_max{instance=~"$host"} or wg:handshake_age_seconds{instance=~"$host"})'';
             legend = "{{instance}} {{interface}}";
             format = "table";
             instant = true;
@@ -2763,7 +2777,7 @@ let
   };
 
   historyFleet = dashboard {
-    uid = "history-fleet";
+    uid = "fleet";
     title = "Fleet and connectivity";
     datasource = "prometheus-lt";
     from = "now-7d";
@@ -2774,12 +2788,12 @@ let
       smoothVariable
     ];
     links = [
-      (presetLink "Live" "history-fleet" "now-15m" "5s")
-      (presetLink "24h" "history-fleet" "now-24h" "1m")
-      (presetLink "7d" "history-fleet" "now-7d" "5m")
-      (presetLink "30d" "history-fleet" "now-30d" "5m")
-      (dashboardLink "System" "history-system")
-      (dashboardLink "Network" "history-network")
+      (presetLink "Live" "fleet" "now-15m" "5s")
+      (presetLink "24h" "fleet" "now-24h" "1m")
+      (presetLink "7d" "fleet" "now-7d" "5m")
+      (presetLink "30d" "fleet" "now-30d" "5m")
+      (dashboardLink "System" "system")
+      (dashboardLink "Network" "network")
       (dashboardLink "Uptime archive" "archive-uptime")
     ];
     panels = [
@@ -2813,7 +2827,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = ''time() - max by (instance) (host:boot_time_seconds_max{instance=~"$host"})'';
+            expr = ''time() - max by (instance) ((host:boot_time_seconds_max{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -2907,7 +2921,7 @@ let
             instant = true;
           })
           (target {
-            expr = "max by (peer) (ts:handshake_age_seconds_max)";
+            expr = "max by (peer) ((ts:handshake_age_seconds_max or ts:handshake_age_seconds))";
             format = "table";
             instant = true;
           })
@@ -2932,7 +2946,7 @@ let
   };
 
   historySystem = dashboard {
-    uid = "history-system";
+    uid = "system";
     title = "System";
     datasource = "prometheus-lt";
     from = "now-7d";
@@ -2944,11 +2958,11 @@ let
       smoothVariable
     ];
     links = [
-      (presetLink "Live" "live-system" "now-15m" "5s")
-      (presetLink "24h" "history-system" "now-24h" "1m")
-      (presetLink "7d" "history-system" "now-7d" "5m")
-      (presetLink "30d" "history-system" "now-30d" "5m")
-      (dashboardLink "Power and thermals" "history-power")
+      (presetLink "Live" "system" "now-15m" "5s")
+      (presetLink "24h" "system" "now-24h" "1m")
+      (presetLink "7d" "system" "now-7d" "5m")
+      (presetLink "30d" "system" "now-30d" "5m")
+      (dashboardLink "Power and thermals" "power")
       (dashboardLink "Capacity archive" "archive-capacity")
     ];
     panels = [
@@ -2965,7 +2979,7 @@ let
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time(cpu:utilisation_max{instance=~"$host"}[''${smooth}s])'';
+            expr = ''max_over_time((cpu:utilisation_max{instance=~"$host"} or cpu:utilisation{instance=~"$host"})[''${smooth}s:])'';
             legend = "{{instance}} peak";
           })
         ];
@@ -2989,7 +3003,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''mem:total_bytes_max{instance=~"$host"}'';
+            expr = ''(mem:total_bytes_max{instance=~"$host"} or mem:total_bytes{instance=~"$host"})'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3002,7 +3016,7 @@ let
         unit = "percentunit";
         targets = [
           (target {
-            expr = ''max_over_time(mem:used_ratio_max{instance=~"$host"}[$__range])'';
+            expr = ''max_over_time((mem:used_ratio_max{instance=~"$host"} or mem:used_ratio{instance=~"$host"})[$__range:])'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3022,11 +3036,11 @@ let
             legend = "{{instance}} used";
           })
           (target {
-            expr = ''max_over_time(mem:used_bytes_max{instance=~"$host"}[''${smooth}s])'';
+            expr = ''max_over_time((mem:used_bytes_max{instance=~"$host"} or mem:used_bytes{instance=~"$host"})[''${smooth}s:])'';
             legend = "{{instance}} peak";
           })
           (target {
-            expr = ''mem:total_bytes_max{instance=~"$host"}'';
+            expr = ''(mem:total_bytes_max{instance=~"$host"} or mem:total_bytes{instance=~"$host"})'';
             legend = "{{instance}} capacity";
           })
         ];
@@ -3042,11 +3056,11 @@ let
         maxPerRow = 2;
         targets = [
           (target {
-            expr = ''avg_over_time(mem:used_bytes[''${smooth}s]) * on(instance) group_left(capacity) mem:capacity_info_max{capacity=~"$capacity"}'';
+            expr = ''avg_over_time(mem:used_bytes[''${smooth}s]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time(mem:used_bytes_max[''${smooth}s]) * on(instance) group_left(capacity) mem:capacity_info_max{capacity=~"$capacity"}'';
+            expr = ''max_over_time((mem:used_bytes_max or mem:used_bytes)[''${smooth}s:]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}} peak";
           })
         ];
@@ -3063,7 +3077,7 @@ let
             legend = "{{instance}}";
           })
           (target {
-            expr = ''max_over_time(mem:used_ratio_max{instance=~"$host"}[''${smooth}s])'';
+            expr = ''max_over_time((mem:used_ratio_max{instance=~"$host"} or mem:used_ratio{instance=~"$host"})[''${smooth}s:])'';
             legend = "{{instance}} peak";
           })
         ];
@@ -3078,11 +3092,11 @@ let
         overrides = [ (dimmed ".*capacity$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(mem:swap_used_bytes[''${smooth}s]) * on(instance) group_left(capacity) mem:capacity_info_max{capacity=~"$capacity"}'';
+            expr = ''avg_over_time(mem:swap_used_bytes[''${smooth}s]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}}";
           })
           (target {
-            expr = ''mem:swap_total_bytes_max * on(instance) group_left(capacity) mem:capacity_info_max{capacity=~"$capacity"}'';
+            expr = ''(mem:swap_total_bytes_max or mem:swap_total_bytes) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}} capacity";
           })
         ];
@@ -3137,7 +3151,7 @@ let
         min = 0;
         targets = [
           (target {
-            expr = ''min_over_time(fs:free_ratio_min{instance=~"$host"}[''${smooth}s])'';
+            expr = ''min_over_time((fs:free_ratio_min{instance=~"$host"} or fs:free_ratio{instance=~"$host"})[''${smooth}s:])'';
             legend = "{{instance}} {{mountpoint}}";
           })
         ];
@@ -3161,7 +3175,7 @@ let
         ];
         targets = [
           (target {
-            expr = ''clamp_max(fs:avail_bytes_min{instance=~"$host"} / -deriv(fs:avail_bytes_min{instance=~"$host"}[7d]) / 86400, 3650) and (deriv(fs:avail_bytes_min{instance=~"$host"}[7d]) < -1)'';
+            expr = ''clamp_max((fs:avail_bytes_min{instance=~"$host"} or fs:avail_bytes{instance=~"$host"}) / -deriv((fs:avail_bytes_min{instance=~"$host"} or fs:avail_bytes{instance=~"$host"})[7d:]) / 86400, 3650) and (deriv((fs:avail_bytes_min{instance=~"$host"} or fs:avail_bytes{instance=~"$host"})[7d:]) < -1)'';
             legend = "{{instance}} {{mountpoint}}";
             instant = true;
           })
@@ -3172,7 +3186,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''max_over_time(systemd:failed_units_max{instance=~"$host"}[''${smooth}s])'';
+            expr = ''max_over_time((systemd:failed_units_max{instance=~"$host"} or systemd:failed_units{instance=~"$host"})[''${smooth}s:])'';
             legend = "{{instance}}";
           })
         ];
@@ -3222,6 +3236,132 @@ let
 
   # Archive folder: hourly aggregates, kept indefinitely.
 
+  reflow =
+    ownUid: p:
+    let
+      shed = x: if (x.datasource.uid or null) == ownUid then removeAttrs x [ "datasource" ] else x;
+    in
+    (removeAttrs (shed p) [
+      "gridPos"
+      "id"
+    ])
+    // { inherit (p.gridPos) w h; }
+    // lib.optionalAttrs (p ? targets) { targets = map shed p.targets; };
+
+  withoutBanner = lib.filter (p: p.type != "text");
+
+  mergedPanels =
+    live: history:
+    let
+      livePanelSet = withoutBanner live.panels;
+      liveTitles = map (p: p.title or "") livePanelSet;
+      extra = lib.filter (p: !(lib.elem (p.title or "") liveTitles)) (withoutBanner history.panels);
+    in
+    map (reflow "prometheus") livePanelSet ++ map (reflow "prometheus-lt") extra;
+
+  tierLink = title: uid: from: refresh: res: {
+    inherit title;
+    type = "link";
+    url = "/d/${uid}?from=${from}&to=now&var-res=${res}&refresh=${refresh}";
+    includeVars = false;
+    keepTime = false;
+    targetBlank = false;
+  };
+
+  tierLinks = uid: [
+    (tierLink "Live" uid "now-15m" "5s" "prometheus")
+    (tierLink "24h" uid "now-24h" "1m" "prometheus-lt")
+    (tierLink "7d" uid "now-7d" "5m" "prometheus-lt")
+    (tierLink "30d" uid "now-30d" "5m" "prometheus-lt")
+    (tierLink "1y" uid "now-1y" "" "prometheus-archive")
+  ];
+
+  mergedPower = dashboard {
+    uid = "power";
+    title = "Power and thermals";
+    datasource = "\${res}";
+    from = "now-15m";
+    refresh = "5s";
+    tags = [ "metrics" ];
+    variables = [
+      resolutionVariable
+      (hostVariable "prometheus")
+      (sensorVariable "prometheus")
+      smoothVariable
+      tariffVariable
+    ];
+    links = tierLinks "power" ++ [
+      (dashboardLink "System" "system")
+      (dashboardLink "Network" "network")
+      (dashboardLink "Fleet" "fleet")
+      (dashboardLink "Overview" "overview")
+    ];
+    panels = mergedPanels livePower historyPower;
+  };
+
+  mergedSystem = dashboard {
+    uid = "system";
+    title = "System";
+    datasource = "\${res}";
+    from = "now-15m";
+    refresh = "5s";
+    tags = [ "metrics" ];
+    variables = [
+      resolutionVariable
+      (hostVariable "prometheus")
+      (capacityVariable "prometheus")
+      smoothVariable
+    ];
+    links = tierLinks "system" ++ [
+      (dashboardLink "Power and thermals" "power")
+      (dashboardLink "Network" "network")
+      (dashboardLink "Fleet" "fleet")
+      (dashboardLink "Overview" "overview")
+    ];
+    panels = mergedPanels liveSystem historySystem;
+  };
+
+  mergedNetworkPanels = map (reflow "prometheus-lt") (withoutBanner historyNetwork.panels);
+
+  mergedNetwork = dashboard {
+    uid = "network";
+    title = "Network";
+    datasource = "\${res}";
+    from = "now-15m";
+    refresh = "5s";
+    tags = [ "metrics" ];
+    variables = [
+      resolutionVariable
+      (hostVariable "prometheus")
+      smoothVariable
+    ];
+    links = tierLinks "network" ++ [
+      (dashboardLink "System" "system")
+      (dashboardLink "Power and thermals" "power")
+      (dashboardLink "Overview" "overview")
+    ];
+    panels = mergedNetworkPanels;
+  };
+
+  mergedFleet = dashboard {
+    uid = "fleet";
+    title = "Fleet";
+    datasource = "\${res}";
+    from = "now-15m";
+    refresh = "5s";
+    tags = [ "metrics" ];
+    variables = [
+      resolutionVariable
+      (fleetHostVariable "prometheus")
+    ];
+    links = tierLinks "fleet" ++ [
+      (dashboardLink "System" "system")
+      (dashboardLink "Power and thermals" "power")
+      (dashboardLink "Overview" "overview")
+    ];
+    panels = map (reflow "prometheus-lt") (withoutBanner historyFleet.panels);
+  };
+
   archiveEnergy = dashboard {
     uid = "archive-energy";
     title = "Energy";
@@ -3235,7 +3375,7 @@ let
       tariffVariable
     ];
     links = [
-      (dashboardLink "Power history" "history-power")
+      (dashboardLink "Power history" "power")
       (dashboardLink "Overview" "overview")
     ];
     panels = [
@@ -3289,7 +3429,7 @@ let
             instant = true;
           })
           (target {
-            expr = ''label_replace(max_over_time(pc:power_watts_max{instance=~"$host"}[24h]), "category", "Max (24h)", "__name__", ".*")'';
+            expr = ''label_replace(max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[24h:]), "category", "Max (24h)", "__name__", ".*")'';
             instant = true;
           })
         ];
@@ -3464,7 +3604,7 @@ let
             interval = "1d";
           })
           (target {
-            expr = ''max_over_time(pc:power_watts_max{instance=~"$host"}[1d])'';
+            expr = ''max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[1d:])'';
             legend = "{{instance}} peak";
             interval = "1d";
           })
@@ -3482,7 +3622,7 @@ let
     tags = [ "archive" ];
     variables = [ (fleetHostVariable "prometheus-archive") ];
     links = [
-      (dashboardLink "Fleet" "history-fleet")
+      (dashboardLink "Fleet" "fleet")
       (dashboardLink "Overview" "overview")
     ];
     panels = [
@@ -3574,7 +3714,7 @@ let
     tags = [ "archive" ];
     variables = [ (capacityVariable "prometheus-archive") ];
     links = [
-      (dashboardLink "System history" "history-system")
+      (dashboardLink "System history" "system")
       (dashboardLink "Overview" "overview")
     ];
     panels = [
@@ -3586,7 +3726,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "mem:total_bytes_max";
+            expr = "(mem:total_bytes_max or mem:total_bytes)";
             legend = "{{instance}}";
             instant = true;
           })
@@ -3599,7 +3739,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = "cpu:cores_max";
+            expr = "(cpu:cores_max or cpu:cores)";
             legend = "{{instance}}";
             instant = true;
           })
@@ -3613,7 +3753,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''sum by (instance) (fs:size_bytes_max{mountpoint="/"})'';
+            expr = ''sum by (instance) ((fs:size_bytes_max{mountpoint="/"} or fs:size_bytes{mountpoint="/"}))'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3634,12 +3774,12 @@ let
             interval = "1d";
           })
           (target {
-            expr = "max_over_time(mem:used_bytes_max[1d])";
+            expr = "max_over_time((mem:used_bytes_max or mem:used_bytes)[1d:])";
             legend = "{{instance}} peak";
             interval = "1d";
           })
           (target {
-            expr = "max_over_time(mem:total_bytes_max[1d])";
+            expr = "max_over_time((mem:total_bytes_max or mem:total_bytes)[1d:])";
             legend = "{{instance}} capacity";
             interval = "1d";
           })
@@ -3656,12 +3796,12 @@ let
         maxPerRow = 2;
         targets = [
           (target {
-            expr = ''avg_over_time(mem:used_bytes[1d]) * on(instance) group_left(capacity) mem:capacity_info_max{capacity=~"$capacity"}'';
+            expr = ''avg_over_time(mem:used_bytes[1d]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}}";
             interval = "1d";
           })
           (target {
-            expr = ''max_over_time(mem:used_bytes_max[1d]) * on(instance) group_left(capacity) mem:capacity_info_max{capacity=~"$capacity"}'';
+            expr = ''max_over_time((mem:used_bytes_max or mem:used_bytes)[1d:]) * on(instance) group_left(capacity) (mem:capacity_info_max{capacity=~"$capacity"} or mem:capacity_info{capacity=~"$capacity"})'';
             legend = "{{instance}} peak";
             interval = "1d";
           })
@@ -3677,7 +3817,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = "max_over_time(mem:used_ratio_max[1d])";
+            expr = "max_over_time((mem:used_ratio_max or mem:used_ratio)[1d:])";
             legend = "{{instance}}";
             interval = "1d";
           })
@@ -3692,12 +3832,12 @@ let
         overrides = [ (dimmed ".*size$") ];
         targets = [
           (target {
-            expr = "min_over_time(fs:avail_bytes_min[1d])";
+            expr = "min_over_time((fs:avail_bytes_min or fs:avail_bytes)[1d:])";
             legend = "{{instance}} {{mountpoint}} free";
             interval = "1d";
           })
           (target {
-            expr = "max_over_time(fs:size_bytes_max[1d])";
+            expr = "max_over_time((fs:size_bytes_max or fs:size_bytes)[1d:])";
             legend = "{{instance}} {{mountpoint}} size";
             interval = "1d";
           })
@@ -3718,7 +3858,7 @@ let
       (sensorVariable "prometheus-archive")
     ];
     links = [
-      (dashboardLink "Thermal history" "history-power")
+      (dashboardLink "Thermal history" "power")
       (dashboardLink "Overview" "overview")
     ];
     panels = [
@@ -3736,12 +3876,12 @@ let
             interval = "1d";
           })
           (target {
-            expr = ''max_over_time(sensor:temp_celsius_max{instance=~"$host",name=~"$sensor"}[1d])'';
+            expr = ''max_over_time((sensor:temp_celsius_max{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[1d:])'';
             legend = "{{instance}} {{name}} peak";
             interval = "1d";
           })
           (target {
-            expr = ''min_over_time(sensor:temp_celsius_min{instance=~"$host",name=~"$sensor"}[1d])'';
+            expr = ''min_over_time((sensor:temp_celsius_min{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[1d:])'';
             legend = "{{instance}} {{name}} floor";
             interval = "1d";
           })
@@ -3755,7 +3895,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''max_over_time(sensor:temp_celsius_max{instance=~"$host",name=~"$sensor"}[1d])'';
+            expr = ''max_over_time((sensor:temp_celsius_max{instance=~"$host",name=~"$sensor"} or sensor:temp_celsius{instance=~"$host",name=~"$sensor"})[1d:])'';
             legend = "{{instance}} {{name}}";
             interval = "1d";
           })
@@ -4034,7 +4174,7 @@ let
     variables = [ (textboxVariable "trace" "Trace ID" ".*") ];
     links = [
       (dashboardLink "All builds" "nix-builds")
-      (dashboardLink "System" "history-system")
+      (dashboardLink "System" "system")
       (dashboardLink "Logs" "logs")
     ];
     panels = [
@@ -4152,16 +4292,11 @@ in
     "alerts.json" = alerts;
   };
 
-  live = {
-    "power.json" = livePower;
-    "system.json" = liveSystem;
-  };
-
-  history = {
-    "power.json" = historyPower;
-    "network.json" = historyNetwork;
-    "fleet.json" = historyFleet;
-    "system.json" = historySystem;
+  metrics = {
+    "power.json" = mergedPower;
+    "system.json" = mergedSystem;
+    "network.json" = mergedNetwork;
+    "fleet.json" = mergedFleet;
   };
 
   archive = {

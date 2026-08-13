@@ -580,8 +580,7 @@ in
           apiVersion = 1;
           providers = [
             (dashboardProvider "overview" "Overview")
-            (dashboardProvider "live" "Live")
-            (dashboardProvider "history" "History")
+            (dashboardProvider "metrics" "Metrics")
             (dashboardProvider "archive" "Archive")
             (dashboardProvider "observability" "Observability")
           ];
