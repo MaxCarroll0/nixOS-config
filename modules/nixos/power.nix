@@ -246,6 +246,8 @@ let
     '';
   };
 
+  deepSleepTarget = "/run/deep-sleep-target";
+
   suspendThenPowerOff =
     hours:
     pkgs.writeShellApplication {
@@ -262,22 +264,11 @@ let
         # Writing a wakealarm that is already armed fails EBUSY.
         echo 0 > "$alarm"
         echo "$target" > "$alarm"
+        echo "$target" > ${deepSleepTarget}
 
-        systemctl suspend
-
-        if [ "$(date +%s)" -lt "$(( target - 60 ))" ]; then
-          echo 0 > "$alarm"
-          exit 0
-        fi
-
-        sleep 60
-        echo 0 > "$alarm"
-
-        if ${lib.getExe sessionActivity}; then
-          exit 0
-        fi
-
-        exec systemctl poweroff
+        # systemctl suspend returns once logind accepts the request, not on
+        # resume, so whether to power off is decided by resumeCommands.
+        exec systemctl suspend
       '';
     };
 in
@@ -577,6 +568,29 @@ in
           };
         };
       };
+    })
+
+    (lib.mkIf (cfg.idle.policy == "autosuspend" && cfg.idle.autosuspend.powerOffAfterHours != null) {
+      systemd.services.deep-sleep-escalate = {
+        description = "Power off when a timed wake finds the host still idle";
+        serviceConfig.Type = "oneshot";
+        script = ''
+          sleep 60
+          if ${lib.getExe sessionActivity}; then
+            exit 0
+          fi
+          ${pkgs.systemd}/bin/systemctl poweroff
+        '';
+      };
+
+      powerManagement.resumeCommands = ''
+        target=$(cat ${deepSleepTarget} 2>/dev/null || echo 0)
+        rm -f ${deepSleepTarget}
+        echo 0 > /sys/class/rtc/rtc0/wakealarm
+        if [ "$target" -gt 0 ] && [ "$(${pkgs.coreutils}/bin/date +%s)" -ge "$(( target - 60 ))" ]; then
+          ${pkgs.systemd}/bin/systemctl start --no-block deep-sleep-escalate.service
+        fi
+      '';
     })
 
     (lib.mkIf cfg.instrument {
