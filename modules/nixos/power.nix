@@ -233,16 +233,11 @@ let
         fi
       done
 
-      # logind never sets IdleHint under Wayland, so ask KDE instead.
+      # IdleHint is never set under Wayland; the screen lock is, by KDE.
       for session in $(loginctl list-sessions --no-legend | awk '{print $1}'); do
         [ "$(loginctl show-session "$session" -p Class --value)" = user ] || continue
         [ -n "$(loginctl show-session "$session" -p Seat --value)" ] || continue
-        runtime="/run/user/$(loginctl show-session "$session" -p User --value)"
-        [ -S "$runtime/bus" ] || continue
-        away=$(XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
-          busctl --user call org.kde.screensaver /ScreenSaver \
-            org.freedesktop.ScreenSaver GetActive 2>/dev/null || true)
-        if [ "$away" != "b true" ]; then
+        if [ "$(loginctl show-session "$session" -p LockedHint --value)" != yes ]; then
           exit 0
         fi
       done
