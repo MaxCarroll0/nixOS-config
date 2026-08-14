@@ -24,8 +24,8 @@ let
   # unlock happens on the way up.
   rouse =
     b:
-    if config.local.wake.peers ? ${b.host} then
-      ''exec ${config.local.wake.package}/bin/wake-peer "$host"''
+    if config.local.wake.peers ? ${b.wakePeer} then
+      "exec ${config.local.wake.package}/bin/wake-peer ${b.wakePeer}"
     else
       lib.optionalString (b.wake.mac != null) ''
         wol ${lib.optionalString (b.wake.broadcast != null) "-i ${b.wake.broadcast}"} ${b.wake.mac}
@@ -75,6 +75,12 @@ let
           type = lib.types.str;
           default = name;
           description = "Hostname of the builder, normally its MagicDNS name.";
+        };
+
+        wakePeer = lib.mkOption {
+          type = lib.types.str;
+          default = name;
+          description = "local.wake.peers entry to rouse this builder with.";
         };
 
         user = lib.mkOption {
