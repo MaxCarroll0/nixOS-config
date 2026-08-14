@@ -131,6 +131,7 @@
     nixd
     shfmt
     jq
+    just
   ];
 
   home.sessionVariables = {
