@@ -1,13 +1,13 @@
 default: check
 
-# Build both hosts and the home config without switching.
+# Build every deployed host and its home config without switching.
 check:
     nix flake check --no-build
     nix build --no-link .#nixosConfigurations.laptop.config.system.build.toplevel
-    nix build --no-link .#nixosConfigurations.desktop.config.system.build.toplevel
+    nix build --no-link .#nixosConfigurations.desktop_new.config.system.build.toplevel
     nix build --no-link .#nixosConfigurations.pi.config.system.build.toplevel
     nix build --no-link '.#homeConfigurations."max@laptop".activationPackage'
-    nix build --no-link '.#homeConfigurations."max@desktop".activationPackage'
+    nix build --no-link '.#homeConfigurations."max@desktop_new".activationPackage'
     nix build --no-link '.#homeConfigurations."max@pi".activationPackage'
 
 build host:
