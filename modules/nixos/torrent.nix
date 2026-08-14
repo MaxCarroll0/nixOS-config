@@ -9,7 +9,7 @@
 
 let
   cfg = config.local.torrent;
-  tunnelInterfaces = map (n: "proton-${n}") (lib.attrNames config.local.vpn.configs);
+  tunnelInterfaces = [ config.local.vpn.interface ];
   tunnelUnits = map (i: "wg-quick-${i}.service") tunnelInterfaces;
 in
 
@@ -92,6 +92,7 @@ in
         partOf = tunnelUnits;
         serviceConfig.RestrictNetworkInterfaces = [ "lo" ] ++ tunnelInterfaces;
       };
+      transmission-setup.unitConfig.RequiresMountsFor = cfg.downloadDir;
     }
     // lib.genAttrs (map (i: "wg-quick-${i}") tunnelInterfaces) (_: {
       wants = [ "transmission.service" ];

@@ -17,5 +17,7 @@ pkgs.buildGoModule {
 
   vendorHash = "sha256-hm+t8Ys5G8MWxgFKaX/44+EDStfftNYSzTZdNYrHT9A=";
 
+  env.CGO_ENABLED = "0";
+
   meta.mainProgram = "protonvpn-wg";
 }

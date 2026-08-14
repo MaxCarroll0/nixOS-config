@@ -20,7 +20,11 @@
 
   networking.hostName = "laptop";
 
-  networking.hosts."100.117.13.66" = [ "observatory" "grafana" "pi.grafana" ];
+  networking.hosts."100.117.13.66" = [
+    "observatory"
+    "grafana"
+    "pi.grafana"
+  ];
 
   services.thermald.enable = true;
 
@@ -36,12 +40,22 @@
     };
   };
 
-  local.vpn = {
-    configs.uk = "proton-wg";
-    primary = "uk";
+  local.vpn.selection = {
+    countries = [ "UK" ];
+    rotateEvery = "6h";
   };
 
-  local.torrent.enable = true;
+  boot.initrd.luks.devices.vault.device = "/dev/disk/by-uuid/13a8f54b-94ee-46d2-a139-d44eeac71cdc";
+  fileSystems."/vault" = {
+    device = "/dev/mapper/vault";
+    fsType = "ext4";
+  };
+
+  local.torrent = {
+    enable = true;
+    downloadDir = "/vault/torrents";
+  };
+  systemd.services.transmission.bindsTo = [ "vault.mount" ];
 
   services.earlyoom = {
     freeMemThreshold = 15;
@@ -90,7 +104,8 @@
 
   local.build.client = {
     enable = true;
-    builders.desktop = {
+    builders.desktopnew = {
+      wakePeer = "desktop";
       user = "max";
       port = 22;
       tailscaleSsh = true;

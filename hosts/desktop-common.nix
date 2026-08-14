@@ -20,11 +20,15 @@
     ../modules/nixos/pam-ssh-agent-sudo.nix
   ];
 
-  networking.hosts."100.117.13.66" = [ "observatory" "grafana" "pi.grafana" ];
+  networking.hosts."100.117.13.66" = [
+    "observatory"
+    "grafana"
+    "pi.grafana"
+  ];
 
-  local.vpn = {
-    configs.nl = "proton-wg-2";
-    primary = "nl";
+  local.vpn.selection = {
+    countries = [ "UK" ];
+    rotateEvery = "6h";
   };
 
   boot.loader.timeout = 0;
@@ -35,6 +39,7 @@
     {
       device = "/swapfile";
       size = 32 * 1024;
+      randomEncryption.enable = true;
     }
   ];
 
