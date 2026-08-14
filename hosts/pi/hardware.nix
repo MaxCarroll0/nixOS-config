@@ -37,6 +37,27 @@
   hardware.raspberry-pi.config.all = {
     base-dt-params.pciex1.enable = true;
     dt-overlays.pcie-32bit-dma-pi5.enable = true;
+    dt-overlays.pwm-2chan = {
+      enable = true;
+      params = {
+        pin = {
+          enable = true;
+          value = 12;
+        };
+        func = {
+          enable = true;
+          value = 4;
+        };
+        pin2 = {
+          enable = true;
+          value = 13;
+        };
+        func2 = {
+          enable = true;
+          value = 4;
+        };
+      };
+    };
     options.usb_max_current_enable = {
       enable = true;
       value = true;

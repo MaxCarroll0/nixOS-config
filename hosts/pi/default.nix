@@ -13,13 +13,19 @@
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/net-watchdog.nix
+    ../../modules/nixos/fancontrol.nix
+    ../../modules/nixos/gpio-pwm-fan.nix
     ../../modules/nixos/build-client.nix
     ../../modules/nixos/pam-ssh-agent-sudo.nix
   ];
 
   networking.hostName = "pi";
   boot.kernelParams = [ "psi=1" ];
-  networking.hosts."100.117.13.66" = [ "observatory" "grafana" "pi.grafana" ];
+  networking.hosts."100.117.13.66" = [
+    "observatory"
+    "grafana"
+    "pi.grafana"
+  ];
 
   # Grafana remains on its private service port. This tailnet-only proxy gives
   # it a memorable, port-free browser address: http://observatory.
@@ -37,6 +43,7 @@
     {
       device = "/swapfile";
       size = 4 * 1024;
+      randomEncryption.enable = true;
     }
   ];
 
@@ -112,6 +119,8 @@
     };
     sensorNames = {
       "cpu_thermal:temp1" = "SoC";
+      "drivetemp:temp1" = "HDD";
+      "pwmfan:fan1" = "Active Cooler";
     };
     totalPower = {
       wallEstimateWatts = 6;
@@ -139,4 +148,14 @@
   system.stateVersion = lib.mkForce "26.05";
 
   local.server.netWatchdog.enable = true;
+
+  local.gpioPwmFan = {
+    enable = true;
+    failsafeUnits = [ "fan2go.service" ];
+  };
+
+  local.fancontrol = {
+    enable = true;
+    configFile = ./fan2go.yaml;
+  };
 }

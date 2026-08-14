@@ -1,0 +1,32 @@
+tempSensorPollingRate: 15s
+tempRollingWindowSize: 30
+
+sensors:
+  - id: hdd
+    cmd:
+      exec: /run/current-system/sw/bin/drive-temp-millicelsius
+
+curves:
+  - id: hdd_curve
+    linear:
+      sensor: hdd
+      steps:
+        - 36: 0%
+        - 39: 20%
+        - 43: 35%
+        - 47: 60%
+        - 52: 100%
+
+fans:
+  - id: hdd_fan
+    cmd:
+      setPwm:
+        exec: /run/current-system/sw/bin/gpio-pwm-fan-set
+        args: [ "%pwm%" ]
+      getPwm:
+        exec: /run/current-system/sw/bin/gpio-pwm-fan-get
+    neverStop: false
+    curve: hdd_curve
+    minPwm: 0
+    startPwm: 60
+    maxPwm: 200
