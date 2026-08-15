@@ -76,8 +76,7 @@ let
     '';
   };
 
-  # Reading drivetemp resets the spin-down timer on some drives, so skip any
-  # drive already in standby; hdparm -C does not itself wake one.
+  # Reading drivetemp resets the spin-down timer on some drives; hdparm -C does not.
   driveTemp = pkgs.writeShellApplication {
     name = "drive-temp-millicelsius";
     runtimeInputs = [
@@ -160,8 +159,6 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    boot.kernelModules = [ "drivetemp" ];
-
     environment.systemPackages = [
       init
       setPwm

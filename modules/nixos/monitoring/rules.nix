@@ -5,11 +5,15 @@
 let
   cfg = config.local.monitoring;
 
+  # The chip-keyed name wins where it exists; chip_name cannot separate sibling
+  # chips that share a driver, such as one drivetemp per disk.
   named =
     metric:
-    "${metric}"
-    + " * on(instance, chip) group_left(chip_name) node_hwmon_chip_names"
-    + " * on(instance, chip_name, sensor) group_left(name) node_sensor_name";
+    let
+      chipped = "${metric} * on(instance, chip) group_left(chip_name) node_hwmon_chip_names";
+    in
+    "(${chipped} * on(instance, chip, sensor) group_left(name) node_sensor_chip)"
+    + " or (${chipped} * on(instance, chip_name, sensor) group_left(name) node_sensor_name)";
 
   sensorRules = {
     "sensor:temp_celsius" = named "node_hwmon_temp_celsius";
@@ -22,7 +26,7 @@ let
       + " or "
       + ''label_replace(max by (instance) (sensor:temp_celsius{name=~"GPU edge|GPU junction"}), "component", "GPU", "", "")''
       + " or "
-      + ''label_replace(max by (instance) (sensor:temp_celsius{name=~"NVMe|Composite"}), "component", "Storage", "", "")''
+      + ''label_replace(max by (instance) (sensor:temp_celsius{name=~"NVMe|Composite|HDD.*"}), "component", "Storage", "", "")''
       + " or "
       + ''label_replace(max by (instance) (sensor:temp_celsius{name=~"System 1|Ambient"}), "component", "Box", "", "")'';
   };
@@ -781,6 +785,14 @@ in
         value = cfg.alerts.nvmeTempCelsius;
         for' = "5m";
         summary = "NVMe on {{ $labels.instance }} is above its comfortable range.";
+      })
+      (threshold {
+        uid = "drive-temp-high";
+        title = "Disk temperature high";
+        expr = ''sensor:temp_celsius{name=~"HDD.*"}'';
+        value = cfg.alerts.driveTempCelsius;
+        for' = "10m";
+        summary = "{{ $labels.name }} on {{ $labels.instance }} is above its comfortable range.";
       })
       (threshold {
         uid = "vrm-temp-high";

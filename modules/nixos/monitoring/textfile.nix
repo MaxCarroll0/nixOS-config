@@ -59,6 +59,31 @@ let
           done
         done
 
+        # Several drives share the chip name "drivetemp", so they can only be told
+        # apart by node_exporter's per-device chip label.
+        echo '# HELP node_sensor_chip Friendly name for a hwmon sensor, keyed by chip and sensor.'
+        echo '# TYPE node_sensor_chip gauge'
+        echo '# HELP node_drive_bay Controller port a drive is attached to.'
+        echo '# TYPE node_drive_bay gauge'
+        for chip in /sys/class/hwmon/hwmon*; do
+          [ "$(cat "$chip/name" 2>/dev/null)" = drivetemp ] || continue
+          block=$(ls "$chip/device/block" 2>/dev/null | head -1)
+          [ -n "$block" ] || continue
+          device=$(readlink -f "$chip/device") || continue
+          label=$(printf '%s' "$device" | awk -F/ '{ print $(NF-1) "_" $NF }')
+          ata=$(readlink -f "/sys/block/$block" | grep -o 'ata[0-9]*' | head -1)
+          bay=$(cat "/sys/class/ata_port/$ata/port_no" 2>/dev/null)
+          [ -n "$bay" ] || continue
+          for input in "$chip"/temp*_input; do
+            [ -e "$input" ] || continue
+            sensor=$(basename "$input" _input)
+            printf 'node_sensor_chip{chip="%s",sensor="%s",name="HDD bay %s"} 1\n' \
+              "$label" "$sensor" "$bay"
+          done
+          printf 'node_drive_bay{chip="%s",device="%s",bay="%s"} 1\n' \
+            "$label" "$block" "$bay"
+        done
+
         echo '# HELP pc_power_baseline_watts Modelled draw of parts with no telemetry.'
         echo '# TYPE pc_power_baseline_watts gauge'
         echo 'pc_power_baseline_watts ${toString cfg.totalPower.baselineWatts}'
