@@ -57,7 +57,7 @@ let
         http://127.0.0.1:${toString hiresPort}/api/v1/query)
       active=$(jq -c '
         [ .data.result[]? | .metric
-          | with_entries(select(.key as $key | ["alert_uid" "instance" "name" "mountpoint" "peer" "device" "host" "project" "failed_package" "trace_id" "id"] | index($key)))
+          | with_entries(select(.key as $key | ["alert_uid", "instance", "name", "mountpoint", "peer", "device", "host", "project", "failed_package", "trace_id", "id"] | index($key)))
           | select(.alert_uid != null)
           | { labels: ., key: (to_entries | sort_by(.key) | tojson) }
         ] | unique_by(.key)
