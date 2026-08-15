@@ -46,6 +46,12 @@ in
       description = "Units that must yield CPU and IO to the protected ones.";
     };
 
+    bulkMemoryMax = lib.mkOption {
+      type = lib.types.str;
+      default = "256M";
+      description = "Hard memory ceiling for bulk units, so they cannot force swapping.";
+    };
+
     swappiness = lib.mkOption {
       type = lib.types.int;
       default = 10;
@@ -69,6 +75,7 @@ in
           IOWeight = 10;
           Nice = 19;
           IOSchedulingClass = "idle";
+          MemoryMax = lib.mkDefault cfg.bulkMemoryMax;
         };
       }))
     ];

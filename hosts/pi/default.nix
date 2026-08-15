@@ -157,8 +157,9 @@
       "tailscaled.service" = "96M";
       "sshd.service" = "32M";
       "nginx.service" = "48M";
-      "grafana.service" = "192M";
+      "grafana.service" = "320M";
     };
+    bulk = [ "prometheus-rule-backfill.service" ];
     critical = {
       "prometheus.service" = "256M";
       "prometheus-longterm.service" = "96M";
