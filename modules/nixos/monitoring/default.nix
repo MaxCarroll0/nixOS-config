@@ -39,7 +39,89 @@ let
     '';
   };
 
+  alertDurationTracker = pkgs.writeShellApplication {
+    name = "track-grafana-alert-durations";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.curl
+      pkgs.jq
+    ];
+    text = ''
+      set -euo pipefail
+
+      state="$STATE_DIRECTORY/active.json"
+      previous='{}'
+      [ -r "$state" ] && previous=$(cat "$state")
+      response=$(curl --fail --silent --show-error --get \
+        --data-urlencode 'query=GRAFANA_ALERTS{grafana_alertstate=~"pending|alerting|recovering"}' \
+        http://127.0.0.1:${toString hiresPort}/api/v1/query)
+      active=$(jq -c '
+        [ .data.result[]? | .metric
+          | with_entries(select(.key as $key | ["alert_uid" "instance" "name" "mountpoint" "peer" "device" "host" "project" "failed_package" "trace_id" "id"] | index($key)))
+          | select(.alert_uid != null)
+          | { labels: ., key: (to_entries | sort_by(.key) | tojson) }
+        ] | unique_by(.key)
+      ' <<<"$response")
+      now=$(date +%s)
+      next=$(jq -c --argjson previous "$previous" --argjson active "$active" --argjson now "$now" '
+        reduce $active[] as $alert ({}; .[$alert.key] = ($previous[$alert.key] // ($now | tonumber)))
+      ')
+      tmp="$state.$$"
+      printf '%s\n' "$next" > "$tmp"
+      mv "$tmp" "$state"
+
+      {
+        echo '# HELP grafana_alert_sustained_since_seconds Unix time when this Grafana alert condition first became pending.'
+        echo '# TYPE grafana_alert_sustained_since_seconds gauge'
+        jq -r '
+          to_entries[]
+          | .value as $since
+          | (.key | fromjson | to_entries | sort_by(.key)
+             | map(.key + "=" + (.value | @json)) | join(",")) as $labels
+          | "grafana_alert_sustained_since_seconds{" + $labels + "} " + ($since | tostring)
+        ' <<<"$next"
+      } | curl --fail --silent --show-error --request PUT --data-binary @- \
+        http://127.0.0.1:${toString powerStatePort}/metrics/job/grafana_alert_duration
+    '';
+  };
+
   ruleFile = name: groups: yaml.generate "${name}.yml" { inherit groups; };
+
+  ruleBackfill = pkgs.writeShellApplication {
+    name = "prometheus-rule-backfill";
+    runtimeInputs = with pkgs; [
+      prometheus.cli
+      coreutils
+    ];
+    text = ''
+      start="$(date -u -d "-${toString cfg.backfill.windowMinutes} min" +%Y-%m-%dT%H:%M:%SZ)"
+      end="$(date -u -d "-${toString cfg.backfill.lagMinutes} min" +%Y-%m-%dT%H:%M:%SZ)"
+
+      repair() {
+        target="$1"
+        source="$2"
+        rulefile="$3"
+        [ -d "$target" ] || return 0
+
+        tmp="$(mktemp -d)"
+        promtool tsdb create-blocks-from rules \
+          --url="http://127.0.0.1:$source" \
+          --start="$start" --end="$end" --output-dir="$tmp" --quiet "$rulefile"
+
+        owner="$(stat -c %u:%g "$target")"
+        for block in "$tmp"/*/; do
+          [ -d "$block" ] || continue
+          chown -R "$owner" "$block"
+          mv "$block" "$target/"
+        done
+        rm -rf "$tmp"
+      }
+
+      repair /var/lib/prometheus2 ${toString hiresPort} ${ruleFile "hires-rules" rules.hires}
+      repair /var/lib/prometheus-longterm ${toString hiresPort} ${ruleFile "lt-repair-rules" rules.minuteRepair}
+      repair /var/lib/prometheus-archive ${toString longtermPort} ${ruleFile "archive-repair-rules" rules.hourRepair}
+    '';
+  };
 
   tierConfig =
     {
@@ -63,12 +145,19 @@ let
           metrics_path = "/federate";
           params."match[]" = [ match ];
           static_configs = [ { targets = [ "127.0.0.1:${toString from}" ]; } ];
-          metric_relabel_configs = map (suffix: {
-            source_labels = [ "__name__" ];
-            regex = "(.*):${window}${suffix}";
-            target_label = "__name__";
-            replacement = "\${1}${suffix}";
-          }) [ "" "_max" "_min" ];
+          metric_relabel_configs =
+            map
+              (suffix: {
+                source_labels = [ "__name__" ];
+                regex = "(.*):${window}${suffix}";
+                target_label = "__name__";
+                replacement = "\${1}${suffix}";
+              })
+              [
+                ""
+                "_max"
+                "_min"
+              ];
         }
       ];
     };
@@ -278,6 +367,26 @@ in
       };
     };
 
+    backfill = {
+      intervalMinutes = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 20;
+        description = "How often the recording rules are re-run over late data.";
+      };
+
+      windowMinutes = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 120;
+        description = "How far back each backfill pass regenerates.";
+      };
+
+      lagMinutes = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 5;
+        description = "How far behind now each pass stops, so live rules own the present.";
+      };
+    };
+
     alerts = {
       cpuTempCelsius = lib.mkOption {
         type = lib.types.number;
@@ -356,7 +465,10 @@ in
       systemd.services.report-power-state-running = {
         description = "Report that this host is running";
         wantedBy = [ "multi-user.target" ];
-        after = [ "network-online.target" "tailscaled.service" ];
+        after = [
+          "network-online.target"
+          "tailscaled.service"
+        ];
         wants = [ "network-online.target" ];
         serviceConfig = {
           Type = "oneshot";
@@ -518,6 +630,28 @@ in
         groups = rules.hourly;
       };
 
+      # Recording rules evaluate live and are never revisited, so samples that
+      # arrive late (a host reconnecting and replaying its queue) leave a
+      # permanent hole in every derived series. Re-run the rules over a lagging
+      # window and drop the resulting blocks into each tier.
+      systemd.services.prometheus-rule-backfill = {
+        description = "Regenerate recording rules over late-arriving samples";
+        after = [ "prometheus.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = lib.getExe ruleBackfill;
+        };
+      };
+
+      systemd.timers.prometheus-rule-backfill = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnBootSec = "15m";
+          OnUnitActiveSec = "${toString cfg.backfill.intervalMinutes}m";
+          RandomizedDelaySec = "2m";
+        };
+      };
+
       # Prometheus reads a retention of 0 as "use the 15 day default", so
       # indefinite has to be spelled as a length nothing will outlive.
       systemd.services.prometheus-archive = mkTier {
@@ -597,6 +731,31 @@ in
               rules = rules.alerts;
             }
           ];
+        };
+      };
+
+      systemd.services.grafana-alert-duration-tracker = {
+        description = "Track Grafana alert condition start times";
+        after = [
+          "grafana.service"
+          "prometheus.service"
+          "prometheus-pushgateway.service"
+        ];
+        wants = [ "prometheus-pushgateway.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          DynamicUser = true;
+          StateDirectory = "grafana-alert-duration-tracker";
+          ExecStart = lib.getExe alertDurationTracker;
+        };
+      };
+
+      systemd.timers.grafana-alert-duration-tracker = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnBootSec = "2m";
+          OnUnitActiveSec = "1m";
+          AccuracySec = "1s";
         };
       };
     })

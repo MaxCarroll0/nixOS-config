@@ -525,6 +525,26 @@ let
 
   minuteRollup = rollup "1m" (metric: _agg: downsampled.${metric}.source);
 
+  # Same aggregates as the rollups, but recorded under the names federation
+  # would have relabelled them to, so a backfill can write straight into the
+  # tier it repairs.
+  repairRollup =
+    window: sourceOf:
+    lib.flatten (
+      lib.mapAttrsToList (
+        metric:
+        { source, aggs, ... }:
+        map (agg: {
+          record = "${source}${aggSuffix agg}";
+          expr = "${aggregations.${agg}}(${sourceOf metric agg}[${window}])";
+        }) aggs
+      ) downsampled
+    );
+
+  minuteRepair = repairRollup "1m" (metric: _agg: downsampled.${metric}.source);
+
+  hourRepair = repairRollup "1h" (metric: agg: "${downsampled.${metric}.source}${aggSuffix agg}");
+
   # The hourly hop reads the matching minute aggregate, so maxima stay maxima.
   hourRollup = rollup "1h" (metric: agg: "${downsampled.${metric}.source}${aggSuffix agg}");
 in
@@ -553,6 +573,22 @@ in
     }
   ];
 
+  minuteRepair = [
+    {
+      name = "downsample-repair";
+      interval = "1m";
+      rules = minuteRepair;
+    }
+  ];
+
+  hourRepair = [
+    {
+      name = "hourly-repair";
+      interval = "1h";
+      rules = hourRepair;
+    }
+  ];
+
   hourly = [
     {
       name = "hourly";
@@ -572,13 +608,19 @@ in
           for' ? "2m",
           severity ? "warning",
           summary,
+          valueFormat ? "humanize",
         }:
         {
           inherit uid title;
           condition = "C";
           for = for';
           labels = { inherit severity; };
-          annotations = { inherit summary; };
+          annotations = {
+            summary =
+              "${summary} Current value: {{ ${valueFormat} $values.A.Value }}; threshold: > ${toString value}. "
+              + (if for' == "0s" then "Fires immediately." else "Fires after ${for'}. ")
+              + "{{ with $values.B }}Sustained for {{ humanizeDuration .Value }}.{{ else }}Tracking sustained duration.{{ end }}";
+          };
           noDataState = "OK";
           execErrState = "OK";
           data = [
@@ -592,7 +634,20 @@ in
               model = {
                 refId = "A";
                 instant = true;
-                inherit expr;
+                expr = ''label_replace((${expr}), "alert_uid", "${uid}", "", "")'';
+              };
+            }
+            {
+              refId = "B";
+              relativeTimeRange = {
+                from = 600;
+                to = 0;
+              };
+              datasourceUid = "prometheus";
+              model = {
+                refId = "B";
+                instant = true;
+                expr = ''time() - grafana_alert_sustained_since_seconds{alert_uid="${uid}"}'';
               };
             }
             {
@@ -627,7 +682,11 @@ in
           condition = "C";
           for = "0s";
           labels = { inherit severity; };
-          annotations = { inherit summary; };
+          annotations = {
+            summary =
+              "${summary} Fires immediately. "
+              + "{{ with $values.B }}Sustained for {{ humanizeDuration .Value }}.{{ else }}Tracking sustained duration.{{ end }}";
+          };
           noDataState = "OK";
           execErrState = "OK";
           data = [
@@ -640,7 +699,7 @@ in
               datasourceUid = "loki";
               model = {
                 refId = "A";
-                inherit expr;
+                expr = expr;
                 editorMode = "code";
                 queryType = "instant";
                 instant = true;
@@ -648,6 +707,19 @@ in
                   type = "loki";
                   uid = "loki";
                 };
+              };
+            }
+            {
+              refId = "B";
+              relativeTimeRange = {
+                from = 300;
+                to = 0;
+              };
+              datasourceUid = "prometheus";
+              model = {
+                refId = "B";
+                instant = true;
+                expr = ''time() - grafana_alert_sustained_since_seconds{alert_uid="${uid}"}'';
               };
             }
             {
@@ -690,9 +762,10 @@ in
       (threshold {
         uid = "ccd-temp-high";
         title = "CPU die temperature high";
-        expr = ''max by (instance) (sensor:temp_celsius{name=~"CPU CCD.*|Tccd.*"})'';
+        expr = ''sensor:temp_celsius{name=~"CPU CCD.*|Tccd.*"}'';
         value = cfg.alerts.cpuCriticalCelsius - 5;
-        summary = "A CPU die on {{ $labels.instance }} is running hot.";
+        summary = "{{ $labels.name }} on {{ $labels.instance }} is running hot.";
+        valueFormat = "humanize";
       })
       (threshold {
         uid = "gpu-temp-high";
@@ -712,20 +785,20 @@ in
       (threshold {
         uid = "vrm-temp-high";
         title = "VRM temperature high";
-        expr = ''max by (instance) (sensor:temp_celsius{name=~"VRM.*|VSoC.*"})'';
+        expr = ''sensor:temp_celsius{name=~"VRM.*|VSoC.*"}'';
         value = cfg.alerts.vrmTempCelsius;
-        summary = "Board VRM on {{ $labels.instance }} is running hot.";
+        summary = "{{ $labels.name }} on {{ $labels.instance }} is running hot.";
       })
       (threshold {
         uid = "fan-stalled-while-hot";
         title = "Fan stopped while hot";
         expr =
-          "count by (instance) (fan:rpm == 0) and "
+          "count by (instance, id, name) (fan:rpm == 0) and "
           + ''on(instance) (temp:major_celsius{component="CPU"} > 60)'';
         value = 0;
         for' = "3m";
         severity = "critical";
-        summary = "A fan on {{ $labels.instance }} reads zero RPM while the machine is hot.";
+        summary = "{{ $labels.name }} ({{ $labels.id }}) on {{ $labels.instance }} reads zero RPM while the machine is hot.";
       })
       (threshold {
         uid = "total-power-high";
@@ -765,10 +838,10 @@ in
       (threshold {
         uid = "systemd-units-failed";
         title = "Failed systemd units";
-        expr = "max by (instance) (systemd:failed_units)";
+        expr = ''max by (instance, name) (node_systemd_unit_state{state="failed"})'';
         value = 0;
         for' = "5m";
-        summary = "{{ $labels.instance }} has failed systemd units.";
+        summary = "{{ $labels.name }} has failed on {{ $labels.instance }}.";
       })
       (threshold {
         uid = "cpu-pressure-warning";
@@ -777,6 +850,7 @@ in
         value = 0.1;
         for' = "5m";
         summary = "CPU work on {{ $labels.instance }} has spent over 10% of its time waiting.";
+        valueFormat = "humanizePercentage";
       })
       (threshold {
         uid = "cpu-pressure-critical";
@@ -786,6 +860,7 @@ in
         for' = "10m";
         severity = "critical";
         summary = "CPU work on {{ $labels.instance }} has spent over half its time waiting.";
+        valueFormat = "humanizePercentage";
       })
       (threshold {
         uid = "io-pressure-warning";
@@ -794,6 +869,7 @@ in
         value = 0.02;
         for' = "5m";
         summary = "Tasks on {{ $labels.instance }} are repeatedly fully stalled on I/O.";
+        valueFormat = "humanizePercentage";
       })
       (threshold {
         uid = "io-pressure-critical";
@@ -803,6 +879,7 @@ in
         for' = "10m";
         severity = "critical";
         summary = "Tasks on {{ $labels.instance }} are severely stalled on I/O.";
+        valueFormat = "humanizePercentage";
       })
       (threshold {
         uid = "memory-pressure-warning";
@@ -811,6 +888,7 @@ in
         value = 0.01;
         for' = "3m";
         summary = "Tasks on {{ $labels.instance }} are repeatedly fully stalled on memory.";
+        valueFormat = "humanizePercentage";
       })
       (threshold {
         uid = "memory-pressure-critical";
@@ -820,6 +898,7 @@ in
         for' = "5m";
         severity = "critical";
         summary = "Tasks on {{ $labels.instance }} are severely stalled on memory.";
+        valueFormat = "humanizePercentage";
       })
       (threshold {
         uid = "network-errors";
@@ -848,7 +927,7 @@ in
       (logThreshold {
         uid = "nix-rebuild-failed";
         title = "Nix rebuild failed";
-        expr = ''sum by (host, project, failed_package, trace_id) (count_over_time({service_name="nix-observer-summary"} | json | event="nix_build" | status="failed" | alert_eligible="true" [5m]))'';
+        expr = ''sum by (host, project, failed_package, trace_id, alert_uid) (count_over_time({service_name="nix-observer-summary"} | json | label_format alert_uid="nix-rebuild-failed" | event="nix_build" | status="failed" | alert_eligible="true" [5m]))'';
         severity = "critical";
         summary = "{{ $labels.project }} failed on {{ $labels.host }} at {{ $labels.failed_package }} (trace {{ $labels.trace_id }}).";
       })
