@@ -21,6 +21,7 @@
 
   networking.hostName = "pi";
   boot.kernelParams = [ "psi=1" ];
+  boot.kernelModules = [ "drivetemp" ];
   networking.hosts."100.117.13.66" = [
     "observatory"
     "grafana"
@@ -149,13 +150,16 @@
 
   local.server.netWatchdog.enable = true;
 
+  local.monitoring.backfill.enable = true;
+
+  # false for 3 pin, true for 4 pin PWM
   local.gpioPwmFan = {
-    enable = true;
+    enable = false;
     failsafeUnits = [ "fan2go.service" ];
   };
 
   local.fancontrol = {
-    enable = true;
+    enable = false;
     configFile = ./fan2go.yaml;
   };
 }
