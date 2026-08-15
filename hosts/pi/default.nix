@@ -13,6 +13,7 @@
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/net-watchdog.nix
+    ../../modules/nixos/service-priority.nix
     ../../modules/nixos/fancontrol.nix
     ../../modules/nixos/gpio-pwm-fan.nix
     ../../modules/nixos/build-client.nix
@@ -149,6 +150,24 @@
   system.stateVersion = lib.mkForce "26.05";
 
   local.server.netWatchdog.enable = true;
+
+  local.servicePriority = {
+    enable = true;
+    essential = {
+      "tailscaled.service" = "96M";
+      "sshd.service" = "32M";
+      "nginx.service" = "48M";
+      "grafana.service" = "192M";
+    };
+    critical = {
+      "prometheus.service" = "256M";
+      "prometheus-longterm.service" = "96M";
+      "prometheus-archive.service" = "96M";
+      "loki.service" = "128M";
+      "alloy.service" = "64M";
+      "pushgateway.service" = "32M";
+    };
+  };
 
   local.monitoring.backfill.enable = true;
 
