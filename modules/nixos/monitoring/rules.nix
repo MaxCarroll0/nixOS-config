@@ -13,7 +13,8 @@ let
       chipped = "${metric} * on(instance, chip) group_left(chip_name) node_hwmon_chip_names";
     in
     "(${chipped} * on(instance, chip, sensor) group_left(name) node_sensor_chip)"
-    + " or (${chipped} * on(instance, chip_name, sensor) group_left(name) node_sensor_name)";
+    + " or ((${chipped} unless on(instance, chip, sensor) node_sensor_chip)"
+    + " * on(instance, chip_name, sensor) group_left(name) node_sensor_name)";
 
   sensorRules = {
     "sensor:temp_celsius" = named "node_hwmon_temp_celsius";
