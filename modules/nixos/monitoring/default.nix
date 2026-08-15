@@ -368,6 +368,8 @@ in
     };
 
     backfill = {
+      enable = lib.mkEnableOption "periodic regeneration of recording rules over late data";
+
       intervalMinutes = lib.mkOption {
         type = lib.types.ints.positive;
         default = 20;
@@ -407,6 +409,11 @@ in
         type = lib.types.number;
         default = 70;
         description = "NVMe temperature that raises a warning.";
+      };
+      driveTempCelsius = lib.mkOption {
+        type = lib.types.number;
+        default = 50;
+        description = "Spinning disk temperature that raises a warning.";
       };
       vrmTempCelsius = lib.mkOption {
         type = lib.types.number;
@@ -634,7 +641,7 @@ in
       # arrive late (a host reconnecting and replaying its queue) leave a
       # permanent hole in every derived series. Re-run the rules over a lagging
       # window and drop the resulting blocks into each tier.
-      systemd.services.prometheus-rule-backfill = {
+      systemd.services.prometheus-rule-backfill = lib.mkIf cfg.backfill.enable {
         description = "Regenerate recording rules over late-arriving samples";
         after = [ "prometheus.service" ];
         serviceConfig = {
@@ -643,7 +650,7 @@ in
         };
       };
 
-      systemd.timers.prometheus-rule-backfill = {
+      systemd.timers.prometheus-rule-backfill = lib.mkIf cfg.backfill.enable {
         wantedBy = [ "timers.target" ];
         timerConfig = {
           OnBootSec = "15m";
