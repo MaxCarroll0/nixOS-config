@@ -87,6 +87,9 @@ let
 
   ruleFile = name: groups: yaml.generate "${name}.yml" { inherit groups; };
 
+  coarsen =
+    groups: map (g: g // { interval = "${toString cfg.backfill.evalIntervalSeconds}s"; }) groups;
+
   ruleBackfill = pkgs.writeShellApplication {
     name = "prometheus-rule-backfill";
     runtimeInputs = with pkgs; [
@@ -117,7 +120,7 @@ let
         rm -rf "$tmp"
       }
 
-      repair /var/lib/prometheus2 ${toString hiresPort} ${ruleFile "hires-rules" rules.hires}
+      repair /var/lib/prometheus2 ${toString hiresPort} ${ruleFile "hires-repair-rules" (coarsen rules.hires)}
       repair /var/lib/prometheus-longterm ${toString hiresPort} ${ruleFile "lt-repair-rules" rules.minuteRepair}
       repair /var/lib/prometheus-archive ${toString longtermPort} ${ruleFile "archive-repair-rules" rules.hourRepair}
     '';
@@ -374,6 +377,24 @@ in
         type = lib.types.ints.positive;
         default = 20;
         description = "How often the recording rules are re-run over late data.";
+      };
+
+      cpuQuotaPercent = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 40;
+        description = "CPU ceiling for the backfill, so it cannot starve the host.";
+      };
+
+      memoryMax = lib.mkOption {
+        type = lib.types.str;
+        default = "512M";
+        description = "Memory ceiling; the backfill is killed rather than the host.";
+      };
+
+      evalIntervalSeconds = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 15;
+        description = "Resolution the rules are re-evaluated at, well below the 1s live rate.";
       };
 
       windowMinutes = lib.mkOption {
@@ -647,6 +668,14 @@ in
         serviceConfig = {
           Type = "oneshot";
           ExecStart = lib.getExe ruleBackfill;
+          TimeoutStartSec = "${toString cfg.backfill.intervalMinutes}m";
+          Nice = 19;
+          IOSchedulingClass = "idle";
+          CPUSchedulingPolicy = "idle";
+          CPUQuota = "${toString cfg.backfill.cpuQuotaPercent}%";
+          MemoryMax = cfg.backfill.memoryMax;
+          MemorySwapMax = 0;
+          OOMPolicy = "stop";
         };
       };
 
