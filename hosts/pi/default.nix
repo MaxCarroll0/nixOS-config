@@ -147,6 +147,10 @@
     auto-optimise-store = true;
   };
 
+  services.udev.extraRules = ''
+    ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd[a-z]", ATTRS{idVendor}=="174c", ATTRS{idProduct}=="55aa", ATTR{queue/read_ahead_kb}="128", ATTR{queue/rotational}="0"
+  '';
+
   system.stateVersion = lib.mkForce "26.05";
 
   local.server.netWatchdog.enable = true;
@@ -154,19 +158,13 @@
   local.servicePriority = {
     enable = true;
     essential = {
-      "tailscaled.service" = "96M";
-      "sshd.service" = "32M";
-      "nginx.service" = "48M";
-      "grafana.service" = "320M";
+      "tailscaled.service" = "48M";
+      "sshd.service" = "16M";
+      "nginx.service" = "24M";
     };
     bulk = [ "prometheus-rule-backfill.service" ];
     critical = {
-      "prometheus.service" = "256M";
-      "prometheus-longterm.service" = "96M";
-      "prometheus-archive.service" = "96M";
-      "loki.service" = "128M";
-      "alloy.service" = "64M";
-      "pushgateway.service" = "32M";
+      "grafana.service" = "128M";
     };
   };
 

@@ -52,9 +52,11 @@ in
       description = "Hard memory ceiling for bulk units, so they cannot force swapping.";
     };
 
+    # Reserving memory shrinks the page cache the TSDBs read through, so a low
+    # swappiness on a small box trades swap thrash for read thrash.
     swappiness = lib.mkOption {
       type = lib.types.int;
-      default = 10;
+      default = 60;
       description = "Low values reclaim page cache before swapping resident services.";
     };
   };
