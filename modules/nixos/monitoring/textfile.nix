@@ -67,7 +67,12 @@ let
         echo '# TYPE node_drive_bay gauge'
         for chip in /sys/class/hwmon/hwmon*; do
           [ "$(cat "$chip/name" 2>/dev/null)" = drivetemp ] || continue
-          block=$(ls "$chip/device/block" 2>/dev/null | head -1)
+          block=""
+          for candidate in "$chip"/device/block/*; do
+            [ -e "$candidate" ] || continue
+            block=$(basename "$candidate")
+            break
+          done
           [ -n "$block" ] || continue
           device=$(readlink -f "$chip/device") || continue
           label=$(printf '%s' "$device" | awk -F/ '{ print $(NF-1) "_" $NF }')
