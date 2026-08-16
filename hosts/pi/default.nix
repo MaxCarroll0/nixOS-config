@@ -14,6 +14,7 @@
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/net-watchdog.nix
     ../../modules/nixos/service-priority.nix
+    ../../modules/nixos/storage.nix
     ../../modules/nixos/fancontrol.nix
     ../../modules/nixos/gpio-pwm-fan.nix
     ../../modules/nixos/build-client.nix
@@ -107,6 +108,7 @@
 
   local.monitoring = {
     exporter.enable = true;
+    exporter.hwmonChipExclude = "^target[0-9]+:0:0_";
     piFirmware.enable = true;
     server.enable = true;
     grafana.enable = true;
@@ -153,6 +155,11 @@
   system.stateVersion = lib.mkForce "26.05";
 
   local.server.netWatchdog.enable = true;
+
+  local.storage.spinDownRotational = {
+    enable = true;
+    standbyValue = 242;
+  };
 
   local.servicePriority = {
     enable = true;

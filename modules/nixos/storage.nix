@@ -183,7 +183,15 @@ in
       warnings =
         lib.optional config.services.smartd.enable "services.smartd polls disks and will spin them up; add '-n standby' to its device options."
         ++ lib.optional (config.services.prometheus.exporters.smartctl.enable or false
-        ) "the smartctl exporter polls disks and will spin them up.";
+        ) "the smartctl exporter polls disks and will spin them up."
+        ++
+          lib.optional
+            (
+              cfg.spinDownRotational.enable
+              && builtins.elem "hwmon" (config.services.prometheus.exporters.node.enabledCollectors or [ ])
+              && (config.local.monitoring.exporter.hwmonChipExclude or "") == ""
+            )
+            "node_exporter's hwmon collector reads drivetemp on every scrape, which resets the spin-down timer; set local.monitoring.exporter.hwmonChipExclude.";
     }
   ];
 }

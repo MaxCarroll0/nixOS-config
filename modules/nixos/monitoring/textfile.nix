@@ -252,6 +252,45 @@ let
     printf 'node_awake_since_seconds %s\n' "$since"
   '';
 
+  driveTemps = writeCollector "drive-temps" [ pkgs.gawk ] ''
+    state=${textfileDir}/.drive-io
+    touch "$state"
+    echo '# HELP node_hwmon_temp_celsius Hardware monitor for temperature (input)'
+    echo '# TYPE node_hwmon_temp_celsius gauge'
+    echo '# HELP node_hwmon_chip_names Annotation metric for human-readable chip names'
+    echo '# TYPE node_hwmon_chip_names gauge'
+    next=$(mktemp)
+    for chip in /sys/class/hwmon/hwmon*; do
+      [ "$(cat "$chip/name" 2>/dev/null)" = drivetemp ] || continue
+      block=""
+      for candidate in "$chip"/device/block/*; do
+        [ -e "$candidate" ] || continue
+        block=$(basename "$candidate")
+        break
+      done
+      [ -n "$block" ] || continue
+
+      io=$(awk -v d="$block" '$3 == d { print $6 + $10 }' /proc/diskstats)
+      [ -n "$io" ] || continue
+      printf '%s %s\n' "$block" "$io" >> "$next"
+      was=$(awk -v d="$block" '$1 == d { print $2 }' "$state")
+
+      [ "$io" != "$was" ] || continue
+
+      device=$(readlink -f "$chip/device") || continue
+      label=$(printf '%s' "$device" | awk -F/ '{ print $(NF-1) "_" $NF }')
+      printf 'node_hwmon_chip_names{chip="%s",chip_name="drivetemp"} 1\n' "$label"
+      for input in "$chip"/temp*_input; do
+        [ -e "$input" ] || continue
+        sensor=$(basename "$input" _input)
+        milli=$(cat "$input")
+        printf 'node_hwmon_temp_celsius{chip="%s",sensor="%s"} %s\n' \
+          "$label" "$sensor" "$(awk -v m="$milli" 'BEGIN { printf "%.3f", m / 1000 }')"
+      done
+    done
+    mv "$next" "$state"
+  '';
+
   collectorService = collector: {
     unitConfig.StartLimitIntervalSec = 0;
     serviceConfig = {
@@ -278,7 +317,25 @@ in
 
     services.prometheus.exporters.node.extraFlags = [
       "--collector.textfile.directory=${textfileDir}"
-    ];
+    ]
+    ++ lib.optional (
+      cfg.exporter.hwmonChipExclude != ""
+    ) "--collector.hwmon.chip-exclude=${cfg.exporter.hwmonChipExclude}";
+
+    systemd.services.textfile-drive-temps = lib.mkIf (cfg.exporter.hwmonChipExclude != "") (
+      lib.mkMerge [
+        (collectorService driveTemps)
+        {
+          description = "Publish drive temperatures without waking idle disks";
+          wantedBy = [ "multi-user.target" ];
+          after = [ "systemd-modules-load.service" ];
+        }
+      ]
+    );
+
+    systemd.timers.textfile-drive-temps = lib.mkIf (cfg.exporter.hwmonChipExclude != "") (
+      collectorTimer "1m"
+    );
 
     systemd.services.textfile-awake-since = lib.mkMerge [
       (collectorService awakeSince)

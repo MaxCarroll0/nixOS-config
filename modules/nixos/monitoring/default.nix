@@ -296,6 +296,12 @@ in
   options.local.monitoring = {
     exporter.enable = lib.mkEnableOption "node_exporter and its textfile collectors";
 
+    exporter.hwmonChipExclude = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = "Regex of hwmon chips node_exporter must not read, sampled by timer instead.";
+    };
+
     server.enable = lib.mkEnableOption "the Prometheus tiers";
 
     grafana.enable = lib.mkEnableOption "Grafana with the provisioned dashboards";
