@@ -147,8 +147,10 @@
     auto-optimise-store = true;
   };
 
+  # Writing rotational makes the kernel recompute readahead, so it must come first
+  # or read_ahead_kb is reset to the device maximum.
   services.udev.extraRules = ''
-    ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd[a-z]", ATTRS{idVendor}=="174c", ATTRS{idProduct}=="55aa", ATTR{queue/read_ahead_kb}="128", ATTR{queue/rotational}="0"
+    ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd[a-z]", ATTRS{idVendor}=="174c", ATTRS{idProduct}=="55aa", ATTR{queue/rotational}="0", ATTR{queue/read_ahead_kb}="128"
   '';
 
   system.stateVersion = lib.mkForce "26.05";
@@ -157,6 +159,7 @@
 
   local.servicePriority = {
     enable = true;
+    swappiness = 60;
     essential = {
       "tailscaled.service" = "48M";
       "sshd.service" = "16M";
@@ -168,7 +171,21 @@
     };
   };
 
-  local.monitoring.backfill.enable = true;
+  local.monitoring.backfill = {
+    enable = true;
+    intervalMinutes = 60;
+    cpuQuotaPercent = 20;
+    memoryMax = "192M";
+    evalIntervalSeconds = 30;
+    windowMinutes = 180;
+  };
+
+  systemd.services.grafana.serviceConfig.MemorySwapMax = 0;
+  systemd.services.prometheus-rule-backfill = {
+    after = [ "grafana.service" ];
+    serviceConfig.ExecCondition = "${pkgs.curl}/bin/curl --fail --silent --show-error --max-time 5 http://127.0.0.1:3000/api/health";
+  };
+  systemd.timers.prometheus-rule-backfill.timerConfig.OnBootSec = lib.mkForce "15m";
 
   # false for 3 pin, true for 4 pin PWM
   local.gpioPwmFan = {
