@@ -26,8 +26,6 @@ in
 {
   options.local.servicePriority = {
     enable = lib.mkEnableOption "resource protection for critical services";
-
-    # MemoryMin is unreclaimable, so the total must stay well inside RAM.
     essential = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
@@ -38,6 +36,11 @@ in
       type = lib.types.attrsOf lib.types.str;
       default = { };
       description = "Units mapped to memory reclaimed only after everything else.";
+    };
+    throttle = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      description = "Units mapped to the size above which they are reclaimed hard.";
     };
 
     bulk = lib.mkOption {
@@ -51,9 +54,6 @@ in
       default = "256M";
       description = "Hard memory ceiling for bulk units, so they cannot force swapping.";
     };
-
-    # Reserving memory shrinks the page cache the TSDBs read through, so a low
-    # swappiness on a small box trades swap thrash for read thrash.
     swappiness = lib.mkOption {
       type = lib.types.int;
       default = 60;
@@ -62,8 +62,6 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    # Raspberry Pi firmware ships cgroup_disable=memory, without which MemoryMin
-    # and MemoryLow are silently ignored.
     boot.kernelParams = [ "cgroup_enable=memory" ];
 
     boot.kernel.sysctl."vm.swappiness" = cfg.swappiness;
@@ -71,6 +69,9 @@ in
     systemd.services = lib.mkMerge [
       (protect "MemoryMin" cfg.essential)
       (protect "MemoryLow" cfg.critical)
+      (lib.mapAttrs' (
+        unit: ceiling: lib.nameValuePair (unitName unit) { serviceConfig.MemoryHigh = ceiling; }
+      ) cfg.throttle)
       (lib.genAttrs (map unitName cfg.bulk) (_: {
         serviceConfig = {
           CPUWeight = 10;

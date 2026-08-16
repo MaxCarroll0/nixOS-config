@@ -146,9 +146,6 @@
     max-free = 5 * 1024 * 1024 * 1024;
     auto-optimise-store = true;
   };
-
-  # Writing rotational makes the kernel recompute readahead, so it must come first
-  # or read_ahead_kb is reset to the device maximum.
   services.udev.extraRules = ''
     ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd[a-z]", ATTRS{idVendor}=="174c", ATTRS{idProduct}=="55aa", ATTR{queue/rotational}="0", ATTR{queue/read_ahead_kb}="128"
   '';
@@ -162,13 +159,18 @@
     swappiness = 60;
     essential = {
       "tailscaled.service" = "48M";
-      "sshd.service" = "16M";
-      "nginx.service" = "24M";
+      "sshd.service" = "8M";
+      "nginx.service" = "16M";
+    };
+    critical = {
+      "grafana.service" = "192M";
+      "systemd-journald.service" = "32M";
+    };
+    throttle = {
+      "alloy.service" = "320M";
+      "prometheus.service" = "384M";
     };
     bulk = [ "prometheus-rule-backfill.service" ];
-    critical = {
-      "grafana.service" = "128M";
-    };
   };
 
   local.monitoring.backfill = {
