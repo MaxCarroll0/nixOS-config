@@ -112,10 +112,15 @@ let
           fi
         done
       done
+      last=/run/drive-temp-millicelsius
       if [ "$found" -eq 0 ]; then
         echo ${toString cfg.noSensorMillicelsius}
+      elif [ "$max" -gt 0 ]; then
+        echo "$max" | tee "$last"
+      elif [ -s "$last" ]; then
+        cat "$last"
       else
-        echo "$max"
+        echo ${toString cfg.asleepMillicelsius}
       fi
     '';
   };
@@ -155,6 +160,12 @@ in
       type = lib.types.int;
       default = 60000;
       description = "Temperature reported when no drivetemp sensor is present.";
+    };
+
+    asleepMillicelsius = lib.mkOption {
+      type = lib.types.int;
+      default = 30000;
+      description = "Temperature assumed when every drive is asleep and none has been read yet.";
     };
   };
 
