@@ -162,6 +162,13 @@ let
       }
     );
 
+  archiveDatasource = {
+    type = "prometheus";
+    uid = "prometheus-archive";
+  };
+
+  allTimeMaxPower = ''label_replace(max by (instance) (max_over_time(pc:power_watts_max{instance=~"$host"}[10y])), "category", "Max (all time)", "__name__", ".*")'';
+
   boundedAverage =
     upMetric: expression:
     "avg_over_time((${expression})[\${smoothspan}:] offset -\${smooth}) "
@@ -977,14 +984,16 @@ let
   tariffVariable = textboxVariable "tariff" "Electricity (p/kWh)" "20.88";
 
   resolutionVariable = {
-    name = "res";
+    # Keep this distinct from the old `res` URL parameter so bookmarked/live
+    # dashboard URLs cannot silently override the long-term default.
+    name = "resolution";
     label = "Resolution";
     type = "datasource";
     query = "prometheus";
     refresh = 1;
     current = {
-      text = "Prometheus";
-      value = "prometheus";
+      text = "Prometheus (1m)";
+      value = "prometheus-lt";
       selected = true;
     };
     options = [ ];
@@ -1175,6 +1184,10 @@ let
       legend = "{{instance}} CPU";
     })
     (target {
+      expr = ''temp:major_celsius{instance=~"$host",component="Storage"}'';
+      legend = "{{instance}} hottest disk";
+    })
+    (target {
       expr = ''temp:major_celsius{instance=~"$host",component="Box"}'';
       legend = "{{instance}} case";
     })
@@ -1190,6 +1203,10 @@ let
       legend = "{{instance}} CPU";
     })
     (target {
+      expr = boundedAverage "host:up" ''temp:major_celsius{instance=~"$host",component="Storage"}'';
+      legend = "{{instance}} hottest disk";
+    })
+    (target {
       expr = boundedAverage "host:up" ''temp:major_celsius{instance=~"$host",component="Box"}'';
       legend = "{{instance}} case";
     })
@@ -1203,6 +1220,10 @@ let
     (target {
       expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="CPU"}[''${smoothspan}] offset -''${smooth})'';
       legend = "{{instance}} CPU";
+    })
+    (target {
+      expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="Storage"}[''${smoothspan}] offset -''${smooth})'';
+      legend = "{{instance}} hottest disk";
     })
     (target {
       expr = ''avg_over_time(temp:major_celsius{instance=~"$host",component="Box"}[''${smoothspan}] offset -''${smooth})'';
@@ -1457,7 +1478,7 @@ let
         };
         targets = [
           (target {
-            expr = "label_replace((${boundedAverage "host:up" "pc:power_watts{instance=~\"$host\"}"}), \"category\", \"Current\", \"__name__\", \".*\")";
+            expr = "label_replace(max by (instance) (${boundedAverage "host:up" "pc:power_watts{instance=~\"$host\"}"}), \"category\", \"Current\", \"__name__\", \".*\")";
             instant = true;
           })
           (target {
@@ -1465,7 +1486,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''label_replace(avg_over_time(pc:power_watts{instance=~"$host"}[24h]), "category", "Mean (24h)", "__name__", ".*")'';
+            expr = ''label_replace(max by (instance) (avg_over_time(pc:power_watts{instance=~"$host"}[24h])), "category", "Mean (24h)", "__name__", ".*")'';
             instant = true;
           })
           (target {
@@ -1473,7 +1494,12 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''label_replace(max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[24h:]), "category", "Max (24h)", "__name__", ".*")'';
+            expr = ''label_replace(max by (instance) (max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[24h:])), "category", "Max (24h)", "__name__", ".*")'';
+            instant = true;
+          })
+          (target {
+            datasource = archiveDatasource;
+            expr = allTimeMaxPower;
             instant = true;
           })
         ];
@@ -1490,7 +1516,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[24h]) / 60 / 1000'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[24h])) / 60 / 1000'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1508,7 +1534,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[7d]) / 60 / 1000'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[7d])) / 60 / 1000'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1526,7 +1552,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[24h]) / 60 / 1000 * ($tariff / 100)'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[24h])) / 60 / 1000 * ($tariff / 100)'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1544,7 +1570,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[7d]) / 60 / 1000 * ($tariff / 100)'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[7d])) / 60 / 1000 * ($tariff / 100)'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -1562,7 +1588,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''sum(sum_over_time(pc:power_watts{instance=~"$host"}[24h]) / 60 / 1000)'';
+            expr = ''sum(max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[24h])) / 60 / 1000)'';
             instant = true;
           })
         ];
@@ -1579,7 +1605,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''sum(sum_over_time(pc:power_watts{instance=~"$host"}[7d]) / 60 / 1000)'';
+            expr = ''sum(max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[7d])) / 60 / 1000)'';
             instant = true;
           })
         ];
@@ -1596,7 +1622,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''sum(sum_over_time(pc:power_watts{instance=~"$host"}[24h]) / 60 / 1000 * ($tariff / 100))'';
+            expr = ''sum(max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[24h])) / 60 / 1000 * ($tariff / 100))'';
             instant = true;
           })
         ];
@@ -1613,7 +1639,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''sum(sum_over_time(pc:power_watts{instance=~"$host"}[7d]) / 60 / 1000 * ($tariff / 100))'';
+            expr = ''sum(max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[7d])) / 60 / 1000 * ($tariff / 100))'';
             instant = true;
           })
         ];
@@ -1623,7 +1649,7 @@ let
         description = "Current awake session, maximum session and observed reachable time over 7 days; suspend ends a session.";
         w = 24;
         h = 7;
-        unit = "dtdurations";
+        unit = "suffix: min";
         decimals = 0;
         options = {
           showHeader = true;
@@ -1679,7 +1705,7 @@ let
               }
               {
                 id = "max";
-                value = 172800;
+                value = 2880;
               }
               {
                 # A down host has no running session; keep that cell neutral
@@ -1731,20 +1757,20 @@ let
               }
               {
                 id = "max";
-                value = 604800;
+                value = 10080;
               }
             ];
           }
         ];
         targets = [
           (target {
-            expr = ''(time() - max by (instance) (host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}) and on(instance) (host:up == 1)) or on(instance) (-2 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S3"})) or on(instance) (-3 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S5"})) or on(instance) ((host:up == 0) * -1)'';
+            expr = ''(round((time() - max by (instance) (host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"})) / 60) and on(instance) (host:up == 1)) or on(instance) (-2 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S3"})) or on(instance) (-3 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S5"})) or on(instance) ((host:up == 0) * -1)'';
             legend = "{{instance}} current";
             format = "table";
             instant = true;
           })
           (target {
-            expr = ''max_over_time((time() - max by (instance) (host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))[$__range:])'';
+            expr = ''round(max_over_time((time() - max by (instance) (host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))[$__range:]) / 60)'';
             legend = "{{instance}} maximum session";
             format = "table";
             instant = true;
@@ -1754,7 +1780,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''max by (instance) (sum_over_time((host:up{instance=~"$host"})[7d:]) * 60 or ((time() - max by (instance) ((host:awake_since_seconds_max{instance=~"$host"} or host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds_max{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))) and on(instance) (host:up == 1)))'';
+            expr = ''round(max by (instance) (sum_over_time((host:up{instance=~"$host"})[7d:]) * 60 or ((time() - max by (instance) ((host:awake_since_seconds_max{instance=~"$host"} or host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds_max{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))) and on(instance) (host:up == 1))) / 60)'';
             legend = "{{instance}} total uptime (7d)";
             format = "table";
             instant = true;
@@ -2180,7 +2206,7 @@ let
       })
       (ts {
         title = "Total device power, broken down";
-        description = "Desktop is a modelled wall estimate, laptop uses RAPL platform energy, and Pi uses its configured wall estimate. Hardware-specific measured rails are shown separately.";
+        description = "Every component of the model, stacked, so the bands add up to wall draw. Measured where the hardware reports watts and modelled from datasheet coefficients elsewhere. The unstacked line is the recorded total and should sit on top of the stack.";
         w = 24;
         h = 9;
         unit = "watt";
@@ -2218,24 +2244,52 @@ let
         ];
         targets = [
           (target {
-            expr = ''pc:cpu_power_watts{instance=~"$host"}'';
-            legend = "{{instance}} CPU";
+            expr = ''pc:power_component_watts{instance=~"$host",component!="Storage"}'';
+            legend = "{{instance}} {{component}}";
           })
           (target {
-            expr = ''pc:gpu_power_watts{instance=~"$host"}'';
-            legend = "{{instance}} GPU";
-          })
-          (target {
-            expr = ''pc:baseline_watts{instance=~"$host"}'';
-            legend = "{{instance}} baseline";
-          })
-          (target {
-            expr = ''pc:psu_loss_watts{instance=~"$host"}'';
-            legend = "{{instance}} PSU loss";
+            expr = ''pc:power_component_watts{instance=~"$host",component="Storage"}'';
+            legend = "{{instance}} {{device}}";
           })
           (target {
             expr = ''pc:power_watts{instance=~"$host"}'';
             legend = "{{instance}} total";
+          })
+        ];
+      })
+      (ts {
+        title = "Model against measured wall power";
+        description = "Populated once a metered plug is scraped. The gap is what the coefficients still get wrong, and is what they should be refitted against.";
+        w = 12;
+        h = 8;
+        unit = "watt";
+        targets = [
+          (target {
+            expr = ''pc:power_meter_watts{instance=~"$host"}'';
+            legend = "{{instance}} meter";
+          })
+          (target {
+            expr = ''pc:power_watts{instance=~"$host"}'';
+            legend = "{{instance}} model";
+          })
+          (target {
+            expr = ''pc:power_model_error_watts{instance=~"$host"}'';
+            legend = "{{instance}} error";
+          })
+        ];
+      })
+      (ts {
+        title = "Drive power state";
+        description = "One line per drive: 1 while the motor is parked. Spun-down drives are the largest single swing in the Pi's draw.";
+        w = 12;
+        h = 8;
+        unit = "short";
+        max = 1;
+        min = 0;
+        targets = [
+          (target {
+            expr = ''pc:disk_standby{instance=~"$host"}'';
+            legend = "{{instance}} {{device}}";
           })
         ];
       })
@@ -2701,12 +2755,12 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[24h]) / 60 / 1000'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[24h])) / 60 / 1000'';
             legend = "{{instance}} 24h";
             instant = true;
           })
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[7d]) / 60 / 1000'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[7d])) / 60 / 1000'';
             legend = "{{instance}} 7d";
             instant = true;
           })
@@ -2720,12 +2774,12 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[24h]) / 60 / 1000 * ($tariff / 100)'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[24h])) / 60 / 1000 * ($tariff / 100)'';
             legend = "{{instance}} 24h";
             instant = true;
           })
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[7d]) / 60 / 1000 * ($tariff / 100)'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[7d])) / 60 / 1000 * ($tariff / 100)'';
             legend = "{{instance}} 7d";
             instant = true;
           })
@@ -2754,6 +2808,30 @@ let
         ];
       })
       (ts {
+        title = "Power by component";
+        description = "The same breakdown as the live dashboard over the selected range; the bands add up to wall draw.";
+        w = 24;
+        h = 9;
+        unit = "watt";
+        custom = lineCustom // {
+          stacking = {
+            mode = "normal";
+            group = "A";
+          };
+          fillOpacity = 35;
+        };
+        targets = [
+          (target {
+            expr = ''avg_over_time(pc:power_component_watts{instance=~"$host",component!="Storage"}[''${smoothspan}] offset -''${smooth})'';
+            legend = "{{instance}} {{component}}";
+          })
+          (target {
+            expr = ''avg_over_time(pc:power_component_watts{instance=~"$host",component="Storage"}[''${smoothspan}] offset -''${smooth})'';
+            legend = "{{instance}} {{device}}";
+          })
+        ];
+      })
+      (ts {
         title = "Energy use over time";
         w = 24;
         h = 9;
@@ -2769,7 +2847,7 @@ let
         };
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[''${smoothspan}] offset -''${smooth}) / 60 / 1000'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[''${smoothspan}] offset -''${smooth})) / 60 / 1000'';
             legend = "{{instance}}";
             interval = "$smooth";
           })
@@ -2785,12 +2863,12 @@ let
         overrides = [ (rightAxisUnit "Cost" "currencyGBP") ];
         targets = [
           (target {
-            expr = ''sum(sum_over_time(pc:power_watts{instance=~"$host"}[1d])) / 60 / 1000'';
+            expr = ''sum(max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[1d]))) / 60 / 1000'';
             legend = "Energy";
             interval = "1d";
           })
           (target {
-            expr = ''sum(sum_over_time(pc:power_watts{instance=~"$host"}[1d])) / 60 / 1000 * ($tariff / 100)'';
+            expr = ''sum(max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[1d]))) / 60 / 1000 * ($tariff / 100)'';
             legend = "Cost";
             interval = "1d";
           })
@@ -2806,12 +2884,12 @@ let
         overrides = [ (rightAxisUnit "Cost" "currencyGBP") ];
         targets = [
           (target {
-            expr = ''sum(sum_over_time(pc:power_watts{instance=~"$host"}[30d])) / 60 / 1000'';
+            expr = ''sum(max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[30d]))) / 60 / 1000'';
             legend = "Energy";
             interval = "30d";
           })
           (target {
-            expr = ''sum(sum_over_time(pc:power_watts{instance=~"$host"}[30d])) / 60 / 1000 * ($tariff / 100)'';
+            expr = ''sum(max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[30d]))) / 60 / 1000 * ($tariff / 100)'';
             legend = "Cost";
             interval = "30d";
           })
@@ -3669,7 +3747,7 @@ let
   tierLink = title: uid: from: seconds: refresh: res: {
     inherit title;
     type = "link";
-    url = "/d/${uid}?from=${from}&to=now&var-res=${res}&var-smooth=${smoothFor seconds}&refresh=${refresh}";
+    url = "/d/${uid}?from=${from}&to=now&var-resolution=${res}&var-smooth=${smoothFor seconds}&refresh=${refresh}";
     includeVars = false;
     keepTime = false;
     targetBlank = false;
@@ -3686,7 +3764,7 @@ let
   mergedPower = dashboard {
     uid = "power";
     title = "Power and thermals";
-    datasource = "\${res}";
+    datasource = "\${resolution}";
     from = "now-15m";
     refresh = "5s";
     tags = [ "metrics" ];
@@ -3711,7 +3789,7 @@ let
   mergedSystem = dashboard {
     uid = "system";
     title = "System";
-    datasource = "\${res}";
+    datasource = "\${resolution}";
     from = "now-15m";
     refresh = "5s";
     tags = [ "metrics" ];
@@ -3737,7 +3815,7 @@ let
   mergedNetwork = dashboard {
     uid = "network";
     title = "Network";
-    datasource = "\${res}";
+    datasource = "\${resolution}";
     from = "now-15m";
     refresh = "5s";
     tags = [ "metrics" ];
@@ -3759,7 +3837,7 @@ let
   mergedFleet = dashboard {
     uid = "fleet";
     title = "Fleet";
-    datasource = "\${res}";
+    datasource = "\${resolution}";
     from = "now-15m";
     refresh = "5s";
     tags = [ "metrics" ];
@@ -3840,11 +3918,16 @@ let
             instant = true;
           })
           (target {
-            expr = ''label_replace(avg_over_time(pc:power_watts{instance=~"$host"}[24h]), "category", "Mean (24h)", "__name__", ".*")'';
+            expr = ''label_replace(max by (instance) (avg_over_time(pc:power_watts{instance=~"$host"}[24h])), "category", "Mean (24h)", "__name__", ".*")'';
             instant = true;
           })
           (target {
-            expr = ''label_replace(max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[24h:]), "category", "Max (24h)", "__name__", ".*")'';
+            expr = ''label_replace(max by (instance) (max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[24h:])), "category", "Max (24h)", "__name__", ".*")'';
+            instant = true;
+          })
+          (target {
+            datasource = archiveDatasource;
+            expr = allTimeMaxPower;
             instant = true;
           })
         ];
@@ -3857,7 +3940,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[24h]) / 1000'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[24h])) / 1000'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3871,7 +3954,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[7d]) / 1000'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[7d])) / 1000'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3885,7 +3968,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[24h]) / 1000 * ($tariff / 100)'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[24h])) / 1000 * ($tariff / 100)'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3899,7 +3982,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[7d]) / 1000 * ($tariff / 100)'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[7d])) / 1000 * ($tariff / 100)'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3913,7 +3996,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[$__range]) / 1000'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[$__range])) / 1000'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3927,7 +4010,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[$__range]) / 1000 * ($tariff / 100)'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[$__range])) / 1000 * ($tariff / 100)'';
             legend = "{{instance}}";
             instant = true;
           })
@@ -3964,7 +4047,7 @@ let
         };
         targets = [
           (target {
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[''${smoothspan}] offset -''${smooth}) / 1000'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[''${smoothspan}] offset -''${smooth})) / 1000'';
             legend = "{{instance}}";
             interval = "$smooth";
           })
@@ -3982,7 +4065,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[1d]) / 60 / 1000 * ($tariff / 100)'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[1d])) / 60 / 1000 * ($tariff / 100)'';
             legend = "{{instance}}";
             interval = "1d";
           })
@@ -4000,7 +4083,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''sum_over_time(pc:power_watts{instance=~"$host"}[30d]) / 60 / 1000'';
+            expr = ''max by (instance) (sum_over_time(pc:power_watts{instance=~"$host"}[30d])) / 60 / 1000'';
             legend = "{{instance}}";
             interval = "30d";
           })

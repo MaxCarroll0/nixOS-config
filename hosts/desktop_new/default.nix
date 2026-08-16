@@ -1,6 +1,6 @@
 # New AMD desktop hardware (Gigabyte board, post 2026-08-11 swap).
 
-{ ... }:
+{ config, ... }:
 
 {
   imports = [
@@ -23,7 +23,20 @@
 
   local.fancontrol.configFile = ./fan2go.yaml;
 
+  boot.extraModulePackages = [ config.boot.kernelPackages.zenpower ];
+  boot.kernelModules = [ "zenpower" ];
+
+  boot.extraModprobeConfig = "options it87 force_id=0x8733";
+
   local.monitoring.sensorNames = {
+    "zenpower:power1" = "CPU cores";
+    "zenpower:power2" = "CPU SoC";
+    "zenpower:temp1" = "CPU Tdie";
+    "zenpower:temp2" = "CPU Tctl";
+    "zenpower:temp3" = "CPU CCD1";
+    "zenpower:temp4" = "CPU CCD2";
+    "it8792:fan1" = "CPU fan";
+    "it8792:fan2" = "Chassis fan";
     "gigabyte_wmi:temp1" = "System 1";
     "gigabyte_wmi:temp2" = "Chipset";
     "gigabyte_wmi:temp3" = "CPU socket";

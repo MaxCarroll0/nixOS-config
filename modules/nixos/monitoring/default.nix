@@ -160,7 +160,13 @@ let
                 ""
                 "_max"
                 "_min"
-              ];
+              ]
+            ++ [
+              {
+                action = "labeldrop";
+                regex = "job";
+              }
+            ];
         }
       ];
     };
@@ -289,6 +295,7 @@ in
 
 {
   imports = [
+    ./power-model.nix
     ./telemetry.nix
     ./textfile.nix
   ];
@@ -337,24 +344,6 @@ in
     };
 
     totalPower = {
-      wallEstimateWatts = lib.mkOption {
-        type = lib.types.nullOr lib.types.number;
-        default = null;
-        description = "Explicit estimated wall draw when no whole-device meter exists.";
-      };
-
-      baselineWatts = lib.mkOption {
-        type = lib.types.number;
-        default = 20.88;
-        description = "Modelled draw of RAM, drives, fans and board with no telemetry.";
-      };
-
-      psuEfficiency = lib.mkOption {
-        type = lib.types.number;
-        default = 0.88;
-        description = "Assumed PSU conversion efficiency, turning DC draw into wall draw.";
-      };
-
       tariffPencePerKwh = lib.mkOption {
         type = lib.types.number;
         default = 25;
@@ -610,6 +599,14 @@ in
                   labels.instance = instanceName;
                 }
               ];
+            }
+            {
+              job_name = "power-meter";
+              scrape_interval = "5s";
+              static_configs = lib.mapAttrsToList (instance: target: {
+                targets = [ target ];
+                labels.instance = instance;
+              }) cfg.power.meters;
             }
             {
               job_name = "prometheus";

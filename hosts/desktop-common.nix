@@ -114,10 +114,40 @@
       laptop = "100.112.109.20:9100";
     };
 
-    totalPower = {
-      baselineWatts = 30;
-      psuEfficiency = 0.88;
-      tariffPencePerKwh = 20.88;
+    totalPower.tariffPencePerKwh = 20.88;
+
+    power = {
+      enable = true;
+      supply = {
+        ratedWatts = 650;
+        peakEfficiency = 0.9;
+        peakLoadRatio = 0.45;
+        curvature = 0.6;
+        idleWatts = 1.5;
+      };
+      ram = {
+        wattsPerGiB = 0.11;
+        activeWattsPerGiB = 0.06;
+      };
+      gpu = {
+        boardFactor = 1.13;
+        overheadWatts = 7;
+      };
+      boardWatts = 12;
+      peripheralsWatts = 2;
+      fans.cpu = {
+        chip = "it8792";
+        sensor = "fan1";
+        maxRpm = 2200;
+        wattsAtMaxRpm = 2.4;
+      };
+      fans.chassis.constantWatts = 2;
+      fans.gpu = {
+        chip = "amdgpu";
+        sensor = "fan1";
+        maxRpm = 2400;
+        wattsAtMaxRpm = 2.5;
+      };
     };
 
     sensorNames = {

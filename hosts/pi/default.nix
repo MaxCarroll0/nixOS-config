@@ -126,11 +126,33 @@
       "drivetemp:temp1" = "HDD";
       "pwmfan:fan1" = "Active Cooler";
     };
-    totalPower = {
-      wallEstimateWatts = 6;
-      baselineWatts = 6;
-      psuEfficiency = 1;
-      tariffPencePerKwh = 20.88;
+    totalPower.tariffPencePerKwh = 20.88;
+
+    power = {
+      enable = true;
+      supply = {
+        ratedWatts = 60;
+        peakEfficiency = 0.88;
+        peakLoadRatio = 0.55;
+        curvature = 0.7;
+        idleWatts = 0.3;
+      };
+      pmicEfficiency = 0.87;
+      ram.modelled = false;
+      boardWatts = 0.5;
+      peripheralsWatts = 1.8;
+      fans.hdd-bay.constantWatts = 0.35;
+      fans.active-cooler = {
+        chip = "pwmfan";
+        sensor = "fan1";
+        maxRpm = 7000;
+        wattsAtMaxRpm = 0.55;
+      };
+      disks.sda = {
+        standbyWatts = 0.3;
+        idleWatts = 0.6;
+        activeWatts = 1.8;
+      };
     };
   };
 

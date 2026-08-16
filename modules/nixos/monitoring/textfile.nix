@@ -89,16 +89,6 @@ let
             "$label" "$block" "$bay"
         done
 
-        echo '# HELP pc_power_baseline_watts Modelled draw of parts with no telemetry.'
-        echo '# TYPE pc_power_baseline_watts gauge'
-        echo 'pc_power_baseline_watts ${toString cfg.totalPower.baselineWatts}'
-        ${lib.optionalString (cfg.totalPower.wallEstimateWatts != null) ''
-          echo '# TYPE pc_power_wall_estimate_watts gauge'
-          echo 'pc_power_wall_estimate_watts ${toString cfg.totalPower.wallEstimateWatts}'
-        ''}
-        echo '# HELP pc_power_psu_efficiency Assumed PSU conversion efficiency.'
-        echo '# TYPE pc_power_psu_efficiency gauge'
-        echo 'pc_power_psu_efficiency ${toString cfg.totalPower.psuEfficiency}'
         echo '# HELP pc_power_tariff_gbp_per_kwh Electricity price used for cost panels.'
         echo '# TYPE pc_power_tariff_gbp_per_kwh gauge'
         echo 'pc_power_tariff_gbp_per_kwh ${toString (cfg.totalPower.tariffPencePerKwh / 100.0)}'
@@ -107,6 +97,150 @@ let
         echo '# HELP pc_memory_capacity_info Installed memory capacity group.'
         echo '# TYPE pc_memory_capacity_info gauge'
         printf 'pc_memory_capacity_info{capacity="%s GiB"} 1\n' "$memory_gib"
+      '';
+
+  power = cfg.power;
+
+  diskProfileTable = pkgs.writeText "disk-power-profiles" (
+    lib.concatMapStrings (
+      profile:
+      "${profile.match}\t${toString profile.standbyWatts}\t${toString profile.idleWatts}"
+      + "\t${toString profile.activeWatts}\t${toString profile.spinUpWatts}\n"
+    ) power.diskProfiles
+  );
+
+  diskOverrideTable = pkgs.writeText "disk-power-overrides" (
+    lib.concatStrings (
+      lib.mapAttrsToList (
+        device: disk:
+        "${device}\t${toString disk.standbyWatts}\t${toString disk.idleWatts}"
+        + "\t${toString disk.activeWatts}\t${toString disk.spinUpWatts}\n"
+      ) power.disks
+    )
+  );
+
+  fanCoefficients = lib.concatStrings (
+    lib.mapAttrsToList (
+      name: fan:
+      lib.optionalString (fan.constantWatts != 0) ''
+        printf 'pc_power_fan_constant_watts{fan="%s"} %s\n' ${
+          lib.escapeShellArgs [
+            name
+            (toString fan.constantWatts)
+          ]
+        }
+      ''
+      + lib.optionalString (fan.chip != "") (
+        let
+          labels = ''fan="${name}",chip_name="${fan.chip}",sensor="${fan.sensor}"'';
+        in
+        ''
+          echo 'pc_power_fan_max_watts{${labels}} ${toString fan.wattsAtMaxRpm}'
+          echo 'pc_power_fan_max_rpm{${labels}} ${toString fan.maxRpm}'
+          echo 'pc_power_fan_exponent{${labels}} ${toString fan.exponent}'
+        ''
+      )
+    ) power.fans
+  );
+
+  powerModel =
+    writeCollector "power-model"
+      [
+        pkgs.gawk
+        pkgs.hdparm
+      ]
+      ''
+        echo '# HELP pc_power_supply_rated_watts Nameplate output of the supply.'
+        echo '# TYPE pc_power_supply_rated_watts gauge'
+        echo 'pc_power_supply_rated_watts ${toString power.supply.ratedWatts}'
+        echo 'pc_power_supply_peak_efficiency ${toString power.supply.peakEfficiency}'
+        echo 'pc_power_supply_peak_load_ratio ${toString power.supply.peakLoadRatio}'
+        echo 'pc_power_supply_curvature ${toString power.supply.curvature}'
+        echo 'pc_power_supply_idle_watts ${toString power.supply.idleWatts}'
+        echo 'pc_power_board_watts ${toString power.boardWatts}'
+        echo 'pc_power_peripherals_watts ${toString power.peripheralsWatts}'
+        echo 'pc_power_gpu_board_factor ${toString power.gpu.boardFactor}'
+        echo 'pc_power_gpu_overhead_watts ${toString power.gpu.overheadWatts}'
+        echo 'pc_power_pmic_efficiency ${toString power.pmicEfficiency}'
+
+        ${fanCoefficients}
+
+        ${lib.optionalString power.ram.modelled ''
+          memory_gib=$(awk '/^MemTotal:/ { printf "%.4f", $2 / 1048576 }' /proc/meminfo)
+          echo '# HELP pc_power_ram_watts Modelled DRAM draw at rest and at full load.'
+          echo '# TYPE pc_power_ram_watts gauge'
+          awk -v gib="$memory_gib" 'BEGIN {
+            printf "pc_power_ram_watts{state=\"idle\"} %.4f\n", gib * ${toString power.ram.wattsPerGiB}
+            printf "pc_power_ram_watts{state=\"active\"} %.4f\n", gib * ${toString power.ram.activeWattsPerGiB}
+          }'
+        ''}
+
+        ${lib.optionalString (power.backlightMaxWatts != 0) ''
+          echo 'pc_power_backlight_max_watts ${toString power.backlightMaxWatts}'
+          for panel in /sys/class/backlight/*; do
+            [ -r "$panel/actual_brightness" ] || continue
+            now=$(cat "$panel/actual_brightness")
+            full=$(cat "$panel/max_brightness")
+            [ "$full" -gt 0 ] || continue
+            awk -v now="$now" -v full="$full" -v panel="''${panel##*/}" 'BEGIN {
+              printf "pc_backlight_ratio{panel=\"%s\"} %.4f\n", panel, now / full
+            }'
+          done
+        ''}
+
+        echo '# HELP pc_power_disk_watts Modelled draw of a drive in each power state.'
+        echo '# TYPE pc_power_disk_watts gauge'
+        echo '# HELP pc_disk_standby Whether the drive motor is stopped.'
+        echo '# TYPE pc_disk_standby gauge'
+
+        profile_for() {
+          local model=$1 class=$2 match standby idle active spinup
+          while IFS=$'\t' read -r match standby idle active spinup; do
+            case "$match" in
+              @*) [ "$match" = "$class" ] || continue ;;
+              *) case "$model" in *"$match"*) ;; *) continue ;; esac ;;
+            esac
+            printf '%s\t%s\t%s\t%s\n' "$standby" "$idle" "$active" "$spinup"
+            return 0
+          done < ${diskProfileTable}
+          return 1
+        }
+
+        for block in /sys/block/*; do
+          device=''${block##*/}
+          case "$device" in
+            loop* | ram* | zram* | dm-* | md* | sr*) continue ;;
+          esac
+          [ -e "$block/device" ] || continue
+
+          rotational=$(cat "$block/queue/rotational" 2>/dev/null || echo 0)
+          if [ "$rotational" = 1 ]; then
+            class=@rotational
+          elif [ "''${device#nvme}" != "$device" ]; then
+            class=@nvme
+          else
+            class=@ssd
+          fi
+
+          model=$(cat "$block/device/model" 2>/dev/null || true)
+          coefficients=$(profile_for "$model" "$class") || continue
+          override=$(awk -F'\t' -v d="$device" '$1 == d {
+            print $2 "\t" $3 "\t" $4 "\t" $5
+          }' ${diskOverrideTable})
+          [ -z "$override" ] || coefficients=$override
+
+          IFS=$'\t' read -r standby idle active spinup <<<"$coefficients"
+          printf 'pc_power_disk_watts{device="%s",state="standby"} %s\n' "$device" "$standby"
+          printf 'pc_power_disk_watts{device="%s",state="idle"} %s\n' "$device" "$idle"
+          printf 'pc_power_disk_watts{device="%s",state="active"} %s\n' "$device" "$active"
+          printf 'pc_power_disk_watts{device="%s",state="spinup"} %s\n' "$device" "$spinup"
+
+          parked=0
+          if [ "$rotational" = 1 ] && ! hdparm -C "/dev/$device" 2>/dev/null | grep -q 'active/idle'; then
+            parked=1
+          fi
+          printf 'pc_disk_standby{device="%s"} %s\n' "$device" "$parked"
+        done
       '';
 
   piFirmwareMetrics =
@@ -361,13 +495,25 @@ in
         description = "Publish friendly hwmon sensor names";
         wantedBy = [ "multi-user.target" ];
         after = [ "systemd-modules-load.service" ];
-        restartTriggers = [
-          sensorNameTable
-          (toString cfg.totalPower.baselineWatts)
-          (toString cfg.totalPower.wallEstimateWatts)
-        ];
+        restartTriggers = [ sensorNameTable ];
       }
     ];
+
+    systemd.services.textfile-power-model = lib.mkIf power.enable (
+      lib.mkMerge [
+        (collectorService powerModel)
+        {
+          description = "Publish power model coefficients and drive standby state";
+          wantedBy = [ "multi-user.target" ];
+          restartTriggers = [
+            diskProfileTable
+            diskOverrideTable
+          ];
+        }
+      ]
+    );
+
+    systemd.timers.textfile-power-model = lib.mkIf power.enable (collectorTimer "5s");
 
     systemd.services.textfile-tailscale = lib.mkIf config.services.tailscale.enable (
       lib.mkMerge [

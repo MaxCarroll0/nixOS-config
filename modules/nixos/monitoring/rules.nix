@@ -32,31 +32,164 @@ let
       + ''label_replace(max by (instance) (sensor:temp_celsius{name=~"System 1|Ambient"}), "component", "Box", "", "")'';
   };
 
-  # zenpower reports measured SVI2 rails; RAPL is the modelled fallback when it is absent.
-  powerRules = {
-    "pc:cpu_power_watts" =
-      ''sum by (instance) (node_hwmon_power_watt and on(instance, chip) node_hwmon_chip_names{chip_name="zenpower"})''
-      + " or sum by (instance) (rate(node_rapl_package_joules_total[1m]))"
-      + ''or pi:pmic_rail_watts{rail="VDD_CORE"}'';
+  coefficient = metric: "max by (instance) (${metric})";
+  perDisk = metric: "max by (instance, device) (${metric})";
+  perFan = metric: "max by (instance, fan) (${metric})";
 
-    "pc:platform_power_watts" = "sum by (instance) (rate(node_rapl_psys_joules_total[1m]))";
+  component = name: expr: ''label_replace(${expr}, "component", "${name}", "", "")'';
 
-    "pc:gpu_power_watts" =
-      ''sum by (instance) (node_hwmon_power_watt and on(instance, chip) node_hwmon_chip_names{chip_name="amdgpu"})'';
+  raplPackage = ''rate(node_rapl_package_joules_total{path!~".*mmio.*"}[1m])'';
 
-    "pc:baseline_watts" = "max by (instance) (pc_power_baseline_watts)";
-    "pc:wall_estimate_watts" = "max by (instance) (pc_power_wall_estimate_watts)";
-    "pc:psu_efficiency" = "max by (instance) (pc_power_psu_efficiency)";
-    "pc:tariff_gbp_per_kwh" = "max by (instance) (pc_power_tariff_gbp_per_kwh)";
+  plausible = ceiling: expr: "clamp_max(${expr}, ${toString ceiling})";
 
-    "pc:power_watts" =
-      "pc:wall_estimate_watts or pc:platform_power_watts or (((pc:cpu_power_watts or pc:baseline_watts * 0) + (pc:gpu_power_watts or pc:baseline_watts * 0)"
-      + " + pc:baseline_watts) / pc:psu_efficiency)";
-    "pc:psu_loss_watts" =
-      "clamp_min(pc:power_watts - pc:cpu_power_watts"
-      + " - (pc:gpu_power_watts or pc:cpu_power_watts * 0) - pc:baseline_watts, 0)";
-    "pi:pmic_rail_watts" = "pi_pmic_current_amps * on(instance, rail) pi_pmic_voltage_volts";
-  };
+  hwmonPower = chipName: ''
+    sum by (instance) (
+      node_hwmon_power_watt
+      and on(instance, chip) node_hwmon_chip_names{chip_name="${chipName}"}
+    )'';
+
+  powerRules = [
+    {
+      record = "pi:pmic_rail_watts";
+      expr = "pi_pmic_current_amps * on(instance, rail) pi_pmic_voltage_volts";
+    }
+    {
+      record = "pc:cpu_power_watts";
+      expr = ''
+        ${hwmonPower "zenpower"}
+        or ${plausible 400 "sum by (instance) (${raplPackage})"}
+        or sum by (instance) (pi:pmic_rail_watts{rail="VDD_CORE"})'';
+    }
+    {
+      record = "pc:gpu_power_watts";
+      expr = ''
+        ${hwmonPower "amdgpu"} * ${coefficient "pc_power_gpu_board_factor"}
+        + ${coefficient "pc_power_gpu_overhead_watts"}'';
+    }
+    {
+      record = "pc:platform_power_watts";
+      expr = plausible 1000 ''
+        clamp_min(
+          sum by (instance) (rate(node_rapl_psys_joules_total[1m]))
+          - sum by (instance) (${raplPackage}),
+          0)'';
+    }
+    {
+      record = "pc:soc_rail_watts";
+      expr = ''sum by (instance) (pi:pmic_rail_watts{rail!="VDD_CORE"})'';
+    }
+    {
+      record = "pc:pmic_loss_watts";
+      expr = ''
+        sum by (instance) (pi:pmic_rail_watts)
+        * (1 / ${coefficient "pc_power_pmic_efficiency"} - 1)'';
+    }
+    {
+      record = "pc:ram_power_watts";
+      expr = ''
+        ${coefficient ''pc_power_ram_watts{state="idle"}''}
+        + ${coefficient ''pc_power_ram_watts{state="active"}''}
+        * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m])))'';
+    }
+    {
+      record = "pc:backlight_power_watts";
+      expr = "${coefficient "pc_power_backlight_max_watts"} * ${coefficient "pc_backlight_ratio"}";
+    }
+    {
+      record = "pc:disk_standby";
+      expr = perDisk "pc_disk_standby";
+    }
+    {
+      record = "pc:disk_activity";
+      expr = "clamp_max(sum by (instance, device) (rate(node_disk_io_time_seconds_total[1m])), 1)";
+    }
+    {
+      record = "pc:disk_power_watts";
+      expr = ''
+        ${perDisk ''pc_power_disk_watts{state="standby"}''} * pc:disk_standby
+        + (1 - pc:disk_standby)
+        * (${perDisk ''pc_power_disk_watts{state="idle"}''}
+           + (${perDisk ''pc_power_disk_watts{state="active"}''}
+              - ${perDisk ''pc_power_disk_watts{state="idle"}''}) * pc:disk_activity)'';
+    }
+    {
+      record = "pc:fan_rpm_modelled";
+      expr = ''
+        max by (instance, fan) (
+          sensor:fan_rpm
+          * on(instance, chip_name, sensor) group_left(fan)
+          (max by (instance, chip_name, sensor, fan) (pc_power_fan_max_rpm) * 0 + 1)
+        )'';
+    }
+    {
+      record = "pc:fan_power_watts";
+      expr = ''
+        ${perFan "pc_power_fan_constant_watts"}
+        or ${perFan "pc_power_fan_max_watts"}
+        * clamp_max(pc:fan_rpm_modelled / ${perFan "pc_power_fan_max_rpm"}, 1)
+        ^ ${perFan "pc_power_fan_exponent"}'';
+    }
+    {
+      record = "pc:power_dc_component_watts";
+      expr = lib.concatStringsSep "\n or " [
+        (component "CPU" "pc:cpu_power_watts")
+        (component "GPU" "pc:gpu_power_watts")
+        (component "Platform" "pc:platform_power_watts")
+        (component "SoC rails" "pc:soc_rail_watts")
+        (component "PMIC loss" "pc:pmic_loss_watts")
+        (component "RAM" "pc:ram_power_watts")
+        (component "Display" "pc:backlight_power_watts")
+        (component "Storage" "pc:disk_power_watts")
+        (component "Fans" "pc:fan_power_watts")
+        (component "Board" (coefficient "pc_power_board_watts"))
+        (component "Peripherals" (coefficient "pc_power_peripherals_watts"))
+      ];
+    }
+    {
+      record = "pc:power_dc_watts";
+      expr = "sum by (instance) (pc:power_dc_component_watts)";
+    }
+    {
+      record = "pc:supply_load_ratio";
+      expr = "pc:power_dc_watts / ${coefficient "pc_power_supply_rated_watts"}";
+    }
+    {
+      record = "pc:supply_efficiency";
+      expr = ''
+        clamp(
+          ${coefficient "pc_power_supply_peak_efficiency"}
+          * (1 - ${coefficient "pc_power_supply_curvature"}
+                 * (pc:supply_load_ratio
+                    - ${coefficient "pc_power_supply_peak_load_ratio"}) ^ 2),
+          0.5, 0.96)'';
+    }
+    {
+      record = "pc:supply_loss_watts";
+      expr = ''
+        pc:power_dc_watts * (1 / pc:supply_efficiency - 1)
+        + ${coefficient "pc_power_supply_idle_watts"}'';
+    }
+    {
+      record = "pc:power_component_watts";
+      expr = "pc:power_dc_component_watts or ${component "Supply loss" "pc:supply_loss_watts"}";
+    }
+    {
+      record = "pc:power_watts";
+      expr = "pc:power_dc_watts + pc:supply_loss_watts";
+    }
+    {
+      record = "pc:power_meter_watts";
+      expr = coefficient "pc_power_meter_watts";
+    }
+    {
+      record = "pc:power_model_error_watts";
+      expr = "pc:power_meter_watts - pc:power_watts";
+    }
+    {
+      record = "pc:tariff_gbp_per_kwh";
+      expr = coefficient "pc_power_tariff_gbp_per_kwh";
+    }
+  ];
 
   systemRules = {
     "cpu:utilisation" = ''1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m]))'';
@@ -256,12 +389,30 @@ let
         "max"
       ];
     };
-    pc_baseline_watts = {
-      source = "pc:baseline_watts";
+    pc_power_component_watts = {
+      source = "pc:power_component_watts";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    pc_supply_efficiency = {
+      source = "pc:supply_efficiency";
       aggs = [ "avg" ];
     };
-    pc_psu_loss_watts = {
-      source = "pc:psu_loss_watts";
+    pc_power_meter_watts = {
+      source = "pc:power_meter_watts";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    pc_power_model_error_watts = {
+      source = "pc:power_model_error_watts";
+      aggs = [ "avg" ];
+    };
+    pc_disk_standby = {
+      source = "pc:disk_standby";
       aggs = [ "avg" ];
     };
     tariff_gbp_per_kwh = {
@@ -559,7 +710,7 @@ in
     {
       name = "sensors";
       interval = "1s";
-      rules = toRules (sensorRules // powerRules);
+      rules = toRules sensorRules ++ powerRules;
     }
     {
       name = "system";

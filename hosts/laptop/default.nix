@@ -38,6 +38,22 @@
       "nvme:temp1" = "NVMe";
       "acpitz:temp1" = "Ambient";
     };
+
+    power = {
+      enable = true;
+      supply = {
+        ratedWatts = 65;
+        peakEfficiency = 0.9;
+        peakLoadRatio = 0.5;
+        curvature = 0.7;
+        idleWatts = 0.2;
+      };
+      ram.modelled = false;
+      backlightMaxWatts = 6;
+      boardWatts = 1.5;
+      peripheralsWatts = 0.8;
+      fans.chassis.constantWatts = 0.3;
+    };
   };
 
   local.vpn.selection = {
