@@ -191,6 +191,36 @@ let
     }
   ];
 
+  smartAttribute = id: "max by (instance, device) (smart_attribute_raw{id=\"${id}\"})";
+
+  driveRules = {
+    "drive:health_ok" = "max by (instance, device) (smart_health_ok)";
+    "drive:sample_age_seconds" = "max by (instance, device) (smart_sample_age_seconds)";
+    "drive:power_on_hours" = "max by (instance, device) (smart_power_on_hours)";
+    "drive:temperature_celsius" = "max by (instance, device) (smart_temperature_celsius)";
+    "drive:reallocated_sectors" = smartAttribute "5";
+    "drive:pending_sectors" = smartAttribute "197";
+    "drive:uncorrectable_sectors" = smartAttribute "198";
+    "drive:crc_errors" = smartAttribute "199";
+    "drive:start_stop_count" = smartAttribute "4";
+    "drive:load_cycle_count" = smartAttribute "193";
+    "drive:selftest_status" = "max by (instance, device) (smart_selftest_status)";
+    "drive:selftest_failed" = "(drive:selftest_status > 0 < 240) or (drive:selftest_status * 0)";
+    "drive:selftest_running" = "clamp_max(drive:selftest_status >= bool 240, 1)";
+    "ssd:written_bytes" =
+      "max by (instance, device) (smart_nvme_written_bytes)" + " or ${smartAttribute "241"} * 512";
+    "ssd:wear_ratio" =
+      "clamp_max(max by (instance, device) (smart_nvme_used_ratio), 1)"
+      + " or clamp_max(1 - max by (instance, device)"
+      + " (smart_attribute_value{id=\"177\"} or smart_attribute_value{id=\"233\"}) / 100, 1)";
+    "ssd:spare_ratio" = "max by (instance, device) (smart_nvme_spare_ratio)";
+    "ssd:media_errors" = "max by (instance, device) (smart_nvme_media_errors)";
+    "ssd:written_bytes_per_day" = "rate(ssd:written_bytes[6h]) * 86400";
+    "cache:hit_ratio" =
+      "rate(bcache_cache_hits[5m])"
+      + " / clamp_min(rate(bcache_cache_hits[5m]) + rate(bcache_cache_misses[5m]), 1)";
+  };
+
   systemRules = {
     "cpu:utilisation" = ''1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m]))'';
     "cpu:core_utilisation" = ''1 - rate(node_cpu_seconds_total{mode="idle"}[15s])'';
@@ -219,10 +249,41 @@ let
     "disk:io_time" = "rate(node_disk_io_time_seconds_total[1m])";
     "disk:read_bytes" = "rate(node_disk_read_bytes_total[1m])";
     "disk:written_bytes" = "rate(node_disk_written_bytes_total[1m])";
+    "disk:read_latency_seconds" =
+      "rate(node_disk_read_time_seconds_total[1m])"
+      + " / clamp_min(rate(node_disk_reads_completed_total[1m]), 1)";
+    "disk:write_latency_seconds" =
+      "rate(node_disk_write_time_seconds_total[1m])"
+      + " / clamp_min(rate(node_disk_writes_completed_total[1m]), 1)";
+    "disk:queue_depth" = "rate(node_disk_io_time_weighted_seconds_total[1m])";
+    "disk:iops" =
+      "rate(node_disk_reads_completed_total[1m]) + rate(node_disk_writes_completed_total[1m])";
     "fs:avail_bytes" = ''node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs"}'';
     "fs:free_ratio" =
       ''node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs"}''
       + ''/ node_filesystem_size_bytes{fstype!~"tmpfs|ramfs"}'';
+    "fs:inode_free_ratio" =
+      ''node_filesystem_files_free{fstype!~"tmpfs|ramfs"}''
+      + ''/ clamp_min(node_filesystem_files{fstype!~"tmpfs|ramfs"}, 1)'';
+
+    "mem:major_faults" = "rate(node_vmstat_pgmajfault[1m])";
+    "mem:swap_in_pages" = "rate(node_vmstat_pswpin[1m])";
+    "mem:swap_out_pages" = "rate(node_vmstat_pswpout[1m])";
+    "mem:page_scan_rate" =
+      "sum by (instance) (rate(node_vmstat_pgscan_kswapd[1m]))"
+      + " + sum by (instance) (rate(node_vmstat_pgscan_direct[1m]))";
+    "mem:page_steal_rate" =
+      "sum by (instance) (rate(node_vmstat_pgsteal_kswapd[1m]))"
+      + " + sum by (instance) (rate(node_vmstat_pgsteal_direct[1m]))";
+    "mem:page_refault_rate" =
+      "sum by (instance) (rate(node_vmstat_workingset_refault_file[1m]))"
+      + " or sum by (instance) (rate(node_vmstat_workingset_refault[1m]))";
+    "mem:refault_ratio" = "mem:page_refault_rate / clamp_min(mem:page_scan_rate, 1)";
+    "mem:reclaim_efficiency" = "mem:page_steal_rate / clamp_min(mem:page_scan_rate, 1)";
+    "mem:thrash_score" =
+      "clamp_max(rate(node_vmstat_pgmajfault[1m]) / 200, 1)"
+      + " * clamp_max(avg by (instance)"
+      + " (rate(node_pressure_memory_stalled_seconds_total[1m])) * 10, 1)";
     "systemd:failed_units" = ''sum by (instance) (node_systemd_unit_state{state="failed"})'';
     "host:up" =
       ''clamp_max(count by (instance) (present_over_time(up{job="node"}[1m])), 1)''
@@ -414,6 +475,114 @@ let
     pc_disk_standby = {
       source = "pc:disk_standby";
       aggs = [ "avg" ];
+    };
+    drive_health_ok = {
+      source = "drive:health_ok";
+      aggs = [ "min" ];
+    };
+    drive_power_on_hours = {
+      source = "drive:power_on_hours";
+      aggs = [ "max" ];
+    };
+    drive_temperature_celsius = {
+      source = "drive:temperature_celsius";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    drive_reallocated_sectors = {
+      source = "drive:reallocated_sectors";
+      aggs = [ "max" ];
+    };
+    drive_pending_sectors = {
+      source = "drive:pending_sectors";
+      aggs = [ "max" ];
+    };
+    drive_uncorrectable_sectors = {
+      source = "drive:uncorrectable_sectors";
+      aggs = [ "max" ];
+    };
+    drive_crc_errors = {
+      source = "drive:crc_errors";
+      aggs = [ "max" ];
+    };
+    drive_start_stop_count = {
+      source = "drive:start_stop_count";
+      aggs = [ "max" ];
+    };
+    drive_load_cycle_count = {
+      source = "drive:load_cycle_count";
+      aggs = [ "max" ];
+    };
+    ssd_written_bytes = {
+      source = "ssd:written_bytes";
+      aggs = [ "max" ];
+    };
+    ssd_wear_ratio = {
+      source = "ssd:wear_ratio";
+      aggs = [ "max" ];
+    };
+    mem_major_faults = {
+      source = "mem:major_faults";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    mem_swap_in_pages = {
+      source = "mem:swap_in_pages";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    mem_swap_out_pages = {
+      source = "mem:swap_out_pages";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    mem_thrash_score = {
+      source = "mem:thrash_score";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    mem_refault_ratio = {
+      source = "mem:refault_ratio";
+      aggs = [ "avg" ];
+    };
+    mem_reclaim_efficiency = {
+      source = "mem:reclaim_efficiency";
+      aggs = [ "avg" ];
+    };
+    disk_read_latency_seconds = {
+      source = "disk:read_latency_seconds";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    disk_write_latency_seconds = {
+      source = "disk:write_latency_seconds";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    disk_iops = {
+      source = "disk:iops";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    fs_inode_free_ratio = {
+      source = "fs:inode_free_ratio";
+      aggs = [ "min" ];
     };
     tariff_gbp_per_kwh = {
       source = "pc:tariff_gbp_per_kwh";
@@ -720,7 +889,7 @@ in
     {
       name = "capacity";
       interval = "5m";
-      rules = toRules capacityRules;
+      rules = toRules (capacityRules // driveRules);
     }
     {
       name = "downsample";
@@ -990,6 +1159,107 @@ in
         value = 1 - cfg.alerts.filesystemFreeRatio;
         for' = "15m";
         summary = "{{ $labels.mountpoint }} on {{ $labels.instance }} is nearly full.";
+      })
+      (threshold {
+        uid = "smart-health-failed";
+        title = "Drive SMART health failing";
+        expr = "1 - drive:health_ok";
+        value = 0;
+        for' = "0s";
+        severity = "critical";
+        summary = "{{ $labels.device }} on {{ $labels.instance }} reports its own SMART self-assessment as failing.";
+      })
+      (threshold {
+        uid = "smart-pending-sectors";
+        title = "Drive has pending sectors";
+        expr = "drive:pending_sectors";
+        value = 0;
+        for' = "0s";
+        severity = "critical";
+        summary = "{{ $labels.device }} on {{ $labels.instance }} has sectors it cannot read and has not yet reallocated.";
+      })
+      (threshold {
+        uid = "smart-reallocated-sectors";
+        title = "Drive reallocated sectors";
+        expr = "drive:reallocated_sectors";
+        value = cfg.alerts.reallocatedSectors;
+        for' = "15m";
+        summary = "{{ $labels.device }} on {{ $labels.instance }} has remapped bad sectors.";
+      })
+      (threshold {
+        uid = "smart-uncorrectable-sectors";
+        title = "Drive uncorrectable sectors";
+        expr = "drive:uncorrectable_sectors";
+        value = 0;
+        for' = "15m";
+        severity = "critical";
+        summary = "{{ $labels.device }} on {{ $labels.instance }} has sectors that could not be corrected.";
+      })
+      (threshold {
+        uid = "smart-crc-errors";
+        title = "Drive interface CRC errors";
+        expr = "increase(drive:crc_errors[6h])";
+        value = 0;
+        for' = "15m";
+        summary = "{{ $labels.device }} on {{ $labels.instance }} is seeing link errors, which points at the cable or bridge rather than the platter.";
+      })
+      (threshold {
+        uid = "smart-selftest-failed";
+        title = "Drive self-test failed";
+        expr = "drive:selftest_failed";
+        value = 0;
+        for' = "15m";
+        summary = "The last self-test on {{ $labels.device }} on {{ $labels.instance }} did not complete cleanly.";
+      })
+      (threshold {
+        uid = "smart-stale";
+        title = "Drive health data stale";
+        expr = "drive:sample_age_seconds";
+        value = cfg.alerts.smartStaleSeconds;
+        for' = "30m";
+        valueFormat = "humanizeDuration";
+        summary = "{{ $labels.device }} on {{ $labels.instance }} has not been readable for a long time; it may have been removed or the collector is stuck.";
+      })
+      (threshold {
+        uid = "ssd-wear-high";
+        title = "SSD wear high";
+        expr = "ssd:wear_ratio";
+        value = cfg.alerts.ssdWearRatio;
+        for' = "1h";
+        summary = "{{ $labels.device }} on {{ $labels.instance }} has used most of its rated write endurance.";
+      })
+      (threshold {
+        uid = "memory-thrashing";
+        title = "Memory thrashing";
+        expr = "mem:thrash_score";
+        value = cfg.alerts.thrashScore;
+        for' = "10m";
+        summary = "{{ $labels.instance }} is faulting pages back in as fast as it evicts them.";
+      })
+      (threshold {
+        uid = "swap-thrashing";
+        title = "Sustained swap-in";
+        expr = "mem:swap_in_pages";
+        value = cfg.alerts.swapInPagesPerSecond;
+        for' = "10m";
+        summary = "{{ $labels.instance }} is reading back from swap continuously.";
+      })
+      (threshold {
+        uid = "disk-latency-high";
+        title = "Disk latency high";
+        expr = "max by (instance, device) (disk:read_latency_seconds)";
+        value = cfg.alerts.diskLatencySeconds;
+        for' = "10m";
+        valueFormat = "humanizeDuration";
+        summary = "Reads from {{ $labels.device }} on {{ $labels.instance }} are taking far longer than they should.";
+      })
+      (threshold {
+        uid = "inodes-low";
+        title = "Inodes nearly exhausted";
+        expr = "1 - min by (instance, mountpoint) (fs:inode_free_ratio)";
+        value = 1 - cfg.alerts.inodeFreeRatio;
+        for' = "15m";
+        summary = "{{ $labels.mountpoint }} on {{ $labels.instance }} is running out of inodes, which fails writes even with free space.";
       })
       (threshold {
         uid = "peer-offline";

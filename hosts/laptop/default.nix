@@ -31,6 +31,7 @@
   local.monitoring = {
     exporter.enable = true;
     laptopTelemetry.enable = true;
+    smart.enable = true;
     userReadable = true;
     telemetry.collector.enable = true;
     sensorNames = {

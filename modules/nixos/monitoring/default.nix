@@ -296,6 +296,7 @@ in
 {
   imports = [
     ./power-model.nix
+    ./smart.nix
     ./telemetry.nix
     ./textfile.nix
   ];
@@ -445,6 +446,48 @@ in
         type = lib.types.number;
         default = 0.1;
         description = "Free space fraction below which a filesystem alerts.";
+      };
+
+      inodeFreeRatio = lib.mkOption {
+        type = lib.types.number;
+        default = 0.1;
+        description = "Free inode fraction below which a filesystem alerts.";
+      };
+
+      reallocatedSectors = lib.mkOption {
+        type = lib.types.number;
+        default = 0;
+        description = "Remapped sector count a drive may reach before alerting.";
+      };
+
+      smartStaleSeconds = lib.mkOption {
+        type = lib.types.number;
+        default = 172800;
+        description = "Age of the newest SMART read before a drive is treated as unreadable.";
+      };
+
+      ssdWearRatio = lib.mkOption {
+        type = lib.types.number;
+        default = 0.8;
+        description = "Fraction of rated write endurance consumed before alerting.";
+      };
+
+      thrashScore = lib.mkOption {
+        type = lib.types.number;
+        default = 0.25;
+        description = "Combined major-fault and memory-stall score that counts as thrashing.";
+      };
+
+      swapInPagesPerSecond = lib.mkOption {
+        type = lib.types.number;
+        default = 200;
+        description = "Sustained pages read back from swap per second before alerting.";
+      };
+
+      diskLatencySeconds = lib.mkOption {
+        type = lib.types.number;
+        default = 0.5;
+        description = "Mean read latency above which a drive alerts.";
       };
     };
   };

@@ -110,6 +110,8 @@
     exporter.enable = true;
     exporter.hwmonChipExclude = "^target[0-9]+:0:0_";
     piFirmware.enable = true;
+    smart.enable = true;
+    smart.selfTest.enable = true;
     server.enable = true;
     grafana.enable = true;
     userReadable = true;

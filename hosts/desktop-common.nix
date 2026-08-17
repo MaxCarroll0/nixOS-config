@@ -100,6 +100,7 @@
 
   local.monitoring = {
     exporter.enable = true;
+    smart.enable = true;
     server.enable = false;
     grafana.enable = false;
     userReadable = true;

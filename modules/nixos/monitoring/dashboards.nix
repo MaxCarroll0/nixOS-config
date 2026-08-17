@@ -169,6 +169,45 @@ let
 
   allTimeMaxPower = ''label_replace(max by (instance) (max_over_time(pc:power_watts_max{instance=~"$host"}[10y])), "category", "Max (all time)", "__name__", ".*")'';
 
+  powerBands = [
+    "CPU"
+    "GPU"
+    "Platform"
+    "SoC rails"
+    "PMIC loss"
+    "RAM"
+    "Display"
+    "Board"
+    "Peripherals"
+    "Supply loss"
+    "nvme0n1"
+    "sda"
+    "sdb"
+    "sdc"
+    "sdd"
+    "cpu fan"
+    "gpu fan"
+    "chassis fan"
+    "active-cooler fan"
+    "hdd-bay fan"
+    "total"
+  ];
+
+  powerBandTargets = prefix: suffix: [
+    (target {
+      expr = ''${prefix}pc:power_component_watts{instance=~"$host",component!~"Storage|Fans"}${suffix}'';
+      legend = "{{instance}} {{component}}";
+    })
+    (target {
+      expr = ''${prefix}pc:power_component_watts{instance=~"$host",component="Storage"}${suffix}'';
+      legend = "{{instance}} {{device}}";
+    })
+    (target {
+      expr = ''${prefix}pc:power_component_watts{instance=~"$host",component="Fans"}${suffix}'';
+      legend = "{{instance}} {{fan}} fan";
+    })
+  ];
+
   boundedAverage =
     upMetric: expression:
     "avg_over_time((${expression})[\${smoothspan}:] offset -\${smooth}) "
@@ -2242,15 +2281,8 @@ let
             ];
           }
         ];
-        targets = [
-          (target {
-            expr = ''pc:power_component_watts{instance=~"$host",component!="Storage"}'';
-            legend = "{{instance}} {{component}}";
-          })
-          (target {
-            expr = ''pc:power_component_watts{instance=~"$host",component="Storage"}'';
-            legend = "{{instance}} {{device}}";
-          })
+        gradientSeries = powerBands;
+        targets = powerBandTargets "" "" ++ [
           (target {
             expr = ''pc:power_watts{instance=~"$host"}'';
             legend = "{{instance}} total";
@@ -2820,16 +2852,8 @@ let
           };
           fillOpacity = 35;
         };
-        targets = [
-          (target {
-            expr = ''avg_over_time(pc:power_component_watts{instance=~"$host",component!="Storage"}[''${smoothspan}] offset -''${smooth})'';
-            legend = "{{instance}} {{component}}";
-          })
-          (target {
-            expr = ''avg_over_time(pc:power_component_watts{instance=~"$host",component="Storage"}[''${smoothspan}] offset -''${smooth})'';
-            legend = "{{instance}} {{device}}";
-          })
-        ];
+        gradientSeries = powerBands;
+        targets = powerBandTargets "avg_over_time(" "[\${smoothspan}] offset -\${smooth})";
       })
       (ts {
         title = "Energy use over time";
@@ -3760,6 +3784,498 @@ let
     (tierLink "30d" uid "now-30d" 2592000 "5m" "prometheus-lt")
     (tierLink "1y" uid "now-1y" 31536000 "" "prometheus-archive")
   ];
+
+  liveDrives = dashboard {
+    uid = "drives";
+    title = "Drives";
+    datasource = "prometheus";
+    from = "now-15m";
+    refresh = "5s";
+    tags = [ "live" ];
+    variables = [
+      (hostVariable "prometheus")
+      autoSmoothVariable
+      smoothVariable
+      smoothSpanVariable
+    ];
+    links = [ ];
+    panels = livePanels [
+      (stat {
+        title = "Drives healthy";
+        description = "Counts drives whose own SMART self-assessment is passing.";
+        w = 6;
+        h = 5;
+        unit = "short";
+        decimals = 0;
+        targets = [
+          (target {
+            expr = ''sum by (instance) (drive:health_ok{instance=~"$host"})'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (stat {
+        title = "Reallocated sectors";
+        w = 6;
+        h = 5;
+        unit = "short";
+        decimals = 0;
+        targets = [
+          (target {
+            expr = ''sum by (instance) (drive:reallocated_sectors{instance=~"$host"})'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (stat {
+        title = "Pending sectors";
+        description = "Sectors the drive cannot read and has not yet remapped. Any non-zero value is worth acting on.";
+        w = 6;
+        h = 5;
+        unit = "short";
+        decimals = 0;
+        targets = [
+          (target {
+            expr = ''sum by (instance) (drive:pending_sectors{instance=~"$host"})'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (stat {
+        title = "Oldest drive";
+        w = 6;
+        h = 5;
+        unit = "h";
+        decimals = 0;
+        targets = [
+          (target {
+            expr = ''max by (instance) (drive:power_on_hours{instance=~"$host"})'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (status {
+        title = "Drive spin state";
+        description = "1 while the motor is parked. SMART is only read when a drive has had real I/O, so parked drives are never disturbed.";
+        w = 12;
+        h = 8;
+        targets = [
+          (target {
+            expr = ''pc:disk_standby{instance=~"$host"}'';
+            legend = "{{instance}} {{device}}";
+          })
+        ];
+      })
+      (status {
+        title = "Self-test activity";
+        description = "1 while a self-test is running. Short tests fire opportunistically as a drive is about to park; long tests run monthly overnight, one drive at a time.";
+        w = 12;
+        h = 8;
+        targets = [
+          (target {
+            expr = ''drive:selftest_running{instance=~"$host"}'';
+            legend = "{{instance}} {{device}}";
+          })
+        ];
+      })
+      (ts {
+        title = "SMART reading age";
+        description = "How long ago each drive was last readable. This climbs while a drive is parked, which is expected; a value climbing past a day means the drive is gone or the collector is stuck.";
+        w = 12;
+        h = 8;
+        unit = "s";
+        targets = [
+          (target {
+            expr = ''drive:sample_age_seconds{instance=~"$host"}'';
+            legend = "{{instance}} {{device}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Drive temperature";
+        w = 12;
+        h = 8;
+        unit = "celsius";
+        targets = [
+          (target {
+            expr = ''drive:temperature_celsius{instance=~"$host"}'';
+            legend = "{{instance}} {{device}}";
+          })
+          (target {
+            expr = ''sensor:temp_celsius{instance=~"$host",name=~"HDD.*"}'';
+            legend = "{{instance}} {{name}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Surface defects";
+        description = "Reallocated, pending and uncorrectable sectors. Growth in any of these is the clearest warning a drive is on its way out.";
+        w = 12;
+        h = 8;
+        unit = "short";
+        targets = [
+          (target {
+            expr = ''drive:reallocated_sectors{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} reallocated";
+          })
+          (target {
+            expr = ''drive:pending_sectors{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} pending";
+          })
+          (target {
+            expr = ''drive:uncorrectable_sectors{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} uncorrectable";
+          })
+        ];
+      })
+      (ts {
+        title = "Interface CRC errors";
+        description = "Link-level errors, which indict the cable or USB bridge rather than the platter.";
+        w = 12;
+        h = 7;
+        unit = "short";
+        targets = [
+          (target {
+            expr = ''drive:crc_errors{instance=~"$host"}'';
+            legend = "{{instance}} {{device}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Head and motor cycles";
+        description = "Start-stop and load-unload counts. Aggressive spin-down trades power for these, and both are rated in the low hundreds of thousands.";
+        w = 12;
+        h = 7;
+        unit = "short";
+        targets = [
+          (target {
+            expr = ''drive:start_stop_count{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} start-stop";
+          })
+          (target {
+            expr = ''drive:load_cycle_count{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} load cycles";
+          })
+        ];
+      })
+      (ts {
+        title = "Filesystem headroom";
+        w = 12;
+        h = 7;
+        unit = "percentunit";
+        min = 0;
+        max = 1;
+        targets = [
+          (target {
+            expr = ''fs:free_ratio{instance=~"$host"}'';
+            legend = "{{instance}} {{mountpoint}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Inode headroom";
+        description = "Exhausting inodes fails writes even when there is free space.";
+        w = 12;
+        h = 7;
+        unit = "percentunit";
+        min = 0;
+        max = 1;
+        targets = [
+          (target {
+            expr = ''fs:inode_free_ratio{instance=~"$host"}'';
+            legend = "{{instance}} {{mountpoint}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Throughput";
+        w = 12;
+        h = 7;
+        unit = "Bps";
+        targets = [
+          (target {
+            expr = ''disk:read_bytes{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} read";
+          })
+          (target {
+            expr = ''disk:written_bytes{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} write";
+          })
+        ];
+      })
+      (ts {
+        title = "Latency";
+        description = "Mean service time per request. A spinning drive waking from standby shows as a large transient here.";
+        w = 12;
+        h = 7;
+        unit = "s";
+        targets = [
+          (target {
+            expr = ''disk:read_latency_seconds{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} read";
+          })
+          (target {
+            expr = ''disk:write_latency_seconds{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} write";
+          })
+        ];
+      })
+      (ts {
+        title = "Busy and queue depth";
+        w = 12;
+        h = 7;
+        unit = "percentunit";
+        targets = [
+          (target {
+            expr = ''disk:io_time{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} busy";
+          })
+          (target {
+            expr = ''disk:queue_depth{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} queue";
+          })
+        ];
+      })
+      (ts {
+        title = "IOPS";
+        w = 12;
+        h = 7;
+        unit = "iops";
+        targets = [
+          (target {
+            expr = ''disk:iops{instance=~"$host"}'';
+            legend = "{{instance}} {{device}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Memory thrashing";
+        description = "The score combines major faults with memory stall time: swap traffic alone is ordinary paging, and a stall alone can be plain I/O, but sustained together they mean the machine is re-reading pages it just evicted.";
+        w = 12;
+        h = 8;
+        unit = "percentunit";
+        min = 0;
+        targets = [
+          (target {
+            expr = ''mem:thrash_score{instance=~"$host"}'';
+            legend = "{{instance}} thrash score";
+          })
+          (target {
+            expr = ''psi:memory_stalled{instance=~"$host"}'';
+            legend = "{{instance}} memory stall";
+          })
+          (target {
+            expr = ''mem:reclaim_efficiency{instance=~"$host"}'';
+            legend = "{{instance}} reclaim efficiency";
+          })
+        ];
+      })
+      (ts {
+        title = "Paging and swap";
+        description = "Major faults hit disk. Swap-in climbing alongside them is the mechanical signature of thrashing.";
+        w = 12;
+        h = 8;
+        unit = "short";
+        targets = [
+          (target {
+            expr = ''mem:major_faults{instance=~"$host"}'';
+            legend = "{{instance}} major faults/s";
+          })
+          (target {
+            expr = ''mem:swap_in_pages{instance=~"$host"}'';
+            legend = "{{instance}} swap in";
+          })
+          (target {
+            expr = ''mem:swap_out_pages{instance=~"$host"}'';
+            legend = "{{instance}} swap out";
+          })
+        ];
+      })
+      (ts {
+        title = "SSD write pressure";
+        description = "Bytes written to flash, and the share of endurance consumed. Once an SSD fronts the spinning disks as a cache, a rising write rate with a falling hit ratio is the signal that the cache is thrashing rather than helping.";
+        w = 12;
+        h = 8;
+        unit = "bytes";
+        overrides = [ (rightAxisUnit ".*wear" "percentunit") ];
+        targets = [
+          (target {
+            expr = ''ssd:written_bytes{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} written";
+          })
+          (target {
+            expr = ''ssd:wear_ratio{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} wear";
+          })
+        ];
+      })
+      (ts {
+        title = "Cache hit ratio";
+        description = "Populated once an SSD cache layer exists in front of the spinning disks; empty until then.";
+        w = 12;
+        h = 8;
+        unit = "percentunit";
+        min = 0;
+        max = 1;
+        targets = [
+          (target {
+            expr = ''cache:hit_ratio{instance=~"$host"}'';
+            legend = "{{instance}} {{device}}";
+          })
+        ];
+      })
+    ];
+  };
+
+  historyDrives = dashboard {
+    uid = "drives";
+    title = "Drives";
+    datasource = "prometheus-lt";
+    from = "now-7d";
+    refresh = "5m";
+    tags = [ "history" ];
+    variables = [
+      (hostVariable "prometheus-lt")
+      autoSmoothVariable
+      smoothVariable
+      smoothSpanVariable
+    ];
+    links = [ ];
+    panels = [
+      (ts {
+        title = "Drive temperature history";
+        w = 24;
+        h = 8;
+        unit = "celsius";
+        overrides = [ (dimmed ".*peak$") ];
+        targets = [
+          (target {
+            expr = ''avg_over_time(drive:temperature_celsius{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
+            legend = "{{instance}} {{device}}";
+          })
+          (target {
+            expr = ''max_over_time((drive:temperature_celsius_max{instance=~"$host"} or drive:temperature_celsius{instance=~"$host"})[''${smoothspan}:] offset -''${smooth})'';
+            legend = "{{instance}} {{device}} peak";
+          })
+        ];
+      })
+      (ts {
+        title = "Thrash score history";
+        w = 24;
+        h = 8;
+        unit = "percentunit";
+        min = 0;
+        targets = [
+          (target {
+            expr = ''avg_over_time(mem:thrash_score{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+    ];
+  };
+
+  mergedDrives = dashboard {
+    uid = "drives";
+    title = "Drives";
+    datasource = "\${resolution}";
+    from = "now-15m";
+    refresh = "5s";
+    tags = [ "metrics" ];
+    variables = [
+      resolutionVariable
+      (hostVariable "prometheus")
+      autoSmoothVariable
+      smoothVariable
+      smoothSpanVariable
+    ];
+    links = tierLinks "drives" ++ [
+      (dashboardLink "System" "system")
+      (dashboardLink "Power and thermals" "power")
+      (dashboardLink "Drive archive" "archive-drives")
+      (dashboardLink "Overview" "overview")
+    ];
+    panels = mergedPanels liveDrives historyDrives;
+  };
+
+  archiveDrives = dashboard {
+    uid = "archive-drives";
+    title = "Drive lifetime";
+    datasource = "prometheus-archive";
+    from = "now-1y";
+    refresh = "";
+    tags = [ "archive" ];
+    variables = [ (hostVariable "prometheus-archive") ];
+    links = [
+      (dashboardLink "Drives" "drives")
+      (dashboardLink "Capacity" "archive-capacity")
+    ];
+    panels = [
+      (ts {
+        title = "Power-on hours";
+        description = "Total spinning hours per drive. Consumer drives are rated around 8760 hours a year of duty.";
+        w = 12;
+        h = 9;
+        unit = "h";
+        targets = [
+          (target {
+            expr = ''drive:power_on_hours_max{instance=~"$host"} or drive:power_on_hours{instance=~"$host"}'';
+            legend = "{{instance}} {{device}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Defect growth";
+        description = "The shape matters more than the value: a flat line is a healthy drive, any sustained slope is a dying one.";
+        w = 12;
+        h = 9;
+        unit = "short";
+        targets = [
+          (target {
+            expr = ''drive:reallocated_sectors_max{instance=~"$host"} or drive:reallocated_sectors{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} reallocated";
+          })
+          (target {
+            expr = ''drive:pending_sectors_max{instance=~"$host"} or drive:pending_sectors{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} pending";
+          })
+        ];
+      })
+      (ts {
+        title = "Head and motor cycles";
+        w = 12;
+        h = 9;
+        unit = "short";
+        targets = [
+          (target {
+            expr = ''drive:start_stop_count_max{instance=~"$host"} or drive:start_stop_count{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} start-stop";
+          })
+          (target {
+            expr = ''drive:load_cycle_count_max{instance=~"$host"} or drive:load_cycle_count{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} load cycles";
+          })
+        ];
+      })
+      (ts {
+        title = "Flash written and wear";
+        w = 12;
+        h = 9;
+        unit = "bytes";
+        overrides = [ (rightAxisUnit ".*wear" "percentunit") ];
+        targets = [
+          (target {
+            expr = ''ssd:written_bytes_max{instance=~"$host"} or ssd:written_bytes{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} written";
+          })
+          (target {
+            expr = ''ssd:wear_ratio_max{instance=~"$host"} or ssd:wear_ratio{instance=~"$host"}'';
+            legend = "{{instance}} {{device}} wear";
+          })
+        ];
+      })
+    ];
+  };
 
   mergedPower = dashboard {
     uid = "power";
@@ -4795,6 +5311,7 @@ in
     "system.json" = mergedSystem;
     "network.json" = mergedNetwork;
     "fleet.json" = mergedFleet;
+    "drives.json" = mergedDrives;
   };
 
   archive = {
@@ -4802,6 +5319,7 @@ in
     "uptime.json" = archiveUptime;
     "thermal.json" = archiveThermal;
     "capacity.json" = archiveCapacity;
+    "drives.json" = archiveDrives;
   };
 
   observability = {

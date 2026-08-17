@@ -10,28 +10,17 @@
 let
   cfg = config.local.monitoring;
 
-  textfileDir = "/var/lib/node-exporter-textfile";
+  collectors = import ./collector-lib.nix { inherit pkgs lib; };
+  inherit (collectors)
+    textfileDir
+    writeCollector
+    collectorService
+    collectorTimer
+    ;
 
   sensorNameTable = pkgs.writeText "sensor-names" (
     lib.concatStringsSep "\n" (lib.mapAttrsToList (key: name: "${key}\t${name}") cfg.sensorNames)
   );
-
-  writeCollector =
-    name: runtimeInputs: text:
-    pkgs.writeShellApplication {
-      inherit name;
-      runtimeInputs = [ pkgs.coreutils ] ++ runtimeInputs;
-      text = ''
-        out=${textfileDir}/${name}.prom
-        tmp=$out.$$
-        trap 'rm -f "$tmp"' EXIT
-        {
-        ${text}
-        } > "$tmp"
-        chmod 0644 "$tmp"
-        mv "$tmp" "$out"
-      '';
-    };
 
   sensorNames =
     writeCollector "sensor-names"
@@ -425,24 +414,7 @@ let
     mv "$next" "$state"
   '';
 
-  collectorService = collector: {
-    unitConfig.StartLimitIntervalSec = 0;
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = lib.getExe collector;
-    };
-  };
-
   hasWireguard = config.networking.wg-quick.interfaces != { };
-
-  collectorTimer = interval: {
-    wantedBy = [ "timers.target" ];
-    timerConfig = {
-      OnBootSec = "30s";
-      OnUnitActiveSec = interval;
-      AccuracySec = "1s";
-    };
-  };
 in
 
 {
@@ -451,6 +423,7 @@ in
 
     services.prometheus.exporters.node.extraFlags = [
       "--collector.textfile.directory=${textfileDir}"
+      "--collector.vmstat.fields=^(oom_kill|pgpg|pswp|pg.*fault|workingset_.*|pgscan.*|pgsteal.*).*"
     ]
     ++ lib.optional (
       cfg.exporter.hwmonChipExclude != ""
