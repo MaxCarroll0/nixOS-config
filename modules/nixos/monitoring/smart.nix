@@ -105,9 +105,10 @@ let
           [ -n "$io" ] || continue
           was=$(cat "${stateDir}/$device.io" 2>/dev/null || true)
 
-          if [ "$io" = "$was" ] && [ -s "$cache" ]; then
+          stamp=$(cat "${stateDir}/$device.ts" 2>/dev/null || echo 0)
+          if [ "$io" = "$was" ] && [ -s "$cache" ] \
+            && [ "$((now - stamp))" -lt ${toString (cfg.refreshMinutes * 60)} ]; then
             cat "$cache"
-            stamp=$(cat "${stateDir}/$device.ts" 2>/dev/null || echo "$now")
             printf 'smart_sample_age_seconds{device="%s"} %s\n' "$device" "$((now - stamp))"
             continue
           fi
@@ -262,6 +263,12 @@ in
   options.local.monitoring.smart = {
     enable = lib.mkEnableOption "SMART health collection";
 
+    refreshMinutes = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 60;
+      description = "Re-read a drive this long after the last successful read even with no I/O; parked drives still refuse.";
+    };
+
     selfTest = {
       enable = lib.mkEnableOption "scheduled SMART self-tests";
 
@@ -291,8 +298,8 @@ in
 
       preSpindownMinutes = lib.mkOption {
         type = lib.types.ints.positive;
-        default = 17;
-        description = "Idle minutes before a short test runs, chosen to land just inside the spin-down timer.";
+        default = 55;
+        description = "Idle minutes before a short test runs; keep just inside the hdparm -S timer, which is 60 minutes at 242.";
       };
     };
   };
