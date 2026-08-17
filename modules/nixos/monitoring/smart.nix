@@ -155,10 +155,14 @@ let
               "smart_nvme_media_errors{\(dev)} \(.media_errors // 0)",
               "smart_nvme_unsafe_shutdowns{\(dev)} \(.unsafe_shutdowns // 0)"),
 
-            (.ata_smart_data.self_test_status // empty |
+            (.ata_smart_data.self_test.status // empty |
               "smart_selftest_status{\(dev)} \(.value)",
               (if .remaining_percent == null then empty
-               else "smart_selftest_remaining_ratio{\(dev)} \(.remaining_percent / 100)" end))
+               else "smart_selftest_remaining_ratio{\(dev)} \(.remaining_percent / 100)" end)),
+
+            (if .ata_smart_data.self_test.polling_minutes == null then empty
+             else "smart_selftest_minutes{\(dev),kind=\"short\"} \(.ata_smart_data.self_test.polling_minutes.short // 0)",
+                  "smart_selftest_minutes{\(dev),kind=\"extended\"} \(.ata_smart_data.self_test.polling_minutes.extended // 0)" end)
           ' > "$fresh" 2>/dev/null || true
 
           if [ -s "$fresh" ]; then
@@ -253,7 +257,7 @@ let
         fi
 
         if probe "$device" -j -c \
-          | jq -e '.ata_smart_data.self_test_status.remaining_percent' >/dev/null 2>&1; then
+          | jq -e '.ata_smart_data.self_test.status.remaining_percent' >/dev/null 2>&1; then
           continue
         fi
 

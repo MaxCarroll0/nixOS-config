@@ -694,6 +694,42 @@ let
     }
   ];
 
+  spinMappings = [
+    {
+      type = "value";
+      options = {
+        "0" = {
+          text = "Spinning";
+          color = "green";
+          index = 0;
+        };
+        "1" = {
+          text = "Parked";
+          color = "blue";
+          index = 1;
+        };
+      };
+    }
+  ];
+
+  selftestMappings = [
+    {
+      type = "value";
+      options = {
+        "0" = {
+          text = "Idle";
+          color = "text";
+          index = 0;
+        };
+        "1" = {
+          text = "Testing";
+          color = "orange";
+          index = 1;
+        };
+      };
+    }
+  ];
+
   upColor = {
     mode = "continuous-RdYlGr";
   };
@@ -1343,6 +1379,7 @@ let
       (dashboardLink "Alerts and triage" "alerts")
       (dashboardLink "System" "system")
       (dashboardLink "Power and thermals" "power")
+      (dashboardLink "Drives" "drives")
       (dashboardLink "Fleet" "fleet")
       (dashboardLink "Network" "network")
       (dashboardLink "Nix builds" "nix-builds")
@@ -1984,6 +2021,7 @@ let
         url = "/alerting/history";
         targetBlank = false;
       }
+      (dashboardLink "Drives" "drives")
       (dashboardLink "Overview" "overview")
       (dashboardLink "Fleet" "fleet")
     ];
@@ -2187,6 +2225,7 @@ let
       (presetLink "24h" "power" "now-24h" "1m")
       (presetLink "7d" "power" "now-7d" "5m")
       (presetLink "30d" "power" "now-30d" "5m")
+      (dashboardLink "Drives" "drives")
       (dashboardLink "System" "system")
       (dashboardLink "Overview" "overview")
     ];
@@ -2284,8 +2323,8 @@ let
         gradientSeries = powerBands;
         targets = powerBandTargets "" "" ++ [
           (target {
-            expr = ''pc:power_watts{instance=~"$host"}'';
-            legend = "{{instance}} total";
+            expr = ''sum(pc:power_watts{instance=~"$host"})'';
+            legend = "combined total";
           })
         ];
       })
@@ -2481,6 +2520,7 @@ let
       (presetLink "24h" "system" "now-24h" "1m")
       (presetLink "7d" "system" "now-7d" "5m")
       (presetLink "30d" "system" "now-30d" "5m")
+      (dashboardLink "Drives" "drives")
       (dashboardLink "Power and thermals" "power")
       (dashboardLink "Overview" "overview")
     ];
@@ -3042,6 +3082,7 @@ let
       (presetLink "24h" "network" "now-24h" "1m")
       (presetLink "7d" "network" "now-7d" "5m")
       (presetLink "30d" "network" "now-30d" "5m")
+      (dashboardLink "Drives" "drives")
       (dashboardLink "Fleet" "fleet")
       (dashboardLink "System" "system")
     ];
@@ -3264,6 +3305,7 @@ let
       (presetLink "24h" "fleet" "now-24h" "1m")
       (presetLink "7d" "fleet" "now-7d" "5m")
       (presetLink "30d" "fleet" "now-30d" "5m")
+      (dashboardLink "Drives" "drives")
       (dashboardLink "System" "system")
       (dashboardLink "Network" "network")
       (dashboardLink "Uptime archive" "archive-uptime")
@@ -3437,6 +3479,7 @@ let
       (presetLink "24h" "system" "now-24h" "1m")
       (presetLink "7d" "system" "now-7d" "5m")
       (presetLink "30d" "system" "now-30d" "5m")
+      (dashboardLink "Drives" "drives")
       (dashboardLink "Power and thermals" "power")
       (dashboardLink "Capacity archive" "archive-capacity")
     ];
@@ -3868,50 +3911,14 @@ let
           })
         ];
       })
-      (stat {
-        title = "Spin state by drive";
-        description = "Per drive: spinning or parked.";
-        w = 18;
-        h = 5;
-        unit = "short";
-        options = statOptions // {
-          reduceOptions = {
-            calcs = [ "lastNotNull" ];
-            fields = "";
-            values = true;
-          };
-          textMode = "value_and_name";
-          colorMode = "background";
-        };
-        mappings = [
-          {
-            type = "value";
-            options = {
-              "0" = {
-                text = "Spinning";
-                color = "green";
-                index = 0;
-              };
-              "1" = {
-                text = "Parked";
-                color = "blue";
-                index = 1;
-              };
-            };
-          }
-        ];
-        targets = [
-          (target {
-            expr = ''pc:disk_standby{instance=~"$host"}'';
-            legend = "{{instance}} {{device}}";
-          })
-        ];
-      })
-      (status {
+      (timeline {
         title = "Drive spin state";
-        description = "1 while the motor is parked. SMART is only read when a drive has had real I/O, so parked drives are never disturbed.";
-        w = 12;
+        description = "One row per drive over time: spinning or parked, the same shape as host reachability.";
+        w = 24;
         h = 8;
+        min = 0;
+        max = 1;
+        mappings = spinMappings;
         targets = [
           (target {
             expr = ''pc:disk_standby{instance=~"$host"}'';
@@ -3919,11 +3926,14 @@ let
           })
         ];
       })
-      (status {
+      (timeline {
         title = "Self-test activity";
-        description = "1 while a self-test is running. Short tests fire opportunistically as a drive is about to park; long tests run monthly overnight, one drive at a time.";
-        w = 12;
-        h = 8;
+        description = "One row per drive: whether a SMART self-test is running.";
+        w = 24;
+        h = 6;
+        min = 0;
+        max = 1;
+        mappings = selftestMappings;
         targets = [
           (target {
             expr = ''drive:selftest_running{instance=~"$host"}'';
