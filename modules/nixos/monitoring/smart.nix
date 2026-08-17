@@ -195,6 +195,12 @@ let
         cat "$file"
       }
 
+      parked() {
+        awk -v d="$1" '$0 ~ "^pc_disk_standby\\{device=\"" d "\"\\}" { print ($NF == 1) ? 1 : 0; found=1 }
+          END { if (!found) print 0 }' \
+          ${collectors.textfileDir}/power-model.prom 2>/dev/null || echo 0
+      }
+
       in_window() {
         local from=${toString cfg.selfTest.longWindowFromHour}
         local to=${toString cfg.selfTest.longWindowToHour}
@@ -216,28 +222,8 @@ let
         [ -e "$path/device" ] || continue
         [ "$(cat "$path/queue/rotational" 2>/dev/null || echo 0)" = 1 ] || continue
 
-        status=$(probe "$device" -j -c)
-        running=$(printf '%s' "$status" \
-          | jq -r '.ata_smart_data.self_test_status.remaining_percent // empty' 2>/dev/null || true)
-        if [ -n "$running" ]; then
-          continue
-        fi
-
         last_long=$(since_seen "${stateDir}/$device.long")
         last_short=$(since_seen "${stateDir}/$device.short")
-
-        if [ "$((now - last_long))" -ge ${
-          toString (cfg.selfTest.longIntervalDays * 86400)
-        } ] && in_window; then
-          probe_wake "$device" -t long > /dev/null
-          printf '%s' "$now" > "${stateDir}/$device.long"
-          exit 0
-        fi
-
-        if printf '%s' "$status" \
-          | jq -e '[.smartctl.messages[]?.string] | any(test("STANDBY"))' >/dev/null 2>&1; then
-          continue
-        fi
 
         io=$(awk -v d="$device" '$3 == d { print $6 + $10 }' /proc/diskstats)
         was=$(cat "${stateDir}/$device.testio" 2>/dev/null || true)
@@ -245,15 +231,40 @@ let
         idle_since=$(cat "${stateDir}/$device.idle" 2>/dev/null || echo "$now")
         if [ "$io" != "$was" ]; then
           printf '%s' "$now" > "${stateDir}/$device.idle"
+          idle_since=$now
+        fi
+
+        long_due=0
+        [ "$((now - last_long))" -ge ${
+          toString (cfg.selfTest.longIntervalDays * 86400)
+        } ] && in_window && long_due=1
+
+        short_due=0
+        [ "$((now - idle_since))" -ge ${toString (cfg.selfTest.preSpindownMinutes * 60)} ] \
+          && [ "$((now - last_short))" -ge ${toString (cfg.selfTest.shortIntervalHours * 3600)} ] \
+          && short_due=1
+
+        if [ "$long_due" = 0 ] && [ "$short_due" = 0 ]; then
           continue
         fi
 
-        if [ "$((now - idle_since))" -ge ${toString (cfg.selfTest.preSpindownMinutes * 60)} ] \
-          && [ "$((now - last_short))" -ge ${toString (cfg.selfTest.shortIntervalHours * 3600)} ]; then
+        if [ "$long_due" = 0 ] && [ "$(parked "$device")" = 1 ]; then
+          continue
+        fi
+
+        if probe "$device" -j -c \
+          | jq -e '.ata_smart_data.self_test_status.remaining_percent' >/dev/null 2>&1; then
+          continue
+        fi
+
+        if [ "$long_due" = 1 ]; then
+          probe_wake "$device" -t long > /dev/null
+          printf '%s' "$now" > "${stateDir}/$device.long"
+        else
           probe "$device" -t short > /dev/null
           printf '%s' "$now" > "${stateDir}/$device.short"
-          exit 0
         fi
+        exit 0
       done
     '';
   };
