@@ -690,7 +690,7 @@ Outstanding: the VictoriaMetrics migration (est. ~380 MB) and a Grafana trim.
 | Stage | Content | Status |
 |---|---|---|
 | 0 | **This document.** Written before any measurement or code, and updated by every later stage. | **done** |
-| 1 | Measure and prepare. Confirm the `sdd` passphrase, unlock read-only, measure fill, record a checksum manifest. Replace `sdc`'s SATA cable, run `smartctl -t long` on all three, re-read the CRC counter. *Gate: the `sdd` fill number decides the migration path.* | **part done** — SMART baseline in section 3; passphrase and cable outstanding |
+| 1 | Measure and prepare. Confirm the `sdd` passphrase, unlock read-only, measure fill, record a checksum manifest. Replace `sdc`'s SATA cable, run `smartctl -t long` on all three, re-read the CRC counter. *Gate: the `sdd` fill number decides the migration path.* | **done bar the cable** — passphrase confirmed, unlocked read-only, 425 GB measured, gate resolved to the simple path; SMART baseline in section 3; checksum manifest still to record |
 | 2 | Storage. Image and repartition the SSD offline; `modules/nixos/nas/storage.nix` with LUKS, Clevis/Tang, unlock units, bcache, btrfs, mergerfs, mover, snapshot timer, SnapRAID and the degraded-mode guard. Execute the migration. | **module written**, mergerfs pool + SnapRAID sync/scrub timers; LUKS/Tang/bcache/mover and the **migration** still to do |
 | 3 | Accounts and access. `accounts.nix` and `samba.nix`, `nas-user`, Tailscale device sharing, ACL reference. | **modules written**; `nas-user` and the Tailscale sharing runbook outstanding |
 | 4 | Prefetch, browse index and metrics. `nas-prefetch`; `nas-index` (SQLite store, `find-new` reconciler, snapshot-diff version counter, thumbnailer); the metadata warmer; the new collectors; per-user dashboards; Grafana authentication. | `nas-index` and the metadata warmer **written and exercised**; `nas-prefetch`, dashboards and Grafana auth outstanding |
@@ -750,6 +750,32 @@ places:
 **Gate:** if `sdd` holds more than about 950 GB it will not fit on `sdb` alone. The fallback
 stages the copy onto `sdc` as a plain filesystem, rebuilds `sdd` and `sdb` as the data disks,
 copies back, then wipes `sdc` into parity. Two copies, works up to about 3 TB.
+
+**Gate resolved: the simple path applies.** `sdd1` is LUKS over **ext4**, 1.8 TB, holding
+**425 GB (25% full)**. That fits `sdb` (931 GB) with room to spare, so no staging through `sdc`
+is needed.
+
+| directory | size |
+|---|---|
+| `v` | 195 G |
+| `yt-batch-downloads` | 168 G |
+| `downloads` | 62 G |
+| `.Trash-1000` | 1.1 G |
+| `yt-batch` | 436 K |
+
+Measured by unlocking read-only, which is safe to repeat:
+
+```bash
+cryptsetup luksOpen --readonly --key-file=<key> /dev/sdd1 sdd_ro
+mount -o ro,noload /dev/mapper/sdd_ro /mnt/sdd_ro
+```
+
+`noload` matters: a plain `-o ro` mount still replays the ext4 journal, which writes to the
+disk whose data must be preserved. `cryptsetup` is not in the pi's system PATH (nothing uses
+LUKS yet), so it has to be called by store path until `storage.nix` is enabled.
+
+Note `.Trash-1000` is 1.1 GB of already-deleted files and `yt-batch-downloads` is largely
+re-obtainable, so the volume that genuinely must survive the migration is closer to 260 GB.
 
 ## 16. Runbooks
 
