@@ -221,6 +221,12 @@ let
         exit 0
       fi
 
+      for pid in $(pgrep -f "[.]tailscaled-wrapped be-child ssh" || true); do
+        if [ "$(ps -o etimes= -p "$pid" 2>/dev/null || echo 0)" -ge 60 ]; then
+          exit 0
+        fi
+      done
+
       threshold=$(( $(date +%s) - ${toString (cfg.idle.autosuspend.idleMinutes * 60)} ))
       for pty in /dev/pts/*; do
         [ -c "$pty" ] || continue
@@ -597,7 +603,7 @@ in
       services.below = {
         enable = true;
         collect.ioStats = true;
-        retention.time = 30 * 24 * 60 * 60;
+        retention.time = 24 * 60 * 60;
       };
 
       systemd.services.powertop-snapshot = {

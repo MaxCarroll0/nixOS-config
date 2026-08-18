@@ -9,6 +9,50 @@
 
 let
   cfg = config.local.storage;
+
+  enforceDiskIdle = pkgs.writeShellApplication {
+    name = "enforce-disk-idle";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gawk
+      pkgs.hdparm
+      pkgs.jq
+      pkgs.smartmontools
+    ];
+    text = ''
+      now=$(date +%s)
+      for block in /sys/block/sd[a-z]; do
+        [ -e "$block/device" ] || continue
+        [ "$(cat "$block/queue/rotational" 2>/dev/null || echo 0)" = 1 ] || continue
+        device=''${block##*/}
+        io=$(awk -v d="$device" '$3 == d { print $6 + $10 }' /proc/diskstats)
+        [ -n "$io" ] || continue
+        state="/var/lib/disk-spindown/$device"
+        previous=""
+        idle_since=$now
+        last_standby=0
+        if [ -s "$state" ]; then
+          read -r previous idle_since last_standby < "$state" || true
+        fi
+        case "$idle_since" in "" | *[!0-9]*) idle_since=$now ;; esac
+        case "$last_standby" in "" | *[!0-9]*) last_standby=0 ;; esac
+        if [ "$io" != "$previous" ]; then
+          idle_since=$now
+        fi
+        if [ "$((now - idle_since))" -ge ${toString (cfg.spinDownRotational.idleMinutes * 60)} ] \
+          && [ "$((now - last_standby))" -ge ${toString (cfg.spinDownRotational.idleMinutes * 60)} ]; then
+          report=$(smartctl -n standby -j -c "/dev/$device" 2>/dev/null || true)
+          if ! printf '%s' "$report" \
+            | jq -e '(.ata_smart_data.self_test.status.remaining_percent // 0) > 0' >/dev/null; then
+            if hdparm -y "/dev/$device" >/dev/null; then
+              last_standby=$now
+            fi
+          fi
+        fi
+        printf '%s %s %s\n' "$io" "$idle_since" "$last_standby" > "$state"
+      done
+    '';
+  };
 in
 
 {
@@ -16,17 +60,16 @@ in
     spinDownRotational = {
       enable = lib.mkEnableOption "idle spin-down for rotational disks";
 
-      # hdparm -S: 1..240 are 5s units, so 120 is 10 minutes.
-      standbyValue = lib.mkOption {
-        type = lib.types.int;
-        default = 120;
-        description = "hdparm -S value applied to rotational disks.";
-      };
-
       apmLevel = lib.mkOption {
         type = lib.types.int;
-        default = 127;
-        description = "hdparm -B value; below 128 permits spin-down.";
+        default = 254;
+        description = "hdparm -B value applied to rotational disks.";
+      };
+
+      idleMinutes = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 60;
+        description = "Minutes without block I/O before userspace forces standby.";
       };
     };
 
@@ -85,12 +128,29 @@ in
 
   config = lib.mkMerge [
     (lib.mkIf cfg.spinDownRotational.enable {
-      # queue/rotational tells HDDs from SSDs, so no device list is needed.
       services.udev.extraRules = ''
-        ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", RUN+="${pkgs.hdparm}/bin/hdparm -B ${toString cfg.spinDownRotational.apmLevel} -S ${toString cfg.spinDownRotational.standbyValue} /dev/%k"
+        ACTION=="add", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", RUN+="${pkgs.hdparm}/bin/hdparm -B ${toString cfg.spinDownRotational.apmLevel} -S 0 /dev/%k"
       '';
 
       environment.systemPackages = [ pkgs.hdparm ];
+
+      systemd.services.enforce-disk-idle = {
+        description = "Force rotational disks into standby after their idle deadline";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = lib.getExe enforceDiskIdle;
+          StateDirectory = "disk-spindown";
+        };
+      };
+
+      systemd.timers.enforce-disk-idle = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnBootSec = "1m";
+          OnUnitActiveSec = "1m";
+          AccuracySec = "10s";
+        };
+      };
     })
 
     (lib.mkIf (cfg.lazyMounts != { }) {
@@ -190,8 +250,9 @@ in
               cfg.spinDownRotational.enable
               && builtins.elem "hwmon" (config.services.prometheus.exporters.node.enabledCollectors or [ ])
               && (config.local.monitoring.exporter.hwmonChipExclude or "") == ""
+              && (config.local.monitoring.exporter.scrapeCadenceOverrides or { }) == { }
             )
-            "node_exporter's hwmon collector reads drivetemp on every scrape, which resets the spin-down timer; set local.monitoring.exporter.hwmonChipExclude.";
+            "node_exporter's hwmon collector reads drivetemp on every scrape, which resets the spin-down timer; add a local.monitoring.exporter.scrapeCadenceOverrides entry.";
     }
   ];
 }

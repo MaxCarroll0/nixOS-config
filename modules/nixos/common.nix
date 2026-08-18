@@ -10,6 +10,7 @@
 let
   flakePath = "/home/max/.config/nix";
   cfg = config.local.users;
+  wakePeers = lib.attrNames (config.local.wake.peers or { });
 
   rebuild = pkgs.writeShellApplication {
     name = "rebuild";
@@ -90,11 +91,25 @@ let
 
         export NIX_CONFIG="accept-flake-config = true"
 
+        # shellcheck disable=SC2194
+        case " ${lib.concatStringsSep " " wakePeers} " in
+          *" $target "*)
+            if command -v wake-peer >/dev/null 2>&1; then
+              wake-peer "$target" || echo "warning: could not wake $target" >&2
+            fi
+            ;;
+        esac
+
         deployTarget="$flake#$target"
         [ -n "$profile" ] && deployTarget="$flake#$target.$profile"
 
+        deployAuthOpts=()
+        if [ "''${REBUILD_SSH_AGENT_SUDO:-0}" = 1 ]; then
+          deployAuthOpts+=(--interactive-sudo false)
+        fi
+
         printf -v deployCmd '%q ' nix run "$flake#deploy-rs" -- \
-          --skip-checks "$deployTarget" "''${deployOpts[@]}" "$@"
+          --skip-checks "''${deployAuthOpts[@]}" "$deployTarget" "''${deployOpts[@]}" "$@"
 
         if getent group novpn >/dev/null 2>&1; then
           /run/wrappers/bin/sg novpn -c "$deployCmd"
