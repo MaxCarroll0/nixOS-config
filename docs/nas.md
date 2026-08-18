@@ -418,12 +418,22 @@ Isolation is layered, and the strongest layer is the kernel:
   owned `<name>:<name>` at mode 0700, the kernel denies cross-user access even if a share
   were misconfigured to point at the wrong directory. This cannot be bypassed by an
   application bug.
-- **The web tier is application-enforced.** A web daemon runs as one service account and must
-  be able to read every user's files, so the kernel permits it; what prevents cross-user
-  access is the application validating every path against each account's home. This is a
-  real, accepted trade: a path-traversal bug in the web tier would breach web-tier isolation,
-  while SMB and SFTP would still hold. The unit is hardened with `ProtectSystem=strict`,
-  `ReadWritePaths` limited to the data tree, and `NoNewPrivileges`.
+- **The web tier is kernel-enforced too, via per-user worker processes.** The obvious design —
+  one service account that can read everybody's files, with the application checking paths —
+  is rejected: a single path-traversal bug would then expose every account. Instead a small
+  privileged dispatcher resolves `Tailscale-User-Login` through `/etc/nas/identity-map` and
+  proxies the request to a **worker running as that Unix user**, a templated
+  `nas-web@<account>.service` with `User=%i`, socket-activated on a per-user socket.
+
+  The worker holds no privilege of its own, so a traversal bug in it changes nothing: the
+  kernel refuses the open, exactly as it does for SMB. What stays trusted is only the
+  dispatcher's header-to-user mapping — a few lines that never touch file contents — rather
+  than an entire file browser, thumbnailer and upload path.
+
+  Consequences, stated plainly: one process per *active* user costs memory on a 2 GB host, so
+  workers must be socket-activated and exit when idle rather than run permanently. And the
+  dispatcher must bind to loopback only, because `Tailscale-User-Login` is trustworthy solely
+  as long as `tailscaled` is the only thing that can set it.
 
 ### 5.1.1 Isolation, as verified
 

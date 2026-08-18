@@ -165,7 +165,6 @@ in
             "fsname=nas"
             "nonempty"
             "allow_other"
-            "default_permissions"
             "use_ino"
             "noauto"
           ];
@@ -174,6 +173,14 @@ in
     ];
 
     systemd.tmpfiles.rules = [ "d ${scfg.contentDir} 0700 root root - -" ];
+
+    systemd.units."srv-nas.mount" = {
+      overrideStrategy = "asDropin";
+      text = ''
+        [Unit]
+        DefaultDependencies=no
+      '';
+    };
 
     systemd.services.nas-snapraid-sync = {
       description = "SnapRAID parity sync";
