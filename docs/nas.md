@@ -49,12 +49,15 @@ NAS work:
 That is roughly 750 MB resident, leaving about 886 MB. Every decision in this document is
 downstream of that number.
 
-**Update: the monitoring trim is partly done and measured.** Removing Loki, Tempo and Alloy
-returned a verified **+150 MB** to `MemAvailable` (median 573.6 to 723.8 MB, non-overlapping
-distributions), and series pruning cut the hires tier's heap from 144 MB to 79 MB. The
-VictoriaMetrics migration, worth an estimated further ~380 MB, is still outstanding. See
-`docs/monitoring.md` for the method and figures; treat the 886 MB above as the pre-trim
-baseline rather than current headroom.
+**Update: the monitoring trim is complete and measured.** Removing Loki, Tempo and Alloy returned
+a verified **+150 MB** to `MemAvailable` (median 573.6 to 723.8 MB, non-overlapping
+distributions), series pruning cut the hires tier's heap from 144 MB to 79 MB, and the
+VictoriaMetrics migration replaced three Prometheus tiers with **272 MB** where they had used
+940 MB. Grafana is capped at 224 MiB soft. Roughly **800 MB** was returned in total and
+`MemAvailable` moved from a median of 500.5 MB to ~750 MB.
+
+See `docs/monitoring.md` for method and figures. The 886 MB above is the pre-trim baseline, not
+current headroom; with the NAS running, headroom is roughly 300-400 MB.
 
 **This NAS is not a backup.** Parity and mirroring cover hardware failure. They do not cover
 fire, theft, or ransomware. Offsite replication is a later stage.

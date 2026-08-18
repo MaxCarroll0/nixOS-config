@@ -90,6 +90,15 @@ in
             type = lib.types.str;
             description = "Backing device or its /dev/disk/by-uuid path.";
           };
+
+          options.fsType = lib.mkOption {
+            type = lib.types.enum [
+              "btrfs"
+              "nilfs2"
+            ];
+            default = "btrfs";
+            description = "Filesystem on this branch. Branches may differ while a migration is in flight.";
+          };
         }
       );
     };
@@ -124,19 +133,21 @@ in
     environment.systemPackages = [
       pkgs.snapraid
       pkgs.mergerfs
+      pkgs.nilfs-utils
+      pkgs.btrfs-progs
     ];
 
     fileSystems = lib.mkMerge [
       (lib.mapAttrs' (
-        name: _:
+        name: d:
         lib.nameValuePair "${scfg.diskRoot}/${name}" {
           device = "/dev/mapper/nas-${name}";
-          fsType = "btrfs";
+          inherit (d) fsType;
           options = [
             "noauto"
-            "compress=zstd:1"
             "noatime"
-          ];
+          ]
+          ++ lib.optional (d.fsType == "btrfs") "compress=zstd:1";
         }
       ) scfg.dataDisks)
 
