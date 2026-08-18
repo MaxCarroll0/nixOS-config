@@ -699,6 +699,27 @@ Outstanding: the VictoriaMetrics migration (est. ~380 MB) and a Grafana trim.
 | 7 | Application-tier bake-off and adoption. |
 | 8 | Follow-ons: offsite backup, 3-node mirror, bidirectional sync, the 2 x 8 TB purchase, the SSD upgrade with LVM. |
 
+### Build progress
+
+| disk | role | state |
+|---|---|---|
+| `sdb` | `disk2` | LUKS2 + btrfs, mounted `/mnt/disks/disk2`, holds the verified 427 GB copy |
+| `sdc` | parity | LUKS2 + btrfs, mounted `/mnt/parity`, empty |
+| `sdd` | `disk1` | **still the original LUKS volume**, untouched, awaiting wipe |
+
+The migration is verified: `rsync -aHAXn` reports zero differences and both sides hold 1783
+entries. `sdd` was only ever unlocked read-only with `noload`, so it was never written.
+
+Remaining for Stage 2: wipe `sdd`, LUKS-format it as `disk1`, then enable
+`local.nas.storage` so mergerfs assembles the pool and SnapRAID starts building parity.
+Do not enable `local.nas.storage` before `disk1` exists — mergerfs would fail to mount a
+missing branch and abort activation.
+
+Every disk uses one passphrase, held only in `secrets/nas.yaml`, which is encrypted to the
+primary and laptop age keys and **deliberately not the pi's**. A stolen NAS host therefore
+cannot decrypt its own disks, which is what makes the manual unlock in section 6 meaningful
+rather than decorative.
+
 ### Module status
 
 `modules/nixos/nas/` is imported by `hosts/pi/default.nix` and builds, contributing **zero
