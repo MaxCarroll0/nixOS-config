@@ -11,6 +11,10 @@ let
   cfg = config.local.nas;
 
   homeOf = name: "${cfg.dataRoot}/${name}";
+
+  managed = lib.filterAttrs (_: a: !a.systemUser);
+
+  groupOf = name: a: if a.systemUser then (config.users.users.${name}.group or name) else name;
 in
 
 {
@@ -32,8 +36,21 @@ in
           {
             options = {
               uid = lib.mkOption {
-                type = lib.types.ints.between 3000 3999;
-                description = "Stable uid, identical on every node so replication preserves ownership.";
+                type = lib.types.nullOr (lib.types.ints.between 3000 3999);
+                default = null;
+                description = "Stable uid, identical on every node so replication preserves ownership. Null for an existing system user.";
+              };
+
+              systemUser = lib.mkOption {
+                type = lib.types.bool;
+                default = false;
+                description = "Use an existing Unix user of this name rather than creating one; its uid is left alone.";
+              };
+
+              tailscaleLogin = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "Tailscale-User-Login this account answers to, for identity-header auth in the web tier.";
               };
 
               description = lib.mkOption {
@@ -65,14 +82,18 @@ in
       {
         assertion =
           let
-            uids = lib.mapAttrsToList (_: a: a.uid) cfg.accounts;
+            uids = lib.mapAttrsToList (_: a: a.uid) (managed cfg.accounts);
           in
           lib.length (lib.unique uids) == lib.length uids;
         message = "local.nas.accounts: uids must be unique, since they are mirrored across nodes.";
       }
+      {
+        assertion = lib.all (a: a.uid != null) (lib.attrValues (managed cfg.accounts));
+        message = "local.nas.accounts: a uid is required unless systemUser is set.";
+      }
     ];
 
-    users.groups = lib.mapAttrs (_: a: { gid = a.uid; }) cfg.accounts;
+    users.groups = lib.mapAttrs (_: a: { gid = a.uid; }) (managed cfg.accounts);
 
     users.users = lib.mapAttrs (name: a: {
       inherit (a) uid description;
@@ -83,10 +104,16 @@ in
       createHome = false;
       homeMode = "0700";
       shell = "${pkgs.shadow}/bin/nologin";
-    }) cfg.accounts;
+    }) (managed cfg.accounts);
 
     systemd.tmpfiles.rules = lib.mapAttrsToList (
-      name: a: "d ${homeOf name} 0700 ${name} ${name} - -"
+      name: a: "d ${homeOf name} 0700 ${name} ${groupOf name a} - -"
     ) cfg.accounts;
+
+    environment.etc."nas/identity-map".text = lib.concatStringsSep "\n" (
+      lib.mapAttrsToList (name: a: "${a.tailscaleLogin} ${name}") (
+        lib.filterAttrs (_: a: a.tailscaleLogin != null) cfg.accounts
+      )
+    );
   };
 }

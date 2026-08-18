@@ -181,9 +181,10 @@
       uid = 3000;
       description = "NAS pipeline test account";
     };
-    accounts.maxnas = {
-      uid = 3001;
+    accounts.max = {
+      systemUser = true;
       description = "Max";
+      tailscaleLogin = "MaxCarroll0@github";
     };
     storage = {
       enable = true;

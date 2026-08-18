@@ -165,6 +165,7 @@ in
             "fsname=nas"
             "nonempty"
             "allow_other"
+            "default_permissions"
             "use_ino"
             "noauto"
           ];

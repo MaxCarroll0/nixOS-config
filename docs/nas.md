@@ -425,7 +425,35 @@ Isolation is layered, and the strongest layer is the kernel:
   while SMB and SFTP would still hold. The unit is hardened with `ProtectSystem=strict`,
   `ReadWritePaths` limited to the data tree, and `NoNewPrivileges`.
 
-### 5.2 Accounts
+### 5.1.1 Isolation, as verified
+
+Tested on the live array with two accounts, `maxnas` (uid 3001) and `nastest` (uid 3000):
+
+| attempt | result |
+|---|---|
+| `maxnas` lists and reads its own home | works, 134 files |
+| `nastest` lists `/srv/nas/maxnas` | `Permission denied` |
+| `nastest` reads a file inside it | `Permission denied` |
+| `nastest` traverses into a subdirectory | `Permission denied` |
+
+**mergerfs runs as root**, so this deserved checking rather than assuming: with `allow_other`
+and no `default_permissions`, FUSE leaves the decision to the filesystem, and a root-owned
+daemon opening a branch file succeeds whatever the caller's uid. Measurement showed mergerfs
+enforcing correctly, and `default_permissions` is now set as well so the **kernel** enforces
+it regardless of mergerfs behaviour.
+
+A real leak was found and closed this way. The migrated data initially sat at the **pool root**
+owned `max:users` mode 0755, where every NAS account could read all 134 files. It now lives in
+`/srv/nas/maxnas` at 0700. The lesson generalises: files arriving from elsewhere keep their
+original ownership, so a migration must end with an explicit `chown` into an account home, and
+nothing should ever be left at the pool root.
+
+The pool root remains listable, so account *names* are visible. That is deliberate and
+harmless — it is the same information the share list exposes — but no home is traversable.
+
+Still to enforce, and **not** yet done: the web tier must scope every request to
+`Tailscale-User-Login` and refuse paths outside that account's home. Unlike SMB and SFTP this
+is application-enforced, so it is the one layer where a bug means real cross-user exposure.
 
 Accounts are **declarative NixOS Unix users with explicit uids and gids**. Because
 `users.mutableUsers = false` already, creating an account necessarily requires a git commit
