@@ -723,6 +723,28 @@ on are:
   `sum(nas_user_bytes) - nas_user_bytes{user="<name>"}`, which yields the aggregate and never
   the per-user breakdown.
 
+### 11.1 How the application tier plugs in
+
+The per-user worker pattern is **application-agnostic on purpose**, because the app itself is
+still undecided (section 12). `local.nas.web.workerCommand` is the seam:
+
+```nix
+local.nas.web.workerCommand = "${pkgs.filebrowser}/bin/filebrowser -r %h";
+```
+
+`%h` expands to that account's home. The requirement on any candidate is narrow: accept a
+socket-activated listener and serve one directory tree. It needs **no** notion of users,
+logins, permissions or multi-tenancy, because it only ever runs as one account and only ever
+sees one home.
+
+That is the point of the design. Whatever app is chosen, its authentication and access-control
+code becomes irrelevant, and its bugs cannot cross an account boundary — the kernel refuses.
+Selecting an application therefore stops being a security decision and becomes a usability one,
+which is a much easier bake-off to run.
+
+The bundled `nas-web-worker.py` is a placeholder, not a candidate: enough to prove the pattern
+and browse files, to be replaced by the real application.
+
 ## 12. Application tier: undecided by design
 
 The application tier is **deferred to a measured bake-off** rather than chosen up front, run
