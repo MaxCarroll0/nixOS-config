@@ -15,6 +15,11 @@
     ../../modules/nixos/net-watchdog.nix
     ../../modules/nixos/service-priority.nix
     ../../modules/nixos/storage.nix
+    ../../modules/nixos/nas/accounts.nix
+    ../../modules/nixos/nas/samba.nix
+    ../../modules/nixos/nas/storage.nix
+    ../../modules/nixos/nas/index.nix
+    ../../modules/nixos/nas/cache.nix
     ../../modules/nixos/fancontrol.nix
     ../../modules/nixos/gpio-pwm-fan.nix
     ../../modules/nixos/build-client.nix
@@ -50,6 +55,13 @@
     }
   ];
 
+  zramSwap = {
+    enable = true;
+    algorithm = "zstd";
+    memoryPercent = 50;
+    priority = 100;
+  };
+
   local.wifi = {
     ssid = "Gigaclear_FA8E";
     pskSecret = "wifi-psk";
@@ -61,7 +73,7 @@
     ];
   };
 
-  local.wake.peers.desktop_new = {
+  local.wake.peers.desktopnew = {
     mac = "b4:2e:99:92:d6:18";
     broadcast = "192.168.0.255";
     address = "192.168.0.161";
@@ -96,7 +108,7 @@
       maxJobs = 8;
       speedFactor = 4;
     };
-    builders.desktop_new = {
+    builders.desktopnew = {
       user = "max";
       port = 22;
       tailscaleSsh = true;
@@ -108,19 +120,20 @@
 
   local.monitoring = {
     exporter.enable = true;
-    exporter.hwmonChipExclude = "^target[0-9]+:0:0_";
+    exporter.scrapeCadenceOverrides.drive-temperatures = {
+      match = "^target[0-9]+:0:0_";
+      interval = "1m";
+      onlyWhenActive = true;
+    };
     piFirmware.enable = true;
     smart.enable = true;
     smart.selfTest.enable = true;
     server.enable = true;
     grafana.enable = true;
     userReadable = true;
-    telemetry = {
-      collector.enable = true;
-      server.enable = true;
-    };
+    telemetry.journalGateway.enable = true;
     targets = {
-      desktop_new = "100.106.140.88:9100";
+      desktopnew = "100.106.140.88:9100";
       laptop = "100.112.109.20:9100";
     };
     sensorNames = {
@@ -158,6 +171,17 @@
     };
   };
 
+  local.nas = {
+    enable = true;
+    dataRoot = "/srv/nas";
+    smb.enable = true;
+    index.enable = true;
+    accounts.nastest = {
+      uid = 3000;
+      description = "NAS pipeline test account";
+    };
+  };
+
   local.power = {
     instrument = true;
     idle.optimise = false;
@@ -182,12 +206,13 @@
 
   local.storage.spinDownRotational = {
     enable = true;
-    standbyValue = 242;
+    apmLevel = 254;
+    idleMinutes = 60;
   };
 
   local.servicePriority = {
     enable = true;
-    swappiness = 60;
+    swappiness = 150;
     essential = {
       "tailscaled.service" = "48M";
       "sshd.service" = "8M";
@@ -198,27 +223,12 @@
       "systemd-journald.service" = "32M";
     };
     throttle = {
-      "alloy.service" = "320M";
-      "prometheus.service" = "384M";
+      "victoriametrics.service" = "256M";
+      "victoriametrics-history.service" = "128M";
     };
-    bulk = [ "prometheus-rule-backfill.service" ];
   };
 
-  local.monitoring.backfill = {
-    enable = true;
-    intervalMinutes = 60;
-    cpuQuotaPercent = 20;
-    memoryMax = "192M";
-    evalIntervalSeconds = 30;
-    windowMinutes = 180;
-  };
-
-  systemd.services.grafana.serviceConfig.MemorySwapMax = 0;
-  systemd.services.prometheus-rule-backfill = {
-    after = [ "grafana.service" ];
-    serviceConfig.ExecCondition = "${pkgs.curl}/bin/curl --fail --silent --show-error --max-time 5 http://127.0.0.1:3000/api/health";
-  };
-  systemd.timers.prometheus-rule-backfill.timerConfig.OnBootSec = lib.mkForce "15m";
+  systemd.services.grafana.serviceConfig.MemorySwapMax = "192M";
 
   # false for 3 pin, true for 4 pin PWM
   local.gpioPwmFan = {

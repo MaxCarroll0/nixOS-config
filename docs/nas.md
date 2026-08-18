@@ -1,0 +1,777 @@
+# Pi NAS: design and architecture
+
+Design-of-record for turning `pi` into a shared, encrypted, observable family NAS while
+keeping it the always-on Grafana and Wake-on-LAN node it already is.
+
+**Status: Stage 0 (design). No NAS storage exists yet.** The monitoring trim of section 13 is
+a prerequisite and is partly built and measured; everything about the array itself is still
+design. Every later stage updates this document as decisions are settled by measurement
+rather than assumption.
+
+Decisions revised during design, so the original write-up is not the current one: placement
+became user-affinity (`mspmfs`) with automatic overflow rather than proportional spread
+(4.3); the browse index became a required bespoke component rather than something inherited
+from the application tier (4.5.1); and section 13 was superseded by what was actually
+deployed.
+
+## 1. Requirements
+
+1. Encrypted at rest, redundant, snapshotted. A 90 day recoverable-delete window,
+   self-service Previous Versions covering same-day changes, and an on-demand permanent
+   delete.
+2. Multiple accounts that strictly cannot reach each other's files. Creating an account is a
+   manual, reviewed act by Max. Adding a *device* to an existing account requires nothing
+   from Max at all.
+3. Reachable only over Tailscale, in two tiers: NAS users reach only the pi, Max's devices
+   reach everything.
+4. Must extend to automated phone photo backup and automated PC folder backup across iOS,
+   Android, Windows and macOS. This is a hard gate on every application-tier candidate.
+5. Grafana shows each user their own disk and network usage with a folder breakdown, plus
+   the *total* used by everyone else, but never a per-user breakdown of others.
+6. Doubles as a Nix binary cache for Max's tailnet only, on separate unencrypted,
+   non-redundant storage, receiving builds pushed from laptop and desktop.
+7. Extensible to at most 3 mirrored nodes later. Designed for now, not built now.
+
+## 2. The binding constraint
+
+The Pi 5 has **2 GB of soldered RAM and will never have more**. Measured baseline before any
+NAS work:
+
+| Service | RSS |
+|---|---|
+| grafana | 181 MB |
+| prometheus (3 tiers) | 263 MB |
+| loki | 115 MB |
+| alloy | 76 MB |
+| tempo | 39 MB |
+| tailscaled | 60 MB |
+
+That is roughly 750 MB resident, leaving about 886 MB. Every decision in this document is
+downstream of that number.
+
+**Update: the monitoring trim is partly done and measured.** Removing Loki, Tempo and Alloy
+returned a verified **+150 MB** to `MemAvailable` (median 573.6 to 723.8 MB, non-overlapping
+distributions), and series pruning cut the hires tier's heap from 144 MB to 79 MB. The
+VictoriaMetrics migration, worth an estimated further ~380 MB, is still outstanding. See
+`docs/monitoring.md` for the method and figures; treat the 886 MB above as the pre-trim
+baseline rather than current headroom.
+
+**This NAS is not a backup.** Parity and mirroring cover hardware failure. They do not cover
+fire, theft, or ransomware. Offsite replication is a later stage.
+
+## 3. Hardware
+
+| Device | Size | Model | Power-on | Realloc / Pending / Uncorrectable | UDMA CRC | Load cycles | Role |
+|---|---|---|---|---|---|---|---|
+| `sda` | 120 GB | Patriot Burst Elite (USB) | 65 h | n/a | n/a | n/a | root, Attic, write tier, read cache |
+| `sdb` | 1 TB | ST1000VM002 (CMR, 5900 rpm) | 74 h | 0 / 0 / 0 | 0 | 195 | data disk 2 |
+| `sdc` | 4 TB | ST4000DM004 (**SMR**, 5425 rpm) | 10,295 h | 0 / 0 / 0 | **329** | 13,754 | parity (interim) |
+| `sdd` | 2 TB | ST2000DM006 (CMR, 7200 rpm) | 11,571 h | 0 / 0 / 0 | 0 | 49,038 | data disk 1, holds data to preserve |
+
+All four report `health_ok = 1` at 32-35 °C. Re-read from the metrics store, no disk woken:
+
+```bash
+curl -s --get --data-urlencode 'match[]=drive:health_ok{instance="pi"}' \
+  --data-urlencode 'start=-1h' http://127.0.0.1:9090/api/v1/export
+```
+
+Use `export`, not an instant query: these series are on a 5-minute cadence and instant-query
+lookback will miss them inside the gap.
+
+**`sdc`'s 329 CRC errors are a link fault, not the drive.** Its media is pristine — zero
+reallocated, pending and uncorrectable — and UDMA CRC counts link-layer failures between
+controller and drive, so the cable or connector is the suspect. The count was **also 329 twenty
+power-on hours earlier**, so it is not accruing: the fault is historic, or intermittent enough
+not to have recurred. Replace the SATA cable before trusting this disk with parity, then confirm
+the counter stays flat rather than assuming the swap fixed anything.
+
+`sdd`'s 49,038 load cycles are worth watching but not alarming: the ST2000DM006 is rated in the
+hundreds of thousands, and the spindown work already stopped exporters from waking the disks.
+
+Controller: JMicron JMB585, 5 SATA ports, 3 used, 2 free. The SSD is on USB and therefore
+costs no SATA port. Kernel has `BCACHE`, `DM_CACHE`, `DM_WRITECACHE`, `BTRFS_FS` and
+`FUSE_FS` available as modules.
+
+Notes from the SMART survey:
+
+- All three drives report `PASSED` with **zero media degradation**: no reallocated, pending
+  or offline-uncorrectable sectors anywhere. No drive warrants a retirement plan on health
+  grounds, including the SMR one.
+- `sdc`'s 329 UDMA CRC errors are SATA **link** errors (cable, connector or power), not
+  platter faults. The normalised value has recovered from a worst of 107 back to 200, which
+  suggests they accumulated earlier and stopped. Because `sdc` is the interim parity disk,
+  and parity is the most write-heavy role in the array, its cable is replaced and the counter
+  re-checked before any data is committed.
+- Ignore the raw `Seek_Error_Rate` figures. Seagate packs two counters into that field; the
+  normalised values are the meaningful ones and are healthy.
+
+Interim usable capacity: **3 TB** (data 2 TB plus 1 TB, parity 4 TB).
+
+All required packages exist in the pinned nixpkgs for aarch64: `mergerfs-2.41.1`,
+`mergerfs-tools`, `snapraid-14.4`, `bcache-tools`, `clevis-22`, `tang-15`, `samba-4.23.8`,
+`sftpgo-2.7.1`, `attic`.
+
+## 4. Architecture
+
+### 4.1 Block stack
+
+```
+sda4 -> LUKS -> btrfs -> /mnt/ssd            write tier, a mergerfs branch (file level)
+sda5 -> LUKS -> bcache cache (writearound)   read cache for the HDDs (block level)
+
+sdd (2 TB) -> LUKS -> bcache backing \  -> btrfs -> /mnt/disk1
+sdb (1 TB) -> LUKS -> bcache backing /  -> btrfs -> /mnt/disk2
+    each branch holds  data/  and  snapshots/
+sdc (4 TB) -> LUKS -> btrfs -> /mnt/parity   (uncached: bulk parity writes would thrash it)
+
+mergerfs(/mnt/ssd, /mnt/disk1, /mnt/disk2) -> /srv/nas
+SnapRAID: parity=/mnt/parity, data=/mnt/disk{1,2}, content files on both plus root
+```
+
+Why this shape:
+
+- **SnapRAID** for redundancy. It costs one disk of parity regardless of array size, accepts
+  any disk size at any time, spins up only the disk holding the file, and if you exceed your
+  parity you lose only the failed disks' files while every survivor remains a directly
+  readable filesystem. This is the Unraid model without Unraid, which is x86-only, a whole
+  operating system that would replace this NixOS configuration entirely, and paid.
+- **btrfs per disk** because SnapRAID requires independent filesystems, and btrfs supplies
+  snapshots and checksums on each. It is also the prerequisite for future `send`/`receive`
+  mirroring.
+- **mergerfs** to present one `/srv/nas` namespace with no per-user disk ceiling, and to make
+  folders the unit of placement, policy and (later) replication.
+- **SSD as a write tier** rather than a write cache. New files land on the SSD and never
+  touch a HDD, so the disks stay asleep through uploads, and SnapRAID only ever ingests data
+  that has already settled for 24 hours. That matters: SnapRAID's own manual says it suits
+  data that rarely changes, and this arrangement guarantees it never sees live data.
+- **bcache in `writearound`** for reads. Writes bypass the cache entirely and go straight to
+  the backing device, so **no dirty data ever exists on the SSD cache**. A failed cache device
+  is a detach-and-continue event, not an array loss.
+
+The mover relocates files off the SSD tier: opportunistically whenever a target HDD is
+already spinning (so a move never itself causes a spin-up), forced under SSD space pressure,
+with a 24 hour backstop. `snapraid sync` runs after the mover.
+
+**Operational rule:** bcache requires its superblock at the start of the device and cannot be
+retrofitted onto a populated disk without a full copy. *Every new data disk gets
+`make-bcache -B` at creation*, even if it is not attached to the cache set immediately.
+
+### 4.2 SSD partition layout
+
+The SSD is USB, so it is unplugged and resized from the laptop rather than touched remotely.
+ext4 cannot shrink online, and shrinking the boot disk of a headless remote host is a
+reliable way to strand it. Free space lands after root, so no partition needs to move. Image
+the SSD first, and back up the SSH host key, because sops decryption depends on it.
+
+| Partition | Label | Size | Contents |
+|---|---|---|---|
+| p1 | FIRMWARE | 1 GB | unchanged |
+| p2 | NIXOS_SD | ~45 GB | root, shrunk from 110.8 GB (32 GB used today) |
+| p3 | nix-cache | ~14 GB | Attic, unencrypted |
+| p4 | nas-tier | ~35 GB | write tier, a mergerfs branch, LUKS (holds user data) |
+| p5 | nas-rcache | ~25 GB | bcache `writearound` read cache, LUKS |
+
+Both NAS partitions widen at the planned SSD upgrade, which is also when LVM replaces fixed
+partitioning so the split can be re-cut online.
+
+### 4.3 Placement: keep a user together, overflow when full
+
+```
+func.mkdir      = mspmfs   minfreespace = 20G     cache.files      = partial
+func.create     = eppfrd   moveonenospc = pfrd    dropcacheonclose = true
+category.search = ff       inodecalc    = hybrid-hash
+```
+
+The goal is **affinity, not balance**: a user's data should sit on one drive, and spill onto
+another only when that drive is genuinely full.
+
+`func.mkdir = mspmfs` ("most shared path, most free space") delivers exactly that. It ranks
+branches by how much of the path being created **already exists** on them, so a new folder
+under `users/alice/` lands on whichever disk already holds Alice's data, and only breaks the
+tie by free space. Unlike a path-preserving `ep*` policy, `msp*` **cannot fail**: when no
+branch holds the path it falls back to the deepest existing ancestor, so overflow is
+automatic rather than an error.
+
+Overflow is driven by `minfreespace`: once Alice's disk drops below 20 GB it stops being
+eligible, the next folder goes elsewhere, and from then on she spans two disks. Nothing has
+to be reconfigured for that to happen. `moveonenospc` catches the narrower case of a single
+file outgrowing the disk mid-write.
+
+`func.create = eppfrd` stays path-preserving, so a new *file* only considers branches where
+its immediate parent folder already exists, which is exactly one. Folders therefore stay
+intact on a single disk even once a user spans several.
+
+Net effect: one user is normally one drive, so browsing their data spins one disk and a disk
+loss costs whole folders belonging to few users rather than fragments belonging to all. There
+is still no per-user ceiling, because overflow is automatic. The cost is that disks fill
+unevenly by design; capacity is balanced by `minfreespace` at the margin rather than
+proportionally from the start.
+
+*Caveats: loose files at a directory's root follow that directory, and the mover decides
+final placement for anything written to the SSD tier first. `mergerfs.consolidate` can pull a
+user's scattered folders back onto one disk after an overflow, but it is a bulk copy that
+spins every drive, so it belongs in a maintenance window.*
+
+### 4.4 Read caching and prefetch
+
+`sequential_cutoff=0` so reads populate the cache, and `congested_read_threshold_us=0` so a
+spun-down disk is not mistaken for congestion and bypassed (the default 2000 microseconds
+would actively defeat the spin-down goal, since a sleeping HDD looks like extreme
+congestion).
+
+`nas-prefetch` is a small daemon watching `FAN_OPEN` via fanotify across `/mnt/disk*`, the
+branch mounts, because real opens land on the underlying filesystems rather than the FUSE
+mount. On an open it reads the file's **non-recursive** siblings so they warm the cache. It
+needs caps (maximum files, maximum bytes, per-folder cooldown) and self-I/O exclusion to
+avoid feedback loops. Being protocol-agnostic, it serves SMB, SFTP and the web tier equally.
+
+This composes with folder-granular placement: the disk has to spin up for the first file
+anyway, so warming the rest of the folder is nearly free. Because the mover's writes bypass
+the cache under `writearound`, only genuine user reads populate it, so the cache holds what
+people actually open rather than what the mover last wrote.
+
+At roughly 25 GB against 3 TB the cache will churn. This becomes considerably more effective
+after the SSD upgrade. Hit ratio and bypass counters are exported so the caps can be tuned
+from evidence rather than guesswork.
+
+### 4.5 Metadata residency
+
+**Stated limitation, up front: truly pinning metadata to the SSD is not achievable in this
+stack.** No Linux block cache (bcache, dm-cache, dm-writecache) can pin data or prioritise
+metadata; all are LRU with no notion of what a block contains. btrfs has no supported way to
+place metadata on a chosen device, as the preferred-metadata patchset appears never to have
+been merged upstream (**verify before relying on this**). bcachefs's `metadata_target` does
+exactly what would be wanted here, but it is externally maintained rather than mainline,
+SnapRAID's per-disk filesystem requirement means one SSD cannot be the metadata target for
+several independent filesystems, and adopting it would discard the validated snapshot and
+`shadow_copy2` design.
+
+For SMB and SFTP the only available lever keeps **btrfs as the source of truth**: btrfs
+metadata for a few million files is a couple of GB against a ~25 GB cache, so it fits
+comfortably, and the only real risk is a bulk read evicting it. A **metadata warmer** walks
+the branch trees during the nightly mover and `snapraid sync` window, when the disks are
+already spinning, so keeping it resident costs essentially nothing. The honest
+characterisation is *effectively always resident*, not *guaranteed resident*. Exported cache
+statistics make it measurable, and widening the read cache at the SSD upgrade is the lever if
+it proves insufficient.
+
+### 4.5.1 The browse index (required, not optional)
+
+Responsive real-world browsing needs three things permanently resident: the **file tree**,
+**thumbnails**, and **version-history counts**. Only the first is filesystem metadata at all,
+so a block cache cannot deliver the other two under any tuning:
+
+- **Thumbnails** are derived data. They do not exist on disk until something generates them.
+- **Version counts** cannot be *queried* cheaply: asking "how many versions does this file
+  have" by stat-ing the path in every snapshot generation on every branch is ~46 FUSE stat
+  calls per file and spins every disk. There is no cache-tuning answer, because the answer is
+  not stored anywhere to be cached.
+
+  But it can be **tracked incrementally as versions appear**, which avoids the query
+  entirely. At each snapshot, diff the new generation against the previous one and increment
+  the count for every path that changed. btrfs supplies this directly (verified against
+  btrfs-progs 6.19.1):
+
+  ```
+  btrfs send --no-data -p <prev-snapshot> <new-snapshot> | btrfs receive --dump
+  ```
+
+  `--no-data` is documented as "faster and useful to show the differences in metadata", and
+  `--dump` emits one line per operation without needing a mount. Being a send stream it
+  reports renames and unlinks as well as writes. (`btrfs subvolume find-new <path> <lastgen>`
+  is the lighter alternative when only modifications matter.)
+
+  Cost is **O(changes), not O(files x generations)**, and it is **authoritative**: it reads
+  btrfs's own metadata rather than trusting a userspace daemon to observe every event, so the
+  entire missed-event drift class does not exist. The per-generation change list is retained
+  so that pruning a generation decrements exactly the paths it incremented.
+
+  Because the array is built fresh, there are **zero snapshots at the start**. Counts begin
+  at zero and remain correct by induction. No backfill scan is ever required.
+
+  *Semantics to document:* version count is per path. A rename starts a new path at one,
+  while the old path's history remains in older snapshots until they expire.
+
+**Decision: the browse index is built as a bespoke component (`nas-index`), not inherited from
+whichever application tier wins.** That keeps the lightweight app tier viable and leaves the
+RAM budget intact.
+
+It is a SQLite database on the SSD holding one row per path: parent, name, size, mtime, uid,
+gid, branch, thumbnail key and version count, indexed on parent so a directory listing is a
+single indexed lookup.
+
+**Correctness comes from btrfs generation numbers; fanotify only reduces latency.** This is
+the property that makes the component both cheap and robust:
+
+| Input | Mechanism | Cost |
+|---|---|---|
+| Tree changes, live | `btrfs subvolume find-new <branch> <lastgen>` since the last recorded generation | O(changes) |
+| Tree changes, immediate | fanotify events into single-row upserts | O(1) per event |
+| Version counts | `btrfs send --no-data -p <prev> <cur>` diff at each snapshot | O(changes) |
+| Thumbnails | generated at ingest while the file is still on the SSD tier | zero HDD I/O |
+
+Because `find-new` can repair the index from btrfs's own metadata at any time, fanotify is an
+optimisation rather than a correctness dependency: if the daemon crashes, is restarted by a
+`rebuild`, or misses events, the next pass reconciles with no full walk. **There is no scan
+anywhere in the design**, neither at bootstrap (the array is built empty) nor at repair.
+
+Efficiency requirements, since this runs on a 2 GB box: SQLite in WAL mode with a bounded
+page cache (single-digit MB), no in-memory tree, batched transactions per pass, and the
+snapshot diff parsed as a stream rather than buffered. Target steady-state footprint is tens
+of MB, and it is exported to Prometheus so the claim is checked rather than assumed.
+
+Drift is contained by construction: the index is a **browsing cache only and never
+authoritative**. Every actual read, write and permission check goes to the real filesystem, so
+a stale entry can produce a stale listing but never data loss or a wrong access decision.
+
+Scope depends on **which process implements the protocol**, not on the protocol itself:
+
+- **OpenSSH `internal-sftp`** issues `readdir` and `stat` syscalls as the logged-in user, so
+  it cannot consult the index without patching OpenSSH.
+- **SFTPGo implements SFTP, WebDAV and its web UI itself, over a filesystem abstraction**
+  (the same one behind its S3 and sftpfs backends). It can serve listings from the index on
+  all three, so choosing it extends indexed browsing well beyond the web tier.
+- **Samba** can reach the index through a **VFS module** serving `readdir`, the same
+  extension mechanism `shadow_copy2` and `vfs_recycle` use. Possible, but bespoke C, and not
+  planned for now.
+
+Two constraints govern where the index may actually be used:
+
+1. **Isolation.** SFTP via `sshd` is kernel-enforced, because the process runs as the real
+   user. Serving SFTP from SFTPGo instead makes it app-enforced, like the web tier. That is
+   trading a real guarantee for browsing speed, and is a decision for Stage 7, not a free win.
+2. **Humans versus machines.** A stale listing is harmless to a person and hazardous to a
+   sync client, which may re-upload or skip files. Since SFTP and WebDAV are exactly what the
+   phone and PC backup clients use, **machine-driven access resolves through the filesystem
+   authoritatively**, and the index serves interactive browsing only.
+
+For SMB, and for any path left authoritative, browsing performance remains the best-effort
+block-cache behaviour described above.
+
+A full application tier would have inherited all of this: OpenCloud's PosixFS maintains its
+own metadata index with an external-change watcher, ships a thumbnails service, and has
+built-in versioning. That is no longer the deciding factor, since `nas-index` supplies the
+same capability to whichever server is chosen. If OpenCloud does win, its native index makes
+`nas-index` redundant for the web tier, though it would still serve any SFTPGo or Samba path.
+
+*Item to resolve:* a full application tier brings **its own** file versioning, which would
+store versions in its state directory separately from the btrfs snapshots of section 4.6.
+Whether to disable one, accept the duplication, or reconcile them is decided at Stage 7.
+
+### 4.6 Snapshots and Previous Versions
+
+Samba's `shadow_copy2` supports snapshots living in a directory that is a **sibling** of the
+shared data directory, mapping `mountpoint/basedir/rel_path` to
+`snapdir/@GMT-token/rel_path`.
+
+Because mergerfs unions trees **by name**, and the mergerfs mount sits one level above
+`data/`, the path `/srv/nas/snapshots/@GMT-2026.08.16-03.00.00/` is automatically the merged
+view of every branch's snapshot at that instant. This holds for every generation from a
+**single** mergerfs mount. No autofs, no per-generation mounts, no extra memory.
+
+```
+shadow:mountpoint = /srv/nas        shadow:snapdir = /srv/nas/snapshots
+shadow:basedir    = /srv/nas/data   shadow:format  = @GMT-%Y.%m.%d-%H.%M.%S
+```
+
+Three consequences follow:
+
+1. Snapshot names must be **identical across branches**. snapper numbers each config
+   independently and cannot do this, so it is replaced by a small timestamp-named snapshot
+   timer plus a retention pruner. btrbk is deferred to its real strength, offsite
+   `send`/`receive`.
+2. SnapRAID must **exclude `snapshots/`**, or parity treats every generation as independent
+   files and grows without bound. The `du` metrics collector excludes it too.
+3. Browsing history traverses FUSE and is slow. This is accepted: retrieval is rare.
+
+The SSD write tier is itself a mergerfs branch with its own `snapshots/`, so the union covers
+live same-day data before the mover has run.
+
+### 4.7 Namespace and protection tiers
+
+```
+/srv/nas/data/users/<name>/           <name>:<name>, mode 0700
+/srv/nas/data/users/<name>/.recycle/  Samba recycle bin, purged at 90 days
+/srv/nas/data/shared/<group>/         root:nas-<group>, mode 2770
+/srv/nas/snapshots/@GMT-.../          union of per-branch snapshots
+/srv/cache                            Attic (p3)
+```
+
+Folders carry a **protection tier**, which is what generalises cleanly to multiple nodes:
+
+- **Tier A**: snapshots, local parity, and (later) mirrored to another node.
+- **Tier B**: snapshots and local parity, not mirrored.
+- **Tier C**: none, disposable. Attic, thumbnails and scratch live here.
+
+Every NAS unit carries `RequiresMountsFor=/srv/nas`. Until the array is unlocked, and if a
+disk is absent or fails to unlock, nothing NAS-related starts and monitoring is untouched:
+the pi remains a healthy Grafana and WoL node. **That is the normal state after every boot.**
+
+## 5. Access and identity
+
+### 5.1 Isolation
+
+Isolation is layered, and the strongest layer is the kernel:
+
+- **SMB and SFTP are kernel-enforced.** `smbd` forks per connection and `setuid()`s to the
+  authenticated Unix user; `sshd`'s SFTP subsystem runs as the logged-in user. With homes
+  owned `<name>:<name>` at mode 0700, the kernel denies cross-user access even if a share
+  were misconfigured to point at the wrong directory. This cannot be bypassed by an
+  application bug.
+- **The web tier is application-enforced.** A web daemon runs as one service account and must
+  be able to read every user's files, so the kernel permits it; what prevents cross-user
+  access is the application validating every path against each account's home. This is a
+  real, accepted trade: a path-traversal bug in the web tier would breach web-tier isolation,
+  while SMB and SFTP would still hold. The unit is hardened with `ProtectSystem=strict`,
+  `ReadWritePaths` limited to the data tree, and `NoNewPrivileges`.
+
+### 5.2 Accounts
+
+Accounts are **declarative NixOS Unix users with explicit uids and gids**. Because
+`users.mutableUsers = false` already, creating an account necessarily requires a git commit
+and a `rebuild`, which is the approval gate, achieved with no portal and no extra
+authentication system. `nas-user` proposes the Nix and sops edit for review; it does not
+apply anything.
+
+Explicit uids are **mandatory**, not stylistic: cross-node replication only preserves
+ownership if uids match on every node, and retrofitting that later would be painful.
+
+### 5.3 Tailscale
+
+Access is granted by **sharing the pi** to each person's own Tailscale account, not by
+inviting them to the tailnet and not by tagging their devices.
+
+Confirmed from Tailscale's documentation:
+
+- Share recipients **do not increase the tailnet's user count**, and no cap on the number of
+  recipients is documented. The free Personal plan currently allows 6 users and has dropped
+  its 100 device cap, but shares sidestep that limit regardless.
+- Recipients reach "the shared machine, and nothing else". The two-tier requirement is
+  therefore **structural**, enforced by Tailscale, rather than an ACL policy that has to be
+  written correctly.
+- Recipients use their own free account on their own tailnet, so Max never manages their
+  devices and adding a device needs nothing from Max.
+- Shared machines are quarantined by default: they answer incoming connections but cannot
+  initiate into the recipient's tailnet. Harmless here, since SMB, SFTP and HTTP are all
+  client-initiated.
+- Revocation is revoking the share, which removes access for all of that person's devices at
+  once.
+
+Tags are used **only for the pi itself**. Using tags for end-user devices is explicitly
+against Tailscale's guidance ("Do not use tags to authenticate end-user devices") and strips
+the device of user identity, which breaks both revocation and auditability.
+
+**Open item to test early:** whether `tailscale serve` resolves identity headers for shared
+users. If it does, the web tier and Grafana get single sign-on and the separate password
+provisioning drops out of two stages.
+
+## 6. Unlocking
+
+The array **never unlocks at boot**. `nas-unlock` on the **laptop** is the entire interface:
+it calls the pi over Tailscale SSH to start `nas-unlock.service`, which runs
+`clevis luks unlock` for each disk against the laptop's `services.tang` (bound to the
+tailscale interface only), assembles bcache, mounts the branches and starts `nas.target`. It
+reports back whether the array actually mounted. `nas-lock` is the reverse.
+
+This defeats whole-machine theft: a stolen pi is inert unless the thief is also on the
+tailnet with the laptop running. Manual triggering also removes Tang's usual fragility,
+because if you are running the unlock then you are at your laptop, so the Tang server is up
+by construction. A passphrase keyslot stored in sops is the fallback for when the laptop is
+genuinely unavailable. There is deliberately **no automatic keyfile**, which would unlock the
+array at boot and render Tang decorative.
+
+Privilege follows the pattern `modules/nixos/storage.nix` already uses for `luksVaults`: a
+`security.sudo` NOPASSWD rule on the pi scoped to exactly that unit and nothing broader. On
+the laptop it is wired to a desktop entry and a Hyprland keybind, so it is one button. A
+Grafana alert fires while the array is locked, so the state is never silently wrong.
+
+**Cost, stated plainly:** after every power cut the shares are down until Max presses the
+button.
+
+## 7. Deletion and recovery
+
+Three separate mechanisms, deliberately not conflated:
+
+- **Undo**: Samba's `vfs_recycle` moves deletions to `.recycle/`, and a timer purges entries
+  past 90 days. This is the 90 day archive and it covers the overwhelming majority of real
+  incidents.
+- **Point-in-time**: the snapshot union of section 4.6, surfaced as Windows "Previous
+  Versions" and to macOS via `vfs_shadow_copy2`. Because the SSD write tier is itself a
+  branch with snapshots, this covers same-day changes that have not yet been moved.
+- **Permanent**: `nas-purge <path>` removes the file from the live tree and its recycle entry
+  immediately, rather than waiting out the 90 days.
+
+**Deletion is logical only.** Snapshots are immutable and continue to hold a purged file
+until they age out on the retention schedule, and nothing attempts to scrub the underlying
+media. Keeping snapshots immutable is also what preserves btrfs `send` incremental parent
+chains for future node mirroring.
+
+Note that `shred` and `wipe` are **ineffective in this stack** and must not be relied upon:
+btrfs is copy-on-write so overwriting a file writes to new blocks and leaves the originals
+intact, and the SSD's flash translation layer relocates writes so overwrite-in-place is
+meaningless. Disposing of a drive is covered by LUKS, not by file deletion.
+
+## 8. Failure envelope
+
+Not all failures are equal, and the differences are worth internalising.
+
+| What fails | Data lost | Notes |
+|---|---|---|
+| Parity disk | **None** | No user data lives on it. Replace and re-sync. Unprotected during the rebuild. The best disk to lose, and conveniently it is the SMR one. |
+| One data disk | Files written since the last sync | `snapraid fix` reconstructs the rest from parity. |
+| Data disk plus parity | That data disk's contents | Parity cannot help once it is gone. |
+| Two data disks, single parity | Both disks' contents | Survivors remain intact and directly readable. |
+| SSD read cache (p5) | **None** | `writearound` means no dirty data. Detach and continue. |
+| SSD write tier (p4) | Files not yet moved to the array | Bounded by the mover's 24 hour backstop. |
+| Root partition (p2) | None (rebuildable from the flake) | The SSH host key must be backed up, since sops decryption depends on it. |
+| Attic (p3) | None that matters | Disposable by design. |
+
+Asymmetries worth noting:
+
+- **A bigger data disk loses more**, roughly in proportion to used space.
+- **Folders are never split across disks**, so a loss reads as "that folder is gone" rather
+  than every file being partially corrupt. That is a far better recovery position and is a
+  direct consequence of the placement policy.
+- **User affinity concentrates the blast radius.** Because `mspmfs` keeps a user on one
+  drive, losing a disk tends to cost most of *one* person's data rather than a slice of
+  everyone's. That is the deliberate trade for one-user-one-disk browsing and spin-down; the
+  alternative spreads the pain thinner but touches every account.
+- SnapRAID parity reflects the **last sync**, not the current state. Files created since are
+  unprotected. This is materially blunted because the NAS is a backup *target*: a photo not
+  yet synced here still exists on the phone that uploaded it.
+- SnapRAID's **content files** must exist on at least two devices or reconstruction is
+  impossible. Three copies are kept, on both data disks and root.
+- **LUKS header backups** for every disk (`cryptsetup luksHeaderBackup`) are stored in sops. A
+  corrupted header is total, unrecoverable loss of that disk.
+
+## 9. Growth policy
+
+For single parity, `usable = sum(all disks) - largest disk`.
+
+| Purchase | Disks (TB) | Parity | Usable | Efficiency |
+|---|---|---|---|---|
+| nothing (today) | 1, 2, 4 | 4 | 3 TB | 43 % |
+| **2 x 8 TB** | 1, 2, 4, 8, 8 | 8 | **15 TB** | 65 % |
+| 1 x 8 TB only | 1, 2, 4, 8 | 8 | 7 TB | 47 % |
+| 1 x 16 TB instead | 1, 2, 4, 16 | 16 | 7 TB | 30 % |
+| 2 x 12 TB | 1, 2, 4, 12, 12 | 12 | 19 TB | 61 % |
+
+- **2 x 8 TB CMR is the correct next purchase**: 15 TB usable, tolerates one disk failure,
+  fills all five SATA ports, and moves parity onto a CMR drive. That demotes the SMR 4 TB to
+  a data disk, which is where it belongs, since data disks see far lighter write loads than
+  parity.
+- **Buy in matched pairs, never one large drive.** A single 16 TB costs about the same as two
+  8 TB and yields less than half the usable space, because the whole 16 TB is consumed by
+  parity. This is the most valuable rule here.
+- **Split parity is rejected.** Parity must be at least as large as the largest data disk,
+  and 4 + 2 + 1 = 7 TB is less than 8 TB, so the existing drives cannot jointly cover an 8 TB
+  data disk.
+- **Committed policy: stay single-parity. Revisit dual parity only at 6 or more disks.**
+- **No retirement plan for the 4 TB.** Its SMART is clean; SMR is a write-performance
+  characteristic, not a reliability one, and as a data disk it is in an appropriate role. The
+  only future reason to evict it is SATA port pressure.
+- **No spare parity-disk space for Attic.** That only exists if the parity disk exceeds the
+  largest data disk, which costs far more usable space than the scrap is worth.
+
+Adding a data disk later is genuinely trivial: format it, add one `data` line, add it as a
+mergerfs branch, run `snapraid sync`. No rebalance, no downtime, no data movement. Because
+`pfrd` weights placement by free space, a new empty disk naturally attracts new folders and
+the array self-balances over time.
+
+## 10. Multi-node target (designed for, not built)
+
+Cross-node redundancy **cannot** come from SnapRAID, because parity is node-local and a whole
+node loss is exactly the correlated failure local parity cannot cover. It must be a
+replication layer.
+
+The chosen model is **whole-node mirroring** via btrbk `send`/`receive` over the tailnet: one
+node mirrors another, and on unequal nodes the larger node's excess capacity becomes Tier C
+(Attic, scratch, un-mirrored bulk).
+
+The current design already satisfies the prerequisites. The invariants to preserve from now
+on are:
+
+1. Explicit, stable uids and gids on every node.
+2. Timestamp-synchronised, immutable snapshot names across branches.
+3. Folder-granular placement, with folders never migrating between disks.
+4. Share definitions derived from one declarative account and folder table, so either
+   topology can be generated from the same source.
+
+## 11. Observability
+
+- **Per-user disk usage**: a nightly `du` at depth 2 per home across branches, excluding
+  `snapshots/`. Nightly because a sweep spins every disk.
+- **Per-user network usage**: nftables byte counters keyed on tailnet source address,
+  extending the existing `tailscaleMetrics` collector in
+  `modules/nixos/monitoring/textfile.nix` rather than adding a new mechanism.
+- **New panels**: bcache hit ratio and bypass counters, SnapRAID sync age and scrub results,
+  per-drive SMART including `sdc`'s CRC counter, and array-locked state.
+- **Grafana scoping**: anonymous access is disabled. Max is admin; NAS users are **Viewers**,
+  which in Grafana OSS cannot edit dashboards or use Explore. The existing Overview, Metrics
+  and Archive folders are granted View to all, so they remain visible but not editable. Each
+  account additionally gets a `NAS / <name>` folder holding one provisioned dashboard whose
+  queries have that user's label baked in, with folder permissions restricted to them, set as
+  their home dashboard. The others-total is
+  `sum(nas_user_bytes) - nas_user_bytes{user="<name>"}`, which yields the aggregate and never
+  the per-user breakdown.
+
+## 12. Application tier: undecided by design
+
+The application tier is **deferred to a measured bake-off** rather than chosen up front, run
+on the real pi behind `MemoryMax` with synthetic load (bulk photo upload, many small files,
+concurrent clients) and RSS, CPU and latency recorded into the existing Prometheus.
+
+Hard gate for every candidate: **automated phone photo backup and automated PC folder
+backup.**
+
+Browsing performance is **no longer a differentiator**, because `nas-index` (section 4.5.1)
+is built regardless and supplies the tree, thumbnails and version counts to whichever server
+is chosen. That removes the pressure toward a heavyweight candidate and returns the decision
+to RAM and backup-client support, which favours the lighter options.
+
+Note that SMB has no server-side thumbnail protocol at all, so Windows and macOS build
+previews by reading whole files regardless; thumbnails only pay off inside a web tier that
+serves them. Whichever application wins, its thumbnail cache points at `thumbs/` on the SSD
+partition, a sibling of `data/` and `snapshots/` and therefore invisible to users, as Tier C
+excluded from parity and snapshots since it is regenerable. At roughly 15 KB per 256 px WebP,
+100k photos is about 1.5 GB.
+
+| Candidate | Approx RSS | Notes |
+|---|---|---|
+| SFTPGo plus PhotoSync / FolderSync clients | ~80 MB | Implements SFTP, WebDAV and its web UI over a filesystem abstraction, so `nas-index` can back all three. SFTP is offset-based so uploads resume. Cheapest on RAM by a wide margin. |
+| OpenCloud (`services.opencloud`, 3.7.0 on 26.05) | ~300-450 MB | Official iOS, Android and desktop apps; native chunked upload; PosixFS keeps files plain on disk so Samba serves the same tree. Its native index would make `nas-index` redundant for the web tier. Best feature fit, RAM is the question. |
+| Seafile | ~300-500 MB | Chunked dedup is its data model, but the opaque block store breaks SMB co-access and folder metrics, and it is not in nixpkgs. |
+| Syncthing | ~80-150 MB | Tiny, plain files, device pairing matches the enrolment model. Strong for Android and PCs, weak for iPhone (needs paid Möbius Sync). No UI to serve an index to. |
+
+## 13. Monitoring trim
+
+**Superseded by what was actually done. See `docs/monitoring.md` for the record.** This
+section originally proposed moving Tempo to the desktop and tuning Loki; both were deleted
+instead, because Tempo had received zero traces in its entire life and Alloy existed only to
+feed the two of them.
+
+Done and measured:
+
+- Loki, Tempo and Alloy removed: **+150 MB** verified against `MemAvailable`, with
+  non-overlapping distributions. Logging is now local-only, explored over ssh.
+- Series pruned and scrape cadence split into live (1 s), slow (60 s) and inventory (1 h)
+  classes: hires heap **144 MB to 79 MB**. Memory and network stayed at 1 s because that is
+  what thrashing analysis needs; filesystem dropped to inventory.
+- `below` retention cut from 30 days to 1, freeing ~16 GB of root.
+
+Outstanding: the VictoriaMetrics migration (est. ~380 MB) and a Grafana trim.
+
+## 14. Items to resolve during implementation
+
+- **SnapRAID sync memory**: a block hash table sized by array capacity, roughly 200 MB for
+  3 TB at the 256 KB default block size. It needs a `MemoryMax` and must run when nothing
+  else peaks. A larger block size trades granularity for RAM.
+- **SnapRAID sync hardening**: the sync unit must run a pre-sync `snapraid diff`, abort when
+  deletion or modification counts exceed a threshold, refuse to sync when a disk is missing
+  or SMART-degraded, and scrub only against a synced array. SnapRAID itself offers only the
+  binary `--force-empty` and no configurable threshold, so the threshold logic is ours to
+  implement.
+- **Spin-down versus drive temperature**: `modules/nixos/storage.nix` warns that
+  node_exporter's hwmon collector reads `drivetemp` on every scrape and resets the spin-down
+  timer, and offers `local.monitoring.exporter.hwmonChipExclude`. Excluding the NAS drives
+  costs their temperature metric. The pi's fan control is currently disabled (3-pin fan) so
+  nothing consumes those temperatures today, but this is a trade to make explicitly rather
+  than by accident. The same applies to smartd, which needs `-n standby`.
+- **Verify** the btrfs preferred-metadata claim in section 4.5 and the Tailscale plan limits
+  in section 5.3 before relying on either.
+- **`nas-index` implementation language and footprint.** It must hold to tens of MB resident
+  on a 2 GB box. The `find-new` and `send --dump` outputs are line-oriented text, so parsing
+  is trivial in any language; the constraint is runtime overhead, not parsing difficulty.
+- **Whether SFTP moves from `sshd` to SFTPGo.** Doing so lets `nas-index` back SFTP browsing,
+  but downgrades SFTP isolation from kernel-enforced to app-enforced. Decided at Stage 7.
+
+## 15. Implementation stages
+
+| Stage | Content | Status |
+|---|---|---|
+| 0 | **This document.** Written before any measurement or code, and updated by every later stage. | **done** |
+| 1 | Measure and prepare. Confirm the `sdd` passphrase, unlock read-only, measure fill, record a checksum manifest. Replace `sdc`'s SATA cable, run `smartctl -t long` on all three, re-read the CRC counter. *Gate: the `sdd` fill number decides the migration path.* | **part done** — SMART baseline in section 3; passphrase and cable outstanding |
+| 2 | Storage. Image and repartition the SSD offline; `modules/nixos/nas/storage.nix` with LUKS, Clevis/Tang, unlock units, bcache, btrfs, mergerfs, mover, snapshot timer, SnapRAID and the degraded-mode guard. Execute the migration. | **module written**, mergerfs pool + SnapRAID sync/scrub timers; LUKS/Tang/bcache/mover and the **migration** still to do |
+| 3 | Accounts and access. `accounts.nix` and `samba.nix`, `nas-user`, Tailscale device sharing, ACL reference. | **modules written**; `nas-user` and the Tailscale sharing runbook outstanding |
+| 4 | Prefetch, browse index and metrics. `nas-prefetch`; `nas-index` (SQLite store, `find-new` reconciler, snapshot-diff version counter, thumbnailer); the metadata warmer; the new collectors; per-user dashboards; Grafana authentication. | `nas-index` and the metadata warmer **written and exercised**; `nas-prefetch`, dashboards and Grafana auth outstanding |
+| 5 | Attic on `/srv/cache`, nginx vhost, `attic watch-store` on laptop and desktop, substituter for Max's hosts only. | blocked on Stage 2 storage |
+| 6 | Monitoring trim. | **done** — see `docs/monitoring.md`; ~800 MB freed, `MemAvailable` median 500 MB to 747 MB |
+| 7 | Application-tier bake-off and adoption. |
+| 8 | Follow-ons: offsite backup, 3-node mirror, bidirectional sync, the 2 x 8 TB purchase, the SSD upgrade with LVM. |
+
+### Module status
+
+`modules/nixos/nas/` is imported by `hosts/pi/default.nix` and builds, contributing **zero
+systemd units** because `local.nas.enable` defaults false. Every `config` block sits behind
+`mkIf`, so nothing changes on the pi until storage exists.
+
+| file | provides |
+|---|---|
+| `accounts.nix` | `local.nas.accounts`, explicit uids 3000-3999, homes 0700, uid-uniqueness assertion |
+| `samba.nix` | one private share per account, `valid users` scoped to the owner, SMB3 + required encryption, bound to `tailscale0`, `vfs_recycle` |
+| `storage.nix` | mergerfs pool with the placement policy from section 4, SnapRAID config, sync and scrub timers that no-op unless every branch is mounted |
+| `index.nix` + `nas-index.py` | SQLite browse index, `find-new` incremental scan, version counter, thumbnailer, per-user usage metrics |
+| `cache.nix` | metadata warmer, run inside the SnapRAID window while disks already spin |
+| `nas-user.py` | proposes an account (next free uid, the Nix block, the sops and `smbpasswd` steps) and applies nothing |
+
+Metrics exported for dashboards, all read from the index rather than the array so no exporter
+ever wakes a disk: `nas_user_bytes`, `nas_user_files`, `nas_user_directories`,
+`nas_metadata_warm_entries`, `nas_metadata_warm_seconds`,
+`nas_metadata_warm_timestamp_seconds`. The `NAS usage` dashboard (uid `nas-usage`, in the
+metrics folder) charts totals, per-account usage and warm-pass age.
+
+**The dashboard is fleet-wide, not per-user.** Section 1's requirement that each person sees
+only their own usage plus an aggregate of everyone else needs Grafana authentication and
+per-user scoping, which is not built: today's Grafana is anonymous-admin on the tailnet. Until
+that lands, treat these panels as an operator view only, and do not share the Grafana URL with
+NAS account holders.
+
+Built and inert is **not** the same as working: enabling these against real disks will exercise
+the mergerfs option string, the SnapRAID layout and the Samba share syntax for the first time.
+`nas-index` is the exception — its scan, version counter and metric output were exercised
+against a scratch tree.
+
+`nas-prefetch` is deliberately unwritten. It needs fanotify `FAN_OPEN` via raw `ctypes`
+syscalls and `CAP_SYS_ADMIN`, so it cannot be tested without root and real branch mounts, and
+an untested privileged daemon with feedback-exclusion logic is a poor trade. It is a cache
+optimisation only: the NAS is correct without it, merely colder on first access.
+
+### Migration, preserving `sdd`
+
+`sdc` and `sdb` are wipeable. `sdd` holds the data to keep and is also wanted as a data disk.
+The source is never written until its copy is verified, so the data always exists in two
+places:
+
+1. Replace `sdc`'s SATA cable. Build parity on `sdc` and data disk 2 on `sdb`.
+2. Unlock the existing `sdd` LUKS with its current passphrase, mount read-only, copy into
+   `/mnt/disk2/data`, and verify against a checksum manifest.
+3. Only then wipe `sdd` and bring it up as data disk 1.
+
+**Gate:** if `sdd` holds more than about 950 GB it will not fit on `sdb` alone. The fallback
+stages the copy onto `sdc` as a plain filesystem, rebuilds `sdd` and `sdb` as the data disks,
+copies back, then wipes `sdc` into parity. Two copies, works up to about 3 TB.
+
+## 16. Runbooks
+
+To be filled in as each stage lands: adding an account, sharing the pi to a new person,
+unlocking and locking, recovery order (freeze remote access and scheduled sync/scrub *first*,
+per the SnapRAID manual), replacing a failed drive, promoting a new drive to parity, and
+decommissioning a drive with `cryptsetup luksErase`.
+
+## 17. Summary of accepted limitations
+
+Stated plainly so none of them is a surprise later:
+
+1. Files on the SSD write tier are unprotected until the mover and the nightly sync run.
+2. Deletion is logical only; snapshots retain purged files until retention expires.
+3. `nas-index` backs interactive browsing on any server that implements its own filesystem
+   abstraction (SFTPGo's web, WebDAV and SFTP). Samba would need a bespoke VFS module, not
+   planned, so SMB browsing relies on the block cache, where metadata residency is
+   effectively but not provably permanent. Machine-driven sync access stays authoritative
+   against the filesystem regardless, since a stale listing can make a sync client re-upload
+   or skip files.
+4. After a power cut the shares stay down until the unlock button is pressed.
+5. The web tier's isolation depends on the application, not the kernel. SMB and SFTP do not.
+6. This NAS is not a backup, and has no offsite copy until Stage 8.
+7. Losing the whole pi loses the data's confidentiality protection only against drive-level
+   theft, not against an attacker who also has the laptop and tailnet access.
