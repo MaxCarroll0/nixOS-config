@@ -29,6 +29,17 @@ CREATE TABLE IF NOT EXISTS scan_state (
     last_gen    INTEGER NOT NULL DEFAULT 0,
     last_run    INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS versions (
+    owner       TEXT NOT NULL,
+    path        TEXT NOT NULL,
+    checkpoint  INTEGER NOT NULL,
+    size        INTEGER NOT NULL,
+    mtime       INTEGER NOT NULL,
+    seen        INTEGER NOT NULL,
+    PRIMARY KEY (owner, path, checkpoint)
+);
+CREATE INDEX IF NOT EXISTS versions_path ON versions (owner, path, seen DESC);
 """
 
 THUMBNAILABLE = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".heic"}
@@ -54,42 +65,22 @@ def connect(db_path):
     return db
 
 
-def btrfs_generation(root):
+def current_checkpoint(path):
+    """Newest NILFS2 checkpoint number for the filesystem holding path, or None."""
     try:
         out = subprocess.run(
-            ["btrfs", "subvolume", "show", str(root)],
+            ["lscp", "-r", str(path)],
             capture_output=True, text=True, timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    for line in out.stdout.splitlines():
-        if "Generation:" in line:
-            try:
-                return int(line.split(":")[1].strip())
-            except (IndexError, ValueError):
-                return None
-    return None
-
-
-def changed_since(root, generation):
-    try:
-        out = subprocess.run(
-            ["btrfs", "subvolume", "find-new", str(root), str(generation)],
-            capture_output=True, text=True, timeout=300,
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode != 0:
         return None
-    paths = set()
     for line in out.stdout.splitlines():
-        marker = " gen "
-        if not line.startswith("inode ") or marker not in line:
-            continue
         parts = line.split()
-        if parts[-1] not in (".", ".."):
-            paths.add(root / parts[-1])
-    return paths
+        if parts and parts[0].isdigit():
+            return int(parts[0])
+    return None
 
 
 def thumbnail_for(src, thumb_dir, size):

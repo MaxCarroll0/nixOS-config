@@ -403,9 +403,18 @@ Only a **bounded rolling window** is exposed this way (default 24). That is what
 its native right-click Previous Versions with no client software, while keeping the mount count
 predictable. Everything older is reached through the web tier, which mounts on demand.
 
-**This rests on mergerfs traversing submounts inside its branches, which must be verified before
-anything is built on it.** If it does not, the native-SMB path collapses and only the web path
-survives.
+**Verified on the live array.** Two tmpfs mounts placed inside separate branches were unioned by
+name into one directory through the existing mergerfs mount:
+
+```
+mount -t tmpfs tmpfs /mnt/disks/disk1/snapshots/probe   # contains a.txt
+mount -t tmpfs tmpfs /mnt/disks/disk2/snapshots/probe   # contains b.txt
+ls /srv/nas/snapshots/probe/                            # -> a.txt  b.txt
+```
+
+mergerfs traverses submounts inside its branches, so checkpoint mounts placed there appear as
+unified generations. This was tested before any disk was reformatted, because the whole
+native-SMB half of the design depends on it.
 
 ### 4.7 Namespace and protection tiers
 
