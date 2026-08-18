@@ -818,6 +818,27 @@ primary and laptop age keys and **deliberately not the pi's**. A stolen NAS host
 cannot decrypt its own disks, which is what makes the manual unlock in section 6 meaningful
 rather than decorative.
 
+### Deploying storage changes
+
+**Changing the mergerfs mount options requires the pool to be unmounted first.** NixOS reloads
+a mount unit whose options changed, and a busy FUSE mount cannot be reloaded in place, so
+activation fails with `Failed to reload srv-nas.mount` and rolls back. Adding
+`default_permissions` hit exactly this.
+
+```bash
+sudo umount /srv/nas     # or nas-lock
+deploy-request --host pi switch
+sudo mount /srv/nas      # or nas-unlock
+```
+
+This costs nothing operationally, since the array is `noauto` and manually unlocked anyway:
+lock, deploy, unlock is already the intended sequence.
+
+**Never move files while `snapraid sync` is running.** It aborts with
+`Missing file ... WARNING! You cannot modify files while running` and the parity pass is
+wasted — 25 minutes and 341 GB of writes, in the case that taught us this. Let the sync finish,
+or stop it, before reorganising the tree.
+
 ### Module status
 
 `modules/nixos/nas/` is imported by `hosts/pi/default.nix` and builds, contributing **zero
