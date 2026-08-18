@@ -15,6 +15,16 @@
   };
 
   config = {
+    home.sessionVariables.EDITOR = "emacs";
+
+    home.packages = [
+      (pkgs.writeShellScriptBin "agda-desktop" ''
+        remote_command='/home/max/.nix-profile/bin/direnv exec /home/max/part-iii/hazel-type-slicing-formalism agda'
+        printf -v remote_args ' %q' "$@"
+        exec ${pkgs.tailscale}/bin/tailscale ssh desktopnew "$remote_command$remote_args"
+      '')
+    ];
+
     programs.emacs = {
       enable = true;
       package = (
@@ -23,7 +33,7 @@
           config = ../emacs/config.org;
           defaultInitFile = true;
           alwaysEnsure = true;
-  
+
           extraEmacsPackages =
             epkgs:
             let

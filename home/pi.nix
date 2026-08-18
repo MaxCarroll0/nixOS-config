@@ -4,6 +4,4 @@
 
 {
   imports = [ ./base.nix ];
-
-  local.emacs.guiToolkit = false;
 }

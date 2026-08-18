@@ -161,6 +161,7 @@ in
 {
   imports = [
     ./base.nix
+    ./emacs.nix
     ./hyprland.nix
   ];
 

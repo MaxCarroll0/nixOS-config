@@ -685,9 +685,14 @@ TODO: test Polymode interactively in real Nix, Org, Markdown, and noweb files.
                    (cons (treesit-node-start first) (treesit-node-end first))
                  (cons (treesit-node-start last) (treesit-node-end last)))))
            (max/nix--captured-nodes kind))))
-    (if (> direction 0)
-        (seq-find (lambda (range) (>= (car range) origin)) ranges)
-      (car (last (seq-filter (lambda (range) (< (car range) origin)) ranges))))))
+    (when-let ((range
+                (if (> direction 0)
+                    (seq-find (lambda (candidate) (>= (car candidate) origin)) ranges)
+                  (car (last (seq-filter
+                              (lambda (candidate) (< (car candidate) origin))
+                              ranges))))))
+      (goto-char (if (> direction 0) (cdr range) (car range)))
+      range)))
 
 (defun max/nix--string-head-matcher (direction)
   "Find a Nix indented-string head in DIRECTION."
@@ -804,6 +809,16 @@ TODO: test Polymode interactively in real Nix, Org, Markdown, and noweb files.
   :hostmode 'max/poly-nix-hostmode
   :innermodes '(max/poly-nix-code-innermode
                 max/poly-nix-interpolation-innermode))
+
+(defun max/poly-nix-refresh-font-lock ()
+  "Re-enable and eagerly refresh font-lock in a Nix Polymode buffer."
+  (interactive)
+  (when (bound-and-true-p max/poly-nix-mode)
+    (font-lock-mode 1)
+    (font-lock-flush (point-min) (point-max))
+    (font-lock-ensure (point-min) (point-max))))
+
+(add-hook 'max/poly-nix-mode-hook #'max/poly-nix-refresh-font-lock)
 
 (use-package poly-org
   :demand t
@@ -1231,21 +1246,119 @@ Eglot's default maps =reason-mode= to =ocamllsp=, picked up from the devshell PA
 ** Agda
 
 agda2-mode is loaded from the project direnv PATH's =agda=, so the Emacs mode matches the project flake instead of a global Agda install.
+The Hazel formalism can instead be opened over Tailscale TRAMP with =C-c a d=;
+then both the visited files and Agda interaction process live on =desktopnew=.
 
 #+begin_src emacs-lisp
 
+  (require 'tramp)
+
+  (add-to-list
+   'tramp-methods
+   '("tailscale"
+     (tramp-login-program "tailscale")
+     (tramp-login-args (("ssh") ("%h")))
+     (tramp-remote-shell "/bin/sh")
+     (tramp-remote-shell-login ("-l"))
+     (tramp-remote-shell-args ("-c"))))
+
+  (defconst max/hazel-local-root
+    "/home/max/part-iii/hazel-type-slicing-formalism/")
+
+  (defconst max/hazel-desktop-root
+    "/tailscale:desktopnew:/home/max/part-iii/hazel-type-slicing-formalism/")
+
+  (defun max/hazel-open-on-desktop ()
+    "Open the corresponding Hazel file on desktopnew over Tailscale TRAMP."
+    (interactive)
+    (let ((relative
+           (if-let ((file buffer-file-name)
+                    ((file-in-directory-p file max/hazel-local-root)))
+               (file-relative-name file max/hazel-local-root)
+             "all.agda")))
+      (find-file (expand-file-name relative max/hazel-desktop-root))))
+
+  (global-set-key (kbd "C-c a d") #'max/hazel-open-on-desktop)
+
+  (defun max/agda2--remote-direnv (&rest command)
+    "Run COMMAND in the remote project direnv and return its stdout."
+    (let* ((root (or (locate-dominating-file default-directory ".envrc")
+                     (user-error "No remote .envrc above %s" default-directory)))
+           (default-directory root)
+           (direnv "/home/max/.nix-profile/bin/direnv"))
+      (with-temp-buffer
+        (let ((status
+               (apply #'process-file direnv nil '(t nil) nil
+                      "exec" (file-local-name root) command)))
+          (unless (zerop status)
+            (error "Remote direnv command failed (%s): %s"
+                   status (string-trim (buffer-string))))
+          (string-trim (buffer-string))))))
+
+  (defun max/agda2--local-mode-file ()
+    "Return the Agda mode installed by the local Hazel direnv."
+    (let ((default-directory max/hazel-local-root)
+          (direnv "/home/max/.nix-profile/bin/direnv"))
+      (with-temp-buffer
+        (let ((status
+               (process-file direnv nil '(t nil) nil
+                             "exec" max/hazel-local-root
+                             "agda-mode" "locate")))
+          (unless (zerop status)
+            (error "Local Hazel direnv could not locate Agda mode (%s): %s"
+                   status (string-trim (buffer-string))))
+          (string-trim (buffer-string))))))
+
+  (defun max/agda2--quote-local-remote-file (original string)
+    "Quote STRING for Agda, removing a TRAMP prefix when present."
+    (funcall original
+             (if (and (stringp string) (file-remote-p string))
+                 (file-local-name string)
+               string)))
+
   (defun max/agda2-bootstrap ()
     "Load agda2-mode from the direnv PATH's agda, then enable it."
-    (require 'envrc)
-    (envrc--update-sync)
-    (unless (fboundp 'agda2-mode)
-      (let ((coding-system-for-read 'utf-8)
-            (loc (string-trim (shell-command-to-string "agda-mode locate"))))
-        (when (file-exists-p loc)
-          (load-file loc))))
-    (if (fboundp 'agda2-mode)
-        (agda2-mode)
-      (message "No agda on PATH; agda2-mode not loaded")))
+    (if (file-remote-p default-directory)
+        (let ((agda
+               (let ((default-directory max/hazel-local-root))
+                 (executable-find "agda-desktop"))))
+          (unless agda
+            (user-error "agda-desktop is not installed"))
+          (max/agda2--remote-direnv "agda" "--version")
+          (unless (fboundp 'agda2-mode)
+            (let ((coding-system-for-read 'utf-8))
+              (load-file (max/agda2--local-mode-file))))
+          (unless (advice-member-p #'max/agda2--quote-local-remote-file
+                                   'agda2-string-quote)
+            (advice-add 'agda2-string-quote :around
+                        #'max/agda2--quote-local-remote-file))
+          (if (fboundp 'agda2-mode)
+              (progn
+                (setq agda2-program-name agda)
+                (let ((default-directory max/hazel-local-root))
+                  (agda2-mode))
+                (setq-local agda2-program-name agda))
+            (message "Remote Agda mode not found")))
+      (require 'envrc)
+      (envrc--update-sync)
+      (if-let ((agda (executable-find "agda")))
+        (let ((project-process-environment process-environment)
+              (project-exec-path exec-path))
+          (unless (fboundp 'agda2-mode)
+            (let ((coding-system-for-read 'utf-8)
+                  (loc (string-trim (shell-command-to-string "agda-mode locate"))))
+              (when (file-exists-p loc)
+                (load-file loc))))
+          (if (fboundp 'agda2-mode)
+              (progn
+                (setq agda2-program-name agda)
+                (let ((process-environment project-process-environment)
+                      (exec-path project-exec-path))
+                  (agda2-mode))
+                (envrc--update-sync)
+                (setq-local agda2-program-name agda))
+            (message "Agda mode not found")))
+        (message "No agda on PATH; agda2-mode not loaded"))))
 
   (dolist (pat '("\\.agda\\'" "\\.lagda\\'" "\\.lagda\\.md\\'" "\\.lagda\\.tex\\'"))
     (add-to-list 'auto-mode-alist (cons pat #'max/agda2-bootstrap)))
