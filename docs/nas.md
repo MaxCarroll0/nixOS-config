@@ -436,6 +436,39 @@ apply anything.
 Explicit uids are **mandatory**, not stylistic: cross-node replication only preserves
 ownership if uids match on every node, and retrofitting that later would be painful.
 
+### 5.2.1 Minting an account
+
+`nas-user <name> [--full-name ...] [--uid N]` picks the next free uid, refuses duplicates and
+out-of-range uids, and **writes the account into `hosts/pi/default.nix`**. The declaration is
+the persistent record: accounts live in git, not in a runtime database, so they survive
+rebuilds and are reviewable in a diff.
+
+It deliberately stops there and prints the rest, because each remaining step needs a human
+decision or a credential it must not hold:
+
+1. Unix password into sops (`mkpasswd -m yescrypt | sops set ...`), plus the
+   `sops.secrets."nas-password-<name>"` declaration.
+2. Review, commit, `rebuild --host pi switch` — the commit **is** the approval gate.
+3. `smbpasswd -a <name>`, since Samba keeps its own password database separate from the Unix
+   one. An account without this can log in over SFTP but not SMB.
+4. `tailscale share pi --email <their-account>` — a share, never an invite and never a tag, so
+   the recipient reaches this machine and nothing else.
+5. Grafana user at Viewer scope, **once authentication exists**.
+
+### 5.2.2 Hiding folders
+
+Dropping a `.nashidden` file in any folder marks that folder and everything beneath it
+`hidden` in the browse index. The web tier and shared dashboards filter on that column; **SMB
+and SFTP are unaffected**, so the owner still sees their own files normally.
+
+It is a marker file rather than a config option on purpose: the owner can hide or unhide a
+folder over SMB without a rebuild, an approval, or any access to the Nix configuration. The
+flag is recomputed on every index pass, including the incremental one, so removing the marker
+unhides on the next run.
+
+This hides from *browsing*, not from *storage accounting*: hidden folders still count toward
+the owner's usage, since pretending otherwise would make quotas and capacity planning lie.
+
 ### 5.3 Tailscale
 
 Access is granted by **sharing the pi** to each person's own Tailscale account, not by

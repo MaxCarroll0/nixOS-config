@@ -41,6 +41,14 @@ let
       done
       unset key
 
+      for m in ${
+        lib.escapeShellArgs (
+          lib.mapAttrsToList (n: _: "${cfg.storage.diskRoot}/${n}") cfg.storage.dataDisks
+        )
+      }; do
+        mountpoint -q "$m" || mount "$m" || true
+      done
+      systemctl start "$(systemd-escape -p --suffix=mount ${cfg.dataRoot})" || true
       systemctl start ${ucfg.target} || true
 
       mounted=0

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS entries (
     size        INTEGER NOT NULL,
     mtime       INTEGER NOT NULL,
     versions    INTEGER NOT NULL DEFAULT 1,
+    hidden      INTEGER NOT NULL DEFAULT 0,
     thumb       TEXT,
     PRIMARY KEY (owner, path)
 );
@@ -31,6 +32,18 @@ CREATE TABLE IF NOT EXISTS scan_state (
 """
 
 THUMBNAILABLE = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".heic"}
+
+HIDE_MARKER = ".nashidden"
+
+
+def is_hidden_path(root, path):
+    current = path
+    while True:
+        if (current / HIDE_MARKER).exists():
+            return True
+        if current == root or current.parent == current:
+            return False
+        current = current.parent
 
 
 def connect(db_path):
@@ -98,7 +111,7 @@ def thumbnail_for(src, thumb_dir, size):
     return str(dest)
 
 
-def record(db, owner, root, path, thumb_dir, thumb_size, want_thumbs):
+def record(db, owner, root, path, thumb_dir, thumb_size, want_thumbs, hidden=0):
     try:
         st = path.lstat()
     except OSError:
@@ -114,15 +127,16 @@ def record(db, owner, root, path, thumb_dir, thumb_size, want_thumbs):
         thumb = thumbnail_for(path, thumb_dir, thumb_size)
     db.execute(
         """
-        INSERT INTO entries (owner, path, parent, name, is_dir, size, mtime, versions, thumb)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+        INSERT INTO entries (owner, path, parent, name, is_dir, size, mtime, versions, hidden, thumb)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
         ON CONFLICT(owner, path) DO UPDATE SET
             size=excluded.size,
             mtime=excluded.mtime,
+            hidden=excluded.hidden,
             thumb=COALESCE(excluded.thumb, entries.thumb),
             versions=entries.versions + (excluded.mtime > entries.mtime)
         """,
-        (owner, rel, parent, path.name, is_dir, st.st_size, int(st.st_mtime), thumb),
+        (owner, rel, parent, path.name, is_dir, st.st_size, int(st.st_mtime), hidden, thumb),
     )
 
 
@@ -131,8 +145,11 @@ def full_scan(db, owner, root, thumb_dir, thumb_size, want_thumbs):
     for dirpath, dirnames, filenames in os.walk(root, onerror=lambda e: None):
         dirnames[:] = [d for d in dirnames if d not in (".snapshots", ".recycle", "lost+found")]
         base = Path(dirpath)
+        hidden = 1 if (HIDE_MARKER in filenames or is_hidden_path(root, base)) else 0
         for entry in dirnames + filenames:
-            record(db, owner, root, base / entry, thumb_dir, thumb_size, want_thumbs)
+            child = base / entry
+            marked = hidden or (entry in dirnames and (child / HIDE_MARKER).exists())
+            record(db, owner, root, child, thumb_dir, thumb_size, want_thumbs, 1 if marked else 0)
             seen += 1
             if seen % 2000 == 0:
                 db.commit()
@@ -145,7 +162,9 @@ def incremental(db, owner, root, since, thumb_dir, thumb_size, want_thumbs):
     if paths is None:
         return None
     for path in paths:
-        record(db, owner, root, path, thumb_dir, thumb_size, want_thumbs)
+        parent = path if path.is_dir() else path.parent
+        record(db, owner, root, path, thumb_dir, thumb_size, want_thumbs,
+               1 if is_hidden_path(root, parent) else 0)
     db.commit()
     return len(paths)
 

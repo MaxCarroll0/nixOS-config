@@ -126,25 +126,51 @@ in
       pkgs.mergerfs
     ];
 
-    fileSystems.${cfg.dataRoot} = {
-      fsType = "fuse.mergerfs";
-      device = lib.concatStringsSep ":" dataMounts;
-      options = [
-        "cache.files=partial"
-        "category.create=eppfrd"
-        "func.mkdir=mspmfs"
-        "category.search=ff"
-        "dropcacheonclose=true"
-        "inodecalc=hybrid-hash"
-        "minfreespace=${scfg.minFreeSpace}"
-        "moveonenospc=pfrd"
-        "fsname=nas"
-        "nonempty"
-        "allow_other"
-        "use_ino"
-        "x-systemd.requires-mounts-for=${scfg.diskRoot}"
-      ];
-    };
+    fileSystems = lib.mkMerge [
+      (lib.mapAttrs' (
+        name: _:
+        lib.nameValuePair "${scfg.diskRoot}/${name}" {
+          device = "/dev/mapper/nas-${name}";
+          fsType = "btrfs";
+          options = [
+            "noauto"
+            "compress=zstd:1"
+            "noatime"
+          ];
+        }
+      ) scfg.dataDisks)
+
+      {
+        ${scfg.parityMount} = {
+          device = "/dev/mapper/nas-parity";
+          fsType = "btrfs";
+          options = [
+            "noauto"
+            "noatime"
+          ];
+        };
+
+        ${cfg.dataRoot} = {
+          fsType = "fuse.mergerfs";
+          device = lib.concatStringsSep ":" dataMounts;
+          options = [
+            "cache.files=partial"
+            "category.create=eppfrd"
+            "func.mkdir=mspmfs"
+            "category.search=ff"
+            "dropcacheonclose=true"
+            "inodecalc=hybrid-hash"
+            "minfreespace=${scfg.minFreeSpace}"
+            "moveonenospc=pfrd"
+            "fsname=nas"
+            "nonempty"
+            "allow_other"
+            "use_ino"
+            "noauto"
+          ];
+        };
+      }
+    ];
 
     systemd.tmpfiles.rules = [ "d ${scfg.contentDir} 0700 root root - -" ];
 

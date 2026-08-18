@@ -1,24 +1,28 @@
-"""Propose a NAS account: prints the Nix and sops edits for review, applies nothing."""
+"""Mint a NAS account: writes the Nix declaration, then prints the manual onboarding steps."""
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 UID_MIN = 3000
 UID_MAX = 3999
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
+NESTED_RE = re.compile(r"(\n(\s*)accounts = \{\n)(.*?)(\n\2\};)", re.S)
+DOTTED_RE = re.compile(r"^([ \t]*)accounts\.([a-z][a-z0-9-]*) = \{", re.M)
 
 
 def used_uids(text):
-    return {int(m) for m in re.findall(r"uid\s*=\s*(\d+)\s*;", text)}
+    return {int(m) for m in re.findall(r"uid = (\d+);", text)}
 
 
 def existing_names(text):
-    block = re.search(r"accounts\s*=\s*\{(.*?)\n    \};", text, re.S)
-    if not block:
-        return set()
-    return set(re.findall(r"^\s{6}([a-z][a-z0-9-]*)\s*=\s*\{", block.group(1), re.M))
+    names = {m.group(2) for m in DOTTED_RE.finditer(text)}
+    block = NESTED_RE.search(text)
+    if block:
+        names |= set(re.findall(r"^\s+([a-z][a-z0-9-]*) = \{", block.group(3), re.M))
+    return names
 
 
 def next_uid(taken):
@@ -28,16 +32,38 @@ def next_uid(taken):
     return None
 
 
+def insert_account(text, name, uid, full):
+    body = f"  uid = {uid};\n" f'  description = "{full}";\n'
+
+    block = NESTED_RE.search(text)
+    if block:
+        indent = block.group(2) + "  "
+        entry = "\n" + indent + name + " = {\n"
+        entry += "".join(f"{indent}{line}\n" for line in body.strip("\n").split("\n"))
+        entry += indent + "};"
+        return text[: block.end(3)] + entry + text[block.end(3) :]
+
+    last = None
+    for m in DOTTED_RE.finditer(text):
+        last = m
+    if last is None:
+        return None
+    indent = last.group(1)
+    close = text.index(f"\n{indent}}};", last.end()) + len(f"\n{indent}}};")
+    entry = f"\n{indent}accounts.{name} = {{\n"
+    entry += "".join(f"{indent}{line}\n" for line in body.strip("\n").split("\n"))
+    entry += f"{indent}}};"
+    return text[:close] + entry + text[close:]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("name")
-    ap.add_argument("--full-name", default=None)
-    ap.add_argument("--uid", type=int, default=None)
-    ap.add_argument(
-        "--host-file",
-        default="hosts/pi/default.nix",
-        help="Host configuration the accounts live in.",
-    )
+    ap.add_argument("--full-name")
+    ap.add_argument("--uid", type=int)
+    ap.add_argument("--host-file", default="hosts/pi/default.nix")
+    ap.add_argument("--tailnet-email", help="Account to share the NAS with.")
+    ap.add_argument("--dry-run", action="store_true", help="Show the change without writing.")
     args = ap.parse_args()
 
     if not NAME_RE.match(args.name):
@@ -51,7 +77,7 @@ def main():
     text = path.read_text()
 
     if args.name in existing_names(text):
-        print(f"error: account {args.name!r} already exists in {path}", file=sys.stderr)
+        print(f"error: account {args.name!r} already exists", file=sys.stderr)
         return 1
 
     taken = used_uids(text)
@@ -66,24 +92,37 @@ def main():
         print(f"error: uid {uid} already in use", file=sys.stderr)
         return 1
 
-    secret = f"nas-password-{args.name}"
     full = args.full_name or args.name
+    updated = insert_account(text, args.name, uid, full)
+    if updated is None:
+        print("error: could not find a local.nas.accounts block to extend", file=sys.stderr)
+        return 1
 
-    print(f"Proposed account {args.name!r} (uid {uid}). Nothing has been changed.\n")
-    print(f"1. Add to local.nas.accounts in {path}:\n")
-    print(f"""      {args.name} = {{
-        uid = {uid};
-        description = "{full}";
-        hashedPasswordFile = config.sops.secrets."{secret}".path;
-      }};""")
-    print(f"\n2. Create the hashed password secret:\n")
-    print(f"      mkpasswd -m yescrypt | sops set secrets/secrets.yaml '[\"{secret}\"]' --")
-    print(f"\n3. Declare it alongside the other sops secrets:\n")
-    print(f'      sops.secrets."{secret}" = {{ }};')
-    print(f"\n4. Review, commit, then:  rebuild --host pi switch")
-    print(f"\n5. Share the pi to their Tailscale account, then add their SMB password:\n")
-    print(f"      sudo-request --host pi sudo smbpasswd -a {args.name}")
-    print(f"\nuid {uid} must be identical on every node, or replication loses ownership.")
+    if args.dry_run:
+        print(updated[updated.index("accounts = {") : updated.index("accounts = {") + 600])
+        return 0
+
+    path.write_text(updated)
+    secret = f"nas-password-{args.name}"
+    print(f"Wrote account {args.name!r} (uid {uid}) to {path}.\n")
+    print("Remaining steps, none of which are automatic:\n")
+    print(f"  1. Password, into the shared secrets file:")
+    print(f"       mkpasswd -m yescrypt | sops set secrets/secrets.yaml '[\"{secret}\"]' --")
+    print(f'       sops.secrets."{secret}" = {{ }};   # declare alongside the others\n')
+    print(f"  2. Review and commit, then:  rebuild --host pi switch\n")
+    print(f"  3. SMB password, which Samba keeps separately from the Unix one:")
+    print(f"       sudo-request --host pi sudo smbpasswd -a {args.name}\n")
+    if args.tailnet_email:
+        print(f"  4. Share the NAS with {args.tailnet_email}:")
+        print(f"       tailscale share pi --email {args.tailnet_email}")
+    else:
+        print("  4. Share the NAS to their own Tailscale account (not an invite, not a tag):")
+        print("       tailscale share pi --email <their-account>")
+    print("     Recipients reach only this machine, so the two-tier split is structural.\n")
+    print(f"  5. Grafana, once authentication exists: create {args.name} with a Viewer role")
+    print("     scoped to their own usage. Grafana currently runs anonymous-admin, so do NOT")
+    print("     hand out its URL until that is fixed.\n")
+    print(f"uid {uid} must be identical on every node, or replication loses ownership.")
     return 0
 
 

@@ -20,6 +20,7 @@
     ../../modules/nixos/nas/storage.nix
     ../../modules/nixos/nas/index.nix
     ../../modules/nixos/nas/cache.nix
+    ../../modules/nixos/nas/unlock.nix
     ../../modules/nixos/fancontrol.nix
     ../../modules/nixos/gpio-pwm-fan.nix
     ../../modules/nixos/build-client.nix
@@ -180,9 +181,16 @@
       uid = 3000;
       description = "NAS pipeline test account";
     };
-    storage.dataDisks = {
-      disk1.device = "/dev/sdd";
-      disk2.device = "/dev/sdb";
+    accounts.maxnas = {
+      uid = 3001;
+      description = "Max";
+    };
+    storage = {
+      enable = true;
+      dataDisks = {
+        disk1.device = "/dev/sdd";
+        disk2.device = "/dev/sdb";
+      };
     };
     unlock = {
       server = true;
