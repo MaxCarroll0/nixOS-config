@@ -1,4 +1,4 @@
-# Metrics: node_exporter everywhere, three Prometheus tiers and Grafana on the server.
+# Metrics: node_exporter everywhere, VictoriaMetrics live and history tiers, Grafana on the server.
 
 {
   config,
@@ -18,10 +18,84 @@ let
   yaml = pkgs.formats.yaml { };
   json = pkgs.formats.json { };
 
-  hiresPort = config.services.prometheus.port;
+  hiresPort = 9090;
   longtermPort = 9091;
-  archivePort = 9092;
   powerStatePort = 9093;
+
+  vmScrapeConfig = yaml.generate "vm-scrape.yml" {
+    global = {
+      scrape_interval = "1s";
+      scrape_timeout = "900ms";
+    };
+    scrape_configs = [
+      {
+        job_name = "power-state";
+        honor_labels = true;
+        static_configs = [ { targets = [ "127.0.0.1:${toString powerStatePort}" ]; } ];
+      }
+      {
+        job_name = "node";
+        metric_relabel_configs = nodeDrops;
+        static_configs = [
+          {
+            targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ];
+            labels.instance = instanceName;
+          }
+        ];
+      }
+      {
+        job_name = "power-meter";
+        scrape_interval = "5s";
+        static_configs = lib.mapAttrsToList (instance: target: {
+          targets = [ target ];
+          labels.instance = instance;
+        }) cfg.power.meters;
+      }
+      {
+        job_name = "victoriametrics";
+        scrape_interval = "15s";
+        metric_relabel_configs = bucketDrops;
+        static_configs = [
+          {
+            targets = [ "127.0.0.1:${toString hiresPort}" ];
+            labels = {
+              instance = instanceName;
+              tier = "hires";
+            };
+          }
+          {
+            targets = [ "127.0.0.1:${toString longtermPort}" ];
+            labels = {
+              instance = instanceName;
+              tier = "history";
+            };
+          }
+        ];
+      }
+    ];
+  };
+
+  historyDataDir = "/var/lib/victoriametrics-history";
+
+  rollupCopy = pkgs.writeShellApplication {
+    name = "vm-rollup-copy";
+    runtimeInputs = [
+      pkgs.curl
+      pkgs.gzip
+    ];
+    text = ''
+      for port in ${toString hiresPort} ${toString longtermPort}; do
+        curl --fail --silent --max-time 5 "http://127.0.0.1:$port/health" >/dev/null 2>&1 || exit 0
+      done
+
+      curl --fail --silent --show-error --get \
+        --data-urlencode 'match[]={__name__=~".*:1h(_max|_min)?"}' \
+        --data-urlencode "start=-3h" \
+        "http://127.0.0.1:${toString hiresPort}/api/v1/export" \
+      | curl --fail --silent --show-error --data-binary @- \
+        "http://127.0.0.1:${toString longtermPort}/api/v1/import"
+    '';
+  };
 
   powerStateReporter = pkgs.writeShellApplication {
     name = "report-power-state";
@@ -51,7 +125,9 @@ let
 
       state="$STATE_DIRECTORY/active.json"
       previous='{}'
-      [ -r "$state" ] && previous=$(cat "$state")
+      if [ -s "$state" ] && jq -e . "$state" >/dev/null 2>&1; then
+        previous=$(cat "$state")
+      fi
       response=$(curl --fail --silent --show-error --get \
         --data-urlencode 'query=GRAFANA_ALERTS{grafana_alertstate=~"pending|alerting|recovering"}' \
         http://127.0.0.1:${toString hiresPort}/api/v1/query)
@@ -87,135 +163,30 @@ let
 
   ruleFile = name: groups: yaml.generate "${name}.yml" { inherit groups; };
 
-  coarsen =
-    groups: map (g: g // { interval = "${toString cfg.backfill.evalIntervalSeconds}s"; }) groups;
-
-  ruleBackfill = pkgs.writeShellApplication {
-    name = "prometheus-rule-backfill";
-    runtimeInputs = with pkgs; [
-      prometheus.cli
-      coreutils
-    ];
-    text = ''
-      start="$(date -u -d "-${toString cfg.backfill.windowMinutes} min" +%Y-%m-%dT%H:%M:%SZ)"
-      end="$(date -u -d "-${toString cfg.backfill.lagMinutes} min" +%Y-%m-%dT%H:%M:%SZ)"
-
-      repair() {
-        target="$1"
-        source="$2"
-        rulefile="$3"
-        [ -d "$target" ] || return 0
-
-        tmp="$(mktemp -d)"
-        promtool tsdb create-blocks-from rules \
-          --url="http://127.0.0.1:$source" \
-          --start="$start" --end="$end" --output-dir="$tmp" --quiet "$rulefile"
-
-        owner="$(stat -c %u:%g "$target")"
-        for block in "$tmp"/*/; do
-          [ -d "$block" ] || continue
-          chown -R "$owner" "$block"
-          mv "$block" "$target/"
-        done
-        rm -rf "$tmp"
-      }
-
-      repair /var/lib/prometheus2 ${toString hiresPort} ${ruleFile "hires-repair-rules" (coarsen rules.hires)}
-      repair /var/lib/prometheus-longterm ${toString hiresPort} ${ruleFile "lt-repair-rules" rules.minuteRepair}
-      repair /var/lib/prometheus-archive ${toString longtermPort} ${ruleFile "archive-repair-rules" rules.hourRepair}
-    '';
-  };
-
-  tierConfig =
+  nodeDrops = [
     {
-      from,
-      match,
-      interval,
-      window,
-      groups,
-    }:
-    yaml.generate "prometheus-${toString from}-federate.yml" {
-      global = {
-        scrape_interval = interval;
-        scrape_timeout = "30s";
-        evaluation_interval = interval;
-      };
-      rule_files = lib.optional (groups != [ ]) "${ruleFile "tier-rules" groups}";
-      scrape_configs = [
-        {
-          job_name = "federate";
-          honor_labels = true;
-          metrics_path = "/federate";
-          params."match[]" = [ match ];
-          static_configs = [ { targets = [ "127.0.0.1:${toString from}" ]; } ];
-          metric_relabel_configs =
-            map
-              (suffix: {
-                source_labels = [ "__name__" ];
-                regex = "(.*):${window}${suffix}";
-                target_label = "__name__";
-                replacement = "\${1}${suffix}";
-              })
-              [
-                ""
-                "_max"
-                "_min"
-              ]
-            ++ [
-              {
-                action = "labeldrop";
-                regex = "job";
-              }
-            ];
-        }
+      source_labels = [
+        "__name__"
+        "state"
       ];
-    };
+      separator = ";";
+      regex = "node_systemd_unit_state;(active|activating|deactivating|inactive)";
+      action = "drop";
+    }
+    {
+      source_labels = [ "__name__" ];
+      regex = "node_cpu_guest_seconds_total|node_cpu_scaling_governor|node_scrape_collector_duration_seconds";
+      action = "drop";
+    }
+  ];
 
-  mkTier =
+  bucketDrops = [
     {
-      name,
-      port,
-      retention,
-      from,
-      match,
-      interval,
-      window,
-      groups ? [ ],
-    }:
-    {
-      description = "Prometheus ${name} tier";
-      wantedBy = [ "multi-user.target" ];
-      after = [
-        "network.target"
-        "prometheus.service"
-      ];
-      serviceConfig = {
-        ExecStart = lib.concatStringsSep " " [
-          "${pkgs.prometheus}/bin/prometheus"
-          "--config.file=${
-            tierConfig {
-              inherit
-                from
-                match
-                interval
-                window
-                groups
-                ;
-            }
-          }"
-          "--storage.tsdb.path=/var/lib/prometheus-${name}"
-          "--storage.tsdb.retention.time=${retention}"
-          "--storage.tsdb.retention.size=0"
-          "--web.listen-address=127.0.0.1:${toString port}"
-          "--web.enable-lifecycle"
-          "--web.enable-admin-api"
-        ];
-        DynamicUser = true;
-        StateDirectory = "prometheus-${name}";
-        Restart = "always";
-        RestartSec = "10s";
-      };
-    };
+      source_labels = [ "__name__" ];
+      regex = ".*_bucket";
+      action = "drop";
+    }
+  ];
 
   datasource = name: uid: port: {
     inherit name uid;
@@ -224,54 +195,8 @@ let
     url = "http://127.0.0.1:${toString port}";
     isDefault = uid == "prometheus-lt";
     jsonData = {
-      timeInterval = if uid == "prometheus" then "1s" else "1m";
+      timeInterval = if port == longtermPort then "1h" else "1s";
       prometheusType = "Prometheus";
-    };
-  };
-
-  lokiDatasource = {
-    name = "Loki";
-    uid = "loki";
-    type = "loki";
-    access = "proxy";
-    url = "http://127.0.0.1:3100";
-    jsonData = {
-      manageAlerts = true;
-      maxLines = 5000;
-      derivedFields = [
-        {
-          name = "TraceID";
-          matcherRegex = ''"trace_id":"([0-9a-f]{32})"'';
-          datasourceUid = "tempo";
-          url = "\${__value.raw}";
-          urlDisplayLabel = "View build trace";
-        }
-      ];
-    };
-  };
-
-  tempoDatasource = {
-    name = "Tempo";
-    uid = "tempo";
-    type = "tempo";
-    access = "proxy";
-    url = "http://127.0.0.1:3200";
-    jsonData = {
-      nodeGraph.enabled = true;
-      search.hide = false;
-      streamingEnabled = {
-        search = true;
-        metrics = true;
-      };
-      tracesToLogsV2 = {
-        datasourceUid = "loki";
-        spanStartTimeShift = "-2s";
-        spanEndTimeShift = "2s";
-        filterByTraceID = true;
-        filterBySpanID = false;
-        customQuery = true;
-        query = ''{service_name=~"nix-observer.*"} | json | trace_id="''${__trace.traceId}"'';
-      };
     };
   };
 
@@ -307,7 +232,36 @@ in
     exporter.hwmonChipExclude = lib.mkOption {
       type = lib.types.str;
       default = "";
-      description = "Regex of hwmon chips node_exporter must not read, sampled by timer instead.";
+      description = "Additional regex of hwmon chips node_exporter must not read.";
+    };
+
+    exporter.scrapeCadenceOverrides = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options = {
+            collector = lib.mkOption {
+              type = lib.types.enum [ "hwmon" ];
+              default = "hwmon";
+              description = "Collector whose metrics use the overridden cadence.";
+            };
+            match = lib.mkOption {
+              type = lib.types.str;
+              description = "Regex matching node_exporter chip labels assigned to this cadence.";
+            };
+            interval = lib.mkOption {
+              type = lib.types.str;
+              description = "Systemd duration between samples.";
+            };
+            onlyWhenActive = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Sample matched drive sensors only while their disk is active.";
+            };
+          };
+        }
+      );
+      default = { };
+      description = "Named metric-source overrides sampled independently of the main exporter cadence.";
     };
 
     server.enable = lib.mkEnableOption "the Prometheus tiers";
@@ -355,7 +309,7 @@ in
     retention = {
       hires = lib.mkOption {
         type = lib.types.str;
-        default = "3h";
+        default = "7d";
         description = "How long the 1-second tier is kept.";
       };
 
@@ -363,46 +317,6 @@ in
         type = lib.types.str;
         default = "2y";
         description = "How long the 1-minute tier is kept.";
-      };
-    };
-
-    backfill = {
-      enable = lib.mkEnableOption "periodic regeneration of recording rules over late data";
-
-      intervalMinutes = lib.mkOption {
-        type = lib.types.ints.positive;
-        default = 20;
-        description = "How often the recording rules are re-run over late data.";
-      };
-
-      cpuQuotaPercent = lib.mkOption {
-        type = lib.types.ints.positive;
-        default = 40;
-        description = "CPU ceiling for the backfill, so it cannot starve the host.";
-      };
-
-      memoryMax = lib.mkOption {
-        type = lib.types.str;
-        default = "512M";
-        description = "Memory ceiling; the backfill is killed rather than the host.";
-      };
-
-      evalIntervalSeconds = lib.mkOption {
-        type = lib.types.ints.positive;
-        default = 15;
-        description = "Resolution the rules are re-evaluated at, well below the 1s live rate.";
-      };
-
-      windowMinutes = lib.mkOption {
-        type = lib.types.ints.positive;
-        default = 120;
-        description = "How far back each backfill pass regenerates.";
-      };
-
-      lagMinutes = lib.mkOption {
-        type = lib.types.ints.positive;
-        default = 5;
-        description = "How far behind now each pass stops, so live rules own the present.";
       };
     };
 
@@ -573,6 +487,7 @@ in
           scrape_configs = [
             {
               job_name = "node";
+              metric_relabel_configs = nodeDrops;
               static_configs = [
                 {
                   targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ];
@@ -612,73 +527,61 @@ in
     })
 
     (lib.mkIf cfg.server.enable {
-      services.prometheus = {
+      services.victoriametrics = {
         enable = true;
-        extraFlags = [
-          "--web.enable-remote-write-receiver"
-          "--web.enable-admin-api"
+        listenAddress = "0.0.0.0:${toString hiresPort}";
+        retentionPeriod = cfg.retention.hires;
+        extraOptions = [
+          "-promscrape.config=${vmScrapeConfig}"
+          "-search.maxStalenessInterval=2h"
         ];
-        listenAddress = "0.0.0.0";
-        retentionTime = cfg.retention.hires;
-        configText = builtins.toJSON {
-          global = {
-            scrape_interval = "1s";
-            scrape_timeout = "900ms";
-            evaluation_interval = "1s";
-          };
-          rule_files = [ "${ruleFile "hires-rules" rules.hires}" ];
-          storage.tsdb.out_of_order_time_window = "1h";
-          scrape_configs = [
-            {
-              job_name = "power-state";
-              honor_labels = true;
-              static_configs = [ { targets = [ "127.0.0.1:${toString powerStatePort}" ]; } ];
-            }
-            {
-              job_name = "node";
-              static_configs = [
-                {
-                  targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ];
-                  labels.instance = instanceName;
-                }
-              ];
-            }
-            {
-              job_name = "power-meter";
-              scrape_interval = "5s";
-              static_configs = lib.mapAttrsToList (instance: target: {
-                targets = [ target ];
-                labels.instance = instance;
-              }) cfg.power.meters;
-            }
-            {
-              job_name = "prometheus";
-              scrape_interval = "15s";
-              static_configs = [
-                {
-                  targets = [ "127.0.0.1:${toString hiresPort}" ];
-                  labels = {
-                    instance = instanceName;
-                    tier = "hires";
-                  };
-                }
-                {
-                  targets = [ "127.0.0.1:${toString longtermPort}" ];
-                  labels = {
-                    instance = instanceName;
-                    tier = "history";
-                  };
-                }
-                {
-                  targets = [ "127.0.0.1:${toString archivePort}" ];
-                  labels = {
-                    instance = instanceName;
-                    tier = "archive";
-                  };
-                }
-              ];
-            }
+      };
+
+      systemd.services.victoriametrics-history = {
+        description = "VictoriaMetrics history tier";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "network.target" ];
+        serviceConfig = {
+          ExecStart = lib.concatStringsSep " " [
+            "${config.services.victoriametrics.package}/bin/victoria-metrics"
+            "-httpListenAddr=127.0.0.1:${toString longtermPort}"
+            "-retentionPeriod=100y"
+            "-storageDataPath=${historyDataDir}"
           ];
+          DynamicUser = true;
+          StateDirectory = "victoriametrics-history";
+          Restart = "always";
+          RestartSec = "10s";
+        };
+      };
+
+      services.vmalert.instances.main = {
+        enable = true;
+        settings = {
+          "datasource.url" = "http://127.0.0.1:${toString hiresPort}";
+          "remoteWrite.url" = "http://127.0.0.1:${toString hiresPort}";
+          "remoteRead.url" = "http://127.0.0.1:${toString hiresPort}";
+          "notifier.blackhole" = true;
+          "evaluationInterval" = "1s";
+        };
+        rules.groups = rules.hires ++ rules.hourly;
+      };
+
+      systemd.services.vm-rollup-copy = {
+        description = "Copy 1h rollups into the history tier";
+        after = [ "victoriametrics.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = lib.getExe rollupCopy;
+        };
+      };
+
+      systemd.timers.vm-rollup-copy = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnActiveSec = "1h";
+          OnUnitActiveSec = "1h";
+          RandomizedDelaySec = "5m";
         };
       };
 
@@ -689,62 +592,9 @@ in
       };
 
       networking.firewall.interfaces.tailscale0.allowedTCPPorts = [
-        config.services.prometheus.port
+        hiresPort
         powerStatePort
       ];
-
-      systemd.services.prometheus-longterm = mkTier {
-        name = "longterm";
-        port = longtermPort;
-        retention = cfg.retention.longterm;
-        from = hiresPort;
-        interval = "60s";
-        window = "1m";
-        match = ''{__name__=~".*:1m(_max|_min)?"}'';
-        groups = rules.hourly;
-      };
-
-      # Recording rules evaluate live and are never revisited, so samples that
-      # arrive late (a host reconnecting and replaying its queue) leave a
-      # permanent hole in every derived series. Re-run the rules over a lagging
-      # window and drop the resulting blocks into each tier.
-      systemd.services.prometheus-rule-backfill = lib.mkIf cfg.backfill.enable {
-        description = "Regenerate recording rules over late-arriving samples";
-        after = [ "prometheus.service" ];
-        serviceConfig = {
-          Type = "oneshot";
-          ExecStart = lib.getExe ruleBackfill;
-          TimeoutStartSec = "${toString cfg.backfill.intervalMinutes}m";
-          Nice = 19;
-          IOSchedulingClass = "idle";
-          CPUSchedulingPolicy = "idle";
-          CPUQuota = "${toString cfg.backfill.cpuQuotaPercent}%";
-          MemoryMax = cfg.backfill.memoryMax;
-          MemorySwapMax = 0;
-          OOMPolicy = "stop";
-        };
-      };
-
-      systemd.timers.prometheus-rule-backfill = lib.mkIf cfg.backfill.enable {
-        wantedBy = [ "timers.target" ];
-        timerConfig = {
-          OnBootSec = "15m";
-          OnUnitActiveSec = "${toString cfg.backfill.intervalMinutes}m";
-          RandomizedDelaySec = "2m";
-        };
-      };
-
-      # Prometheus reads a retention of 0 as "use the 15 day default", so
-      # indefinite has to be spelled as a length nothing will outlive.
-      systemd.services.prometheus-archive = mkTier {
-        name = "archive";
-        port = archivePort;
-        retention = "100y";
-        from = longtermPort;
-        interval = "1h";
-        window = "1h";
-        match = ''{__name__=~".*:1h(_max|_min)?"}'';
-      };
 
     })
 
@@ -753,6 +603,11 @@ in
       systemd.services.grafana = {
         after = [ "sops-install-secrets.service" ];
         wants = [ "sops-install-secrets.service" ];
+        environment = {
+          GOMEMLIMIT = "144MiB";
+          GOGC = "40";
+        };
+        serviceConfig.MemoryHigh = "224M";
       };
 
       networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 3000 ];
@@ -760,8 +615,6 @@ in
       services.grafana = {
         enable = true;
         declarativePlugins = [
-          pkgs.grafanaPlugins.grafana-exploretraces-app
-          pkgs.grafanaPlugins.grafana-lokiexplore-app
           pkgs.grafanaPlugins.grafana-metricsdrilldown-app
         ];
         settings.server = {
@@ -772,10 +625,15 @@ in
         settings.security.secret_key = "$__file{${config.sops.secrets."grafana-secret-key".path}}";
         settings."unified_alerting.state_history" = {
           enabled = true;
-          backend = "loki";
-          loki_remote_url = "http://127.0.0.1:3100";
+          backend = "annotations";
         };
         settings.feature_toggles.enable = "alertingCentralAlertHistory";
+        settings.analytics = {
+          reporting_enabled = false;
+          check_for_updates = false;
+          check_for_plugin_updates = false;
+        };
+        settings.live.max_connections = 0;
         settings."auth.anonymous" = {
           enabled = true;
           org_role = "Admin";
@@ -783,12 +641,32 @@ in
 
         provision.datasources.settings = {
           apiVersion = 1;
+          deleteDatasources = [
+            {
+              name = "Loki";
+              orgId = 1;
+            }
+            {
+              name = "Tempo";
+              orgId = 1;
+            }
+            {
+              name = "Prometheus (1s)";
+              orgId = 1;
+            }
+            {
+              name = "Prometheus (1m)";
+              orgId = 1;
+            }
+            {
+              name = "Prometheus (1h)";
+              orgId = 1;
+            }
+          ];
           datasources = [
-            (datasource "Prometheus (1s)" "prometheus" hiresPort)
-            (datasource "Prometheus (1m)" "prometheus-lt" longtermPort)
-            (datasource "Prometheus (1h)" "prometheus-archive" archivePort)
-            lokiDatasource
-            tempoDatasource
+            (datasource "Live (1s, 7d)" "prometheus" hiresPort)
+            (datasource "Live (1s, 7d) default" "prometheus-lt" hiresPort)
+            (datasource "History (1h, forever)" "prometheus-archive" longtermPort)
           ];
         };
 
@@ -798,7 +676,6 @@ in
             (dashboardProvider "overview" "Overview")
             (dashboardProvider "metrics" "Metrics")
             (dashboardProvider "archive" "Archive")
-            (dashboardProvider "observability" "Observability")
           ];
         };
 
@@ -820,7 +697,6 @@ in
         description = "Track Grafana alert condition start times";
         after = [
           "grafana.service"
-          "prometheus.service"
           "prometheus-pushgateway.service"
         ];
         wants = [ "prometheus-pushgateway.service" ];
@@ -828,6 +704,7 @@ in
           Type = "oneshot";
           DynamicUser = true;
           StateDirectory = "grafana-alert-duration-tracker";
+          ExecCondition = "${pkgs.curl}/bin/curl --fail --silent --max-time 5 http://127.0.0.1:${toString hiresPort}/health";
           ExecStart = lib.getExe alertDurationTracker;
         };
       };

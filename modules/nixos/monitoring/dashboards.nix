@@ -193,20 +193,27 @@ let
     "total"
   ];
 
-  powerBandTargets = prefix: suffix: [
-    (target {
-      expr = ''${prefix}pc:power_component_watts{instance=~"$host",component!~"Storage|Fans"}${suffix}'';
-      legend = "{{instance}} {{component}}";
-    })
-    (target {
-      expr = ''${prefix}pc:power_component_watts{instance=~"$host",component="Storage"}${suffix}'';
-      legend = "{{instance}} {{device}}";
-    })
-    (target {
-      expr = ''${prefix}pc:power_component_watts{instance=~"$host",component="Fans"}${suffix}'';
-      legend = "{{instance}} {{fan}} fan";
-    })
+  powerStackHosts = [
+    "desktopnew"
+    "desktopold"
+    "laptop"
+    "pi"
   ];
+
+  powerBandTargets =
+    prefix: suffix:
+    map (
+      host:
+      target {
+        expr = ''
+          sort_desc(
+            label_replace((${prefix}pc:power_component_watts{instance="${host}",component!~"Storage|Fans"}${suffix}) >= 0, "name", "$1", "component", "(.*)")
+            or label_replace((${prefix}pc:power_component_watts{instance="${host}",component="Storage"}${suffix}) >= 0, "name", "$1", "device", "(.*)")
+            or label_replace((${prefix}pc:power_component_watts{instance="${host}",component="Fans"}${suffix}) >= 0, "name", "$1 fan", "fan", "(.*)")
+          ) and on(instance) (${prefix}pc:power_watts{instance=~"$host"}${suffix})'';
+        legend = "{{instance}} {{name}}";
+      }
+    ) powerStackHosts;
 
   boundedAverage =
     upMetric: expression:
@@ -349,6 +356,7 @@ let
     );
 
   alertList = args: panel "alertlist" args;
+  annotationList = args: panel "annolist" args;
   logs =
     args:
     panel "logs" (
@@ -367,32 +375,22 @@ let
       // args
     );
 
-  alertHostFilter =
-    hostFilter:
-    ''| json | label_format alertHost="{{ or .labels_instance .labels_host | replace \"_\" \"\" }}" | alertHost=~"(${hostFilter})|"'';
-
   recentAlerts =
-    {
-      hostFilter,
-      severityFilter ? ".*",
-      ruleFilter ? ".*",
-      stateFilter ? ".*",
-    }:
-    logs {
+    { ... }:
+    annotationList {
       title = "Recent alerts";
-      description = "Latest alert state changes.";
+      description = "Latest alert state changes, recorded as Grafana annotations.";
       w = 24;
       h = 10;
-      datasource = {
-        type = "loki";
-        uid = "loki";
+      options = {
+        onlyFromThisDashboard = false;
+        onlyInTimeRange = false;
+        tags = [ "alertName" ];
+        limit = 30;
+        showTags = true;
+        showTime = true;
+        showUser = false;
       };
-      targets = [
-        (target {
-          expr = ''{from="state-history"} ${alertHostFilter hostFilter} | labels_severity=~"${severityFilter}" | ruleTitle=~"${ruleFilter}" | current=~"${stateFilter}" | line_format "{{.ruleTitle}}  {{.alertHost}}  {{.labels_severity}}  {{.previous}} → {{.current}}"'';
-          maxDataPoints = 30;
-        })
-      ];
     };
 
   rightAxis = pattern: {
@@ -1067,7 +1065,7 @@ let
     query = "prometheus";
     refresh = 1;
     current = {
-      text = "Prometheus (1m)";
+      text = "Live (1s, 7d) default";
       value = "prometheus-lt";
       selected = true;
     };
@@ -1077,13 +1075,7 @@ let
   hostVariable =
     datasource:
     let
-      metric =
-        if datasource == "prometheus" then
-          "host:up"
-        else if datasource == "prometheus-lt" then
-          "host:up"
-        else
-          "host:up";
+      metric = "host:up";
       # Historical series created before host relabelling must not surface as
       # selectable hosts in Grafana.
       hostSelector = ''{instance!~"127[.]0[.]0[.]1(:[0-9]+)?"}'';
@@ -1117,13 +1109,7 @@ let
   sensorVariable =
     datasource:
     let
-      metric =
-        if datasource == "prometheus" then
-          "sensor:temp_celsius"
-        else if datasource == "prometheus-lt" then
-          "sensor:temp_celsius"
-        else
-          "sensor:temp_celsius";
+      metric = "sensor:temp_celsius";
     in
     {
       name = "sensor";
@@ -1154,11 +1140,7 @@ let
   capacityVariable =
     datasource:
     let
-      metric =
-        if datasource == "prometheus-archive" then
-          "(mem:capacity_info_max or mem:capacity_info)"
-        else
-          "(mem:capacity_info_max or mem:capacity_info)";
+      metric = ''{__name__=~"mem:capacity_info(_max)?"}'';
     in
     {
       name = "capacity";
@@ -1222,28 +1204,6 @@ let
     current = {
       text = value;
       inherit value;
-      selected = true;
-    };
-    options = [ ];
-  };
-
-  logHostVariable = {
-    name = "host";
-    label = "Host";
-    type = "query";
-    datasource = {
-      type = "loki";
-      uid = "loki";
-    };
-    query = ''label_values({source="journal"}, host)'';
-    definition = ''label_values({source="journal"}, host)'';
-    refresh = 1;
-    multi = true;
-    includeAll = true;
-    allValue = ".*";
-    current = {
-      text = "All";
-      value = "$__all";
       selected = true;
     };
     options = [ ];
@@ -1441,7 +1401,7 @@ let
         ];
         targets = [
           (target {
-            expr = ''count(host:up{instance=~"$host"} == 1) * 10 + count(host:up{instance=~"$host"})'';
+            expr = ''count(round(host:up{instance=~"$host"}) == 1) * 10 + count(host:up{instance=~"$host"})'';
             instant = true;
           })
         ];
@@ -1965,13 +1925,9 @@ let
         title = "Nix rebuilds (24h)";
         w = 6;
         h = 5;
-        datasource = {
-          type = "loki";
-          uid = "loki";
-        };
         targets = [
           (target {
-            expr = ''sum(count_over_time({service_name="nix-observer-summary"} | json | event="nix_rebuild" [24h]))'';
+            expr = ''sum(nix_events_24h{event="nix_rebuild"})'';
             instant = true;
           })
         ];
@@ -1980,13 +1936,9 @@ let
         title = "Failed Nix rebuilds (24h)";
         w = 6;
         h = 5;
-        datasource = {
-          type = "loki";
-          uid = "loki";
-        };
         targets = [
           (target {
-            expr = ''sum(count_over_time({service_name="nix-observer-summary"} | json | event="nix_rebuild" | status="failed" | alert_eligible="true" [24h]))'';
+            expr = ''sum(nix_alertable_failures_24h{event="nix_rebuild"})'';
             instant = true;
           })
         ];
@@ -2093,64 +2045,20 @@ let
           viewMode = "list";
         };
       })
-      (logs {
+      (annotationList {
         title = "Alert history";
-        description = "One row per Grafana alert state transition, stored in Loki. Expand a row for the complete rule labels and evaluated values.";
+        description = "Every Grafana alert state transition, recorded as annotations in Grafana's own store.";
         w = 24;
         h = 14;
-        datasource = {
-          type = "loki";
-          uid = "loki";
+        options = {
+          onlyFromThisDashboard = false;
+          onlyInTimeRange = true;
+          tags = [ "alertName" ];
+          limit = 100;
+          showTags = true;
+          showTime = true;
+          showUser = false;
         };
-        targets = [
-          (target {
-            expr = ''{from="state-history"} ${alertHostFilter "$host"} | labels_severity=~"$severity" | ruleTitle=~"$rule" | current=~"$state" | line_format "{{.ruleTitle}}  {{.alertHost}}  {{.labels_severity}}  {{.previous}} → {{.current}}  value={{.values}}"'';
-          })
-        ];
-      })
-      (ts {
-        title = "Alert transitions per hour";
-        w = 24;
-        h = 8;
-        datasource = {
-          type = "loki";
-          uid = "loki";
-        };
-        targets = [
-          (target {
-            expr = ''sum(count_over_time({from="state-history"} ${alertHostFilter "$host"} | labels_severity=~"$severity" | ruleTitle=~"$rule" | current=~"$state" [1h]))'';
-            interval = "1h";
-            maxDataPoints = 200;
-          })
-        ];
-      })
-      (logs {
-        title = "Recent failures and unhealthy evaluations";
-        w = 12;
-        h = 10;
-        datasource = {
-          type = "loki";
-          uid = "loki";
-        };
-        targets = [
-          (target {
-            expr = ''{from="state-history"} ${alertHostFilter "$host"} | current=~"Alerting.*|Error.*|NoData.*" | line_format "{{.ruleTitle}}  {{.alertHost}}  {{.previous}} → {{.current}}  {{.values}}"'';
-          })
-        ];
-      })
-      (logs {
-        title = "Recently resolved";
-        w = 12;
-        h = 10;
-        datasource = {
-          type = "loki";
-          uid = "loki";
-        };
-        targets = [
-          (target {
-            expr = ''{from="state-history"} ${alertHostFilter "$host"} | previous=~"Alerting.*|Error.*|NoData.*" | current=~"Normal.*" | line_format "{{.ruleTitle}}  {{.alertHost}}  {{.previous}} → {{.current}}"'';
-          })
-        ];
       })
       (timeline {
         title = "Host reachability";
@@ -2160,7 +2068,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = "max by (instance) (host:up${upSelector})";
+            expr = "round(max by (instance) (host:up${upSelector}))";
             legend = "{{instance}}";
           })
         ];
@@ -2238,7 +2146,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''pc:power_watts{instance=~"$host"}'';
+            expr = ''pc:power_watts{instance=~"$host"} >= 0'';
             legend = "{{instance}}";
           })
         ];
@@ -2323,7 +2231,7 @@ let
         gradientSeries = powerBands;
         targets = powerBandTargets "" "" ++ [
           (target {
-            expr = ''sum(pc:power_watts{instance=~"$host"})'';
+            expr = ''sum(pc:power_watts{instance=~"$host"}) >= 0'';
             legend = "combined total";
           })
         ];
@@ -2340,27 +2248,12 @@ let
             legend = "{{instance}} meter";
           })
           (target {
-            expr = ''pc:power_watts{instance=~"$host"}'';
+            expr = ''pc:power_watts{instance=~"$host"} >= 0'';
             legend = "{{instance}} model";
           })
           (target {
             expr = ''pc:power_model_error_watts{instance=~"$host"}'';
             legend = "{{instance}} error";
-          })
-        ];
-      })
-      (ts {
-        title = "Drive power state";
-        description = "One line per drive: 1 while the motor is parked. Spun-down drives are the largest single swing in the Pi's draw.";
-        w = 12;
-        h = 8;
-        unit = "short";
-        max = 1;
-        min = 0;
-        targets = [
-          (target {
-            expr = ''pc:disk_standby{instance=~"$host"}'';
-            legend = "{{instance}} {{device}}";
           })
         ];
       })
@@ -2442,19 +2335,19 @@ let
       })
       (ts {
         title = "Temperature against fan speed";
-        description = "Fans on the right axis. Use the Smoothing picker to make the lag between a temperature rise and the fan response easier to inspect.";
+        description = "Fan speed as a share of each fan's configured maximum, on the right axis. Use the Smoothing picker to make the lag between a temperature rise and the fan response easier to inspect.";
         w = 24;
         h = 9;
         unit = "celsius";
-        overrides = [ (rightAxis ".*rpm.*") ];
+        overrides = [ (rightAxisUnit ".*fan$" "percentunit") ];
         targets = [
           (target {
             expr = ''temp:major_celsius{instance=~"$host",component="CPU"}'';
             legend = "{{instance}} CPU";
           })
           (target {
-            expr = ''fan:rpm{instance=~"$host"} > 0'';
-            legend = "{{instance}} {{id}} rpm";
+            expr = ''pc:fan_speed_ratio{instance=~"$host"}'';
+            legend = "{{instance}} {{fan}} fan";
           })
         ];
       })
@@ -2669,6 +2562,20 @@ let
         ];
       })
       (ts {
+        title = "Memory by service";
+        description = "Memory charged to each systemd unit cgroup, so host pressure can be attributed to a service. Includes page cache charged to the unit, which is reclaimable, so this sums above what the host reports as used.";
+        w = 24;
+        h = 10;
+        unit = "bytes";
+        min = 0;
+        targets = [
+          (target {
+            expr = ''topk(12, node_unit_memory_bytes{instance=~"$host"})'';
+            legend = "{{instance}} {{unit}}";
+          })
+        ];
+      })
+      (ts {
         title = "Swap used";
         unit = "bytes";
         min = 0;
@@ -2866,7 +2773,7 @@ let
         overrides = [ (dimmed ".*(peak|floor)$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(pc:power_watts{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
+            expr = ''avg_over_time(pc:power_watts{instance=~"$host"}[''${smoothspan}] offset -''${smooth}) >= 0'';
             legend = "{{instance}}";
           })
           (target {
@@ -2874,7 +2781,7 @@ let
             legend = "{{instance}} peak";
           })
           (target {
-            expr = ''min_over_time((pc:power_watts_min{instance=~"$host"} or pc:power_watts{instance=~"$host"})[''${smoothspan}:] offset -''${smooth})'';
+            expr = ''min_over_time((pc:power_watts_min{instance=~"$host"} or pc:power_watts{instance=~"$host"})[''${smoothspan}:] offset -''${smooth}) >= 0'';
             legend = "{{instance}} floor";
           })
         ];
@@ -3005,11 +2912,11 @@ let
         w = 24;
         h = 9;
         unit = "celsius";
-        overrides = [ (rightAxis ".*rpm.*") ];
+        overrides = [ (rightAxisUnit ".*fan$" "percentunit") ];
         targets = smoothedMajorTemperatureTargets ++ [
           (target {
-            expr = ''max by (instance) (avg_over_time(fan:rpm{instance=~"$host"}[''${smoothspan}] offset -''${smooth}))'';
-            legend = "{{instance}} fan rpm";
+            expr = ''avg_over_time(pc:fan_speed_ratio{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
+            legend = "{{instance}} {{fan}} fan";
           })
         ];
       })
@@ -3028,7 +2935,7 @@ let
         ];
         targets = [
           (target {
-            expr = ''max by (instance) (avg_over_time(fan:rpm{instance=~"$host"}[''${smoothspan}] offset -''${smooth}))'';
+            expr = ''max by (instance) (avg_over_time(pc:fan_speed_ratio{instance=~"$host"}[''${smoothspan}] offset -''${smooth}))'';
             legend = "{{instance}} fan";
           })
           (target {
@@ -3246,7 +3153,7 @@ let
         mappings = directMappings;
         targets = [
           (target {
-            expr = ''avg_over_time(ts:peer_direct{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
+            expr = ''round(avg_over_time(ts:peer_direct{instance=~"$host"}[''${smoothspan}] offset -''${smooth}))'';
             legend = "{{instance}} to {{peer}}";
           })
         ];
@@ -3317,7 +3224,7 @@ let
         h = 5;
         targets = [
           (target {
-            expr = "count(host:up == 1)";
+            expr = "count(round(host:up) == 1)";
             instant = true;
           })
         ];
@@ -3328,7 +3235,7 @@ let
         h = 5;
         targets = [
           (target {
-            expr = "count(max by (peer) (ts:peer_online) == 1)";
+            expr = "count(round(max by (peer) (ts:peer_online)) == 1)";
             instant = true;
           })
         ];
@@ -3431,7 +3338,7 @@ let
         ];
         targets = [
           (target {
-            expr = "max by (peer, peer_os, relay) (ts:peer_online)";
+            expr = "round(max by (peer, peer_os, relay) (ts:peer_online))";
             format = "table";
             instant = true;
           })
@@ -3452,7 +3359,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = "max by (instance) (host:up${upSelector})";
+            expr = "round(max by (instance) (host:up${upSelector}))";
             legend = "{{instance}}";
           })
         ];
@@ -3906,7 +3813,7 @@ let
         decimals = 0;
         targets = [
           (target {
-            expr = ''sum by (instance) (1 - pc:disk_standby{instance=~"$host"})'';
+            expr = ''sum by (instance) (1 - round(drive:standby{instance=~"$host"}))'';
             legend = "{{instance}}";
           })
         ];
@@ -3921,7 +3828,7 @@ let
         mappings = spinMappings;
         targets = [
           (target {
-            expr = ''pc:disk_standby{instance=~"$host"}'';
+            expr = ''round(drive:standby{instance=~"$host"})'';
             legend = "{{instance}} {{device}}";
           })
         ];
@@ -3936,7 +3843,7 @@ let
         mappings = selftestMappings;
         targets = [
           (target {
-            expr = ''drive:selftest_running{instance=~"$host"}'';
+            expr = ''round(drive:selftest_running{instance=~"$host"})'';
             legend = "{{instance}} {{device}}";
           })
         ];
@@ -3956,14 +3863,11 @@ let
       })
       (ts {
         title = "Drive temperature";
+        description = "Live HDD temperatures; parked drives and unavailable readings are omitted.";
         w = 12;
         h = 8;
         unit = "celsius";
         targets = [
-          (target {
-            expr = ''drive:temperature_celsius{instance=~"$host"}'';
-            legend = "{{instance}} {{device}}";
-          })
           (target {
             expr = ''sensor:temp_celsius{instance=~"$host",name=~"HDD.*"}'';
             legend = "{{instance}} {{name}}";
@@ -4213,12 +4117,12 @@ let
         overrides = [ (dimmed ".*peak$") ];
         targets = [
           (target {
-            expr = ''avg_over_time(drive:temperature_celsius{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
-            legend = "{{instance}} {{device}}";
+            expr = ''avg_over_time(sensor:temp_celsius{instance=~"$host",name=~"HDD.*"}[''${smoothspan}] offset -''${smooth})'';
+            legend = "{{instance}} {{name}}";
           })
           (target {
-            expr = ''max_over_time((drive:temperature_celsius_max{instance=~"$host"} or drive:temperature_celsius{instance=~"$host"})[''${smoothspan}:] offset -''${smooth})'';
-            legend = "{{instance}} {{device}} peak";
+            expr = ''max_over_time((sensor:temp_celsius_max{instance=~"$host",name=~"HDD.*"} or sensor:temp_celsius{instance=~"$host",name=~"HDD.*"})[''${smoothspan}:] offset -''${smooth})'';
+            legend = "{{instance}} {{name}} peak";
           })
         ];
       })
@@ -4330,13 +4234,13 @@ let
         max = 1;
         targets = [
           (target {
-            expr = ''1 - avg by (instance, device) (avg_over_time(pc:disk_standby{instance=~"$host"}[1d]))'';
+            expr = ''1 - avg by (instance, device) (avg_over_time(drive:standby{instance=~"$host"}[1d]))'';
             legend = "{{instance}} {{device}}";
             interval = "1d";
           })
         ];
       })
-      (bar {
+      (barGauge {
         title = "Spun-up time over range";
         description = "Total hours each drive spent spinning across the selected range.";
         w = 12;
@@ -4345,7 +4249,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = ''(1 - avg by (instance, device) (avg_over_time(pc:disk_standby{instance=~"$host"}[$__range]))) * $__range_s / 3600'';
+            expr = ''(1 - avg by (instance, device) (avg_over_time(drive:standby{instance=~"$host"}[$__range]))) * $__range_s / 3600'';
             legend = "{{instance}} {{device}}";
             instant = true;
           })
@@ -4805,7 +4709,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = "max by (instance) (host:up${upSelector})";
+            expr = "round(max by (instance) (host:up${upSelector}))";
             legend = "{{instance}}";
           })
         ];
@@ -5037,357 +4941,62 @@ let
       })
     ];
   };
-
-  nixBuilds = dashboard {
-    uid = "nix-builds";
-    title = "Nix Builds";
-    datasource = "loki";
+  nasUsage = dashboard {
+    uid = "nas-usage";
+    title = "NAS usage";
+    datasource = "prometheus";
     from = "now-24h";
     refresh = "1m";
-    tags = [
-      "nix"
-      "builds"
-    ];
-    variables = [
-      logHostVariable
-      (textboxVariable "project" "Project regex" ".*")
-    ];
-    links = [
-      (dashboardLink "Build detail" "nix-build-detail")
-      (dashboardLink "Daily history" "nix-build-history")
-      (dashboardLink "Logs" "logs")
-      (dashboardLink "Alerts" "alerts")
-      (dashboardLink "Overview" "overview")
-    ];
+    tags = [ "nas" ];
+    links = [ (dashboardLink "Drives" "drives") ];
     panels = [
       (stat {
-        title = "Builds";
-        w = 4;
-        h = 5;
-        targets = [
-          (target {
-            expr = ''sum(count_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" [$__range]))'';
-            instant = true;
-          })
-        ];
+        title = "Stored";
+        unit = "bytes";
+        w = 6;
+        h = 4;
+        targets = [ { expr = "sum(nas_user_bytes)"; } ];
       })
       (stat {
-        title = "Failures";
-        w = 4;
-        h = 5;
-        targets = [
-          (target {
-            expr = ''sum(count_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | status="failed" [$__range]))'';
-            instant = true;
-          })
-        ];
+        title = "Files";
+        w = 6;
+        h = 4;
+        targets = [ { expr = "sum(nas_user_files)"; } ];
       })
       (stat {
-        title = "Mean full rebuild time";
-        w = 4;
-        h = 5;
+        title = "Accounts";
+        w = 6;
+        h = 4;
+        targets = [ { expr = "count(nas_user_bytes)"; } ];
+      })
+      (stat {
+        title = "Metadata warm age";
         unit = "s";
-        targets = [
-          (target {
-            expr = ''avg(avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_rebuild" | project=~"$project" | unwrap duration_seconds [$__range]))'';
-            instant = true;
-          })
-        ];
-      })
-      (stat {
-        title = "Compiled derivations";
-        w = 4;
-        h = 5;
-        targets = [
-          (target {
-            expr = ''sum(sum_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap compiled [$__range]))'';
-            instant = true;
-          })
-        ];
-      })
-      (stat {
-        title = "Substituted paths";
-        w = 4;
-        h = 5;
-        targets = [
-          (target {
-            expr = ''sum(sum_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap substituted [$__range]))'';
-            instant = true;
-          })
-        ];
-      })
-      (stat {
-        title = "Cache ratio";
-        w = 4;
-        h = 5;
-        unit = "percentunit";
-        min = 0;
-        max = 1;
-        targets = [
-          (target {
-            expr = ''sum(sum_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap substituted [$__range])) / sum(sum_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap required [$__range]))'';
-            instant = true;
-          })
-        ];
-      })
-      (bar {
-        title = "Build duration (5-minute buckets)";
-        w = 24;
-        h = 9;
-        unit = "s";
-        targets = [
-          (target {
-            expr = ''max_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap duration_seconds [5m])'';
-            legend = "{{host}} {{project}} {{kind}} {{status}}";
-            interval = "5m";
-            maxDataPoints = 300;
-          })
-        ];
-      })
-      (logs {
-        title = "Build and rebuild history";
-        w = 24;
-        h = 13;
-        targets = [
-          (target {
-            expr = ''{service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | line_format "{{.status}}  {{.project}}  {{.kind}}  {{.duration_seconds}}s  required={{.required}} compiled={{.compiled}} substituted={{.substituted}} closure={{.closure_paths}}/{{.closure_nar_bytes}}B failed={{.failed_package}} trace={{.trace_id}}"'';
-          })
-        ];
-      })
-      (logs {
-        title = "Failed package output";
-        w = 24;
-        h = 12;
-        targets = [
-          (target {
-            expr = ''{service_name="nix-observer",host=~"$host"} | json | event="nix_build_log" | project=~"$project" | line_format "{{.project}} {{.package}}: {{.message}} trace={{.trace_id}}"'';
-          })
-        ];
-      })
-    ];
-  };
-
-  nixBuildHistory = dashboard {
-    uid = "nix-build-history";
-    title = "Nix Build History";
-    datasource = "loki";
-    from = "now-90d";
-    refresh = "";
-    tags = [
-      "nix"
-      "builds"
-      "history"
-    ];
-    variables = [
-      logHostVariable
-      (textboxVariable "project" "Project regex" ".*")
-    ];
-    links = [
-      (dashboardLink "Recent builds" "nix-builds")
-      (dashboardLink "Build detail" "nix-build-detail")
-      (dashboardLink "Overview" "overview")
-    ];
-    panels = [
-      (bar {
-        title = "Builds per day";
-        w = 12;
-        h = 9;
-        targets = [
-          (target {
-            expr = ''sum by (host) (count_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" [1d]))'';
-            legend = "{{host}}";
-            interval = "1d";
-            maxDataPoints = 100;
-          })
-        ];
-      })
-      (bar {
-        title = "Failures per day";
-        w = 12;
-        h = 9;
-        targets = [
-          (target {
-            expr = ''sum by (host) (count_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | status="failed" [1d]))'';
-            legend = "{{host}}";
-            interval = "1d";
-            maxDataPoints = 100;
-          })
-        ];
-      })
-      (ts {
-        title = "Daily build duration";
-        w = 24;
-        h = 10;
-        unit = "s";
-        targets = [
-          (target {
-            expr = ''avg by (host) (avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap duration_seconds [1d]))'';
-            legend = "{{host}} mean";
-            interval = "1d";
-            maxDataPoints = 100;
-          })
-          (target {
-            expr = ''max by (host) (max_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap duration_seconds [1d]))'';
-            legend = "{{host}} max";
-            interval = "1d";
-            maxDataPoints = 100;
-          })
-          (target {
-            expr = ''avg by (host) (avg_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_rebuild" | project=~"$project" | unwrap duration_seconds [1d]))'';
-            legend = "{{host}} full rebuild mean";
-            interval = "1d";
-            maxDataPoints = 100;
-          })
-        ];
-      })
-      (bar {
-        title = "Compiled paths per day";
-        w = 12;
-        h = 9;
-        targets = [
-          (target {
-            expr = ''sum by (host) (sum_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap compiled [1d]))'';
-            legend = "{{host}}";
-            interval = "1d";
-            maxDataPoints = 100;
-          })
-        ];
-      })
-      (bar {
-        title = "Substituted paths per day";
-        w = 12;
-        h = 9;
-        targets = [
-          (target {
-            expr = ''sum by (host) (sum_over_time({service_name="nix-observer-summary",host=~"$host"} | json | event="nix_build" | project=~"$project" | unwrap substituted [1d]))'';
-            legend = "{{host}}";
-            interval = "1d";
-            maxDataPoints = 100;
-          })
-        ];
-      })
-    ];
-  };
-
-  nixBuildDetail = dashboard {
-    uid = "nix-build-detail";
-    title = "Nix Build Detail";
-    datasource = "loki";
-    from = "now-6h";
-    refresh = "30s";
-    tags = [
-      "nix"
-      "builds"
-    ];
-    variables = [ (textboxVariable "trace" "Trace ID" ".*") ];
-    links = [
-      (dashboardLink "All builds" "nix-builds")
-      (dashboardLink "System" "system")
-      (dashboardLink "Logs" "logs")
-    ];
-    panels = [
-      (logs {
-        title = "Invocation";
-        w = 24;
-        h = 6;
-        targets = [
-          (target {
-            expr = ''{service_name="nix-observer-summary"} | json | event="nix_build" | trace_id=~"$trace"'';
-          })
-        ];
-      })
-      (logs {
-        title = "Required workset — compiled and substituted";
-        w = 24;
-        h = 14;
-        targets = [
-          (target {
-            expr = ''{service_name="nix-observer"} | json | event="nix_derivation" | trace_id=~"$trace" | line_format "{{.status}}  {{.classification}}  {{.package}}  {{.duration_seconds}}s  phase={{.phase}}  {{.derivation}}"'';
-          })
-        ];
-      })
-      (logs {
-        title = "Failure output";
-        w = 24;
-        h = 16;
-        targets = [
-          (target {
-            expr = ''{service_name="nix-observer"} | json | event="nix_build_log" | trace_id=~"$trace" | line_format "{{.package}}: {{.message}}"'';
-          })
-        ];
-      })
-    ];
-  };
-
-  logsExplorer = dashboard {
-    uid = "logs";
-    title = "Fleet Logs";
-    datasource = "loki";
-    from = "now-6h";
-    refresh = "30s";
-    tags = [ "logs" ];
-    variables = [
-      logHostVariable
-      (textboxVariable "search" "Message regex" ".*")
-    ];
-    links = [
-      (dashboardLink "Nix builds" "nix-builds")
-      (dashboardLink "Alerts" "alerts")
-      (dashboardLink "Overview" "overview")
-    ];
-    panels = [
-      (stat {
-        title = "Errors and worse";
         w = 6;
-        h = 5;
+        h = 4;
+        targets = [ { expr = "time() - nas_metadata_warm_timestamp_seconds"; } ];
+      })
+      (barGauge {
+        title = "Stored by account";
+        unit = "bytes";
+        w = 12;
+        h = 8;
         targets = [
-          (target {
-            expr = ''sum(count_over_time({source="journal",host=~"$host",level=~"emerg|alert|crit|err"} [$__range]))'';
-            instant = true;
-          })
+          {
+            expr = "nas_user_bytes";
+            legendFormat = "{{owner}}";
+          }
         ];
       })
-      (stat {
-        title = "OOM / kernel failures";
-        w = 6;
-        h = 5;
+      (barGauge {
+        title = "Files by account";
+        w = 12;
+        h = 8;
         targets = [
-          (target {
-            expr = ''sum(count_over_time({source="journal",host=~"$host"} |~ "(?i)out of memory|oom-kill|kernel panic" [$__range]))'';
-            instant = true;
-          })
-        ];
-      })
-      (stat {
-        title = "Tailscale / VPN failures";
-        w = 6;
-        h = 5;
-        targets = [
-          (target {
-            expr = ''sum(count_over_time({source="journal",host=~"$host",unit=~"tailscaled.service|wg-quick-.*"} |~ "(?i)error|failed|timeout|disconnected" [$__range]))'';
-            instant = true;
-          })
-        ];
-      })
-      (stat {
-        title = "Failed Nix builds";
-        w = 6;
-        h = 5;
-        targets = [
-          (target {
-            expr = ''sum(count_over_time({service_name="nix-observer-summary",host=~"$host"} | json | status="failed" [$__range]))'';
-            instant = true;
-          })
-        ];
-      })
-      (logs {
-        title = "Journal";
-        w = 24;
-        h = 20;
-        targets = [
-          (target {
-            expr = ''{source="journal",host=~"$host"} |~ "$search"'';
-          })
+          {
+            expr = "nas_user_files";
+            legendFormat = "{{owner}}";
+          }
         ];
       })
     ];
@@ -5406,6 +5015,7 @@ in
     "network.json" = mergedNetwork;
     "fleet.json" = mergedFleet;
     "drives.json" = mergedDrives;
+    "nas.json" = nasUsage;
   };
 
   archive = {
@@ -5416,10 +5026,4 @@ in
     "drives.json" = archiveDrives;
   };
 
-  observability = {
-    "nix-builds.json" = nixBuilds;
-    "nix-build-history.json" = nixBuildHistory;
-    "nix-build-detail.json" = nixBuildDetail;
-    "logs.json" = logsExplorer;
-  };
 }

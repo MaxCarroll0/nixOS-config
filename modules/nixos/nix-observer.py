@@ -394,7 +394,7 @@ def main():
     if os.environ.get("NIX_OBSERVER_NOVPN") == "1" and Path("/run/wrappers/bin/sg").exists():
         command = ["/run/wrappers/bin/sg", "novpn", "-c", "exec " + shlex.join(command)]
     nom = None
-    if observer.has_build_intent():
+    if observer.has_build_intent() and os.environ.get("NIX_OBSERVER_PLAIN") != "1":
         nom_environment = os.environ.copy()
         real_nix = os.environ.get("NIX_OBSERVER_REAL_NIX", options.real)
         nom_environment["PATH"] = str(Path(real_nix).parent) + os.pathsep + nom_environment.get("PATH", "")

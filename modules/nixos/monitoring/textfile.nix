@@ -18,6 +18,17 @@ let
     collectorTimer
     ;
 
+  cadenceOverrides = cfg.exporter.scrapeCadenceOverrides;
+  overriddenHwmonRegex = lib.concatStringsSep "|" (
+    lib.mapAttrsToList (_: override: "(${override.match})") cadenceOverrides
+  );
+  excludedHwmonRegex = lib.concatStringsSep "|" (
+    lib.filter (regex: regex != "") [
+      cfg.exporter.hwmonChipExclude
+      overriddenHwmonRegex
+    ]
+  );
+
   sensorNameTable = pkgs.writeText "sensor-names" (
     lib.concatStringsSep "\n" (lib.mapAttrsToList (key: name: "${key}\t${name}") cfg.sensorNames)
   );
@@ -46,7 +57,7 @@ let
             printf 'node_sensor_name{chip_name="%s",sensor="%s",name="%s"} 1\n' \
               "$chip_name" "$sensor" "$name"
           done
-        done
+        done | sort -u
 
         # Several drives share the chip name "drivetemp", so they can only be told
         # apart by node_exporter's per-device chip label.
@@ -132,11 +143,42 @@ let
     ) power.fans
   );
 
+  drivePowerState = ''
+    drive_power_state() {
+      local device=$1 mode report
+      report=$(hdparm -C "/dev/$device" 2>/dev/null || true)
+      if printf '%s' "$report" | grep -q 'active/idle'; then
+        printf active
+        return
+      fi
+      if printf '%s' "$report" | grep -q 'standby'; then
+        printf standby
+        return
+      fi
+
+      mode=$(cat "/var/lib/smart-health/$device.mode" 2>/dev/null || echo auto)
+      if [ "$mode" = sat ]; then
+        report=$(smartctl -n standby -j -d sat -i "/dev/$device" 2>/dev/null || true)
+      else
+        report=$(smartctl -n standby -j -i "/dev/$device" 2>/dev/null || true)
+      fi
+      if printf '%s' "$report" | jq -e '[.smartctl.messages[]?.string] | any(test("STANDBY"))' >/dev/null 2>&1; then
+        printf standby
+      elif printf '%s' "$report" | jq -e '.model_name' >/dev/null 2>&1; then
+        printf active
+      else
+        printf unknown
+      fi
+    }
+  '';
+
   powerModel =
     writeCollector "power-model"
       [
         pkgs.gawk
         pkgs.hdparm
+        pkgs.jq
+        pkgs.smartmontools
       ]
       ''
         echo '# HELP pc_power_supply_rated_watts Nameplate output of the supply.'
@@ -195,6 +237,8 @@ let
           return 1
         }
 
+        ${drivePowerState}
+
         for block in /sys/block/*; do
           device=''${block##*/}
           case "$device" in
@@ -224,11 +268,10 @@ let
           printf 'pc_power_disk_watts{device="%s",state="active"} %s\n' "$device" "$active"
           printf 'pc_power_disk_watts{device="%s",state="spinup"} %s\n' "$device" "$spinup"
 
-          parked=0
-          if [ "$rotational" = 1 ] && ! hdparm -C "/dev/$device" 2>/dev/null | grep -q 'active/idle'; then
-            parked=1
-          fi
-          printf 'pc_disk_standby{device="%s"} %s\n' "$device" "$parked"
+          case $(drive_power_state "$device") in
+            active) printf 'pc_disk_standby{device="%s"} 0\n' "$device" ;;
+            standby) printf 'pc_disk_standby{device="%s"} 1\n' "$device" ;;
+          esac
         done
       '';
 
@@ -358,6 +401,70 @@ let
         }'
       '';
 
+  nixBuildMetrics =
+    writeCollector "nix-builds"
+      [
+        pkgs.systemd
+        pkgs.jq
+      ]
+      ''
+        echo '# HELP nix_events_24h Nix invocations recorded in this host'"'"'s journal over the last 24 hours.'
+        echo '# TYPE nix_events_24h gauge'
+        echo '# HELP nix_alertable_failures_24h Failures the observer marked alert-eligible.'
+        echo '# TYPE nix_alertable_failures_24h gauge'
+        echo '# HELP nix_last_seconds Unix time of the most recent invocation of this event and status.'
+        echo '# TYPE nix_last_seconds gauge'
+        echo '# HELP nix_last_duration_seconds Duration of the most recent invocation of this event and status.'
+        echo '# TYPE nix_last_duration_seconds gauge'
+
+        journalctl -t nix-observer-summary --since -24h -o json --no-pager 2>/dev/null \
+          | jq -rs '
+              map(
+                . as $entry
+                | ($entry.MESSAGE | fromjson? // empty)
+                | select(.event != null)
+                | . + { ts: (($entry.__REALTIME_TIMESTAMP // "0") | tonumber / 1000000) }
+              )
+              | group_by([.event, .status])
+              | map({
+                  event: .[0].event,
+                  status: .[0].status,
+                  count: length,
+                  alertable: (map(select(.alert_eligible == true)) | length),
+                  last: max_by(.ts),
+                })
+              | .[]
+              | "nix_events_24h{event=\"\(.event)\",status=\"\(.status)\"} \(.count)",
+                "nix_alertable_failures_24h{event=\"\(.event)\",status=\"\(.status)\"} \(.alertable)",
+                "nix_last_seconds{event=\"\(.event)\",status=\"\(.status)\"} \(.last.ts)",
+                "nix_last_duration_seconds{event=\"\(.event)\",status=\"\(.status)\"} \(.last.duration_seconds // 0)"
+            '
+      '';
+
+  memoryByUnit = writeCollector "memory-by-unit" [ pkgs.findutils ] ''
+    echo '# HELP node_unit_memory_bytes Memory currently charged to a systemd unit cgroup.'
+    echo '# TYPE node_unit_memory_bytes gauge'
+    echo '# HELP node_unit_memory_peak_bytes Peak memory charged to a systemd unit cgroup.'
+    echo '# TYPE node_unit_memory_peak_bytes gauge'
+
+    emit() {
+      local unit=$1 dir=$2 current peak
+      [ -r "$dir/memory.current" ] || return 0
+      read -r current < "$dir/memory.current" || return 0
+      [ "$current" -gt 0 ] || return 0
+      printf 'node_unit_memory_bytes{unit="%s"} %s\n' "$unit" "$current"
+      if [ -r "$dir/memory.peak" ] && read -r peak < "$dir/memory.peak"; then
+        printf 'node_unit_memory_peak_bytes{unit="%s"} %s\n' "$unit" "$peak"
+      fi
+    }
+
+    while IFS= read -r dir; do
+      emit "''${dir##*/}" "$dir"
+    done < <(find /sys/fs/cgroup/system.slice -mindepth 1 -type d -name '*.service' 2>/dev/null)
+
+    emit user.slice /sys/fs/cgroup/user.slice
+  '';
+
   # Kernel uptime counts time spent suspended, so boot time cannot answer
   # "how long has this host been awake".
   awakeSince = writeCollector "awake-since" [ pkgs.gawk ] ''
@@ -375,155 +482,184 @@ let
     printf 'node_awake_since_seconds %s\n' "$since"
   '';
 
-  driveTemps = writeCollector "drive-temps" [ pkgs.gawk ] ''
-    state=${textfileDir}/.drive-io
-    touch "$state"
-    echo '# HELP node_hwmon_temp_celsius Hardware monitor for temperature (input)'
-    echo '# TYPE node_hwmon_temp_celsius gauge'
-    echo '# HELP node_hwmon_chip_names Annotation metric for human-readable chip names'
-    echo '# TYPE node_hwmon_chip_names gauge'
-    next=$(mktemp)
-    for chip in /sys/class/hwmon/hwmon*; do
-      [ "$(cat "$chip/name" 2>/dev/null)" = drivetemp ] || continue
-      block=""
-      for candidate in "$chip"/device/block/*; do
-        [ -e "$candidate" ] || continue
-        block=$(basename "$candidate")
-        break
-      done
-      [ -n "$block" ] || continue
+  hwmonOverrideCollector =
+    name: override:
+    writeCollector "hwmon-${name}"
+      [
+        pkgs.gawk
+        pkgs.gnugrep
+        pkgs.hdparm
+        pkgs.jq
+        pkgs.smartmontools
+      ]
+      ''
+        echo '# HELP node_hwmon_temp_celsius Hardware monitor for temperature (input)'
+        echo '# TYPE node_hwmon_temp_celsius gauge'
+        echo '# HELP node_hwmon_chip_names Annotation metric for human-readable chip names'
+        echo '# TYPE node_hwmon_chip_names gauge'
+        ${drivePowerState}
+        for chip in /sys/class/hwmon/hwmon*; do
+          chip_name=$(cat "$chip/name" 2>/dev/null) || continue
+          device=$(readlink -f "$chip/device") || continue
+          label=$(printf '%s' "$device" | awk -F/ '{ print $(NF-1) "_" $NF }')
+          printf '%s\n' "$label" | grep -Eq -- ${lib.escapeShellArg override.match} || continue
 
-      io=$(awk -v d="$block" '$3 == d { print $6 + $10 }' /proc/diskstats)
-      [ -n "$io" ] || continue
-      printf '%s %s\n' "$block" "$io" >> "$next"
-      was=$(awk -v d="$block" '$1 == d { print $2 }' "$state")
+          ${lib.optionalString override.onlyWhenActive ''
+            block=""
+            for candidate in "$chip"/device/block/*; do
+              [ -e "$candidate" ] || continue
+              block=$(basename "$candidate")
+              break
+            done
+            [ -n "$block" ] || continue
+            [ "$(drive_power_state "$block")" = active ] || continue
+          ''}
 
-      [ "$io" != "$was" ] || continue
+          printf 'node_hwmon_chip_names{chip="%s",chip_name="%s"} 1\n' "$label" "$chip_name"
+          for input in "$chip"/temp*_input; do
+            [ -e "$input" ] || continue
+            sensor=$(basename "$input" _input)
+            read -r milli < "$input" || continue
+            printf '%s\n' "$milli" | grep -Eq '^-?[0-9]+$' || continue
+            printf 'node_hwmon_temp_celsius{chip="%s",sensor="%s"} %s\n' \
+              "$label" "$sensor" "$(awk -v m="$milli" 'BEGIN { printf "%.3f", m / 1000 }')"
+          done
+        done
+      '';
 
-      device=$(readlink -f "$chip/device") || continue
-      label=$(printf '%s' "$device" | awk -F/ '{ print $(NF-1) "_" $NF }')
-      printf 'node_hwmon_chip_names{chip="%s",chip_name="drivetemp"} 1\n' "$label"
-      for input in "$chip"/temp*_input; do
-        [ -e "$input" ] || continue
-        sensor=$(basename "$input" _input)
-        milli=$(cat "$input")
-        printf 'node_hwmon_temp_celsius{chip="%s",sensor="%s"} %s\n' \
-          "$label" "$sensor" "$(awk -v m="$milli" 'BEGIN { printf "%.3f", m / 1000 }')"
-      done
-    done
-    mv "$next" "$state"
-  '';
+  cadenceOverrideServices = lib.mapAttrs' (
+    name: override:
+    lib.nameValuePair "textfile-hwmon-${name}" (
+      lib.mkMerge [
+        (collectorService (hwmonOverrideCollector name override))
+        {
+          description = "Publish ${name} hwmon metrics at an overridden cadence";
+          wantedBy = [ "multi-user.target" ];
+          after = [ "systemd-modules-load.service" ];
+        }
+      ]
+    )
+  ) cadenceOverrides;
+
+  cadenceOverrideTimers = lib.mapAttrs' (
+    name: override: lib.nameValuePair "textfile-hwmon-${name}" (collectorTimer override.interval)
+  ) cadenceOverrides;
 
   hasWireguard = config.networking.wg-quick.interfaces != { };
 in
 
 {
-  config = lib.mkIf cfg.exporter.enable {
-    systemd.tmpfiles.rules = [ "d ${textfileDir} 0755 root root -" ];
+  config = lib.mkIf cfg.exporter.enable (
+    lib.mkMerge [
+      {
+        systemd.tmpfiles.rules = [ "d ${textfileDir} 0755 root root -" ];
 
-    services.prometheus.exporters.node.extraFlags = [
-      "--collector.textfile.directory=${textfileDir}"
-      "--collector.vmstat.fields=^(oom_kill|pgpg|pswp|pg.*fault|workingset_.*|pgscan.*|pgsteal.*).*"
+        services.prometheus.exporters.node.extraFlags = [
+          "--collector.textfile.directory=${textfileDir}"
+          "--collector.vmstat.fields=^(oom_kill|pgpg|pswp|pg.*fault|workingset_.*|pgscan.*|pgsteal.*).*"
+        ]
+        ++ lib.optional (excludedHwmonRegex != "") "--collector.hwmon.chip-exclude=${excludedHwmonRegex}";
+
+        systemd.services.textfile-awake-since = lib.mkMerge [
+          (collectorService awakeSince)
+          {
+            description = "Publish the last boot or resume time";
+            wantedBy = [ "multi-user.target" ];
+          }
+        ];
+
+        environment.etc."systemd/system-sleep/textfile-awake-since" = {
+          mode = "0755";
+          source = pkgs.writeShellScript "textfile-awake-since-sleep" ''
+            if [ "$1" = post ]; then
+              ${lib.getExe awakeSince} resume
+            fi
+            exit 0
+          '';
+        };
+
+        systemd.services.textfile-sensor-names = lib.mkMerge [
+          (collectorService sensorNames)
+          {
+            description = "Publish friendly hwmon sensor names";
+            wantedBy = [ "multi-user.target" ];
+            after = [ "systemd-modules-load.service" ];
+            restartTriggers = [ sensorNameTable ];
+          }
+        ];
+
+        systemd.services.textfile-power-model = lib.mkIf power.enable (
+          lib.mkMerge [
+            (collectorService powerModel)
+            {
+              description = "Publish power model coefficients and drive standby state";
+              wantedBy = [ "multi-user.target" ];
+              restartTriggers = [
+                diskProfileTable
+                diskOverrideTable
+              ];
+            }
+          ]
+        );
+
+        systemd.timers.textfile-power-model = lib.mkIf power.enable (collectorTimer "5s");
+
+        systemd.services.textfile-tailscale = lib.mkIf config.services.tailscale.enable (
+          lib.mkMerge [
+            (collectorService tailscaleMetrics)
+            { description = "Publish per-peer tailnet traffic and reachability"; }
+          ]
+        );
+
+        systemd.timers.textfile-tailscale = lib.mkIf config.services.tailscale.enable (
+          collectorTimer "15s"
+        );
+
+        systemd.services.textfile-wireguard = lib.mkIf hasWireguard (
+          lib.mkMerge [
+            (collectorService wireguardMetrics)
+            { description = "Publish wireguard handshake age and byte counters"; }
+          ]
+        );
+
+        systemd.timers.textfile-wireguard = lib.mkIf hasWireguard (collectorTimer "30s");
+
+        systemd.services.textfile-pi-firmware = lib.mkIf cfg.piFirmware.enable (
+          lib.mkMerge [
+            (collectorService piFirmwareMetrics)
+            { description = "Publish Raspberry Pi firmware and PMIC telemetry"; }
+          ]
+        );
+
+        systemd.timers.textfile-pi-firmware = lib.mkIf cfg.piFirmware.enable (collectorTimer "1s");
+
+        systemd.services.textfile-laptop-battery = lib.mkIf cfg.laptopTelemetry.enable (
+          lib.mkMerge [
+            (collectorService laptopBatteryMetrics)
+            { description = "Publish laptop battery telemetry"; }
+          ]
+        );
+
+        systemd.timers.textfile-laptop-battery = lib.mkIf cfg.laptopTelemetry.enable (collectorTimer "5s");
+
+        systemd.services.textfile-memory-by-unit = lib.mkMerge [
+          (collectorService memoryByUnit)
+          { description = "Publish per-unit memory from the systemd cgroup hierarchy"; }
+        ];
+
+        systemd.timers.textfile-memory-by-unit = collectorTimer "15s";
+
+        systemd.services.textfile-nix-builds = lib.mkMerge [
+          (collectorService nixBuildMetrics)
+          { description = "Publish Nix build outcomes from the local journal"; }
+        ];
+
+        systemd.timers.textfile-nix-builds = collectorTimer "60s";
+      }
+      {
+        systemd.services = cadenceOverrideServices;
+        systemd.timers = cadenceOverrideTimers;
+      }
     ]
-    ++ lib.optional (
-      cfg.exporter.hwmonChipExclude != ""
-    ) "--collector.hwmon.chip-exclude=${cfg.exporter.hwmonChipExclude}";
-
-    systemd.services.textfile-drive-temps = lib.mkIf (cfg.exporter.hwmonChipExclude != "") (
-      lib.mkMerge [
-        (collectorService driveTemps)
-        {
-          description = "Publish drive temperatures without waking idle disks";
-          wantedBy = [ "multi-user.target" ];
-          after = [ "systemd-modules-load.service" ];
-        }
-      ]
-    );
-
-    systemd.timers.textfile-drive-temps = lib.mkIf (cfg.exporter.hwmonChipExclude != "") (
-      collectorTimer "1m"
-    );
-
-    systemd.services.textfile-awake-since = lib.mkMerge [
-      (collectorService awakeSince)
-      {
-        description = "Publish the last boot or resume time";
-        wantedBy = [ "multi-user.target" ];
-      }
-    ];
-
-    environment.etc."systemd/system-sleep/textfile-awake-since" = {
-      mode = "0755";
-      source = pkgs.writeShellScript "textfile-awake-since-sleep" ''
-        if [ "$1" = post ]; then
-          ${lib.getExe awakeSince} resume
-        fi
-        exit 0
-      '';
-    };
-
-    systemd.services.textfile-sensor-names = lib.mkMerge [
-      (collectorService sensorNames)
-      {
-        description = "Publish friendly hwmon sensor names";
-        wantedBy = [ "multi-user.target" ];
-        after = [ "systemd-modules-load.service" ];
-        restartTriggers = [ sensorNameTable ];
-      }
-    ];
-
-    systemd.services.textfile-power-model = lib.mkIf power.enable (
-      lib.mkMerge [
-        (collectorService powerModel)
-        {
-          description = "Publish power model coefficients and drive standby state";
-          wantedBy = [ "multi-user.target" ];
-          restartTriggers = [
-            diskProfileTable
-            diskOverrideTable
-          ];
-        }
-      ]
-    );
-
-    systemd.timers.textfile-power-model = lib.mkIf power.enable (collectorTimer "5s");
-
-    systemd.services.textfile-tailscale = lib.mkIf config.services.tailscale.enable (
-      lib.mkMerge [
-        (collectorService tailscaleMetrics)
-        { description = "Publish per-peer tailnet traffic and reachability"; }
-      ]
-    );
-
-    systemd.timers.textfile-tailscale = lib.mkIf config.services.tailscale.enable (
-      collectorTimer "15s"
-    );
-
-    systemd.services.textfile-wireguard = lib.mkIf hasWireguard (
-      lib.mkMerge [
-        (collectorService wireguardMetrics)
-        { description = "Publish wireguard handshake age and byte counters"; }
-      ]
-    );
-
-    systemd.timers.textfile-wireguard = lib.mkIf hasWireguard (collectorTimer "30s");
-
-    systemd.services.textfile-pi-firmware = lib.mkIf cfg.piFirmware.enable (
-      lib.mkMerge [
-        (collectorService piFirmwareMetrics)
-        { description = "Publish Raspberry Pi firmware and PMIC telemetry"; }
-      ]
-    );
-
-    systemd.timers.textfile-pi-firmware = lib.mkIf cfg.piFirmware.enable (collectorTimer "1s");
-
-    systemd.services.textfile-laptop-battery = lib.mkIf cfg.laptopTelemetry.enable (
-      lib.mkMerge [
-        (collectorService laptopBatteryMetrics)
-        { description = "Publish laptop battery telemetry"; }
-      ]
-    );
-
-    systemd.timers.textfile-laptop-battery = lib.mkIf cfg.laptopTelemetry.enable (collectorTimer "5s");
-  };
+  );
 }

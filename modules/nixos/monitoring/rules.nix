@@ -39,6 +39,8 @@ let
   component = name: expr: ''label_replace(${expr}, "component", "${name}", "", "")'';
 
   raplPackage = ''rate(node_rapl_package_joules_total{path!~".*mmio.*"}[1m])'';
+  cpuBusy = ''clamp(1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m])), 0, 1)'';
+  cpuCoreBusy = ''clamp(1 - rate(node_cpu_seconds_total{mode="idle"}[15s]), 0, 1)'';
 
   plausible = ceiling: expr: "clamp_max(${expr}, ${toString ceiling})";
 
@@ -89,15 +91,15 @@ let
       expr = ''
         ${coefficient ''pc_power_ram_watts{state="idle"}''}
         + ${coefficient ''pc_power_ram_watts{state="active"}''}
-        * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m])))'';
+        * ${cpuBusy}'';
     }
     {
       record = "pc:backlight_power_watts";
       expr = "${coefficient "pc_power_backlight_max_watts"} * ${coefficient "pc_backlight_ratio"}";
     }
     {
-      record = "pc:disk_standby";
-      expr = perDisk "pc_disk_standby";
+      record = "drive:standby";
+      expr = ''${perDisk "pc_disk_standby"} and on(instance, device) smart_device_info{rotational="1"}'';
     }
     {
       record = "pc:disk_activity";
@@ -106,8 +108,8 @@ let
     {
       record = "pc:disk_power_watts";
       expr = ''
-        ${perDisk ''pc_power_disk_watts{state="standby"}''} * pc:disk_standby
-        + (1 - pc:disk_standby)
+        ${perDisk ''pc_power_disk_watts{state="standby"}''} * ${perDisk "pc_disk_standby"}
+        + (1 - ${perDisk "pc_disk_standby"})
         * (${perDisk ''pc_power_disk_watts{state="idle"}''}
            + (${perDisk ''pc_power_disk_watts{state="active"}''}
               - ${perDisk ''pc_power_disk_watts{state="idle"}''}) * pc:disk_activity)'';
@@ -130,6 +132,10 @@ let
         ^ ${perFan "pc_power_fan_exponent"}'';
     }
     {
+      record = "pc:fan_speed_ratio";
+      expr = "clamp(pc:fan_rpm_modelled / ${perFan "pc_power_fan_max_rpm"}, 0, 1)";
+    }
+    {
       record = "pc:power_dc_component_watts";
       expr = lib.concatStringsSep "\n or " [
         (component "CPU" "pc:cpu_power_watts")
@@ -147,7 +153,7 @@ let
     }
     {
       record = "pc:power_dc_watts";
-      expr = "sum by (instance) (pc:power_dc_component_watts)";
+      expr = "clamp_min(sum by (instance) (pc:power_dc_component_watts), 0)";
     }
     {
       record = "pc:supply_load_ratio";
@@ -222,14 +228,11 @@ let
   };
 
   systemRules = {
-    "cpu:utilisation" = ''1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m]))'';
-    "cpu:core_utilisation" = ''1 - rate(node_cpu_seconds_total{mode="idle"}[15s])'';
-    "cpu:core_utilisation_min" =
-      ''min by (instance) (1 - rate(node_cpu_seconds_total{mode="idle"}[15s]))'';
-    "cpu:core_utilisation_avg" =
-      ''avg by (instance) (1 - rate(node_cpu_seconds_total{mode="idle"}[15s]))'';
-    "cpu:core_utilisation_max" =
-      ''max by (instance) (1 - rate(node_cpu_seconds_total{mode="idle"}[15s]))'';
+    "cpu:utilisation" = cpuBusy;
+    "cpu:core_utilisation" = cpuCoreBusy;
+    "cpu:core_utilisation_min" = "min by (instance) (${cpuCoreBusy})";
+    "cpu:core_utilisation_avg" = "avg by (instance) (${cpuCoreBusy})";
+    "cpu:core_utilisation_max" = "max by (instance) (${cpuCoreBusy})";
     "cpu:hertz" = "avg by (instance) (node_cpu_scaling_frequency_hertz)";
     "cpu:hertz_min" = "min by (instance) (node_cpu_scaling_frequency_hertz)";
     "cpu:hertz_max" = "max by (instance) (node_cpu_scaling_frequency_hertz)";
@@ -240,6 +243,7 @@ let
     "mem:used_ratio" = "1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes";
     "mem:cached_bytes" = "node_memory_Cached_bytes + node_memory_Buffers_bytes";
     "mem:swap_used_bytes" = "node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes";
+    "unit:memory_bytes" = "node_unit_memory_bytes";
     "load:load1" = "node_load1";
     "load:pressure_ratio" =
       ''node_load1 / on(instance) count by (instance) (node_cpu_seconds_total{mode="idle"})'';
@@ -377,6 +381,13 @@ let
         "max"
       ];
     };
+    pc_fan_speed_ratio = {
+      source = "pc:fan_speed_ratio";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
     major_temp_celsius = {
       source = "temp:major_celsius";
       aggs = [
@@ -472,8 +483,8 @@ let
       source = "pc:power_model_error_watts";
       aggs = [ "avg" ];
     };
-    pc_disk_standby = {
-      source = "pc:disk_standby";
+    drive_standby = {
+      source = "drive:standby";
       aggs = [ "avg" ];
     };
     drive_health_ok = {
@@ -616,6 +627,13 @@ let
     };
     mem_used_bytes = {
       source = "mem:used_bytes";
+      aggs = [
+        "avg"
+        "max"
+      ];
+    };
+    unit_memory_bytes = {
+      source = "unit:memory_bytes";
       aggs = [
         "avg"
         "max"
@@ -994,78 +1012,6 @@ in
             }
           ];
         };
-      logThreshold =
-        {
-          uid,
-          title,
-          expr,
-          summary,
-          severity ? "warning",
-        }:
-        {
-          inherit uid title;
-          condition = "C";
-          for = "0s";
-          labels = { inherit severity; };
-          annotations = {
-            summary =
-              "${summary} Fires immediately. "
-              + "{{ with $values.B }}Sustained for {{ humanizeDuration .Value }}.{{ else }}Tracking sustained duration.{{ end }}";
-          };
-          noDataState = "OK";
-          execErrState = "OK";
-          data = [
-            {
-              refId = "A";
-              relativeTimeRange = {
-                from = 300;
-                to = 0;
-              };
-              datasourceUid = "loki";
-              model = {
-                refId = "A";
-                expr = expr;
-                editorMode = "code";
-                queryType = "instant";
-                instant = true;
-                datasource = {
-                  type = "loki";
-                  uid = "loki";
-                };
-              };
-            }
-            {
-              refId = "B";
-              relativeTimeRange = {
-                from = 300;
-                to = 0;
-              };
-              datasourceUid = "prometheus";
-              model = {
-                refId = "B";
-                instant = true;
-                expr = ''time() - grafana_alert_sustained_since_seconds{alert_uid="${uid}"}'';
-              };
-            }
-            {
-              refId = "C";
-              datasourceUid = "__expr__";
-              model = {
-                refId = "C";
-                type = "threshold";
-                expression = "A";
-                conditions = [
-                  {
-                    evaluator = {
-                      type = "gt";
-                      params = [ 0 ];
-                    };
-                  }
-                ];
-              };
-            }
-          ];
-        };
     in
     [
       (threshold {
@@ -1358,12 +1304,14 @@ in
         for' = "10m";
         summary = "Traffic from {{ $labels.instance }} to {{ $labels.peer }} has remained relayed for ten minutes.";
       })
-      (logThreshold {
+      (threshold {
         uid = "nix-rebuild-failed";
         title = "Nix rebuild failed";
-        expr = ''sum by (host, project, failed_package, trace_id, alert_uid) (count_over_time({service_name="nix-observer-summary"} | json | label_format alert_uid="nix-rebuild-failed" | event="nix_build" | status="failed" | alert_eligible="true" [5m]))'';
+        expr = ''sum by (instance) (nix_alertable_failures_24h{status="failed"})'';
+        value = 0;
+        for' = "0s";
         severity = "critical";
-        summary = "{{ $labels.project }} failed on {{ $labels.host }} at {{ $labels.failed_package }} (trace {{ $labels.trace_id }}).";
+        summary = "An alert-eligible Nix build failed on {{ $labels.instance }}. Details: journalctl -t nix-observer-summary on that host.";
       })
     ];
 }
