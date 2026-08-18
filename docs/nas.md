@@ -119,13 +119,15 @@ All required packages exist in the pinned nixpkgs for aarch64: `mergerfs-2.41.1`
 ### 4.1 Block stack
 
 ```
-sda4 -> LUKS -> btrfs -> /mnt/ssd            write tier, a mergerfs branch (file level)
+sda4 -> LUKS -> nilfs2 -> /mnt/ssd           write tier, a mergerfs branch (file level)
+                                             NILFS2: this is where edits are versioned
 sda5 -> LUKS -> bcache cache (writearound)   read cache for the HDDs (block level)
 
-sdd (2 TB) -> LUKS -> bcache backing \  -> btrfs -> /mnt/disk1
-sdb (1 TB) -> LUKS -> bcache backing /  -> btrfs -> /mnt/disk2
-    each branch holds  data/  and  snapshots/
+sdd (2 TB) -> LUKS -> bcache backing \  -> nilfs2 -> /mnt/disk1
+sdb (1 TB) -> LUKS -> bcache backing /  -> nilfs2 -> /mnt/disk2
+    each branch holds  data/  and  snapshots/  (snapshots/ = checkpoint mounts)
 sdc (4 TB) -> LUKS -> btrfs -> /mnt/parity   (uncached: bulk parity writes would thrash it)
+                                             stays btrfs: one parity file, no versioning wanted
 
 mergerfs(/mnt/ssd, /mnt/disk1, /mnt/disk2) -> /srv/nas
 SnapRAID: parity=/mnt/parity, data=/mnt/disk{1,2}, content files on both plus root
@@ -406,6 +408,33 @@ weakest of them:
 
 What it would still cost is the reason for the change in the first place: btrbk snapshots are
 point-in-time on a timer, so anything created and deleted between two runs leaves no trace.
+
+#### The write tier must be NILFS2 too
+
+**This is where versions are actually created.** Writes land on the SSD tier and only reach the
+HDDs when the mover runs, so if the SSD branch were btrfs while the HDD branches were NILFS2,
+every intermediate edit would be discarded before it ever touched a checkpointed filesystem. The
+HDDs would record only the post-mover state, and continuous versioning would apply to precisely
+the data that changes least.
+
+So `sda4` (the write tier, section 4.1) is NILFS2 as well. This suits it: a log-structured
+filesystem writes sequentially, which is what flash prefers, and its garbage collection costs no
+seeks and — critically — never touches a spun-down HDD. The nightly GC window applies to the HDD
+branches; the SSD can be collected freely.
+
+`sda5`, the bcache read cache, is unaffected. It is block-level and below the filesystem, so it
+has no bearing on versioning.
+
+**The consequence, stated plainly: fine-grained history is bounded by the SSD.** Edit-by-edit
+history lives on the write tier while the file is still there. Once the mover promotes a file to
+a HDD, the HDD captures it as of that moment, and the intermediate versions survive only as long
+as the SSD's checkpoints are retained. On a 120 GB SSD that is a real limit.
+
+So "retain everything forever" holds for the HDD branches at mover granularity, and holds for
+fine-grained edits only within the SSD's retention. Anyone relying on recovering a specific
+intermediate save of an actively-edited file needs to know that window is finite. Whether the
+mover should promote a file's *history* as well as its current contents is unresolved, and there
+is no cheap mechanism for it: checkpoints cannot be transplanted between filesystems.
 
 #### Exposing versions to SMB
 
