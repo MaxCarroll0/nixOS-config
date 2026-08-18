@@ -502,9 +502,38 @@ Tags are used **only for the pi itself**. Using tags for end-user devices is exp
 against Tailscale's guidance ("Do not use tags to authenticate end-user devices") and strips
 the device of user identity, which breaks both revocation and auditability.
 
-**Open item to test early:** whether `tailscale serve` resolves identity headers for shared
-users. If it does, the web tier and Grafana get single sign-on and the separate password
-provisioning drops out of two stages.
+**Resolved: `tailscale serve` does inject identity.** Measured against a header-echo behind
+`tailscale serve --http=8088`, a request from another tailnet device arrived with:
+
+```
+Tailscale-User-Login: MaxCarroll0@github
+Tailscale-User-Name: MaxCarroll0
+Tailscale-User-Profile-Pic: https://avatars.githubusercontent.com/...
+X-Forwarded-For: 100.112.109.20
+```
+
+Plain HTTP works and needs no certificate; the HTTPS form blocks on cert provisioning unless
+HTTPS is enabled for the tailnet. Requests by raw IP return 404, because the proxy keys on the
+MagicDNS host, so anything in front of it must preserve the `Host` header.
+
+This makes **Tailscale the identity provider**, and the account model follows from it:
+
+- The web tier needs no passwords and no login form. `Tailscale-User-Login` is the identity,
+  authenticated by the tailnet before the request arrives.
+- Grafana uses `auth.proxy` against the same header, so per-user dashboard scoping comes free
+  rather than needing its own accounts.
+- **Sharing the device is the enrolment.** A share recipient reaching the web tier presents an
+  identity that has never been seen before, so the account can be provisioned from that first
+  request rather than minted in advance.
+- Only **SMB** still needs a password of its own, because the protocol cannot use a header.
+  That password is set by the owner on a page already authenticated by their Tailscale
+  identity, so no enrolment token, no out-of-band secret and nothing for Max to transport.
+
+Two things this rests on and which must be verified before relying on it: that the headers are
+present for **shared** users and not only tailnet members (untested — it needs a second
+account), and that nothing else can reach the listener, since the headers are trustworthy only
+because `tailscaled` sets them. Bind the backend to loopback and never expose it on another
+interface, or the headers become forgeable by anyone who can reach the port.
 
 ## 6. Unlocking
 
