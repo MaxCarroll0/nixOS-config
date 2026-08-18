@@ -180,6 +180,14 @@
       uid = 3000;
       description = "NAS pipeline test account";
     };
+    storage.dataDisks = {
+      disk1.device = "/dev/sdd";
+      disk2.device = "/dev/sdb";
+    };
+    unlock = {
+      server = true;
+      parityDevice = "/dev/sdc";
+    };
   };
 
   local.power = {

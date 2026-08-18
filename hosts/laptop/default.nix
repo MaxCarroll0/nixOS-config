@@ -16,9 +16,17 @@
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/server/build-host.nix
     ../../modules/nixos/pam-ssh-agent-sudo.nix
+    ../../modules/nixos/nas/unlock.nix
   ];
 
   networking.hostName = "laptop";
+
+  local.nas.unlock.client = true;
+  sops.secrets."nas-luks-key" = {
+    sopsFile = ../../secrets/nas.yaml;
+    owner = "max";
+    mode = "0400";
+  };
 
   networking.hosts."100.117.13.66" = [
     "observatory"

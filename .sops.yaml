@@ -4,6 +4,11 @@ keys:
   - &desktopnew age1dsvv2wangclezl745vqlvvmcggaszc4fcxu84ks7qphm5tupq98srdtgx8
   - &pi age1m4ycl8t27weff4q6upne4zzprdfw6x0wdf50s3z63shpe8c6kqgs64djpv
 creation_rules:
+  - path_regex: secrets/nas.yaml$
+    key_groups:
+    - age:
+      - *primary
+      - *laptop
   - path_regex: secrets/secrets.yaml$
     key_groups:
     - age:
