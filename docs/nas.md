@@ -443,17 +443,25 @@ out-of-range uids, and **writes the account into `hosts/pi/default.nix`**. The d
 the persistent record: accounts live in git, not in a runtime database, so they survive
 rebuilds and are reviewable in a diff.
 
-It deliberately stops there and prints the rest, because each remaining step needs a human
-decision or a credential it must not hold:
+uids are chosen **at random** from the free part of the range rather than sequentially, so an
+account number reveals nothing about when it was created or how many exist.
 
-1. Unix password into sops (`mkpasswd -m yescrypt | sops set ...`), plus the
-   `sops.secrets."nas-password-<name>"` declaration.
-2. Review, commit, `rebuild --host pi switch` — the commit **is** the approval gate.
-3. `smbpasswd -a <name>`, since Samba keeps its own password database separate from the Unix
-   one. An account without this can log in over SFTP but not SMB.
+The account is minted **locked**: Max never sets, sees or transports anyone's password.
+
+1. Review, commit, `rebuild --host pi switch` — the commit **is** the approval gate.
+2. `nas-enroll-issue <name>` prints a one-time token, stored only as a SHA-256 hash with an
+   expiry (48 h by default).
+3. The owner opens `http://enroll/` on the tailnet, enters the token and chooses their own
+   password. That single action sets **both** the Unix password and the Samba one, which are
+   otherwise separate databases and a common way to end up half-enrolled.
 4. `tailscale share pi --email <their-account>` — a share, never an invite and never a tag, so
    the recipient reaches this machine and nothing else.
 5. Grafana user at Viewer scope, **once authentication exists**.
+
+The form refuses expired and mismatched tokens, enforces a minimum length, sleeps briefly on
+every POST, and returns one generic message for a wrong token, an unknown account and a
+malformed name alike, so it cannot be used to enumerate who has an account. The token is
+consumed on success and deleted on expiry.
 
 ### 5.2.2 Hiding folders
 

@@ -2,7 +2,7 @@
 
 import argparse
 import re
-import subprocess
+import secrets
 import sys
 from pathlib import Path
 
@@ -26,10 +26,8 @@ def existing_names(text):
 
 
 def next_uid(taken):
-    for candidate in range(UID_MIN, UID_MAX + 1):
-        if candidate not in taken:
-            return candidate
-    return None
+    free = [u for u in range(UID_MIN, UID_MAX + 1) if u not in taken]
+    return secrets.choice(free) if free else None
 
 
 def insert_account(text, name, uid, full):
@@ -103,15 +101,14 @@ def main():
         return 0
 
     path.write_text(updated)
-    secret = f"nas-password-{args.name}"
     print(f"Wrote account {args.name!r} (uid {uid}) to {path}.\n")
-    print("Remaining steps, none of which are automatic:\n")
-    print(f"  1. Password, into the shared secrets file:")
-    print(f"       mkpasswd -m yescrypt | sops set secrets/secrets.yaml '[\"{secret}\"]' --")
-    print(f'       sops.secrets."{secret}" = {{ }};   # declare alongside the others\n')
-    print(f"  2. Review and commit, then:  rebuild --host pi switch\n")
-    print(f"  3. SMB password, which Samba keeps separately from the Unix one:")
-    print(f"       sudo-request --host pi sudo smbpasswd -a {args.name}\n")
+    print("The account is minted locked. You never set their password.\n")
+    print(f"  1. Review and commit, then:  rebuild --host pi switch\n")
+    print(f"  2. Issue a one-time enrolment token:")
+    print(f"       sudo-request --host pi sudo nas-enroll-issue {args.name}\n")
+    print(f"  3. Send them the token and the enrolment URL. They set both their login and")
+    print(f"     file-sharing password themselves, at  http://enroll/  on the tailnet.")
+    print(f"     The token works once and expires; nobody else ever learns the password.\n")
     if args.tailnet_email:
         print(f"  4. Share the NAS with {args.tailnet_email}:")
         print(f"       tailscale share pi --email {args.tailnet_email}")
