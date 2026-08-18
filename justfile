@@ -4,10 +4,10 @@ default: check
 check:
     nix flake check --no-build
     nix build --no-link .#nixosConfigurations.laptop.config.system.build.toplevel
-    nix build --no-link .#nixosConfigurations.desktop_new.config.system.build.toplevel
+    nix build --no-link .#nixosConfigurations.desktopnew.config.system.build.toplevel
     nix build --no-link .#nixosConfigurations.pi.config.system.build.toplevel
     nix build --no-link '.#homeConfigurations."max@laptop".activationPackage'
-    nix build --no-link '.#homeConfigurations."max@desktop_new".activationPackage'
+    nix build --no-link '.#homeConfigurations."max@desktopnew".activationPackage'
     nix build --no-link '.#homeConfigurations."max@pi".activationPackage'
 
 build host:

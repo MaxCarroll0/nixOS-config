@@ -33,7 +33,7 @@
     laptopTelemetry.enable = true;
     smart.enable = true;
     userReadable = true;
-    telemetry.collector.enable = true;
+    telemetry.journalGateway.enable = true;
     sensorNames = {
       "coretemp:temp1" = "CPU package";
       "nvme:temp1" = "NVMe";
@@ -97,7 +97,7 @@
     authKeySecret = "tailscale-auth-key";
   };
 
-  local.wake.peers.desktop = {
+  local.wake.peers.desktopnew = {
     mac = "b4:2e:99:92:d6:18";
     broadcast = "192.168.0.255";
     address = "192.168.0.161";
@@ -122,7 +122,7 @@
   local.build.client = {
     enable = true;
     builders.desktopnew = {
-      wakePeer = "desktop";
+      wakePeer = "desktopnew";
       user = "max";
       port = 22;
       tailscaleSsh = true;

@@ -188,7 +188,10 @@
             "home"
           ];
           profiles = {
-            system.path = deployLib.activate.nixos host;
+            system = {
+              path = deployLib.activate.nixos host;
+              interactiveSudo = true;
+            };
             home = {
               user = "max";
               path = deployLib.activate.home-manager self.homeConfigurations."max@${name}";
@@ -199,7 +202,7 @@
     {
       nixosConfigurations = {
         laptop = mkHost { module = ./hosts/laptop; };
-        desktop_new = mkHost { module = ./hosts/desktop_new; };
+        desktopnew = mkHost { module = ./hosts/desktopnew; };
         desktop_old = mkHost { module = ./hosts/desktop_old; };
       }
       // lib.mapAttrs (_: module: mkPi { inherit module; }) piHosts
@@ -210,7 +213,7 @@
 
       homeConfigurations = {
         "max@laptop" = mkHome { module = ./home/laptop.nix; };
-        "max@desktop_new" = mkHome { module = ./home/desktop.nix; };
+        "max@desktopnew" = mkHome { module = ./home/desktop.nix; };
         "max@desktop_old" = mkHome { module = ./home/desktop.nix; };
         "max@pi" = mkHome {
           module = ./home/pi.nix;
@@ -229,8 +232,8 @@
 
         nodes = {
           laptop = mkNode "laptop" "100.112.109.20" false;
-          desktop_new = mkNode "desktop_new" "100.106.140.88" false;
-          pi = mkNode "pi" "100.117.13.66" true;
+          desktopnew = mkNode "desktopnew" "100.106.140.88" false;
+          pi = mkNode "pi" "100.117.13.66" false;
         };
       };
 

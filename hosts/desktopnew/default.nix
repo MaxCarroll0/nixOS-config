@@ -8,7 +8,7 @@
     ../desktop-common.nix
   ];
 
-  networking.hostName = "desktop_new";
+  networking.hostName = "desktopnew";
 
   # Headless: no connector is plugged in, so amdgpu exposes no CRTC and any GL or
   # Vulkan client fails to create a surface. Force one on.

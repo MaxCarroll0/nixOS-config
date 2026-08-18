@@ -105,10 +105,12 @@
     grafana.enable = false;
     userReadable = true;
 
-    telemetry = {
-      collector.enable = true;
-      server.enable = false;
+    exporter.scrapeCadenceOverrides.nvme = {
+      match = "^nvme_nvme0$";
+      interval = "5s";
     };
+
+    telemetry.journalGateway.enable = true;
 
     targets = {
       pi = "100.117.13.66:9100";
