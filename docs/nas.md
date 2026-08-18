@@ -383,6 +383,27 @@ Two consequences are worth stating because they contradict the earlier btrfs des
    *everything* costs space proportional to churn — that is physics, not a filesystem choice, and
    no filesystem makes it free.
 
+#### Future opportunity: btrfs with btrbk
+
+The btrfs path is **not discarded, it is parked**. Branch `btrfs-btrbk` is cut from `745ae71`,
+the last commit before this change, and carries a minimal `modules/nixos/nas/btrbk.nix` —
+package plus basic parameters (hourly, `snapshot_preserve = 48h 30d 12m`, one subvolume per
+branch). Nothing is wired into a host; it exists so the alternative can be explored later
+without reconstructing the pre-NILFS state.
+
+It is worth revisiting because btrfs keeps four things NILFS2 gives up, and btrbk addresses the
+weakest of them:
+
+- **`send`/`receive`** for the section 10 node mirror, which is O(changes) rather than rsync's
+  O(files), and which also replicates *history* rather than only the live tree.
+- **Checksums on read**, so corruption is caught at access rather than at the next scrub.
+- **Reflink**, which makes restructuring and deduplication nearly free.
+- **Fine-grained purge**: a btrfs snapshot can be flipped read-write to strip a single path,
+  which is exactly what NILFS2's whole-checkpoint `rmcp` cannot do.
+
+What it would still cost is the reason for the change in the first place: btrbk snapshots are
+point-in-time on a timer, so anything created and deleted between two runs leaves no trace.
+
 #### Exposing versions to SMB
 
 Samba's `shadow_copy2` needs generations visible as directories, which NILFS2 does not provide
