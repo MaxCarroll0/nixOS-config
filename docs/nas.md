@@ -723,6 +723,32 @@ on are:
   `sum(nas_user_bytes) - nas_user_bytes{user="<name>"}`, which yields the aggregate and never
   the per-user breakdown.
 
+### 11.0 Grafana must be fixed before anyone is shared in
+
+**Current state, measured:** Grafana listens on `0.0.0.0:3000`, port 3000 is open on
+`tailscale0`, and `auth.anonymous` grants `Admin`. Any tailnet device gets full admin,
+including every dashboard and the ability to edit alerting. That is fine while the tailnet is
+only Max's own machines and **unacceptable the moment the pi is shared with anyone**. Treat it
+as a gate on Stage 3 onboarding, not a later polish item.
+
+The fix, using the identity headers proven above:
+
+1. `http_addr = "127.0.0.1"` and drop 3000 from the `tailscale0` firewall.
+2. Disable `auth.anonymous`; enable `auth.proxy` with `header_name = Tailscale-User-Login`,
+   `auto_sign_up = true`, and a default role of `Viewer`.
+3. Front it with `tailscale serve`, which terminates on the tailnet and sets the header.
+
+**The trap:** `auth.proxy` trusts the header absolutely. If *anything* other than
+`tailscaled` can reach the listener, a user simply sends `Tailscale-User-Login: someone-else`
+and becomes them. So the reverse proxy must be loopback-only, and if nginx stays in the path it
+must explicitly clear any client-supplied `Tailscale-*` headers rather than forwarding them.
+Binding to `0.0.0.0` with `auth.proxy` enabled would be strictly worse than the anonymous
+access it replaces, because it would look authenticated while being trivially forgeable.
+
+Per-user scoping then follows from the same header, and the "users see only their own usage
+plus others' aggregate" requirement in section 1 becomes a dashboard-variable question rather
+than an authentication one.
+
 ### 11.1 How the application tier plugs in
 
 The per-user worker pattern is **application-agnostic on purpose**, because the app itself is
