@@ -267,27 +267,30 @@ so a block cache cannot deliver the other two under any tuning:
   calls per file and spins every disk. There is no cache-tuning answer, because the answer is
   not stored anywhere to be cached.
 
-  But it can be **tracked incrementally as versions appear**, which avoids the query
-  entirely. At each snapshot, diff the new generation against the previous one and increment
-  the count for every path that changed. btrfs supplies this directly (verified against
-  btrfs-progs 6.19.1):
+  But it can be **tracked incrementally as versions appear**, which avoids the query entirely.
 
-  ```
-  btrfs send --no-data -p <prev-snapshot> <new-snapshot> | btrfs receive --dump
-  ```
+  **This is where the move to NILFS2 costs the most, and the earlier design must be inverted.**
+  The btrfs plan was to diff generations with `btrfs send --no-data -p <prev> <cur> | btrfs
+  receive --dump`, or the lighter `btrfs subvolume find-new`. Both read the filesystem's own
+  metadata, so they were *authoritative*: cost O(changes), and the missed-event drift class did
+  not exist. **NILFS2 has no equivalent.** `lscp` reports blocks changed per checkpoint, not
+  paths, and diffing two checkpoints means mounting both and walking them — O(files), not
+  O(changes).
 
-  `--no-data` is documented as "faster and useful to show the differences in metadata", and
-  `--dump` emits one line per operation without needing a mount. Being a send stream it
-  reports renames and unlinks as well as writes. (`btrfs subvolume find-new <path> <lastgen>`
-  is the lighter alternative when only modifications matter.)
+  So the mechanism inverts: **fanotify becomes the primary source of truth, not an optimisation**,
+  with a periodic full walk as the correctness backstop. That reintroduces exactly the
+  missed-event drift the btrfs design avoided: if the watcher dies or drops events, the index is
+  wrong until the next reconciliation walk.
 
-  Cost is **O(changes), not O(files x generations)**, and it is **authoritative**: it reads
-  btrfs's own metadata rather than trusting a userspace daemon to observe every event, so the
-  entire missed-event drift class does not exist. The per-generation change list is retained
-  so that pruning a generation decrements exactly the paths it incremented.
+  Mitigations, none of which fully restore the old guarantee:
 
-  Because the array is built fresh, there are **zero snapshots at the start**. Counts begin
-  at zero and remain correct by induction. No backfill scan is ever required.
+  - The reconciliation walk runs in the **nightly window** when disks are already spinning for
+    `snapraid sync`, so it costs no extra spin-up.
+  - The watcher records a monotonic event sequence, so a gap is detectable rather than silent.
+  - Checkpoint numbers from `lscp` are recorded alongside each observed change, which is what
+    lets `nas-revert` mount exactly one checkpoint instead of searching.
+
+  Because the array is built fresh, counts begin at zero and no backfill is required.
 
   *Semantics to document:* version count is per path. A rename starts a new path at one,
   while the old path's history remains in older snapshots until they expire.
@@ -300,19 +303,19 @@ It is a SQLite database on the SSD holding one row per path: parent, name, size,
 gid, branch, thumbnail key and version count, indexed on parent so a directory listing is a
 single indexed lookup.
 
-**Correctness comes from btrfs generation numbers; fanotify only reduces latency.** This is
-the property that makes the component both cheap and robust:
+**Correctness now rests on fanotify plus a periodic walk.** On btrfs it rested on generation
+numbers and fanotify was mere latency reduction; NILFS2 offers no such metadata, so the
+dependency is reversed and the component is correspondingly less robust:
 
 | Input | Mechanism | Cost |
 |---|---|---|
-| Tree changes, live | `btrfs subvolume find-new <branch> <lastgen>` since the last recorded generation | O(changes) |
 | Tree changes, immediate | fanotify events into single-row upserts | O(1) per event |
-| Version counts | `btrfs send --no-data -p <prev> <cur>` diff at each snapshot | O(changes) |
+| Tree changes, reconciliation | full walk in the nightly spin-up window | O(files) |
+| Version identity | checkpoint number from `lscp` recorded with each observed change | O(1) |
 | Thumbnails | generated at ingest while the file is still on the SSD tier | zero HDD I/O |
 
-Because `find-new` can repair the index from btrfs's own metadata at any time, fanotify is an
-optimisation rather than a correctness dependency: if the daemon crashes, is restarted by a
-`rebuild`, or misses events, the next pass reconciles with no full walk. **There is no scan
+The reconciliation walk is the only thing that can repair drift, and it is O(files) rather than
+O(changes). **There is no scan
 anywhere in the design**, neither at bootstrap (the array is built empty) nor at repair.
 
 Efficiency requirements, since this runs on a 2 GB box: SQLite in WAL mode with a bounded
@@ -358,34 +361,51 @@ same capability to whichever server is chosen. If OpenCloud does win, its native
 store versions in its state directory separately from the btrfs snapshots of section 4.6.
 Whether to disable one, accept the duplication, or reconcile them is decided at Stage 7.
 
-### 4.6 Snapshots and Previous Versions
+### 4.6 Versions: NILFS2 checkpoints
 
-Samba's `shadow_copy2` supports snapshots living in a directory that is a **sibling** of the
-shared data directory, mapping `mountpoint/basedir/rel_path` to
-`snapdir/@GMT-token/rel_path`.
+**The data branches are NILFS2, not btrfs.** NILFS2 is log-structured and creates a checkpoint
+**continuously as segments are written**, so every change is captured without a timer deciding
+the granularity. btrfs snapshots are point-in-time: whatever happens between two of them is
+unrecoverable, and a file created and deleted inside that window leaves no trace. That gap is
+the reason for the change.
 
-Because mergerfs unions trees **by name**, and the mergerfs mount sits one level above
-`data/`, the path `/srv/nas/snapshots/@GMT-2026.08.16-03.00.00/` is automatically the merged
-view of every branch's snapshot at that instant. This holds for every generation from a
-**single** mergerfs mount. No autofs, no per-generation mounts, no extra memory.
+Checkpoints live **outside the filesystem namespace**. They are listed with `lscp`, promoted to
+permanent snapshots with `chcp ss` (which protects them from garbage collection), removed with
+`rmcp`, and read by mounting: `mount -t nilfs2 -o cp=<n>,ro`.
+
+Two consequences are worth stating because they contradict the earlier btrfs design:
+
+1. **SnapRAID needs no snapshot exclusion.** Checkpoints are not files, so parity naturally
+   covers only the live tree. The old `exclude snapshots/` requirement disappears, as does the
+   risk of parity growing without bound.
+2. **Retention is a deliberate act.** The garbage collector reclaims unpromoted checkpoints to
+   recover space. Keeping history means promoting checkpoints, which pins those blocks. Keeping
+   *everything* costs space proportional to churn — that is physics, not a filesystem choice, and
+   no filesystem makes it free.
+
+#### Exposing versions to SMB
+
+Samba's `shadow_copy2` needs generations visible as directories, which NILFS2 does not provide
+natively. Mounting each branch's checkpoint **inside that branch**, at
+`/mnt/disks/<branch>/snapshots/@GMT-<ts>/`, makes the **single existing mergerfs** union them by
+name — the same by-name union the btrfs design relied on.
 
 ```
 shadow:mountpoint = /srv/nas        shadow:snapdir = /srv/nas/snapshots
 shadow:basedir    = /srv/nas/data   shadow:format  = @GMT-%Y.%m.%d-%H.%M.%S
 ```
 
-Three consequences follow:
+Cost per exposed generation is **two kernel mounts**, a few KB — not a mergerfs process each. An
+earlier estimate of 7.5 MB per generation was wrong: it assumed one mergerfs per generation to
+union the branches, which mounting inside the branches avoids.
 
-1. Snapshot names must be **identical across branches**. snapper numbers each config
-   independently and cannot do this, so it is replaced by a small timestamp-named snapshot
-   timer plus a retention pruner. btrbk is deferred to its real strength, offsite
-   `send`/`receive`.
-2. SnapRAID must **exclude `snapshots/`**, or parity treats every generation as independent
-   files and grows without bound. The `du` metrics collector excludes it too.
-3. Browsing history traverses FUSE and is slow. This is accepted: retrieval is rare.
+Only a **bounded rolling window** is exposed this way (default 24). That is what gives Windows
+its native right-click Previous Versions with no client software, while keeping the mount count
+predictable. Everything older is reached through the web tier, which mounts on demand.
 
-The SSD write tier is itself a mergerfs branch with its own `snapshots/`, so the union covers
-live same-day data before the mover has run.
+**This rests on mergerfs traversing submounts inside its branches, which must be verified before
+anything is built on it.** If it does not, the native-SMB path collapses and only the web path
+survives.
 
 ### 4.7 Namespace and protection tiers
 
@@ -598,21 +618,32 @@ button.
 
 ## 7. Deletion and recovery
 
-Three separate mechanisms, deliberately not conflated:
+**There is no recycle bin.** It was removed: a checkpoint taken before a deletion still contains
+the file, so continuous versioning *is* deletion recovery, and `vfs_recycle` plus a 90-day purge
+timer was a second mechanism covering the same ground. One mechanism, not two.
 
-- **Undo**: Samba's `vfs_recycle` moves deletions to `.recycle/`, and a timer purges entries
-  past 90 days. This is the 90 day archive and it covers the overwhelming majority of real
-  incidents.
-- **Point-in-time**: the snapshot union of section 4.6, surfaced as Windows "Previous
-  Versions" and to macOS via `vfs_shadow_copy2`. Because the SSD write tier is itself a
-  branch with snapshots, this covers same-day changes that have not yet been moved.
-- **Permanent**: `nas-purge <path>` removes the file from the live tree and its recycle entry
-  immediately, rather than waiting out the 90 days.
+The one thing recycle caught that checkpoints do not is a file created and deleted between two
+checkpoints. With NILFS2 that window is the segment write interval rather than a timer, so it is
+far narrower than it would be with periodic snapshots — but it is not zero.
 
-**Deletion is logical only.** Snapshots are immutable and continue to hold a purged file
-until they age out on the retention schedule, and nothing attempts to scrub the underlying
-media. Keeping snapshots immutable is also what preserves btrfs `send` incremental parent
-chains for future node mirroring.
+- **Restore a version**: `nas-revert list <path>` reads the index; `nas-revert restore` mounts
+  exactly one checkpoint read-only, copies the file out, unmounts. Recent history is also visible
+  natively in Windows Explorer via Previous Versions (section 4.6).
+- **Rewind a folder**: the web tier presents a whole directory as of a chosen point. Writes to it
+  are impossible rather than forbidden — the checkpoint is mounted `ro` and an unpromoted
+  checkpoint cannot be mounted writable at all. Restoring is an explicit copy forward into the
+  live tree, so the live tree stays the only writable surface.
+- **Permanent delete**: see the limitation below.
+
+**Permanent delete is coarser on NILFS2 than it would be on btrfs.** `rmcp` removes a whole
+checkpoint; there is no way to strip one path from one checkpoint, whereas a btrfs snapshot can be
+flipped read-write and edited. So purging a file from history means deleting every checkpoint that
+contains it, which discards unrelated history in that window. **Unresolved:** whether that is
+acceptable, or whether purge should be defined as live-tree-only with history expiring naturally.
+
+Note that `shred` and `wipe` are **ineffective in this stack** and must not be relied upon: a
+log-structured filesystem never overwrites in place, and the SSD's flash translation layer
+relocates writes regardless. Disposing of a drive is covered by LUKS, not by file deletion.
 
 Note that `shred` and `wipe` are **ineffective in this stack** and must not be relied upon:
 btrfs is copy-on-write so overwriting a file writes to new blocks and leaves the originals
@@ -692,9 +723,22 @@ Cross-node redundancy **cannot** come from SnapRAID, because parity is node-loca
 node loss is exactly the correlated failure local parity cannot cover. It must be a
 replication layer.
 
-The chosen model is **whole-node mirroring** via btrbk `send`/`receive` over the tailnet: one
-node mirrors another, and on unequal nodes the larger node's excess capacity becomes Tier C
-(Attic, scratch, un-mirrored bulk).
+The chosen model is **whole-node mirroring** over the tailnet: one node mirrors another, and on
+unequal nodes the larger node's excess capacity becomes Tier C (Attic, scratch, un-mirrored bulk).
+
+**The transport changed with NILFS2.** The original plan was btrbk `send`/`receive`, which is
+btrfs-specific and streams only changed extents against a parent snapshot. NILFS2 has no
+equivalent, so replication falls back to **rsync**. The practical differences:
+
+- rsync must *scan* both sides to find changes, where `send` is handed them by the filesystem.
+  Cost moves from O(changes) to O(files) per run.
+- It replicates the **live tree only**. Checkpoint history does not cross the wire, so a mirror
+  is a copy of the current state, not of the version history. Losing a node loses its history.
+- No stream-level integrity: `send` produces a self-describing stream, rsync compares metadata
+  and optionally checksums.
+
+This is the largest single cost of the filesystem change and it is unbuilt either way, so it is
+recorded rather than solved here.
 
 The current design already satisfies the prerequisites. The invariants to preserve from now
 on are:
