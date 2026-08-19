@@ -69,9 +69,11 @@ let
       .import '$work/events.csv' raw
       BEGIN;
       INSERT INTO versions (ino, cno, created)
-        SELECT r.ino, c.cno, c.epoch FROM raw r
-        JOIN cps c ON c.cno = (SELECT MIN(c2.cno) FROM cps c2 WHERE c2.epoch >= r.ts)
-        GROUP BY r.ino, c.cno
+        SELECT DISTINCT r.ino,
+          (SELECT c.cno FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch LIMIT 1),
+          (SELECT c.epoch FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch LIMIT 1)
+        FROM raw r
+        WHERE (SELECT c.cno FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch LIMIT 1) IS NOT NULL
         ON CONFLICT(ino, cno) DO NOTHING;
       INSERT INTO inodes (branch, path, ino, seen)
         SELECT '$branch', r.path, r.ino, MAX(r.ts) FROM raw r GROUP BY r.path
