@@ -385,6 +385,23 @@ is `restore --version N` picking a cno that belongs to the other branch and moun
 this device, where it is often a valid but unrelated checkpoint, so the wrong contents come back
 silently. This was invisible for as long as there was one branch.
 
+**Two traps in walking a branch that has its window mounted.** Both appear only once promotion is
+running, so neither was reachable during development:
+
+- **`find` reports a filesystem loop.** A checkpoint mounted inside its own branch shares the
+  device, so `find` warns `File system loop detected` and **exits 1**, which `set -e` turns into a
+  failed unit. `-not -path` filters the output but does not stop find entering. Prune instead:
+  `find "$branch" -xdev -path "$branch/snapshots" -prune -o -type f -printf ...`.
+- **A tree walk multiplies by the number of generations.** `nas-index` pruned btrfs's dotted
+  `.snapshots` but not the NILFS2 `snapshots`, so it would have walked into every mounted
+  generation, each a complete copy of the branch. This is the same dotted-name mismatch that hit
+  the SnapRAID exclude list; that name has now caused the bug twice.
+
+**`readlink -m`, not `-f`, when resolving a path for lookup.** `-f` fails if any parent is missing,
+which is exactly the case for a file whose directory was deleted, so listing a deleted file's
+history died silently before printing anything. Verified after the fix: a file whose parent
+directory was removed still lists all four versions and restores byte-identical.
+
 **Lookups resolve the inode from the live file, not from the recorded path.** Applications
 routinely write to a temporary name and rename into place, and NILFS2 keeps the inode across the
 rename while `fatrace -f W+D` never sees the move. SnapRAID is a live example: its history was
@@ -655,9 +672,14 @@ cannot create cleanerd on /dev/dm-3: Invalid argument
 ```
 
 nilfs-utils ships a sample at `$out/etc/nilfs_cleanerd.conf`, but NixOS never links a package's
-`etc/` into `/etc`, so the file was simply absent. `storage.nix` now installs it. This matters far
-more than it appears: the accepted failure mode of this design is that a branch fills up, and
-without a startable collector there is **no way to reclaim space even after deleting versions**.
+`etc/` into `/etc`, so the file was simply absent. This matters far more than it appears: the
+accepted failure mode of this design is that a branch fills up, and without a startable collector
+there is **no way to reclaim space even after deleting versions**.
+
+The settings live in `modules/nixos/nas/nilfs_cleanerd.conf`, version controlled and passed
+explicitly with `nilfs_cleanerd -c`. Deliberately **not** installed to `/etc`: nothing should be
+able to start a collector implicitly while the policy is to retain everything. `nas-cleaner
+start|status|stop <branch>` is the only intended entry point.
 
 **Beware `nilfs-clean -s`: that is `--suspend`, not status.** Status is `-l`. Using `-s` to "check"
 a running cleaner silently suspends it.
