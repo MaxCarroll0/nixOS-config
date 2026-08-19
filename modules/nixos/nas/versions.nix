@@ -1,0 +1,229 @@
+# Per-file version history: fatrace records writes, checkpoints hold the content.
+
+{
+  config,
+  pkgs,
+  lib,
+  ...
+}:
+
+let
+  cfg = config.local.nas;
+  vcfg = cfg.versions;
+  scfg = cfg.storage;
+
+  nilfsBranches = lib.filterAttrs (_: d: d.fsType == "nilfs2") scfg.dataDisks;
+
+  db = "${vcfg.stateDir}/versions.db";
+  eventsFor = name: "${vcfg.stateDir}/${name}.jsonl";
+
+  ingest = pkgs.writeShellApplication {
+    name = "nas-versions-ingest";
+    runtimeInputs = [
+      pkgs.jq
+      pkgs.gawk
+      pkgs.sqlite
+      pkgs.nilfs-utils
+      pkgs.util-linux
+      pkgs.coreutils
+    ];
+    text = ''
+      sqlite3 ${db} <<'SQL'
+      CREATE TABLE IF NOT EXISTS versions (
+        ino INTEGER NOT NULL, cno INTEGER NOT NULL, created INTEGER NOT NULL,
+        PRIMARY KEY (ino, cno));
+      CREATE TABLE IF NOT EXISTS inodes (
+        branch TEXT NOT NULL, path TEXT NOT NULL, ino INTEGER NOT NULL, seen INTEGER NOT NULL,
+        PRIMARY KEY (branch, path));
+      CREATE INDEX IF NOT EXISTS inodes_ino ON inodes (ino);
+      SQL
+
+      # A write lands in the first checkpoint at or after it, so the join is a correlated MIN.
+      ingest_branch() {
+        branch=$1
+        events=$2
+        mountpoint -q "$branch" || return 0
+        [ -s "$events" ] || return 0
+
+        device=$(findmnt -no SOURCE "$branch")
+        work=$(mktemp -d)
+        # shellcheck disable=SC2064
+        trap "rm -rf '$work'" RETURN
+
+        mv "$events" "$work/pending.jsonl"
+
+        lscp "$device" | awk 'NR>1 && $1 ~ /^[0-9]+$/ {print $1 "," $2 " " $3}' > "$work/cno.txt"
+        cut -d, -f2 "$work/cno.txt" | date -f - +%s > "$work/epoch.txt"
+        paste -d, <(cut -d, -f1 "$work/cno.txt") "$work/epoch.txt" > "$work/cps.csv"
+
+        jq -r --arg root "$branch/" '
+          select(.path | startswith($root))
+          | [.inode, (.timestamp | floor), (.path[($root | length):])] | @csv
+        ' "$work/pending.jsonl" > "$work/events.csv"
+
+        sqlite3 ${db} <<SQL
+      CREATE TEMP TABLE cps(cno INTEGER, epoch INTEGER);
+      CREATE TEMP TABLE raw(ino INTEGER, ts INTEGER, path TEXT);
+      .mode csv
+      .import '$work/cps.csv' cps
+      .import '$work/events.csv' raw
+      BEGIN;
+      INSERT INTO versions (ino, cno, created)
+        SELECT r.ino, c.cno, c.epoch FROM raw r
+        JOIN cps c ON c.cno = (SELECT MIN(c2.cno) FROM cps c2 WHERE c2.epoch >= r.ts)
+        GROUP BY r.ino, c.cno
+        ON CONFLICT(ino, cno) DO NOTHING;
+      INSERT INTO inodes (branch, path, ino, seen)
+        SELECT '$branch', r.path, r.ino, MAX(r.ts) FROM raw r GROUP BY r.path
+        ON CONFLICT(branch, path) DO UPDATE SET ino=excluded.ino, seen=excluded.seen;
+      COMMIT;
+      SQL
+      }
+
+      ${lib.concatMapStringsSep "\n" (name: ''
+        ingest_branch ${scfg.diskRoot}/${name} ${eventsFor name}
+      '') (lib.attrNames nilfsBranches)}
+    '';
+  };
+
+  versions = pkgs.writeShellApplication {
+    name = "nas-versions";
+    runtimeInputs = [
+      pkgs.sqlite
+      pkgs.nilfs-utils
+      pkgs.util-linux
+      pkgs.coreutils
+    ];
+    text = ''
+      usage() {
+        echo "usage: nas-versions list <path>" >&2
+        echo "       nas-versions restore <path> --version N [--output PATH]" >&2
+        echo "       nas-versions clean <path> --before YYYY-MM-DD" >&2
+        exit 2
+      }
+
+      resolve() {
+        target=$(readlink -f "$1")
+        branch=$(findmnt -no TARGET --target "$target")
+        while [ -n "$branch" ] && [ "$(findmnt -no FSTYPE --target "$branch")" != "nilfs2" ]; do
+          [ "$branch" = "/" ] && { echo "not on a NILFS2 branch: $target" >&2; exit 1; }
+          branch=$(dirname "$branch")
+        done
+        device=$(findmnt -no SOURCE "$branch")
+        rel=''${target#"$branch"/}
+      }
+
+      cmd=''${1:-}; shift || usage
+      case "$cmd" in
+        list)
+          [ $# -ge 1 ] || usage
+          resolve "$1"
+          sqlite3 -noheader -separator '  ' ${db} \
+            "SELECT (SELECT COUNT(*) FROM versions v2 WHERE v2.ino=i.ino AND v2.cno<=v.cno),
+                    v.cno, datetime(v.created,'unixepoch')
+             FROM versions v JOIN inodes i ON i.ino=v.ino
+             WHERE i.branch='$branch' AND i.path='$rel' ORDER BY v.cno;" \
+            | awk 'BEGIN{printf "%-8s %-10s %s\n","VERSION","CHECKPOINT","WHEN (UTC)"} {printf "%-8s %-10s %s %s\n",$1,$2,$3,$4}'
+          ;;
+        restore)
+          [ $# -ge 3 ] || usage
+          path="$1"; shift
+          version=""; output=""
+          while [ $# -gt 0 ]; do
+            case "$1" in
+              --version) version="$2"; shift 2 ;;
+              --output) output="$2"; shift 2 ;;
+              *) usage ;;
+            esac
+          done
+          [ -n "$version" ] || usage
+          resolve "$path"
+          cno=$(sqlite3 -noheader ${db} \
+            "SELECT v.cno FROM versions v JOIN inodes i ON i.ino=v.ino
+             WHERE i.branch='$branch' AND i.path='$rel' ORDER BY v.cno
+             LIMIT 1 OFFSET $((version - 1));")
+          [ -n "$cno" ] || { echo "no version $version for $rel" >&2; exit 1; }
+          tmp=$(mktemp -d /run/nas-restore.XXXXXX)
+          trap 'umount "$tmp" 2>/dev/null || true; rmdir "$tmp" 2>/dev/null || true' EXIT
+          mount -t nilfs2 -o "cp=$cno,ro" "$device" "$tmp"
+          [ -f "$tmp/$rel" ] || { echo "$rel absent from checkpoint $cno" >&2; exit 1; }
+          cp -a "$tmp/$rel" "''${output:-$target}"
+          echo "restored version $version (checkpoint $cno) to ''${output:-$target}"
+          ;;
+        clean)
+          echo "not implemented: removing versions is deliberate and needs the" >&2
+          echo "checkpoint-exclusivity check described in docs/nas.md section 7.1" >&2
+          exit 1
+          ;;
+        *) usage ;;
+      esac
+    '';
+  };
+in
+
+{
+  options.local.nas.versions = {
+    enable = lib.mkEnableOption "per-file version history";
+
+    stateDir = lib.mkOption {
+      type = lib.types.str;
+      default = "/var/lib/nas-versions";
+      description = "Where the version index and pending event files live; on the SSD.";
+    };
+
+    ingestInterval = lib.mkOption {
+      type = lib.types.str;
+      default = "1m";
+      description = "How often recorded writes are folded into the index.";
+    };
+  };
+
+  config = lib.mkIf (cfg.enable && vcfg.enable && nilfsBranches != { }) {
+    environment.systemPackages = [
+      versions
+      pkgs.fatrace
+    ];
+
+    systemd.tmpfiles.rules = [ "d ${vcfg.stateDir} 0750 root root - -" ];
+
+    systemd.services = lib.mkMerge [
+      (lib.mapAttrs' (
+        name: _:
+        lib.nameValuePair "nas-versions-watch-${name}" {
+          description = "Record writes on ${name} for version history";
+          wantedBy = [ "multi-user.target" ];
+          serviceConfig = {
+            ExecStart = "${pkgs.fatrace}/bin/fatrace -c -j -f W+D -t -t -o ${eventsFor name}";
+            WorkingDirectory = "${scfg.diskRoot}/${name}";
+            Restart = "on-failure";
+            RestartSec = 30;
+            Nice = 10;
+            MemoryMax = "32M";
+          };
+          unitConfig.ConditionPathIsMountPoint = "${scfg.diskRoot}/${name}";
+        }
+      ) nilfsBranches)
+
+      {
+        nas-versions-ingest = {
+          description = "Fold recorded writes into the version index";
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = lib.getExe ingest;
+            Nice = 15;
+            IOSchedulingClass = "idle";
+          };
+        };
+      }
+    ];
+
+    systemd.timers.nas-versions-ingest = {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "3m";
+        OnUnitActiveSec = vcfg.ingestInterval;
+        Persistent = false;
+      };
+    };
+  };
+}
