@@ -5067,6 +5067,66 @@ let
           }
         ];
       })
+      (stat {
+        title = "Branch fullness";
+        description = "History is never collected, so this only ever rises. A full NILFS2 stops accepting writes.";
+        unit = "percentunit";
+        w = 8;
+        h = 4;
+        targets = [
+          {
+            expr = "nas_branch_used_ratio";
+            legendFormat = "{{branch}}";
+          }
+        ];
+      })
+      (stat {
+        title = "Retained checkpoints";
+        description = "Promoted checkpoints. Only a promoted checkpoint is mountable, so this is what is recoverable.";
+        w = 8;
+        h = 4;
+        targets = [
+          {
+            expr = "sum(nas_checkpoint_snapshots)";
+          }
+        ];
+      })
+      (stat {
+        title = "Generations exposed to SMB";
+        description = "Mounted under snapshots/ for Windows Previous Versions.";
+        w = 8;
+        h = 4;
+        targets = [ { expr = "sum(nas_checkpoints_exposed)"; } ];
+      })
+      (ts {
+        title = "Checkpoint growth";
+        description = "Checkpoints accrue with write volume, not with time, so this tracks churn.";
+        w = 12;
+        h = 8;
+        targets = [
+          {
+            expr = "nas_checkpoints";
+            legendFormat = "{{branch}} total";
+          }
+          {
+            expr = "nas_checkpoint_snapshots";
+            legendFormat = "{{branch}} retained";
+          }
+        ];
+      })
+      (ts {
+        title = "Space consumed per day";
+        description = "Extrapolate against free space to estimate when a branch stops accepting writes.";
+        unit = "bytes";
+        w = 12;
+        h = 8;
+        targets = [
+          {
+            expr = "deriv(nas_branch_used_ratio[6h]) * 86400 * nas_branch_size_bytes";
+            legendFormat = "{{branch}}";
+          }
+        ];
+      })
     ];
   };
 in

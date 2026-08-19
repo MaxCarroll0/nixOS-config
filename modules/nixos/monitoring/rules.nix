@@ -1313,5 +1313,30 @@ in
         severity = "critical";
         summary = "An alert-eligible Nix build failed on {{ $labels.instance }}. Details: journalctl -t nix-observer-summary on that host.";
       })
+      (threshold {
+        uid = "nas-branch-filling";
+        title = "NAS branch filling up";
+        expr = "max by (branch) (nas_branch_used_ratio)";
+        value = 0.8;
+        for' = "30m";
+        summary = "{{ $labels.branch }} is {{ $value | humanizePercentage }} full. Retained history is never collected, so this only rises.";
+      })
+      (threshold {
+        uid = "nas-branch-nearly-full";
+        title = "NAS branch nearly full";
+        expr = "max by (branch) (nas_branch_used_ratio)";
+        value = 0.92;
+        for' = "5m";
+        severity = "critical";
+        summary = "{{ $labels.branch }} is {{ $value | humanizePercentage }} full. A full NILFS2 stops accepting writes; clean versions or add capacity.";
+      })
+      (threshold {
+        uid = "nas-metrics-stale";
+        title = "NAS checkpoint metrics stale";
+        expr = "time() - max(nas_metrics_timestamp_seconds)";
+        value = 7200;
+        for' = "15m";
+        summary = "Checkpoint metrics have not been written for {{ $value | humanizeDuration }}, so branch fullness is no longer being watched.";
+      })
     ];
 }

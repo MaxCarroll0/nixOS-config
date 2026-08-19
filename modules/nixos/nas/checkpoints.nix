@@ -161,17 +161,23 @@ let
         echo '# TYPE nas_checkpoints_exposed gauge'
         echo '# HELP nas_branch_used_ratio Space used, which only ever grows while history is retained.'
         echo '# TYPE nas_branch_used_ratio gauge'
+        echo '# HELP nas_branch_size_bytes Branch capacity, for projecting when writes will stop.'
+        echo '# TYPE nas_branch_size_bytes gauge'
+        echo '# HELP nas_metrics_timestamp_seconds When this file was last written.'
+        echo '# TYPE nas_metrics_timestamp_seconds gauge'
         ${forEachBranch ''
           label=$(basename "$branch")
           total=$(lscp "$device" | tail -n +2 | wc -l)
           snaps=$(lscp -s "$device" | tail -n +2 | wc -l)
           shown=$(find "$branch/${ccfg.snapshotDir}" -maxdepth 1 -name '@GMT-*' 2>/dev/null | wc -l)
-          ratio=$(df --output=pcent "$branch" | tail -1 | tr -dc '0-9')
+          read -r used size <<<"$(df -B1 --output=used,size "$branch" | tail -1)"
           echo "nas_checkpoints{branch=\"$label\"} $total"
           echo "nas_checkpoint_snapshots{branch=\"$label\"} $snaps"
           echo "nas_checkpoints_exposed{branch=\"$label\"} $shown"
-          echo "nas_branch_used_ratio{branch=\"$label\"} 0.''${ratio}"
+          echo "nas_branch_used_ratio{branch=\"$label\"} $(awk -v u="$used" -v s="$size" 'BEGIN{printf "%.6f", u/s}')"
+          echo "nas_branch_size_bytes{branch=\"$label\"} $size"
         ''}
+        echo "nas_metrics_timestamp_seconds $(date +%s)"
       } > "$tmp"
       mv "$tmp" ${ccfg.metricsFile}
     '';
