@@ -456,8 +456,25 @@ Only a **bounded rolling window** is exposed this way (default 24). That is what
 its native right-click Previous Versions with no client software, while keeping the mount count
 predictable. Everything older is reached through the web tier, which mounts on demand.
 
-**Verified on the live array.** Two tmpfs mounts placed inside separate branches were unioned by
-name into one directory through the existing mergerfs mount:
+**Verified end to end on the live array**, with real NILFS2 checkpoints on disk1:
+
+```
+/dev/mapper/nas-disk1 /mnt/disks/disk1/snapshots/@GMT-2026.08.19-03.16.09 nilfs2 ro,cp=2
+/dev/mapper/nas-disk1 /mnt/disks/disk1/snapshots/@GMT-2026.08.19-03.11.02 nilfs2 ro,cp=1
+
+ls /srv/nas/snapshots/   ->   @GMT-2026.08.19-03.11.02  @GMT-2026.08.19-03.16.09
+```
+
+Checkpoints mount read-only inside the branch under the exact name `shadow_copy2` expects, and
+mergerfs surfaces them at pool level. `ro,cp=N` means a rewound view is unwritable by
+construction rather than by policy.
+
+**Operational note: every nilfs tool takes the device, never the mountpoint.** `lscp
+/mnt/disks/disk1` fails with `cannot open NILFS ... No such device or address`, while `lscp
+/dev/mapper/nas-disk1` works. This silently produced "promoted 0" until it was found.
+
+The earlier proof, before any disk was reformatted — two tmpfs mounts inside separate branches
+unioned by name through the existing mergerfs mount:
 
 ```
 mount -t tmpfs tmpfs /mnt/disks/disk1/snapshots/probe   # contains a.txt
