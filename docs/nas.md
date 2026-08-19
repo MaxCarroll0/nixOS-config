@@ -424,6 +424,13 @@ resolves to `MIN(cno) WHERE cp.epoch >= event.ts`. This must be a per-row scalar
 earlier `JOIN ... ON c.cno = (subquery)` silently dropped versions and was caught only by a test
 that expected three checkpoints and got one.
 
+**Checkpoint times are whole seconds, so the tie must break towards the later checkpoint.**
+`lscp` reports to the second while several checkpoints can share one, and a checkpoint created in
+the same second as a write may still predate it. Taking the *first* qualifying checkpoint recorded
+a version that could never be restored: the test wrote a file at `T`, checkpoints 1 and 2 both
+reported `T`, the index chose cp1, and mounting cp1 found no file. Ordering by
+`epoch, cno DESC` takes the last checkpoint in that second instead, which does contain the write.
+
 **Rotation, forced by `fatrace`'s output handling.** It opens `-o` with `O_CREAT|O_WRONLY|O_EXCL`
 and no `O_APPEND`, which has two consequences: a stale file makes the watcher fail to start (so
 the unit removes it in `ExecStartPre`), and the file cannot be renamed or truncated out from

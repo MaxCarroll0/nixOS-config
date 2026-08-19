@@ -83,12 +83,14 @@ let
       .import '$work/cps.csv' cps
       .import '$work/events.csv' raw
       BEGIN;
+      -- Checkpoint times are whole seconds, so a checkpoint sharing the write's second may predate
+      -- it; take the last one in that second rather than the first.
       INSERT INTO versions (branch, ino, cno, created)
         SELECT DISTINCT '$branch', r.ino,
-          (SELECT c.cno FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch LIMIT 1),
-          (SELECT c.epoch FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch LIMIT 1)
+          (SELECT c.cno FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch, c.cno DESC LIMIT 1),
+          (SELECT c.epoch FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch, c.cno DESC LIMIT 1)
         FROM raw r
-        WHERE (SELECT c.cno FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch LIMIT 1) IS NOT NULL
+        WHERE (SELECT c.cno FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch, c.cno DESC LIMIT 1) IS NOT NULL
         ON CONFLICT(branch, ino, cno) DO NOTHING;
       INSERT INTO inodes (branch, path, ino, seen)
         SELECT '$branch', r.path, r.ino, MAX(r.ts) FROM raw r GROUP BY r.path
@@ -150,15 +152,15 @@ let
       BEGIN;
       INSERT INTO versions (branch, ino, cno, created)
         SELECT DISTINCT '$branch', l.ino,
-          (SELECT c.cno FROM cps c WHERE c.epoch >= l.mtime ORDER BY c.epoch LIMIT 1),
-          (SELECT c.epoch FROM cps c WHERE c.epoch >= l.mtime ORDER BY c.epoch LIMIT 1)
+          (SELECT c.cno FROM cps c WHERE c.epoch >= l.mtime ORDER BY c.epoch, c.cno DESC LIMIT 1),
+          (SELECT c.epoch FROM cps c WHERE c.epoch >= l.mtime ORDER BY c.epoch, c.cno DESC LIMIT 1)
         FROM live l
-        WHERE (SELECT c.cno FROM cps c WHERE c.epoch >= l.mtime ORDER BY c.epoch LIMIT 1) IS NOT NULL
+        WHERE (SELECT c.cno FROM cps c WHERE c.epoch >= l.mtime ORDER BY c.epoch, c.cno DESC LIMIT 1) IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM versions v
                           WHERE v.branch='$branch' AND v.ino=l.ino AND v.created >= l.mtime)
         ON CONFLICT(branch, ino, cno) DO NOTHING;
       INSERT INTO inodes (branch, path, ino, seen)
-        SELECT '$branch', l.path, l.ino, l.mtime FROM live l
+        SELECT '$branch', l.path, l.ino, l.mtime FROM live l WHERE true
         ON CONFLICT(branch, path) DO UPDATE SET ino=excluded.ino, seen=excluded.seen;
       COMMIT;
       SQL
