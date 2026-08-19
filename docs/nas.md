@@ -1203,6 +1203,26 @@ sudo mount /srv/nas      # or nas-unlock
 This costs nothing operationally, since the array is `noauto` and manually unlocked anyway:
 lock, deploy, unlock is already the intended sequence.
 
+**Emptying a data disk needs a one-off `--force-empty`, and it must stay one-off.** After disk2
+was reformatted, `snapraid sync` refused to run:
+
+```
+WARNING! All the files previously present in disk 'disk2' ... are now missing or have been rewritten!
+This could occur when some disks are not mounted in the expected directory.
+If you want to 'sync' anyway, use 'snapraid --force-empty sync'.
+```
+
+That guard is the one thing standing between an accidentally unmounted disk and parity being
+overwritten with the absence of its data. Run the override by hand for the migration:
+
+```bash
+systemd-run --unit=nas-sync-once --collect --nice=15 --property=IOSchedulingClass=idle \
+  snapraid -c <conf> --force-empty sync
+```
+
+**Do not add `--force-empty` to `nas-snapraid-sync.service`.** Baking it in disables the check
+permanently, so a later unmounted branch would silently destroy its own recovery path.
+
 **Never move files while `snapraid sync` is running.** It aborts with
 `Missing file ... WARNING! You cannot modify files while running` and the parity pass is
 wasted — 25 minutes and 341 GB of writes, in the case that taught us this. Let the sync finish,
