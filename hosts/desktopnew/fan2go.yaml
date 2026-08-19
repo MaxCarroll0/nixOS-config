@@ -12,9 +12,9 @@ curves:
     linear:
       sensor: cpu
       steps:
-        - 30: 0%
-        - 60: 10%
-        - 70: 50%
+        - 60: 00%
+        - 70: 20%
+        - 75: 50%
         - 80: 100%
 
 fans:
@@ -30,6 +30,6 @@ fans:
         maxPwmChangePerCycle: 5
     controlMode:
       onExit: restore
-    minPwm: 20
+    minPwm: 0
     startPwm: 40
     maxPwm: 255
