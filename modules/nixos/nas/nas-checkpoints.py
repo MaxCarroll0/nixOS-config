@@ -17,8 +17,14 @@ def run(args, **kw):
 
 
 def checkpoints(branch):
-    """[(cno, datetime, is_snapshot)] newest first, or [] if the branch is not NILFS2."""
-    out = run(["lscp", "-r", str(branch)])
+    """[(cno, datetime, is_snapshot)] newest first, or [] if the branch is not NILFS2.
+
+    The nilfs tools take the device, never the mountpoint.
+    """
+    device = device_for(branch)
+    if device is None:
+        return []
+    out = run(["lscp", "-r", device])
     if out.returncode != 0:
         return []
     found = []
@@ -36,15 +42,18 @@ def checkpoints(branch):
 
 
 def promote(branch, cno):
-    return run(["chcp", "ss", str(branch), str(cno)]).returncode == 0
+    device = device_for(branch)
+    return device is not None and run(["chcp", "ss", device, str(cno)]).returncode == 0
 
 
 def demote(branch, cno):
-    return run(["chcp", "cp", str(branch), str(cno)]).returncode == 0
+    device = device_for(branch)
+    return device is not None and run(["chcp", "cp", device, str(cno)]).returncode == 0
 
 
 def remove(branch, cno):
-    return run(["rmcp", str(branch), str(cno)]).returncode == 0
+    device = device_for(branch)
+    return device is not None and run(["rmcp", device, str(cno)]).returncode == 0
 
 
 def mounted_windows(snapdir):
