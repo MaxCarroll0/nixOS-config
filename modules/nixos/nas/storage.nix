@@ -140,6 +140,14 @@ in
       }
     ];
 
+    nixpkgs.overlays = [
+      (_: prev: {
+        nilfs-utils = prev.nilfs-utils.overrideAttrs (old: {
+          patches = (old.patches or [ ]) ++ [ ../../patches/nilfs-utils-chcp-device-arg.patch ];
+        });
+      })
+    ];
+
     environment.systemPackages = [
       pkgs.snapraid
       pkgs.mergerfs

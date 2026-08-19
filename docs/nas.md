@@ -580,6 +580,31 @@ load-bearing rather than merely a retention policy: the SMB window, `nas-version
 why the migration's unpromoted checkpoints are unreachable as well as collectable, which is the
 intended outcome there.
 
+**`chcp` is patched, and without the patch promotion is a silent no-op.** nilfs-utils 2.2.12
+inverts the `[DEVICE]`/`CNO` test in `bin/chcp.c`: a device path fails `nilfs_parse_cno()` and is
+left in the checkpoint list, while a *numeric* first-of-two argument is taken as the device. Both
+halves are observable:
+
+```
+chcp ss /dev/mapper/nas-disk1 1464   ->  chcp: /dev/mapper/nas-disk1: invalid checkpoint number
+chcp ss 1470 1476                    ->  chcp: cannot open NILFS on 1470
+```
+
+`rmcp.c` performs the identical test with the branches the correct way round, which is what
+identifies it as a bug rather than an interface choice. Two consequences:
+
+1. `nas-checkpoint-promote` piped `xargs -n1 chcp ss "$device"`, so **every promotion failed** and
+   was swallowed by `|| true`. The snapshot count sat at 0 while appearing to work — meaning
+   nothing was retained and nothing was mountable.
+2. With no usable device argument, `chcp` falls back to `nilfs_open(NULL, ...)`, and
+   `nilfs_find_fs` then takes the **first rw nilfs2 line in `/proc/mounts`** — it does not consult
+   the working directory. With one NILFS2 branch that is right by luck; with disk1 *and* disk2 it
+   would apply one filesystem's checkpoint numbers to the other, silently promoting arbitrary
+   checkpoints. This had to be fixed before disk2 was converted.
+
+`patches/nilfs-utils-chcp-device-arg.patch` swaps the two branches, applied via an overlay in
+`storage.nix` so every `pkgs.nilfs-utils` consumer gets it.
+
 **Promotion is suspended by a marker file, not by stopping the timer.** `systemctl mask` cannot be
 used on a NixOS unit whose `/etc/systemd/system` entry is a store symlink, and a stopped timer is
 restarted by the next activation — which is how a deploy mid-migration nearly pinned ~1,300

@@ -35,6 +35,8 @@ let
       pkgs.gawk
       pkgs.findutils
     ];
+    # The device argument needs patches/nilfs-utils-chcp-device-arg.patch; without it
+    # chcp silently targets the first rw nilfs2 mount instead.
     text = forEachBranch ''
       lscp -r "$device" | awk '$4=="cp" {print $1}' | xargs -r -n1 chcp ss "$device" || true
     '';

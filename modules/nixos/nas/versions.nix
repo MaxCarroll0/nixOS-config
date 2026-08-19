@@ -144,7 +144,7 @@ let
           branch=$(sqlite3 -noheader ${db} "SELECT branch FROM inodes WHERE path='$rel' LIMIT 1;")
         fi
         [ -n "$branch" ] || { echo "not on a NILFS2 branch: $target" >&2; exit 1; }
-        device=$(findmnt -no SOURCE "$branch")
+        device=$(findmnt -no SOURCE "$branch" | head -1)
       }
 
       cmd=''${1:-}; shift || usage
