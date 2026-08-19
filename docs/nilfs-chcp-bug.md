@@ -163,11 +163,20 @@ nilfs-utils = prev.nilfs-utils.overrideAttrs (old: rec {
     hash = "sha256-Sqg1pERzxc6H7eMJGv3XTgiC3/KXu/hqqZzl1vxM6E8=";
   };
   postPatch = builtins.replaceStrings [ "sbin/mkfs/mkfs.c" ] [ "sbin/mkfs.c" ] old.postPatch;
+  nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ final.pkg-config ];
+  buildInputs = (old.buildInputs or [ ]) ++ [ final.libuuid final.util-linux ];
+  installFlags = (old.installFlags or [ ]) ++ [ "core_sbindir=${placeholder "out"}/sbin" ];
 });
 ```
 
-`sbin/mkfs/mkfs.c` moved to `sbin/mkfs.c` in 2.3.0, so the existing nixpkgs `postPatch` needs
-redirecting or the build fails with `substitute(): ERROR: file 'sbin/mkfs/mkfs.c' does not exist`.
+Four things changed between 2.2.12 and 2.3.x, each producing a different failure:
+
+| Change | Failure without the override |
+|---|---|
+| `sbin/mkfs/mkfs.c` moved to `sbin/mkfs.c` | `substitute(): ERROR: file 'sbin/mkfs/mkfs.c' does not exist` |
+| `configure.ac` gained `PKG_CHECK_MODULES` for `uuid`, `blkid`, `mount`, falling back to `/usr/include/...` when pkg-config is absent | `fatal error: uuid.h: No such file or directory`, then `libmount.h` |
+| those modules must actually be present | as above, once pkg-config is added |
+| `root_sbindir` renamed `core_sbindir` | `make: *** [Makefile:439: install-core_sbinPROGRAMS] Error 1` |
 
 2.3.x also brings [`ea6b9b84f`](https://github.com/nilfs-dev/nilfs-utils/commit/ea6b9b84f),
 *"bin: allow specifying filesystem node instead of device"*, so a mountpoint can be passed where

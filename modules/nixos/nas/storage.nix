@@ -151,6 +151,12 @@ in
             hash = "sha256-Sqg1pERzxc6H7eMJGv3XTgiC3/KXu/hqqZzl1vxM6E8=";
           };
           postPatch = builtins.replaceStrings [ "sbin/mkfs/mkfs.c" ] [ "sbin/mkfs.c" ] old.postPatch;
+          nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ final.pkg-config ];
+          buildInputs = (old.buildInputs or [ ]) ++ [
+            final.libuuid
+            final.util-linux
+          ];
+          installFlags = (old.installFlags or [ ]) ++ [ "core_sbindir=${placeholder "out"}/sbin" ];
         });
       })
     ];

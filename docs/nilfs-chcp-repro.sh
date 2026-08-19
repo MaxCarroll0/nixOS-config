@@ -53,13 +53,14 @@ echo "### 4. BUG b: chcp takes a numeric checkpoint as the device"
 echo "\$ chcp ss $CA $CB"; sudo chcp ss "$CA" "$CB"; echo "  rc=$?"
 
 echo
-echo "### 5. IMPACT: with no usable device argument, chcp hits the wrong filesystem."
+echo "### 5. Without a device argument, the target is implicit (cwd selects it)."
 echo "    cwd is B's mountpoint, and we ask to promote checkpoint $CB."
 echo "\$ cd $W/mnt_b && chcp ss $CB"
 sudo sh -c "cd $W/mnt_b && chcp ss $CB"; echo "  rc=$?"
 echo "  snapshots on A: $(sudo lscp -s "$DA" | tail -n +2 | awk '{print $1}' | tr '\n' ' ')"
 echo "  snapshots on B: $(sudo lscp -s "$DB" | tail -n +2 | awk '{print $1}' | tr '\n' ' ')"
-echo "  ^ the snapshot lands on A (first rw nilfs2 line in /proc/mounts), not on B."
+echo "  ^ cwd selected B. Checkpoint numbers are per-filesystem, so a wrong cwd"
+echo "    promotes an unrelated checkpoint elsewhere instead of failing."
 
 echo
 echo "### cleanup"
