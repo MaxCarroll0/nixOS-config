@@ -38,8 +38,8 @@ in
 
     workerCommand = lib.mkOption {
       type = lib.types.str;
-      default = "${pkgs.python3}/bin/python3 ${./nas-web-worker.py} --root %h";
-      description = "Application run per account. %h is that account's home. Must accept a socket-activated fd on LISTEN_FDS. Replace this with the chosen application tier; the reference browser is only a placeholder.";
+      default = "${pkgs.copyparty}/bin/copyparty -i 127.0.0.1 -p 0 -v %h::rw --no-crt -q";
+      description = "Application run per account. %h is that account's home. It needs no auth or multi-tenancy: it only ever runs as one user and sees one home.";
     };
   };
 

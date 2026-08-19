@@ -62,10 +62,7 @@ class Handler(BaseHTTPRequestHandler):
             self._deny(401, "No Tailscale identity. Reach this through the tailnet.\n")
             return
 
-        account = self.server.identity.get(login)
-        if account is None:
-            self.server.identity = load_map(self.server.map_path)
-            account = self.server.identity.get(login)
+        account = self.server.lookup(login)
         if account is None:
             self._deny(403, f"{login} has no NAS account.\n")
             return
@@ -102,7 +99,20 @@ class Server(ThreadingHTTPServer):
         super().__init__(addr, Handler)
         self.map_path = map_path
         self.socket_dir = socket_dir
-        self.identity = load_map(map_path)
+        self.identity = {}
+        self.map_mtime = None
+        self.lookup("")
+
+    def lookup(self, login):
+        """Reload when the map file changes, so a new account works without a restart."""
+        try:
+            mtime = os.stat(self.map_path).st_mtime
+        except OSError:
+            mtime = None
+        if mtime != self.map_mtime:
+            self.identity = load_map(self.map_path)
+            self.map_mtime = mtime
+        return self.identity.get(login)
 
 
 def main():
