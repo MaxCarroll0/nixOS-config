@@ -18,6 +18,40 @@ let
     lib.attrNames nilfsBranches
   );
 
+  # Only nilfs_cleanerd reclaims space; deleting a checkpoint alone frees nothing.
+  cleaner = pkgs.writeShellApplication {
+    name = "nas-checkpoint-clean";
+    runtimeInputs = [
+      pkgs.nilfs-utils
+      pkgs.procps
+      pkgs.util-linux
+    ];
+    text = ''
+      for branch in ${
+        lib.concatStringsSep " " (map (name: "${scfg.diskRoot}/${name}") (lib.attrNames nilfsBranches))
+      }; do
+        mountpoint -q "$branch" || continue
+        device=$(findmnt -no SOURCE "$branch")
+        [ -n "$device" ] || continue
+
+        nilfs_cleanerd "$device" "$branch" || true
+      done
+
+      sleep ${toString ccfg.cleanForSeconds}
+
+      for branch in ${
+        lib.concatStringsSep " " (map (name: "${scfg.diskRoot}/${name}") (lib.attrNames nilfsBranches))
+      }; do
+        mountpoint -q "$branch" || continue
+        device=$(findmnt -no SOURCE "$branch")
+        [ -n "$device" ] || continue
+        nilfs-clean -q "$device" 2>/dev/null || true
+      done
+
+      pkill -x nilfs_cleanerd || true
+    '';
+  };
+
   tool = pkgs.writeShellApplication {
     name = "nas-checkpoints";
     runtimeInputs = [
@@ -64,6 +98,12 @@ in
       type = lib.types.str;
       default = "*-*-* 04:45:00";
       description = "When the garbage collector may run; inside the SnapRAID window so it never wakes a sleeping disk.";
+    };
+
+    cleanForSeconds = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 1800;
+      description = "How long the collector is allowed to run before being stopped again.";
     };
   };
 
@@ -115,11 +155,10 @@ in
       description = "NILFS2 garbage collection, confined to the nightly window";
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = lib.concatMapStringsSep " ; " (
-          name: "${pkgs.nilfs-utils}/bin/nilfs-clean ${scfg.diskRoot}/${name}"
-        ) (lib.attrNames nilfsBranches);
+        ExecStart = "${cleaner}/bin/nas-checkpoint-clean";
         Nice = 19;
         IOSchedulingClass = "idle";
+        TimeoutStartSec = ccfg.cleanForSeconds + 120;
       };
     };
 
