@@ -47,6 +47,9 @@ THUMBNAILABLE = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".he
 
 HIDE_MARKER = ".nashidden"
 
+# Not accounts: indexing these would multiply the index by the checkpoint window.
+RESERVED = {"snapshots", "lost+found"}
+
 
 def is_hidden_path(root, path):
     current = path
@@ -63,7 +66,21 @@ def connect(db_path):
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA synchronous=NORMAL")
     db.executescript(SCHEMA)
+    migrate(db)
     return db
+
+
+def migrate(db):
+    """CREATE TABLE IF NOT EXISTS never alters an existing table, so add columns explicitly."""
+    have = {row[1] for row in db.execute("PRAGMA table_info(entries)")}
+    for name, decl in (
+        ("versions", "INTEGER NOT NULL DEFAULT 1"),
+        ("hidden", "INTEGER NOT NULL DEFAULT 0"),
+        ("thumb", "TEXT"),
+    ):
+        if name not in have:
+            db.execute(f"ALTER TABLE entries ADD COLUMN {name} {decl}")
+    db.commit()
 
 
 def current_checkpoint(path):
@@ -249,7 +266,11 @@ def main():
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
     db = connect(args.db)
     thumb_dir = Path(args.thumb_dir)
-    owners = args.owner or [p.name for p in data_root.iterdir() if p.is_dir()]
+    owners = args.owner or [
+        p.name
+        for p in data_root.iterdir()
+        if p.is_dir() and p.name not in RESERVED and not p.name.startswith(".")
+    ]
 
     for owner in owners:
         root = data_root / owner
