@@ -21,6 +21,7 @@
     ../../modules/nixos/nas/index.nix
     ../../modules/nixos/nas/cache.nix
     ../../modules/nixos/nas/unlock.nix
+    ../../modules/nixos/nas/checkpoints.nix
     ../../modules/nixos/fancontrol.nix
     ../../modules/nixos/gpio-pwm-fan.nix
     ../../modules/nixos/build-client.nix
@@ -188,8 +189,12 @@
     };
     storage = {
       enable = true;
+      parityFsType = "btrfs";
       dataDisks = {
-        disk1.device = "/dev/sdd";
+        disk1 = {
+          device = "/dev/sdd";
+          fsType = "nilfs2";
+        };
         disk2.device = "/dev/sdb";
       };
     };
@@ -197,6 +202,7 @@
       server = true;
       parityDevice = "/dev/sdc";
     };
+    checkpoints.enable = true;
   };
 
   local.power = {
