@@ -49,6 +49,35 @@ let
     '';
   };
 
+  cleaner = pkgs.writeShellApplication {
+    name = "nas-cleaner";
+    runtimeInputs = [
+      pkgs.nilfs-utils
+      pkgs.util-linux
+      pkgs.coreutils
+    ];
+    text = ''
+      usage() {
+        echo "usage: nas-cleaner start|status|stop <branch>" >&2
+        echo "  Collection is deliberate and bounded: retained history is never collected," >&2
+        echo "  so a collector should only run while reclaiming explicitly deleted versions." >&2
+        exit 2
+      }
+
+      cmd=''${1:-}; branch=''${2:-}
+      [ -n "$cmd" ] && [ -n "$branch" ] || usage
+      mountpoint -q "$branch" || { echo "not mounted: $branch" >&2; exit 1; }
+      device=$(findmnt -no SOURCE "$branch" | head -1)
+
+      case "$cmd" in
+        start)  nilfs_cleanerd -c ${scfg.cleanerConfig} "$device" "$branch" ;;
+        status) nilfs-clean -l "$device" ;;
+        stop)   nilfs-clean -q "$device" ;;
+        *)      usage ;;
+      esac
+    '';
+  };
+
   scrub = pkgs.writeShellApplication {
     name = "nas-snapraid-scrub";
     runtimeInputs = [
@@ -133,6 +162,12 @@ in
       default = 10;
       description = "Only scrub blocks older than this many days.";
     };
+
+    cleanerConfig = lib.mkOption {
+      type = lib.types.path;
+      default = ./nilfs_cleanerd.conf;
+      description = "Collector settings, passed with -c so no collector ever starts implicitly.";
+    };
   };
 
   config = lib.mkIf (cfg.enable && scfg.enable) {
@@ -170,10 +205,8 @@ in
       })
     ];
 
-    # Without this the collector cannot start at all, so a full branch has no way back.
-    environment.etc."nilfs_cleanerd.conf".source = "${pkgs.nilfs-utils}/etc/nilfs_cleanerd.conf";
-
     environment.systemPackages = [
+      cleaner
       pkgs.snapraid
       pkgs.mergerfs
       pkgs.nilfs-utils
