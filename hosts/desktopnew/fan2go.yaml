@@ -1,5 +1,5 @@
 tempSensorPollingRate: 2s
-tempRollingWindowSize: 20
+tempRollingWindowSize: 10
 
 sensors:
   - id: cpu
@@ -12,11 +12,10 @@ curves:
     linear:
       sensor: cpu
       steps:
-        - 29: 0%
-        - 35: 20%
-        - 45: 50%
-        - 55: 80%
-        - 63: 100%
+        - 30: 15%
+        - 60: 20%
+        - 70: 50%
+        - 80: 100%
 
 fans:
   - id: cpu_fan
