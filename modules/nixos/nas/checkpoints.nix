@@ -64,6 +64,18 @@ let
         --snapshot-dir ${ccfg.snapshotDir} "$@"
     '';
   };
+
+  revert = pkgs.writeShellApplication {
+    name = "nas-revert";
+    runtimeInputs = [
+      pkgs.python3
+      pkgs.nilfs-utils
+      pkgs.util-linux
+    ];
+    text = ''
+      exec python3 ${./nas-revert.py} --db ${cfg.index.stateDir}/index.db "$@"
+    '';
+  };
 in
 
 {
@@ -110,6 +122,7 @@ in
   config = lib.mkIf (cfg.enable && ccfg.enable && nilfsBranches != { }) {
     environment.systemPackages = [
       tool
+      revert
       pkgs.nilfs-utils
     ];
 

@@ -490,6 +490,17 @@ construction rather than by policy.
 /mnt/disks/disk1` fails with `cannot open NILFS ... No such device or address`, while `lscp
 /dev/mapper/nas-disk1` works. This silently produced "promoted 0" until it was found.
 
+**`nilfs_cleanerd` must actually be running or nothing is ever reclaimed.** Deleting checkpoints
+frees no space by itself — `nilfs-clean` only signals a running collector, and reported
+`No cleaner found` because none had been started. Left unnoticed, the disk fills. It is started
+for a bounded window by `nas-checkpoint-clean` rather than left running, so collection never
+touches a spun-down disk.
+
+**Suspend promotion during bulk ingest.** At the measured rate, copying 427 GB creates ~1,700
+checkpoints, almost all of them partial file-transfer states. Promoting those pins them
+permanently. Stop `nas-checkpoint-promote.timer` before a migration and restart it afterwards;
+unpromoted checkpoints are then reclaimed by the collector.
+
 The earlier proof, before any disk was reformatted — two tmpfs mounts inside separate branches
 unioned by name through the existing mergerfs mount:
 
