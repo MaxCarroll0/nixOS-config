@@ -98,8 +98,17 @@ let
       COMMIT;
       SQL
 
-        printf '%s' "$size" > "$offsetfile"
-        if [ "$size" -gt ${toString vcfg.rotateBytes} ]; then
+        # An event newer than the newest checkpoint has nowhere to land yet, so leave it
+        # unconsumed rather than advancing past it and losing that version for good.
+        maxcp=$(cut -d, -f2 "$work/cps.csv" | sort -n | tail -1)
+        awk -v m="''${maxcp:-0}" '
+          match($0, /"timestamp":[0-9]+/) {
+            if (substr($0, RSTART + 12, RLENGTH - 12) + 0 > m) print
+          }' "$work/pending.jsonl" > "$work/carry.jsonl"
+        carry=$(wc -c < "$work/carry.jsonl")
+
+        printf '%s' "$((size - carry))" > "$offsetfile"
+        if [ "$size" -gt ${toString vcfg.rotateBytes} ] && [ "$carry" -eq 0 ]; then
           rm -f "$events"
           printf '0' > "$offsetfile"
           systemctl restart "$unit"
