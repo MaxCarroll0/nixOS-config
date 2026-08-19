@@ -1166,9 +1166,11 @@ Outstanding: the VictoriaMetrics migration (est. ~380 MB) and a Grafana trim.
 
 ## 14. Items to resolve during implementation
 
-- **SnapRAID sync memory**: a block hash table sized by array capacity, roughly 200 MB for
-  3 TB at the 256 KB default block size. It needs a `MemoryMax` and must run when nothing
-  else peaks. A larger block size trades granularity for RAM.
+- **SnapRAID sync memory, now measured: 545 MB peak, not the ~200 MB estimated.** The full
+  post-migration sync of the 2.9 TB array (434 GB of data) took 1h 10m wall for 45m of CPU,
+  reading 864 GB and writing 850 GB, and peaked at **545.2 MB with 68.7 MB of swap**. On a 2 GB
+  box that is a quarter of RAM, so the `MemoryMax` this item calls for is more necessary than the
+  original estimate suggested, and 81% of the wait time was parity I/O rather than hashing.
 - **SnapRAID sync hardening**: the sync unit must run a pre-sync `snapraid diff`, abort when
   deletion or modification counts exceed a threshold, refuse to sync when a disk is missing
   or SMART-degraded, and scrub only against a synced array. SnapRAID itself offers only the
