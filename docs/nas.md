@@ -1252,17 +1252,20 @@ Outstanding: the VictoriaMetrics migration (est. ~380 MB) and a Grafana trim.
 
 | disk | role | state |
 |---|---|---|
-| `sdb` | `disk2` | LUKS2 + btrfs, mounted `/mnt/disks/disk2`, holds the verified 427 GB copy |
-| `sdc` | parity | LUKS2 + btrfs, mounted `/mnt/parity`, parity built and verified |
-| `sdd` | `disk1` | LUKS2 + **NILFS2**, mounted `/mnt/disks/disk1`, receiving the copy back from `disk2` |
+| `sdb` | `disk2` | LUKS2 + **NILFS2**, mounted `/mnt/disks/disk2`, empty and available |
+| `sdc` | parity | LUKS2 + btrfs, mounted `/mnt/parity`, synced over the final layout |
+| `sdd` | `disk1` | LUKS2 + **NILFS2**, mounted `/mnt/disks/disk1`, holds the 434 GB live tree |
 
-Phase 1 verified NILFS2 on `disk1`: checkpoints appear continuously, `chcp ss` retains them,
-and a deleted `loadtest/` tree was recovered from three checkpoints seconds apart. Phase 2 is
-the copy back from `disk2` onto NILFS2, running as `nas-phase2.service`, with
-`nas-checkpoint-promote.timer` **stopped** so its bulk-ingest checkpoints stay collectable.
+**Stage 2 is complete and retention is live.** Phase 1 validated NILFS2 on `disk1`; Phase 2 copied
+the data back onto it (`rsync -aHAXn` reported zero differences), `disk2` was reformatted as
+NILFS2, and `snapraid sync --force-empty` rebuilt parity to `Everything OK`. The suspend marker is
+gone, so `nas-checkpoint-promote` runs every 15 minutes and every checkpoint is retained.
 
-Remaining for Stage 2: finish the copy, reformat `disk2` as NILFS2 and set its `fsType`, then
-re-run `snapraid sync` and start the promote timer.
+Verified end to end on the deployed system: four writes produced four versions with distinct UTC
+timestamps, all four restored byte-identical by `sha256sum`, every referenced checkpoint was
+retained, `nas-at` returned the correct historical content and refused writes, a file deleted along
+with its parent directory still listed and restored its full history, and the `@GMT-` window
+appeared on both branches with names correctly one hour behind local BST.
 
 Every disk uses one passphrase, held only in `secrets/nas.yaml`, which is encrypted to the
 primary and laptop age keys and **deliberately not the pi's**. A stolen NAS host therefore
