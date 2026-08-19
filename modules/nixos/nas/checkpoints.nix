@@ -58,7 +58,8 @@ let
       wanted=""
       while read -r cno cpdate cptime _rest; do
         [ -n "$cno" ] || continue
-        name=$(date -u -d "$cpdate $cptime" +@GMT-%Y.%m.%d-%H.%M.%S) || continue
+        epoch=$(date -d "$cpdate $cptime" +%s) || continue
+        name=$(date -u -d "@$epoch" +@GMT-%Y.%m.%d-%H.%M.%S) || continue
         wanted="$wanted $name"
         if ! mountpoint -q "$snapdir/$name" 2>/dev/null; then
           mkdir -p "$snapdir/$name"
