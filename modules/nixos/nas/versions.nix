@@ -54,7 +54,8 @@ let
         [ "$size" -ge "$offset" ] || offset=0
         [ "$size" -gt "$offset" ] || return 0
 
-        device=$(findmnt -no SOURCE "$branch")
+        device=$(findmnt -no SOURCE "$branch" | head -1)
+        lscp "$device" >/dev/null 2>&1 || return 0
         work=$(mktemp -d)
         # shellcheck disable=SC2064
         trap "rm -rf '$work'" RETURN
@@ -260,7 +261,7 @@ in
     systemd.timers.nas-versions-ingest = {
       wantedBy = [ "timers.target" ];
       timerConfig = {
-        OnBootSec = "3m";
+        OnActiveSec = "3m";
         OnUnitActiveSec = vcfg.ingestInterval;
         Persistent = false;
       };

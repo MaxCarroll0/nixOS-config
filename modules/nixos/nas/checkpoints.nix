@@ -19,8 +19,9 @@ let
     branches=( ${lib.escapeShellArgs branchPaths} )
     for branch in "''${branches[@]}"; do
       mountpoint -q "$branch" || continue
-      device=$(findmnt -no SOURCE "$branch") || continue
+      device=$(findmnt -no SOURCE "$branch" | head -1) || continue
       [ -n "$device" ] || continue
+      lscp "$device" >/dev/null 2>&1 || continue
       ${body}
     done
   '';
@@ -196,6 +197,12 @@ in
       description = "How often checkpoints are promoted and the window refreshed.";
     };
 
+    suspendFile = lib.mkOption {
+      type = lib.types.str;
+      default = "/run/nas-promote-suspended";
+      description = "While this file exists, promotion is skipped; use it during bulk ingest.";
+    };
+
     metricsFile = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/node-exporter-textfile/nas-checkpoints.prom";
@@ -224,12 +231,13 @@ in
         Nice = 15;
         IOSchedulingClass = "idle";
       };
+      unitConfig.ConditionPathExists = "!${ccfg.suspendFile}";
     };
 
     systemd.timers.nas-checkpoint-promote = {
       wantedBy = [ "timers.target" ];
       timerConfig = {
-        OnBootSec = "5m";
+        OnActiveSec = "5m";
         OnUnitActiveSec = ccfg.interval;
         Persistent = false;
       };

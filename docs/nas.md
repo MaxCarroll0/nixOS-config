@@ -567,6 +567,32 @@ Checkpoints mount read-only inside the branch under the exact name `shadow_copy2
 mergerfs surfaces them at pool level. `ro,cp=N` means a rewound view is unwritable by
 construction rather than by policy.
 
+**A plain checkpoint cannot be mounted. Only a snapshot can.**
+
+```
+mount -t nilfs2 -o cp=1365,ro /dev/mapper/nas-disk1 ...
+  ->  Error while mounting: Invalid argument
+```
+
+`cp=N` succeeds only once that checkpoint has been promoted with `chcp ss`. This makes promotion
+load-bearing rather than merely a retention policy: the SMB window, `nas-versions restore` and
+`nas-at` all mount, so **none of them can reach a checkpoint that was never promoted**. It is also
+why the migration's unpromoted checkpoints are unreachable as well as collectable, which is the
+intended outcome there.
+
+**Promotion is suspended by a marker file, not by stopping the timer.** `systemctl mask` cannot be
+used on a NixOS unit whose `/etc/systemd/system` entry is a store symlink, and a stopped timer is
+restarted by the next activation — which is how a deploy mid-migration nearly pinned ~1,300
+bulk-ingest checkpoints permanently. `nas-checkpoint-promote` therefore carries
+`ConditionPathExists=!/run/nas-promote-suspended`; `touch` that file for a bulk copy and remove it
+afterwards. A failed condition marks the unit skipped rather than failed, so it cannot break an
+activation either.
+
+**Timers must use `OnActiveSec`, not `OnBootSec`.** On a host whose uptime already exceeds
+`OnBootSec`, the timer fires the instant activation installs it, so a `oneshot` that fails takes
+`switch-to-configuration` to exit 4 and deploy-rs rolls the whole generation back. That is exactly
+how the first `versions.nix` deploy failed.
+
 **Operational note: every nilfs tool takes the device, never the mountpoint.** `lscp
 /mnt/disks/disk1` fails with `cannot open NILFS ... No such device or address`, while `lscp
 /dev/mapper/nas-disk1` works. This silently produced "promoted 0" until it was found.
