@@ -169,7 +169,11 @@ let
           label=$(basename "$branch")
           total=$(lscp "$device" | tail -n +2 | wc -l)
           snaps=$(lscp -s "$device" | tail -n +2 | wc -l)
-          shown=$(find "$branch/${ccfg.snapshotDir}" -maxdepth 1 -name '@GMT-*' 2>/dev/null | wc -l)
+          if [ -d "$branch/${ccfg.snapshotDir}" ]; then
+            shown=$(find "$branch/${ccfg.snapshotDir}" -maxdepth 1 -name '@GMT-*' | wc -l)
+          else
+            shown=0
+          fi
           read -r used size <<<"$(df -B1 --output=used,size "$branch" | tail -1)"
           echo "nas_checkpoints{branch=\"$label\"} $total"
           echo "nas_checkpoint_snapshots{branch=\"$label\"} $snaps"
