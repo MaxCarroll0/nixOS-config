@@ -25,6 +25,8 @@ let
         "exclude /tmp/"
         "exclude .recycle/"
         "exclude .snapshots/"
+        # Each mounted generation is a whole view of the branch; parity must not walk them.
+        "exclude ${cfg.checkpoints.snapshotDir or "snapshots"}/"
         "exclude lost+found/"
         "blocksize 256"
         "autosave 250"

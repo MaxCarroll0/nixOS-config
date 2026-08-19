@@ -455,9 +455,13 @@ permanent snapshots with `chcp ss` (which protects them from garbage collection)
 
 Two consequences are worth stating because they contradict the earlier btrfs design:
 
-1. **SnapRAID needs no snapshot exclusion.** Checkpoints are not files, so parity naturally
-   covers only the live tree. The old `exclude snapshots/` requirement disappears, as does the
-   risk of parity growing without bound.
+1. **SnapRAID still needs the snapshot exclusion, for a different reason.** Checkpoints are not
+   files, so parity does not see them — but the SMB window *mounts* up to 24 of them inside each
+   branch at `snapshots/@GMT-…`, and each mount is a complete view of that branch. Without
+   `exclude snapshots/`, `snapraid sync` walks every one and computes parity over roughly 24x the
+   array. The inherited config excluded btrfs's dotted `.snapshots/`, which does not match the
+   NILFS2 window directory; that mismatch was live and only harmless because promotion happened
+   to be suspended, leaving the directory empty.
 2. **Promotion is retention, and everything is promoted.** `nilfs_cleanerd`'s protection period
    is time-bounded and cannot express "keep forever", so `nas-checkpoint-promote` runs `chcp ss`
    over every checkpoint it finds. A promoted checkpoint is immune to collection, which means the
