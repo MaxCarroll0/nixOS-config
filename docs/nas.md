@@ -551,6 +551,19 @@ shadow:mountpoint = /srv/nas        shadow:snapdir = /srv/nas/snapshots
 shadow:basedir    = /srv/nas/data   shadow:format  = @GMT-%Y.%m.%d-%H.%M.%S
 ```
 
+**`@GMT-` names are UTC, and `date -u -d` alone does not produce them.** `-u` sets `TZ=UTC` for
+the whole process, so it parses `lscp`'s local timestamp *as* UTC and returns it unchanged — a
+silent no-op that leaves every generation an hour off in BST. Convert through the epoch instead,
+which also picks the right offset for the checkpoint's own date rather than today's:
+
+```bash
+epoch=$(date -d "$cpdate $cptime" +%s)
+name=$(date -u -d "@$epoch" +@GMT-%Y.%m.%d-%H.%M.%S)
+```
+
+Verified on the pi: a August checkpoint at 14:29:32 local yields `13.29.32`, while a January one
+at the same clock time yields `14.29.32`, since GMT has no offset.
+
 Cost per exposed generation is **two kernel mounts**, a few KB — not a mergerfs process each. An
 earlier estimate of 7.5 MB per generation was wrong: it assumed one mergerfs per generation to
 union the branches, which mounting inside the branches avoids.
