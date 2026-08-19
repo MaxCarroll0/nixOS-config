@@ -75,6 +75,16 @@ in
       description = "Mountpoint of the parity disk.";
     };
 
+    parityFsType = lib.mkOption {
+      type = lib.types.enum [
+        "xfs"
+        "ext4"
+        "btrfs"
+      ];
+      default = "xfs";
+      description = "Filesystem under the parity file. Not copy-on-write: parity is one huge file rewritten in place.";
+    };
+
     contentDir = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/snapraid";
@@ -135,6 +145,7 @@ in
       pkgs.mergerfs
       pkgs.nilfs-utils
       pkgs.btrfs-progs
+      pkgs.xfsprogs
     ];
 
     fileSystems = lib.mkMerge [
@@ -154,7 +165,7 @@ in
       {
         ${scfg.parityMount} = {
           device = "/dev/mapper/nas-parity";
-          fsType = "btrfs";
+          fsType = scfg.parityFsType;
           options = [
             "noauto"
             "noatime"

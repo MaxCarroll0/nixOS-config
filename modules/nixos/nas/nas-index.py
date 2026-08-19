@@ -5,6 +5,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 SCHEMA = """
@@ -148,16 +149,23 @@ def full_scan(db, owner, root, thumb_dir, thumb_size, want_thumbs):
     return seen
 
 
-def incremental(db, owner, root, since, thumb_dir, thumb_size, want_thumbs):
-    paths = changed_since(root, since)
-    if paths is None:
-        return None
-    for path in paths:
-        parent = path if path.is_dir() else path.parent
-        record(db, owner, root, path, thumb_dir, thumb_size, want_thumbs,
-               1 if is_hidden_path(root, parent) else 0)
-    db.commit()
-    return len(paths)
+def note_version(db, owner, root, path, checkpoint):
+    """Record which checkpoint holds this version, so revert is a lookup not a search."""
+    if checkpoint is None:
+        return
+    try:
+        st = path.lstat()
+    except OSError:
+        return
+    db.execute(
+        """
+        INSERT INTO versions (owner, path, checkpoint, size, mtime, seen)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(owner, path, checkpoint) DO NOTHING
+        """,
+        (owner, str(path.relative_to(root)), checkpoint,
+         st.st_size, int(st.st_mtime), int(time.time())),
+    )
 
 
 def export_metrics(db, out_path):
@@ -182,6 +190,42 @@ def export_metrics(db, out_path):
         lines.append(f'nas_user_bytes{{owner="{owner}"}} {size or 0}')
         lines.append(f'nas_user_files{{owner="{owner}"}} {files or 0}')
         lines.append(f'nas_user_directories{{owner="{owner}"}} {dirs or 0}')
+
+    lines += [
+        "# HELP nas_age_bytes Bytes whose newest version is at least this old, by age bucket.",
+        "# TYPE nas_age_bytes gauge",
+        "# HELP nas_age_files Files whose newest version is at least this old, by age bucket.",
+        "# TYPE nas_age_files gauge",
+    ]
+    now = int(time.time())
+    for owner, bucket, size, count in db.execute(
+        """
+        SELECT owner,
+               CASE
+                 WHEN ? - mtime <    604800 THEN 'week'
+                 WHEN ? - mtime <   2592000 THEN 'month'
+                 WHEN ? - mtime <   7776000 THEN 'quarter'
+                 WHEN ? - mtime <  31536000 THEN 'year'
+                 WHEN ? - mtime <  94608000 THEN 'three_years'
+                 ELSE 'ancient'
+               END,
+               SUM(size), COUNT(*)
+        FROM entries WHERE is_dir=0
+        GROUP BY owner, 2
+        """,
+        (now, now, now, now, now),
+    ).fetchall():
+        lines.append(f'nas_age_bytes{{owner="{owner}",bucket="{bucket}"}} {size or 0}')
+        lines.append(f'nas_age_files{{owner="{owner}",bucket="{bucket}"}} {count or 0}')
+
+    oldest = db.execute("SELECT owner, MIN(mtime) FROM entries WHERE is_dir=0 GROUP BY owner")
+    lines += [
+        "# HELP nas_oldest_file_seconds Age of the oldest file held by this account.",
+        "# TYPE nas_oldest_file_seconds gauge",
+    ]
+    for owner, mtime in oldest.fetchall():
+        if mtime:
+            lines.append(f'nas_oldest_file_seconds{{owner="{owner}"}} {now - mtime}')
     tmp = f"{out_path}.tmp"
     Path(tmp).write_text("\n".join(lines) + "\n")
     os.replace(tmp, out_path)
@@ -211,24 +255,23 @@ def main():
         root = data_root / owner
         if not root.is_dir():
             continue
-        row = db.execute("SELECT last_gen FROM scan_state WHERE owner=?", (owner,)).fetchone()
-        last_gen = row[0] if row else 0
-        generation = btrfs_generation(root)
+        checkpoint = current_checkpoint(root)
 
-        touched = None
-        if last_gen and generation:
-            touched = incremental(db, owner, root, last_gen, thumb_dir,
-                                  args.thumb_size, not args.no_thumbnails)
-        if touched is None:
-            touched = full_scan(db, owner, root, thumb_dir,
-                                args.thumb_size, not args.no_thumbnails)
+        touched = full_scan(db, owner, root, thumb_dir,
+                            args.thumb_size, not args.no_thumbnails)
+
+        if checkpoint is not None:
+            for row in db.execute(
+                "SELECT path FROM entries WHERE owner=? AND is_dir=0", (owner,)
+            ).fetchall():
+                note_version(db, owner, root, root / row[0], checkpoint)
 
         db.execute(
             """
             INSERT INTO scan_state (owner, last_gen, last_run) VALUES (?, ?, strftime('%s','now'))
             ON CONFLICT(owner) DO UPDATE SET last_gen=excluded.last_gen, last_run=excluded.last_run
             """,
-            (owner, generation or 0),
+            (owner, checkpoint or 0),
         )
         db.commit()
         print(f"{owner}: {touched} entries", file=sys.stderr)

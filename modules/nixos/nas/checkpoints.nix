@@ -14,9 +14,9 @@ let
 
   nilfsBranches = lib.filterAttrs (_: d: d.fsType == "nilfs2") scfg.dataDisks;
 
-  branchArgs = lib.concatMapStringsSep " " (
-    name: "--branch ${scfg.diskRoot}/${name}"
-  ) (lib.attrNames nilfsBranches);
+  branchArgs = lib.concatMapStringsSep " " (name: "--branch ${scfg.diskRoot}/${name}") (
+    lib.attrNames nilfsBranches
+  );
 
   tool = pkgs.writeShellApplication {
     name = "nas-checkpoints";

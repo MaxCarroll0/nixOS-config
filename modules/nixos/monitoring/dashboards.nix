@@ -4999,6 +4999,74 @@ let
           }
         ];
       })
+      (barGauge {
+        title = "Stored by age";
+        description = "How much data has not been touched recently. The right-hand buckets are the deletion candidates.";
+        unit = "bytes";
+        w = 12;
+        h = 8;
+        targets = [
+          {
+            expr = "sum by (bucket) (nas_age_bytes)";
+            legendFormat = "{{bucket}}";
+          }
+        ];
+      })
+      (barGauge {
+        title = "Files by age";
+        w = 12;
+        h = 8;
+        targets = [
+          {
+            expr = "sum by (bucket) (nas_age_files)";
+            legendFormat = "{{bucket}}";
+          }
+        ];
+      })
+      (stat {
+        title = "Untouched over a year";
+        unit = "bytes";
+        w = 8;
+        h = 4;
+        targets = [
+          {
+            expr = ''sum(nas_age_bytes{bucket=~"year|three_years|ancient"})'';
+          }
+        ];
+      })
+      (stat {
+        title = "Oldest file";
+        unit = "s";
+        w = 8;
+        h = 4;
+        targets = [ { expr = "max(nas_oldest_file_seconds)"; } ];
+      })
+      (stat {
+        title = "Cold share";
+        unit = "percent";
+        w = 8;
+        h = 4;
+        targets = [
+          {
+            expr = ''100 * sum(nas_age_bytes{bucket=~"year|three_years|ancient"}) / sum(nas_age_bytes)'';
+          }
+        ];
+      })
+      (ts {
+        title = "Age mix over time";
+        description = "Whether the array is accumulating cold data faster than it is being used.";
+        unit = "bytes";
+        w = 24;
+        h = 8;
+        custom.fillOpacity = 30;
+        custom.stacking.mode = "normal";
+        targets = [
+          {
+            expr = "sum by (bucket) (nas_age_bytes)";
+            legendFormat = "{{bucket}}";
+          }
+        ];
+      })
     ];
   };
 in
