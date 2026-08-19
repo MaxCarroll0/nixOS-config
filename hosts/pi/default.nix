@@ -196,7 +196,10 @@
           device = "/dev/sdd";
           fsType = "nilfs2";
         };
-        disk2.device = "/dev/sdb";
+        disk2 = {
+          device = "/dev/sdb";
+          fsType = "nilfs2";
+        };
       };
     };
     unlock = {
