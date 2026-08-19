@@ -388,6 +388,23 @@ Two consequences are worth stating because they contradict the earlier btrfs des
    *everything* costs space proportional to churn — that is physics, not a filesystem choice, and
    no filesystem makes it free.
 
+**Measured checkpoint rate.** Writing 1000 MB to disk1 in 21 seconds produced 4 checkpoints:
+
+```
+1000 MB in 21s   ->   checkpoints 4 -> 8
+```
+
+So roughly **one checkpoint per 250 MB written, about one every 5 seconds under sustained write**,
+and near-zero when idle (two checkpoints five minutes apart on a quiet filesystem). Count tracks
+*activity*, not elapsed time, which is what makes "retain everything" affordable here where a
+fixed timer would not be.
+
+**The trap this exposes: do not blindly promote during bulk ingest.** A 427 GB migration generates
+roughly 1,700 checkpoints, almost all of which capture *partial file-transfer states* of no value.
+Promoting them pins that garbage permanently. Promotion must be suspended during bulk copies, or
+be selective about what is worth keeping — an unresolved detail in `nas-checkpoint-promote`, which
+currently promotes everything it finds.
+
 #### Future opportunity: btrfs with btrbk
 
 The btrfs path is **not discarded, it is parked**. Branch `btrfs-btrbk` is cut from `745ae71`,
@@ -805,19 +822,30 @@ replication layer.
 The chosen model is **whole-node mirroring** over the tailnet: one node mirrors another, and on
 unequal nodes the larger node's excess capacity becomes Tier C (Attic, scratch, un-mirrored bulk).
 
-**The transport changed with NILFS2.** The original plan was btrbk `send`/`receive`, which is
-btrfs-specific and streams only changed extents against a parent snapshot. NILFS2 has no
-equivalent, so replication falls back to **rsync**. The practical differences:
+**The transport must be block-level, not file-level.** This is the key correction: a file-level
+copy (rsync) walks the live tree and therefore replicates *current state only*, losing every
+version. A **block-level** copy of the device carries the log itself, so checkpoints cross the
+wire with it.
 
-- rsync must *scan* both sides to find changes, where `send` is handed them by the filesystem.
-  Cost moves from O(changes) to O(files) per run.
-- It replicates the **live tree only**. Checkpoint history does not cross the wire, so a mirror
-  is a copy of the current state, not of the version history. Losing a node loses its history.
-- No stream-level integrity: `send` produces a self-describing stream, rsync compares metadata
-  and optionally checksums.
+| failure | mechanism | preserves history |
+|---|---|---|
+| single local disk | SnapRAID parity | **no** — parity is computed over files, so checkpoints are invisible to it |
+| whole node | block-level replication | **yes** |
 
-This is the largest single cost of the filesystem change and it is unbuilt either way, so it is
-recorded rather than solved here.
+Candidates are `bdsync` or `blocksync`, which compare block hashes and send only what changed, so
+replication stays incremental without needing filesystem support. NILFS2 suits this unusually
+well: being log-structured, a crash-consistent block image is exactly what it is designed to
+recover from, so a copy taken without quiescing should still mount.
+
+Two consequences worth stating:
+
+- **SnapRAID does not protect version history.** A single disk failure rebuilds the live tree onto
+  a fresh filesystem and every checkpoint on that disk is gone. Local parity and history
+  preservation are separate problems with separate mechanisms.
+- Block-level replication needs a target device at least as large as the source, and replicates
+  free space and garbage alike, so it is less efficient than `send`/`receive` would have been.
+
+This is unbuilt, but the mechanism is now identified rather than an open question.
 
 The current design already satisfies the prerequisites. The invariants to preserve from now
 on are:
