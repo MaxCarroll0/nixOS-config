@@ -752,6 +752,33 @@ Note that `shred` and `wipe` are **ineffective in this stack** and must not be r
 log-structured filesystem never overwrites in place, and the SSD's flash translation layer
 relocates writes regardless. Disposing of a drive is covered by LUKS, not by file deletion.
 
+### 7.1 Ideas the version index makes possible
+
+Both are unbuilt. They are recorded because the index changes what is feasible, not because they
+are scheduled.
+
+**Opting a file out of versioning.** NILFS2 checkpoints are whole-filesystem, so a file cannot be
+excluded from one. The mechanism therefore has to be placement, not policy: keep a branch that is
+**not** NILFS2 — plain ext4 or xfs — in the mergerfs pool, and move opted-out files there. mergerfs
+unions by name, so the file stays at the same path in `/srv/nas` while nothing about it is
+versioned and its blocks are freed on delete like any ordinary filesystem. Good candidates are
+caches, transcodes, downloads that can be re-fetched, and anything large and derived.
+
+**Retroactively reclaiming a deleted file's history.** Today purging one file from history means
+deleting every checkpoint containing it, which discards unrelated history in the same window. The
+index makes this *decidable* rather than all-or-nothing: it knows exactly which checkpoints hold
+versions of a given inode, so it can identify checkpoints whose only content is that inode. Those
+can be removed with `rmcp -f` with no collateral loss, and the collector then reclaims the space.
+
+This is common in practice: a large file written on its own occupies whole checkpoints by itself.
+Deleting a 40 GB video and reclaiming its history would work cleanly, while a file edited alongside
+others in the same checkpoint would not — and the index can say which case applies before anything
+is removed, rather than after.
+
+Both need a way to answer "which inodes does checkpoint N contain", which `dumpseg` provides
+offline. That is the right use for a debugging tool: an occasional, deliberate audit rather than a
+routine path.
+
 Note that `shred` and `wipe` are **ineffective in this stack** and must not be relied upon:
 btrfs is copy-on-write so overwriting a file writes to new blocks and leaves the originals
 intact, and the SSD's flash translation layer relocates writes so overwrite-in-place is

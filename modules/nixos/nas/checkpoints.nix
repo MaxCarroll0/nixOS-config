@@ -1,4 +1,4 @@
-# NILFS2 checkpoints: promotion, the SMB-visible rolling window, manual pruning and metrics.
+# NILFS2 checkpoints: promotion is retention, plus the SMB-visible window and metrics.
 
 {
   config,
@@ -13,74 +13,103 @@ let
   scfg = cfg.storage;
 
   nilfsBranches = lib.filterAttrs (_: d: d.fsType == "nilfs2") scfg.dataDisks;
+  branchPaths = map (name: "${scfg.diskRoot}/${name}") (lib.attrNames nilfsBranches);
 
-  branchArgs = lib.concatMapStringsSep " " (name: "--branch ${scfg.diskRoot}/${name}") (
-    lib.attrNames nilfsBranches
-  );
+  forEachBranch = body: ''
+    for branch in ${lib.escapeShellArgs branchPaths}; do
+      mountpoint -q "$branch" || continue
+      device=$(findmnt -no SOURCE "$branch") || continue
+      [ -n "$device" ] || continue
+      ${body}
+    done
+  '';
 
-  # Only nilfs_cleanerd reclaims space; deleting a checkpoint alone frees nothing.
-  cleaner = pkgs.writeShellApplication {
-    name = "nas-checkpoint-clean";
+  # Nothing is ever collected automatically: promotion to snapshot is what retains a checkpoint.
+  promote = pkgs.writeShellApplication {
+    name = "nas-checkpoint-promote";
     runtimeInputs = [
       pkgs.nilfs-utils
-      pkgs.procps
       pkgs.util-linux
+      pkgs.gawk
+      pkgs.findutils
     ];
-    text = ''
-      for branch in ${
-        lib.concatStringsSep " " (map (name: "${scfg.diskRoot}/${name}") (lib.attrNames nilfsBranches))
-      }; do
-        mountpoint -q "$branch" || continue
-        device=$(findmnt -no SOURCE "$branch")
-        [ -n "$device" ] || continue
-
-        nilfs_cleanerd "$device" "$branch" || true
-      done
-
-      sleep ${toString ccfg.cleanForSeconds}
-
-      for branch in ${
-        lib.concatStringsSep " " (map (name: "${scfg.diskRoot}/${name}") (lib.attrNames nilfsBranches))
-      }; do
-        mountpoint -q "$branch" || continue
-        device=$(findmnt -no SOURCE "$branch")
-        [ -n "$device" ] || continue
-        nilfs-clean -q "$device" 2>/dev/null || true
-      done
-
-      pkill -x nilfs_cleanerd || true
+    text = forEachBranch ''
+      lscp -r "$device" | awk '$4=="cp" {print $1}' | xargs -r -n1 chcp ss "$device" || true
     '';
   };
 
-  tool = pkgs.writeShellApplication {
-    name = "nas-checkpoints";
+  # lscp prints local time; @GMT- names are UTC by convention, so convert explicitly.
+  window = pkgs.writeShellApplication {
+    name = "nas-checkpoint-window";
     runtimeInputs = [
-      pkgs.python3
       pkgs.nilfs-utils
       pkgs.util-linux
+      pkgs.gawk
+      pkgs.coreutils
     ];
-    text = ''
-      exec python3 ${./nas-checkpoints.py} ${branchArgs} \
-        --snapshot-dir ${ccfg.snapshotDir} "$@"
+    text = forEachBranch ''
+      snapdir="$branch/${ccfg.snapshotDir}"
+      mkdir -p "$snapdir"
+
+      wanted=""
+      while read -r cno cpdate cptime _rest; do
+        [ -n "$cno" ] || continue
+        name=$(date -u -d "$cpdate $cptime" +@GMT-%Y.%m.%d-%H.%M.%S) || continue
+        wanted="$wanted $name"
+        if ! mountpoint -q "$snapdir/$name" 2>/dev/null; then
+          mkdir -p "$snapdir/$name"
+          mount -t nilfs2 -o "cp=$cno,ro" "$device" "$snapdir/$name" || rmdir "$snapdir/$name" || true
+        fi
+      done < <(lscp -s -r -n ${toString ccfg.window} "$device" | awk 'NR>1 {print $1, $2, $3}')
+
+      for path in "$snapdir"/@GMT-*; do
+        [ -d "$path" ] || continue
+        case " $wanted " in
+          *" $(basename "$path") "*) ;;
+          *) umount "$path" 2>/dev/null && rmdir "$path" 2>/dev/null || true ;;
+        esac
+      done
     '';
   };
 
-  revert = pkgs.writeShellApplication {
-    name = "nas-revert";
+  metrics = pkgs.writeShellApplication {
+    name = "nas-checkpoint-metrics";
     runtimeInputs = [
-      pkgs.python3
       pkgs.nilfs-utils
       pkgs.util-linux
+      pkgs.coreutils
     ];
     text = ''
-      exec python3 ${./nas-revert.py} --db ${cfg.index.stateDir}/index.db "$@"
+      tmp=${ccfg.metricsFile}.tmp
+      {
+        echo '# HELP nas_checkpoints Checkpoints on this branch.'
+        echo '# TYPE nas_checkpoints gauge'
+        echo '# HELP nas_checkpoint_snapshots Checkpoints promoted to snapshots, which are retained forever.'
+        echo '# TYPE nas_checkpoint_snapshots gauge'
+        echo '# HELP nas_checkpoints_exposed Generations mounted for SMB Previous Versions.'
+        echo '# TYPE nas_checkpoints_exposed gauge'
+        echo '# HELP nas_branch_used_ratio Space used, which only ever grows while history is retained.'
+        echo '# TYPE nas_branch_used_ratio gauge'
+        ${forEachBranch ''
+          label=$(basename "$branch")
+          total=$(lscp "$device" | tail -n +2 | wc -l)
+          snaps=$(lscp -s "$device" | tail -n +2 | wc -l)
+          shown=$(find "$branch/${ccfg.snapshotDir}" -maxdepth 1 -name '@GMT-*' 2>/dev/null | wc -l)
+          ratio=$(df --output=pcent "$branch" | tail -1 | tr -dc '0-9')
+          echo "nas_checkpoints{branch=\"$label\"} $total"
+          echo "nas_checkpoint_snapshots{branch=\"$label\"} $snaps"
+          echo "nas_checkpoints_exposed{branch=\"$label\"} $shown"
+          echo "nas_branch_used_ratio{branch=\"$label\"} 0.''${ratio}"
+        ''}
+      } > "$tmp"
+      mv "$tmp" ${ccfg.metricsFile}
     '';
   };
 in
 
 {
   options.local.nas.checkpoints = {
-    enable = lib.mkEnableOption "NILFS2 checkpoint promotion, rolling window and metrics";
+    enable = lib.mkEnableOption "NILFS2 checkpoint retention, the SMB window and metrics";
 
     snapshotDir = lib.mkOption {
       type = lib.types.str;
@@ -91,47 +120,39 @@ in
     window = lib.mkOption {
       type = lib.types.ints.positive;
       default = 24;
-      description = "Generations exposed for SMB Previous Versions. Each costs one mount per branch.";
+      description = "Generations exposed for SMB Previous Versions. Versioning does not depend on this.";
     };
 
-    promoteInterval = lib.mkOption {
+    interval = lib.mkOption {
       type = lib.types.str;
       default = "15m";
-      description = "How often checkpoints are promoted so the collector cannot reclaim them.";
+      description = "How often checkpoints are promoted and the window refreshed.";
     };
 
     metricsFile = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/node-exporter-textfile/nas-checkpoints.prom";
-      description = "Textfile collector output for checkpoint counts and age.";
-    };
-
-    cleanerWindow = lib.mkOption {
-      type = lib.types.str;
-      default = "*-*-* 04:45:00";
-      description = "When the garbage collector may run; inside the SnapRAID window so it never wakes a sleeping disk.";
-    };
-
-    cleanForSeconds = lib.mkOption {
-      type = lib.types.ints.positive;
-      default = 1800;
-      description = "How long the collector is allowed to run before being stopped again.";
+      description = "Textfile collector output for checkpoint counts and branch fullness.";
     };
   };
 
   config = lib.mkIf (cfg.enable && ccfg.enable && nilfsBranches != { }) {
     environment.systemPackages = [
-      tool
-      revert
+      promote
+      window
+      metrics
       pkgs.nilfs-utils
     ];
 
     systemd.services.nas-checkpoint-promote = {
-      description = "Promote NILFS2 checkpoints so they survive collection";
+      description = "Retain every NILFS2 checkpoint by promoting it";
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${lib.getExe tool} promote";
-        ExecStartPost = "${lib.getExe tool} metrics --output ${ccfg.metricsFile}";
+        ExecStart = lib.getExe promote;
+        ExecStartPost = [
+          (lib.getExe window)
+          (lib.getExe metrics)
+        ];
         Nice = 15;
         IOSchedulingClass = "idle";
       };
@@ -141,46 +162,8 @@ in
       wantedBy = [ "timers.target" ];
       timerConfig = {
         OnBootSec = "5m";
-        OnUnitActiveSec = ccfg.promoteInterval;
+        OnUnitActiveSec = ccfg.interval;
         Persistent = false;
-      };
-    };
-
-    systemd.services.nas-checkpoint-window = {
-      description = "Expose the newest generations for SMB Previous Versions";
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = "${lib.getExe tool} window --window ${toString ccfg.window}";
-        Nice = 15;
-      };
-    };
-
-    systemd.timers.nas-checkpoint-window = {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnBootSec = "6m";
-        OnUnitActiveSec = ccfg.promoteInterval;
-        Persistent = false;
-      };
-    };
-
-    systemd.services.nas-checkpoint-clean = {
-      description = "NILFS2 garbage collection, confined to the nightly window";
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = "${cleaner}/bin/nas-checkpoint-clean";
-        Nice = 19;
-        IOSchedulingClass = "idle";
-        TimeoutStartSec = ccfg.cleanForSeconds + 120;
-      };
-    };
-
-    systemd.timers.nas-checkpoint-clean = {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnCalendar = ccfg.cleanerWindow;
-        Persistent = false;
-        RandomizedDelaySec = "10m";
       };
     };
   };
