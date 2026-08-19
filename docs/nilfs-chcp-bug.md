@@ -2,7 +2,7 @@
 
 **Status: fixed upstream**, by commit
 [`27bfa50c4`](https://github.com/nilfs-dev/nilfs-utils/commit/27bfa50c4) — *"chcp: fix inverted
-logic in argument parsing"*, 2026-01-21 — first released in **v2.3.0**. nixpkgs still ships
+logic in argument parsing"*, 2026-01-21 — first released in **v2.3.0**, and present in the current **v2.3.1**. nixpkgs still ships
 **2.2.12** (released before the fix), so any NixOS system using `chcp` from nixpkgs is affected
 until that package is bumped.
 
@@ -151,16 +151,16 @@ checkpoint on another filesystem rather than failing.
 
 ## Fix
 
-Upgrade to **v2.3.0 or newer**. On nixpkgs (still 2.2.12) that means an overlay:
+Upgrade to **v2.3.1** (or anything from v2.3.0 on). On nixpkgs (still 2.2.12) that means an overlay:
 
 ```nix
 nilfs-utils = prev.nilfs-utils.overrideAttrs (old: rec {
-  version = "2.3.0";
+  version = "2.3.1";
   src = final.fetchFromGitHub {
     owner = "nilfs-dev";
     repo = "nilfs-utils";
     tag = "v${version}";
-    hash = "sha256-wjVgvNW9BCRIBsxX6orYPvNMy7mFDBoj0bEV0VaJBtg=";
+    hash = "sha256-Sqg1pERzxc6H7eMJGv3XTgiC3/KXu/hqqZzl1vxM6E8=";
   };
   postPatch = builtins.replaceStrings [ "sbin/mkfs/mkfs.c" ] [ "sbin/mkfs.c" ] old.postPatch;
 });
@@ -169,7 +169,7 @@ nilfs-utils = prev.nilfs-utils.overrideAttrs (old: rec {
 `sbin/mkfs/mkfs.c` moved to `sbin/mkfs.c` in 2.3.0, so the existing nixpkgs `postPatch` needs
 redirecting or the build fails with `substitute(): ERROR: file 'sbin/mkfs/mkfs.c' does not exist`.
 
-2.3.0 also brings [`ea6b9b84f`](https://github.com/nilfs-dev/nilfs-utils/commit/ea6b9b84f),
+2.3.x also brings [`ea6b9b84f`](https://github.com/nilfs-dev/nilfs-utils/commit/ea6b9b84f),
 *"bin: allow specifying filesystem node instead of device"*, so a mountpoint can be passed where
 2.2.12 demanded a device — which removes the "every nilfs tool takes the device, never the
 mountpoint" trap as well.
@@ -181,4 +181,4 @@ $ chcp ss /dev/loopX <cno>
 ```
 
 Broken (2.2.12): `chcp: /dev/loopX: invalid checkpoint number`, exit 1.
-Fixed (2.3.0): exits 0, and the checkpoint appears in `lscp -s /dev/loopX`.
+Fixed (2.3.x): exits 0, and the checkpoint appears in `lscp -s /dev/loopX`.

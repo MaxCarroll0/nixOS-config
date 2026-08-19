@@ -143,12 +143,12 @@ in
     nixpkgs.overlays = [
       (final: prev: {
         nilfs-utils = prev.nilfs-utils.overrideAttrs (old: rec {
-          version = "2.3.0";
+          version = "2.3.1";
           src = final.fetchFromGitHub {
             owner = "nilfs-dev";
             repo = "nilfs-utils";
             tag = "v${version}";
-            hash = "sha256-wjVgvNW9BCRIBsxX6orYPvNMy7mFDBoj0bEV0VaJBtg=";
+            hash = "sha256-Sqg1pERzxc6H7eMJGv3XTgiC3/KXu/hqqZzl1vxM6E8=";
           };
           postPatch = builtins.replaceStrings [ "sbin/mkfs/mkfs.c" ] [ "sbin/mkfs.c" ] old.postPatch;
         });
