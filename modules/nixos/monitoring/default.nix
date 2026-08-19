@@ -697,9 +697,9 @@ in
         description = "Track Grafana alert condition start times";
         after = [
           "grafana.service"
-          "prometheus-pushgateway.service"
+          "pushgateway.service"
         ];
-        wants = [ "prometheus-pushgateway.service" ];
+        wants = [ "pushgateway.service" ];
         serviceConfig = {
           Type = "oneshot";
           DynamicUser = true;
