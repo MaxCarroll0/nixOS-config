@@ -170,6 +170,9 @@ in
       })
     ];
 
+    # Without this the collector cannot start at all, so a full branch has no way back.
+    environment.etc."nilfs_cleanerd.conf".source = "${pkgs.nilfs-utils}/etc/nilfs_cleanerd.conf";
+
     environment.systemPackages = [
       pkgs.snapraid
       pkgs.mergerfs

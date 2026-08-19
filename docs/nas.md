@@ -646,13 +646,35 @@ how the first `versions.nix` deploy failed.
 /mnt/disks/disk1` fails with `cannot open NILFS ... No such device or address`, while `lscp
 /dev/mapper/nas-disk1` works. This silently produced "promoted 0" until it was found.
 
-**`nilfs_cleanerd` must actually be running or nothing is ever reclaimed.** Deleting checkpoints
-frees no space by itself — `nilfs-clean` only signals a running collector, and reported
-`No cleaner found` because none had been started. Under the retain-everything policy that is the
+**`nilfs_cleanerd` could not start at all until `/etc/nilfs_cleanerd.conf` existed.** The earlier
+reading, that no collector "had been started", was wrong: every attempt died immediately with
+
+```
+/etc/nilfs_cleanerd.conf: bad configuration file
+cannot create cleanerd on /dev/dm-3: Invalid argument
+```
+
+nilfs-utils ships a sample at `$out/etc/nilfs_cleanerd.conf`, but NixOS never links a package's
+`etc/` into `/etc`, so the file was simply absent. `storage.nix` now installs it. This matters far
+more than it appears: the accepted failure mode of this design is that a branch fills up, and
+without a startable collector there is **no way to reclaim space even after deleting versions**.
+
+**Beware `nilfs-clean -s`: that is `--suspend`, not status.** Status is `-l`. Using `-s` to "check"
+a running cleaner silently suspends it.
+
+**Deleting checkpoints frees no space by itself** — `nilfs-clean` only signals a running collector. Under the retain-everything policy that is the
 correct steady state — every checkpoint is a snapshot, so there is nothing to reclaim and no
 collector runs. It matters only during a bulk migration, when the timer is stopped deliberately
 and the unpromoted checkpoints do need collecting; start `nilfs_cleanerd` by hand for that
 window, so collection never touches a spun-down disk unattended.
+
+**Measured: bulk-ingest checkpoints cost almost nothing, so reclaiming them is pointless.** After
+the migration, disk1 held 2,171 checkpoints against a 427 GB live tree while the filesystem
+reported 434 GB used, so the entire checkpoint overhead was about **7 GB, 0.4% of the disk**.
+Running the collector over it removed nothing and sat `idle`, because `min_reclaimable_blocks 10%`
+skips segments that are mostly live data, which a fresh bulk copy is. The concern that motivated
+suspending promotion (that promoting bulk checkpoints "pins that garbage permanently") assumed a
+large space cost that measurement does not support.
 
 **Suspend promotion during bulk ingest.** At the measured rate, copying 427 GB creates ~1,700
 checkpoints, almost all of them partial file-transfer states. Promoting those pins them
