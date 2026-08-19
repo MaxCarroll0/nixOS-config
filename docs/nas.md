@@ -293,7 +293,7 @@ so a block cache cannot deliver the other two under any tuning:
     `snapraid sync`, so it costs no extra spin-up.
   - The watcher records a monotonic event sequence, so a gap is detectable rather than silent.
   - Checkpoint numbers from `lscp` are recorded alongside each observed change, which is what
-    lets `nas-revert` mount exactly one checkpoint instead of searching.
+    lets `nas-versions` mount exactly one checkpoint instead of searching.
 
   Because the array is built fresh, counts begin at zero and no backfill is required.
 
@@ -366,6 +366,81 @@ same capability to whichever server is chosen. If OpenCloud does win, its native
 store versions in its state directory separately from the btrfs snapshots of section 4.6.
 Whether to disable one, accept the duplication, or reconcile them is decided at Stage 7.
 
+### 4.5.2 The version index, as built
+
+Separate from the browse index, and much smaller: `modules/nixos/nas/versions.nix` maintains the
+mapping from a file to every checkpoint that contains a change to it. Two integer tables in one
+SQLite file on the SSD:
+
+```
+versions(ino, cno, created)      PRIMARY KEY (ino, cno)
+inodes  (branch, path, ino, seen) PRIMARY KEY (branch, path)
+```
+
+A million versions is roughly 24 MB. Nothing is resident between runs: SQLite is a library, not
+a server, and the ingest is a `oneshot` timer.
+
+**Why an index is required at all.** "Show me every version of this file and when" cannot be
+answered by scanning checkpoints, because nothing is ever collected: there will eventually be
+tens of thousands, and mounting each to `stat` one path is O(checkpoints) per query.
+
+**Why not `dumpseg`.** It does carry the mapping — `ino` and `cno` per log entry — but measured
+on disk1 it emits 120 KB and 2047 lines per segment at 74 ms, of which **one line** is useful.
+Extrapolated to the 427 GB migration (~53,000 segments) that is ~6.4 GB of text and ~65 minutes
+of Pi CPU to recover a few thousand rows. It is also documented as a debugging tool, so its
+format is not a stable interface. It stays as the **offline audit path** for checking the index
+against the log, which is what a debugging tool is for. `lssu` reports segment usage only, with
+no inode detail, so it does not help.
+
+**Collection is `fatrace`**, the packaged C fanotify tool — one instance per NILFS2 branch,
+`-c` scoping it to that mount:
+
+```
+fatrace -c -j -f W+D -t -t -o <events>.jsonl
+```
+
+`-j` gives JSONL carrying `inode`, `path` and an epoch `timestamp`, so no path-to-inode
+resolution is needed afterwards. Writing the consumer in Python was rejected: the stdlib has no
+fanotify, so it would mean hand-written `ctypes` syscall wrappers plus an interpreter's RSS —
+C-in-Python with the drawbacks of both. The ingest is shell (`jq`, `sqlite3`, `lscp`).
+
+**Time to checkpoint.** A write lands in the first checkpoint at or after it, so each event
+resolves to `MIN(cno) WHERE cp.epoch >= event.ts`. This must be a per-row scalar subquery; an
+earlier `JOIN ... ON c.cno = (subquery)` silently dropped versions and was caught only by a test
+that expected three checkpoints and got one.
+
+**Rotation, forced by `fatrace`'s output handling.** It opens `-o` with `O_CREAT|O_WRONLY|O_EXCL`
+and no `O_APPEND`, which has two consequences: a stale file makes the watcher fail to start (so
+the unit removes it in `ExecStartPre`), and the file cannot be renamed or truncated out from
+under it. Ingest therefore reads forward from a stored byte offset, and rotates only by deleting
+the file and restarting the watcher once it passes `rotateBytes` (64 MB).
+
+**The known weakness is missed events while the watcher is down.** A periodic pass reconciles by
+comparing each file's mtime against its newest recorded version. That detects *that* a file
+changed, not that it changed three times — an honest limit, and why it is a backstop rather than
+the primary path.
+
+Version *number* is the ordinal of a checkpoint within that inode's history, so "currently on
+version 12" is a `COUNT(*)` and the full timestamped list is one indexed range scan.
+
+### 4.5.3 Reading a previous version, and time travel
+
+Two access paths, deliberately separate:
+
+**Per file, on demand.** `nas-versions list <path>` is an index query with no mounts at all.
+`nas-versions restore <path> --version N` mounts that one checkpoint read-only in a temporary
+directory, copies the file out and unmounts. Mounting is the only way to read from a checkpoint —
+NILFS2 exposes no API to read a path from a checkpoint without one — so this is a single
+transient mount, not a whole-array operation.
+
+**By time, whole array.** `nas-at '<time>'` resolves the newest checkpoint at or before that
+time **per branch** and mounts each read-only under `snapshots/@AT-<ts>`, which mergerfs unions
+into one rewound view of the pool. `nas-at --list` shows what is mounted, `nas-at --release
+<name>` tears it down. `ro,cp=N` means writes fail by construction rather than by policy.
+
+It is **not** a globally atomic cut: each branch resolves its own nearest checkpoint. That is
+acceptable because user-affinity placement keeps an account on one branch.
+
 ### 4.6 Versions: NILFS2 checkpoints
 
 **The data branches are NILFS2, not btrfs.** NILFS2 is log-structured and creates a checkpoint
@@ -383,10 +458,16 @@ Two consequences are worth stating because they contradict the earlier btrfs des
 1. **SnapRAID needs no snapshot exclusion.** Checkpoints are not files, so parity naturally
    covers only the live tree. The old `exclude snapshots/` requirement disappears, as does the
    risk of parity growing without bound.
-2. **Retention is a deliberate act.** The garbage collector reclaims unpromoted checkpoints to
-   recover space. Keeping history means promoting checkpoints, which pins those blocks. Keeping
-   *everything* costs space proportional to churn — that is physics, not a filesystem choice, and
-   no filesystem makes it free.
+2. **Promotion is retention, and everything is promoted.** `nilfs_cleanerd`'s protection period
+   is time-bounded and cannot express "keep forever", so `nas-checkpoint-promote` runs `chcp ss`
+   over every checkpoint it finds. A promoted checkpoint is immune to collection, which means the
+   collector has nothing to reclaim and **is not run on a timer at all**.
+
+   **The cost, stated plainly: space grows monotonically with churn and is never returned.** That
+   is the requirement, not a flaw, but it needs an honest failure mode — a full NILFS2 filesystem
+   stops accepting writes — so `nas_branch_used_ratio` and `nas_checkpoint_snapshots` are exported
+   and alertable. Also unmeasured: whether NILFS2 stays healthy at very large snapshot counts. At
+   one checkpoint per 250 MB written, a terabyte of writes is ~4,000 snapshots.
 
 **Measured checkpoint rate.** Writing 1000 MB to disk1 in 21 seconds produced 4 checkpoints:
 
@@ -401,9 +482,9 @@ fixed timer would not be.
 
 **The trap this exposes: do not blindly promote during bulk ingest.** A 427 GB migration generates
 roughly 1,700 checkpoints, almost all of which capture *partial file-transfer states* of no value.
-Promoting them pins that garbage permanently. Promotion must be suspended during bulk copies, or
-be selective about what is worth keeping — an unresolved detail in `nas-checkpoint-promote`, which
-currently promotes everything it finds.
+Promoting them pins that garbage permanently. `nas-checkpoint-promote` promotes everything it
+finds by design, so the operational rule is to **stop its timer before a migration and start it
+afterwards**; unpromoted checkpoints are then collectable.
 
 #### Future opportunity: btrfs with btrbk
 
@@ -492,9 +573,11 @@ construction rather than by policy.
 
 **`nilfs_cleanerd` must actually be running or nothing is ever reclaimed.** Deleting checkpoints
 frees no space by itself — `nilfs-clean` only signals a running collector, and reported
-`No cleaner found` because none had been started. Left unnoticed, the disk fills. It is started
-for a bounded window by `nas-checkpoint-clean` rather than left running, so collection never
-touches a spun-down disk.
+`No cleaner found` because none had been started. Under the retain-everything policy that is the
+correct steady state — every checkpoint is a snapshot, so there is nothing to reclaim and no
+collector runs. It matters only during a bulk migration, when the timer is stopped deliberately
+and the unpromoted checkpoints do need collecting; start `nilfs_cleanerd` by hand for that
+window, so collection never touches a spun-down disk unattended.
 
 **Suspend promotion during bulk ingest.** At the measured rate, copying 427 GB creates ~1,700
 checkpoints, almost all of them partial file-transfer states. Promoting those pins them
@@ -733,7 +816,7 @@ The one thing recycle caught that checkpoints do not is a file created and delet
 checkpoints. With NILFS2 that window is the segment write interval rather than a timer, so it is
 far narrower than it would be with periodic snapshots — but it is not zero.
 
-- **Restore a version**: `nas-revert list <path>` reads the index; `nas-revert restore` mounts
+- **Restore a version**: `nas-versions list <path>` reads the index; `nas-versions restore` mounts
   exactly one checkpoint read-only, copies the file out, unmounts. Recent history is also visible
   natively in Windows Explorer via Previous Versions (section 4.6).
 - **Rewind a folder**: the web tier presents a whole directory as of a chosen point. Writes to it
@@ -1049,16 +1132,16 @@ Outstanding: the VictoriaMetrics migration (est. ~380 MB) and a Grafana trim.
 | disk | role | state |
 |---|---|---|
 | `sdb` | `disk2` | LUKS2 + btrfs, mounted `/mnt/disks/disk2`, holds the verified 427 GB copy |
-| `sdc` | parity | LUKS2 + btrfs, mounted `/mnt/parity`, empty |
-| `sdd` | `disk1` | **still the original LUKS volume**, untouched, awaiting wipe |
+| `sdc` | parity | LUKS2 + btrfs, mounted `/mnt/parity`, parity built and verified |
+| `sdd` | `disk1` | LUKS2 + **NILFS2**, mounted `/mnt/disks/disk1`, receiving the copy back from `disk2` |
 
-The migration is verified: `rsync -aHAXn` reports zero differences and both sides hold 1783
-entries. `sdd` was only ever unlocked read-only with `noload`, so it was never written.
+Phase 1 verified NILFS2 on `disk1`: checkpoints appear continuously, `chcp ss` retains them,
+and a deleted `loadtest/` tree was recovered from three checkpoints seconds apart. Phase 2 is
+the copy back from `disk2` onto NILFS2, running as `nas-phase2.service`, with
+`nas-checkpoint-promote.timer` **stopped** so its bulk-ingest checkpoints stay collectable.
 
-Remaining for Stage 2: wipe `sdd`, LUKS-format it as `disk1`, then enable
-`local.nas.storage` so mergerfs assembles the pool and SnapRAID starts building parity.
-Do not enable `local.nas.storage` before `disk1` exists — mergerfs would fail to mount a
-missing branch and abort activation.
+Remaining for Stage 2: finish the copy, reformat `disk2` as NILFS2 and set its `fsType`, then
+re-run `snapraid sync` and start the promote timer.
 
 Every disk uses one passphrase, held only in `secrets/nas.yaml`, which is encrypted to the
 primary and laptop age keys and **deliberately not the pi's**. A stolen NAS host therefore
@@ -1099,7 +1182,9 @@ systemd units** because `local.nas.enable` defaults false. Every `config` block 
 | `storage.nix` | mergerfs pool with the placement policy from section 4, SnapRAID config, sync and scrub timers that no-op unless every branch is mounted |
 | `index.nix` + `nas-index.py` | SQLite browse index, `find-new` incremental scan, version counter, thumbnailer, per-user usage metrics |
 | `cache.nix` | metadata warmer, run inside the SnapRAID window while disks already spin |
-| `nas-user.py` | proposes an account (next free uid, the Nix block, the sops and `smbpasswd` steps) and applies nothing |
+| `nas-user.py` | proposes an account (random uid in 3000-3999, the Nix block, the sops and `smbpasswd` steps) and applies nothing |
+| `checkpoints.nix` | `nas-checkpoint-promote` (retention), the `@GMT-` window for Samba, `nas-at` time travel, checkpoint metrics |
+| `versions.nix` | one `fatrace` watcher per NILFS2 branch, the ingest timer, `nas-versions list`/`restore` |
 
 Metrics exported for dashboards, all read from the index rather than the array so no exporter
 ever wakes a disk: `nas_user_bytes`, `nas_user_files`, `nas_user_directories`,

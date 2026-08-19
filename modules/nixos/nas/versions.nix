@@ -16,6 +16,7 @@ let
 
   db = "${vcfg.stateDir}/versions.db";
   eventsFor = name: "${vcfg.stateDir}/${name}.jsonl";
+  offsetFor = name: "${vcfg.stateDir}/${name}.offset";
 
   ingest = pkgs.writeShellApplication {
     name = "nas-versions-ingest";
@@ -26,6 +27,7 @@ let
       pkgs.nilfs-utils
       pkgs.util-linux
       pkgs.coreutils
+      pkgs.systemd
     ];
     text = ''
       sqlite3 ${db} <<'SQL'
@@ -38,19 +40,26 @@ let
       CREATE INDEX IF NOT EXISTS inodes_ino ON inodes (ino);
       SQL
 
-      # A write lands in the first checkpoint at or after it, so the join is a correlated MIN.
+      # fatrace opens its output O_EXCL, never O_APPEND: read forward, rotate by restart.
       ingest_branch() {
         branch=$1
         events=$2
+        offsetfile=$3
+        unit=$4
         mountpoint -q "$branch" || return 0
         [ -s "$events" ] || return 0
+
+        size=$(stat -c %s "$events")
+        offset=$(cat "$offsetfile" 2>/dev/null || echo 0)
+        [ "$size" -ge "$offset" ] || offset=0
+        [ "$size" -gt "$offset" ] || return 0
 
         device=$(findmnt -no SOURCE "$branch")
         work=$(mktemp -d)
         # shellcheck disable=SC2064
         trap "rm -rf '$work'" RETURN
 
-        mv "$events" "$work/pending.jsonl"
+        tail -c "+$((offset + 1))" "$events" | head -c "$((size - offset))" > "$work/pending.jsonl"
 
         lscp "$device" | awk 'NR>1 && $1 ~ /^[0-9]+$/ {print $1 "," $2 " " $3}' > "$work/cno.txt"
         cut -d, -f2 "$work/cno.txt" | date -f - +%s > "$work/epoch.txt"
@@ -80,10 +89,17 @@ let
         ON CONFLICT(branch, path) DO UPDATE SET ino=excluded.ino, seen=excluded.seen;
       COMMIT;
       SQL
+
+        printf '%s' "$size" > "$offsetfile"
+        if [ "$size" -gt ${toString vcfg.rotateBytes} ]; then
+          rm -f "$events"
+          printf '0' > "$offsetfile"
+          systemctl restart "$unit"
+        fi
       }
 
       ${lib.concatMapStringsSep "\n" (name: ''
-        ingest_branch ${scfg.diskRoot}/${name} ${eventsFor name}
+        ingest_branch ${scfg.diskRoot}/${name} ${eventsFor name} ${offsetFor name} nas-versions-watch-${name}.service
       '') (lib.attrNames nilfsBranches)}
     '';
   };
@@ -173,6 +189,12 @@ in
       description = "Where the version index and pending event files live; on the SSD.";
     };
 
+    rotateBytes = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 64 * 1024 * 1024;
+      description = "Event file size at which the watcher is restarted onto a fresh file.";
+    };
+
     ingestInterval = lib.mkOption {
       type = lib.types.str;
       default = "1m";
@@ -195,6 +217,7 @@ in
           description = "Record writes on ${name} for version history";
           wantedBy = [ "multi-user.target" ];
           serviceConfig = {
+            ExecStartPre = "${pkgs.coreutils}/bin/rm -f ${eventsFor name} ${offsetFor name}";
             ExecStart = "${pkgs.fatrace}/bin/fatrace -c -j -f W+D -t -t -o ${eventsFor name}";
             WorkingDirectory = "${scfg.diskRoot}/${name}";
             Restart = "on-failure";

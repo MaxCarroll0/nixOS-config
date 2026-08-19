@@ -16,7 +16,8 @@ let
   branchPaths = map (name: "${scfg.diskRoot}/${name}") (lib.attrNames nilfsBranches);
 
   forEachBranch = body: ''
-    for branch in ${lib.escapeShellArgs branchPaths}; do
+    branches=( ${lib.escapeShellArgs branchPaths} )
+    for branch in "''${branches[@]}"; do
       mountpoint -q "$branch" || continue
       device=$(findmnt -no SOURCE "$branch") || continue
       [ -n "$device" ] || continue
