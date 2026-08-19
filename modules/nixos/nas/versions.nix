@@ -110,6 +110,66 @@ let
     '';
   };
 
+  # fatrace loses events while its watcher is down; mtime says a file changed, not how often.
+  reconcile = pkgs.writeShellApplication {
+    name = "nas-versions-reconcile";
+    runtimeInputs = [
+      pkgs.sqlite
+      pkgs.nilfs-utils
+      pkgs.util-linux
+      pkgs.findutils
+      pkgs.gawk
+      pkgs.coreutils
+    ];
+    text = ''
+      reconcile_branch() {
+        branch=$1
+        mountpoint -q "$branch" || return 0
+        device=$(findmnt -no SOURCE "$branch" | head -1)
+        lscp "$device" >/dev/null 2>&1 || return 0
+
+        work=$(mktemp -d)
+        # shellcheck disable=SC2064
+        trap "rm -rf '$work'" RETURN
+
+        find "$branch" -xdev -type f \
+          -not -path "$branch/${cfg.checkpoints.snapshotDir or "snapshots"}/*" \
+          -printf '%i,%T@,%P\n' 2>/dev/null | awk -F, '{printf "%s,%d,%s\n", $1, $2, $3}' > "$work/live.csv"
+        [ -s "$work/live.csv" ] || return 0
+
+        lscp "$device" | awk 'NR>1 && $1 ~ /^[0-9]+$/ {print $1 "," $2 " " $3}' > "$work/cno.txt"
+        cut -d, -f2 "$work/cno.txt" | date -f - +%s > "$work/epoch.txt"
+        paste -d, <(cut -d, -f1 "$work/cno.txt") "$work/epoch.txt" > "$work/cps.csv"
+
+        sqlite3 ${db} <<SQL
+      CREATE TEMP TABLE live(ino INTEGER, mtime INTEGER, path TEXT);
+      CREATE TEMP TABLE cps(cno INTEGER, epoch INTEGER);
+      .mode csv
+      .import '$work/live.csv' live
+      .import '$work/cps.csv' cps
+      BEGIN;
+      INSERT INTO versions (branch, ino, cno, created)
+        SELECT DISTINCT '$branch', l.ino,
+          (SELECT c.cno FROM cps c WHERE c.epoch >= l.mtime ORDER BY c.epoch LIMIT 1),
+          (SELECT c.epoch FROM cps c WHERE c.epoch >= l.mtime ORDER BY c.epoch LIMIT 1)
+        FROM live l
+        WHERE (SELECT c.cno FROM cps c WHERE c.epoch >= l.mtime ORDER BY c.epoch LIMIT 1) IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM versions v
+                          WHERE v.branch='$branch' AND v.ino=l.ino AND v.created >= l.mtime)
+        ON CONFLICT(branch, ino, cno) DO NOTHING;
+      INSERT INTO inodes (branch, path, ino, seen)
+        SELECT '$branch', l.path, l.ino, l.mtime FROM live l
+        ON CONFLICT(branch, path) DO UPDATE SET ino=excluded.ino, seen=excluded.seen;
+      COMMIT;
+      SQL
+      }
+
+      ${lib.concatMapStringsSep "\n" (name: ''
+        reconcile_branch ${scfg.diskRoot}/${name}
+      '') (lib.attrNames nilfsBranches)}
+    '';
+  };
+
   versions = pkgs.writeShellApplication {
     name = "nas-versions";
     runtimeInputs = [
@@ -228,6 +288,12 @@ in
       default = "1m";
       description = "How often recorded writes are folded into the index.";
     };
+
+    reconcileCalendar = lib.mkOption {
+      type = lib.types.str;
+      default = "*-*-* 04:30:00";
+      description = "When the mtime backstop runs; inside the SnapRAID window so disks already spin.";
+    };
   };
 
   config = lib.mkIf (cfg.enable && vcfg.enable && nilfsBranches != { }) {
@@ -267,6 +333,16 @@ in
             IOSchedulingClass = "idle";
           };
         };
+
+        nas-versions-reconcile = {
+          description = "Recover versions missed while a watcher was down";
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = lib.getExe reconcile;
+            Nice = 19;
+            IOSchedulingClass = "idle";
+          };
+        };
       }
     ];
 
@@ -276,6 +352,15 @@ in
         OnActiveSec = "3m";
         OnUnitActiveSec = vcfg.ingestInterval;
         Persistent = false;
+      };
+    };
+
+    systemd.timers.nas-versions-reconcile = {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = vcfg.reconcileCalendar;
+        Persistent = true;
+        RandomizedDelaySec = "10m";
       };
     };
   };
