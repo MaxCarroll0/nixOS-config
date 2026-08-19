@@ -21,7 +21,10 @@
 
   local.server.ssh.lanInterfaces = [ "enp5s0" ];
 
-  local.fancontrol.configFile = ./fan2go.yaml;
+  local.fancontrol = {
+    enable = true;
+    configFile = ./fan2go.yaml;
+  };
 
   boot.extraModulePackages = [ config.boot.kernelPackages.zenpower ];
   boot.kernelModules = [ "zenpower" ];

@@ -4,7 +4,7 @@ tempRollingWindowSize: 20
 sensors:
   - id: cpu
     hwmon:
-      platform: k10temp
+      platform: zenpower
       index: 1
 
 curves:
@@ -19,9 +19,9 @@ curves:
         - 63: 100%
 
 fans:
-  - id: cpu_pump
+  - id: cpu_fan
     hwmon:
-      platform: it87
+      platform: it8792
       rpmChannel: 1
       pwmChannel: 1
     neverStop: true
@@ -29,5 +29,8 @@ fans:
     controlAlgorithm:
       direct:
         maxPwmChangePerCycle: 5
+    controlMode:
+      onExit: restore
     minPwm: 20
     startPwm: 40
+    maxPwm: 255

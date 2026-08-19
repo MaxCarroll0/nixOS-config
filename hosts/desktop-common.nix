@@ -85,7 +85,7 @@
     lazyMounts = { };
   };
 
-  local.fancontrol.enable = false;
+  local.fancontrol.enable = lib.mkDefault false;
 
   systemd.services.schedutil-rate-limit = {
     wantedBy = [ "multi-user.target" ];
