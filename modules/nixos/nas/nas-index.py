@@ -50,6 +50,10 @@ HIDE_MARKER = ".nashidden"
 # Not accounts: indexing these would multiply the index by the checkpoint window.
 RESERVED = {"snapshots", "lost+found"}
 
+# Each mounted generation under snapshots/ is a whole copy of the branch, so walking in
+# multiplies the index by the number of exposed generations.
+PRUNED_DIRS = {"snapshots", ".snapshots", ".recycle", "lost+found"}
+
 
 def is_hidden_path(root, path):
     current = path
@@ -152,7 +156,7 @@ def record(db, owner, root, path, thumb_dir, thumb_size, want_thumbs, hidden=0):
 def full_scan(db, owner, root, thumb_dir, thumb_size, want_thumbs):
     seen = 0
     for dirpath, dirnames, filenames in os.walk(root, onerror=lambda e: None):
-        dirnames[:] = [d for d in dirnames if d not in (".snapshots", ".recycle", "lost+found")]
+        dirnames[:] = [d for d in dirnames if d not in PRUNED_DIRS]
         base = Path(dirpath)
         hidden = 1 if (HIDE_MARKER in filenames or is_hidden_path(root, base)) else 0
         for entry in dirnames + filenames:

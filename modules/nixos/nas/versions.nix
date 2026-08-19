@@ -143,9 +143,11 @@ let
         # shellcheck disable=SC2064
         trap "rm -rf '$work'" RETURN
 
-        find "$branch" -xdev -type f \
-          -not -path "$branch/${cfg.checkpoints.snapshotDir or "snapshots"}/*" \
-          -printf '%i,%T@,%P\n' 2>/dev/null | awk -F, '{printf "%s,%d,%s\n", $1, $2, $3}' > "$work/live.csv"
+        # -prune, not -not -path: a checkpoint mounted inside its own branch looks like a
+        # filesystem loop to find, which warns and exits 1 once the SMB window is populated.
+        find "$branch" -xdev \
+          -path "$branch/${cfg.checkpoints.snapshotDir or "snapshots"}" -prune -o \
+          -type f -printf '%i,%T@,%P\n' | awk -F, '{printf "%s,%d,%s\n", $1, $2, $3}' > "$work/live.csv"
         [ -s "$work/live.csv" ] || return 0
 
         lscp "$device" | awk 'NR>1 && $1 ~ /^[0-9]+$/ {print $1 "," $2 " " $3}' > "$work/cno.txt"
