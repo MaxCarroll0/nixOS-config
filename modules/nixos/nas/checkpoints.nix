@@ -174,7 +174,10 @@ let
           else
             shown=0
           fi
-          read -r used size <<<"$(df -B1 --output=used,size "$branch" | tail -1)"
+          read -r used size <<<"$(df -B1 --output=used,size "$branch" | tail -1)" || continue
+          case "$used$size" in *[!0-9]* | "") continue ;; esac
+          [ "$size" -gt 0 ] || continue
+
           echo "nas_checkpoints{branch=\"$label\"} $total"
           echo "nas_checkpoint_snapshots{branch=\"$label\"} $snaps"
           echo "nas_checkpoints_exposed{branch=\"$label\"} $shown"
@@ -183,7 +186,14 @@ let
         ''}
         echo "nas_metrics_timestamp_seconds $(date +%s)"
       } > "$tmp"
-      mv "$tmp" ${ccfg.metricsFile}
+
+      if awk '!/^#/ && NF && ($NF == "" || $NF + 0 != $NF) { bad = 1 } END { exit bad }' "$tmp"; then
+        mv "$tmp" ${ccfg.metricsFile}
+      else
+        rm -f "$tmp"
+        echo "refusing to publish malformed metrics; keeping the previous file" >&2
+        exit 1
+      fi
     '';
   };
 in

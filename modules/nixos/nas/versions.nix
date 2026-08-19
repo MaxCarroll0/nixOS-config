@@ -14,6 +14,10 @@ let
 
   nilfsBranches = lib.filterAttrs (_: d: d.fsType == "nilfs2") scfg.dataDisks;
 
+  mountUnit =
+    name:
+    "${lib.replaceStrings [ "/" ] [ "-" ] (lib.removePrefix "/" "${scfg.diskRoot}/${name}")}.mount";
+
   db = "${vcfg.stateDir}/versions.db";
   eventsFor = name: "${vcfg.stateDir}/${name}.jsonl";
   offsetFor = name: "${vcfg.stateDir}/${name}.offset";
@@ -323,7 +327,9 @@ in
         name: _:
         lib.nameValuePair "nas-versions-watch-${name}" {
           description = "Record writes on ${name} for version history";
-          wantedBy = [ "multi-user.target" ];
+          wantedBy = [ "${mountUnit name}" ];
+          partOf = [ "${mountUnit name}" ];
+          after = [ "${mountUnit name}" ];
           serviceConfig = {
             ExecStartPre = "${pkgs.coreutils}/bin/rm -f ${eventsFor name} ${offsetFor name}";
             ExecStart = "${pkgs.fatrace}/bin/fatrace -c -j -f W+D -t -t -o ${eventsFor name}";
