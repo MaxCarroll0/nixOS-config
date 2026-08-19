@@ -30,14 +30,19 @@ let
       pkgs.systemd
     ];
     text = ''
+      # Inode numbers are per-filesystem, so versions without a branch collide across branches.
+      if [ "$(sqlite3 ${db} "SELECT COUNT(*) FROM pragma_table_info('versions') WHERE name='branch';" 2>/dev/null || echo 0)" != 1 ]; then
+        sqlite3 ${db} "DROP TABLE IF EXISTS versions;"
+      fi
+
       sqlite3 ${db} <<'SQL'
       CREATE TABLE IF NOT EXISTS versions (
-        ino INTEGER NOT NULL, cno INTEGER NOT NULL, created INTEGER NOT NULL,
-        PRIMARY KEY (ino, cno));
+        branch TEXT NOT NULL, ino INTEGER NOT NULL, cno INTEGER NOT NULL, created INTEGER NOT NULL,
+        PRIMARY KEY (branch, ino, cno));
       CREATE TABLE IF NOT EXISTS inodes (
         branch TEXT NOT NULL, path TEXT NOT NULL, ino INTEGER NOT NULL, seen INTEGER NOT NULL,
         PRIMARY KEY (branch, path));
-      CREATE INDEX IF NOT EXISTS inodes_ino ON inodes (ino);
+      CREATE INDEX IF NOT EXISTS inodes_ino ON inodes (branch, ino);
       SQL
 
       # fatrace opens its output O_EXCL, never O_APPEND: read forward, rotate by restart.
@@ -78,13 +83,13 @@ let
       .import '$work/cps.csv' cps
       .import '$work/events.csv' raw
       BEGIN;
-      INSERT INTO versions (ino, cno, created)
-        SELECT DISTINCT r.ino,
+      INSERT INTO versions (branch, ino, cno, created)
+        SELECT DISTINCT '$branch', r.ino,
           (SELECT c.cno FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch LIMIT 1),
           (SELECT c.epoch FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch LIMIT 1)
         FROM raw r
         WHERE (SELECT c.cno FROM cps c WHERE c.epoch >= r.ts ORDER BY c.epoch LIMIT 1) IS NOT NULL
-        ON CONFLICT(ino, cno) DO NOTHING;
+        ON CONFLICT(branch, ino, cno) DO NOTHING;
       INSERT INTO inodes (branch, path, ino, seen)
         SELECT '$branch', r.path, r.ino, MAX(r.ts) FROM raw r GROUP BY r.path
         ON CONFLICT(branch, path) DO UPDATE SET ino=excluded.ino, seen=excluded.seen;
@@ -145,6 +150,12 @@ let
         fi
         [ -n "$branch" ] || { echo "not on a NILFS2 branch: $target" >&2; exit 1; }
         device=$(findmnt -no SOURCE "$branch" | head -1)
+
+        # The live inode survives renames; fall back to the recorded one for deleted files.
+        ino=$(stat -c %i "$branch/$rel" 2>/dev/null) || ino=""
+        [ -n "$ino" ] || ino=$(sqlite3 -noheader ${db} \
+          "SELECT ino FROM inodes WHERE branch='$branch' AND path='$rel' LIMIT 1;")
+        [ -n "$ino" ] || { echo "no version history for $rel" >&2; exit 1; }
       }
 
       cmd=''${1:-}; shift || usage
@@ -153,10 +164,11 @@ let
           [ $# -ge 1 ] || usage
           resolve "$1"
           sqlite3 -noheader -separator '  ' ${db} \
-            "SELECT (SELECT COUNT(*) FROM versions v2 WHERE v2.ino=i.ino AND v2.cno<=v.cno),
+            "SELECT (SELECT COUNT(*) FROM versions v2
+                       WHERE v2.branch=v.branch AND v2.ino=v.ino AND v2.cno<=v.cno),
                     v.cno, datetime(v.created,'unixepoch')
-             FROM versions v JOIN inodes i ON i.ino=v.ino
-             WHERE i.branch='$branch' AND i.path='$rel' ORDER BY v.cno;" \
+             FROM versions v
+             WHERE v.branch='$branch' AND v.ino=$ino ORDER BY v.cno;" \
             | awk 'BEGIN{printf "%-8s %-10s %s\n","VERSION","CHECKPOINT","WHEN (UTC)"} {printf "%-8s %-10s %s %s\n",$1,$2,$3,$4}'
           ;;
         restore)
@@ -173,8 +185,8 @@ let
           [ -n "$version" ] || usage
           resolve "$path"
           cno=$(sqlite3 -noheader ${db} \
-            "SELECT v.cno FROM versions v JOIN inodes i ON i.ino=v.ino
-             WHERE i.branch='$branch' AND i.path='$rel' ORDER BY v.cno
+            "SELECT v.cno FROM versions v
+             WHERE v.branch='$branch' AND v.ino=$ino ORDER BY v.cno
              LIMIT 1 OFFSET $((version - 1));")
           [ -n "$cno" ] || { echo "no version $version for $rel" >&2; exit 1; }
           tmp=$(mktemp -d /run/nas-restore.XXXXXX)

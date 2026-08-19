@@ -373,9 +373,24 @@ mapping from a file to every checkpoint that contains a change to it. Two intege
 SQLite file on the SSD:
 
 ```
-versions(ino, cno, created)      PRIMARY KEY (ino, cno)
-inodes  (branch, path, ino, seen) PRIMARY KEY (branch, path)
+versions(branch, ino, cno, created) PRIMARY KEY (branch, ino, cno)
+inodes  (branch, path, ino, seen)   PRIMARY KEY (branch, path)
 ```
+
+**`versions` must be keyed by branch, not by inode alone.** Inode numbers are per-filesystem, so
+with two branches disk1 and disk2 both allocate low numbers and unrelated files collide. The first
+two-branch test showed one disk2 path listing four versions, two from disk2's checkpoint space and
+two from disk1's, out of chronological order. The listing is the visible symptom; the dangerous one
+is `restore --version N` picking a cno that belongs to the other branch and mounting that number on
+this device, where it is often a valid but unrelated checkpoint, so the wrong contents come back
+silently. This was invisible for as long as there was one branch.
+
+**Lookups resolve the inode from the live file, not from the recorded path.** Applications
+routinely write to a temporary name and rename into place, and NILFS2 keeps the inode across the
+rename while `fatrace -f W+D` never sees the move. SnapRAID is a live example: its history was
+recorded against `.snapraid.content.tmp`, so a query for `.snapraid.content` returned nothing.
+`stat`-ing the live path gives the authoritative inode and the history follows the rename; the
+recorded path is the fallback, used for files that no longer exist.
 
 A million versions is roughly 24 MB. Nothing is resident between runs: SQLite is a library, not
 a server, and the ingest is a `oneshot` timer.
