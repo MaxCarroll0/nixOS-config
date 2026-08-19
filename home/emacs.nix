@@ -7,6 +7,9 @@
   ...
 }:
 
+let
+  overrides = import ../lib/overrides.nix { inherit lib; };
+in
 {
   options.local.emacs.guiToolkit = lib.mkOption {
     type = lib.types.bool;
@@ -64,15 +67,17 @@
                 };
               };
               # Drop this override once nixpkgs envrc includes async processing.
-              envrc = epkgs.envrc.overrideAttrs (_old: {
-                version = "0-unstable-2025-01-11";
-                src = pkgs.fetchFromGitHub {
-                  owner = "Grimpper";
-                  repo = "envrc";
-                  rev = "71f67971bc5eb2974ae2f738512c8f09f0822527";
-                  hash = "sha256-Zfu+yWY+POMnrWbmP6HWOjgFsASNU3HcCowNo8BIzpk=";
-                };
-              });
+              envrc = overrides.againstVersion "envrc" "0-unstable-2025-01-11" epkgs.envrc.version (
+                epkgs.envrc.overrideAttrs (_old: {
+                  version = "0-unstable-2025-01-11";
+                  src = pkgs.fetchFromGitHub {
+                    owner = "Grimpper";
+                    repo = "envrc";
+                    rev = "71f67971bc5eb2974ae2f738512c8f09f0822527";
+                    hash = "sha256-Zfu+yWY+POMnrWbmP6HWOjgFsASNU3HcCowNo8BIzpk=";
+                  };
+                })
+              );
               lean4-mode = epkgs.trivialBuild {
                 pname = "lean4-mode";
                 version = "unstable";

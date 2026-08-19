@@ -11,11 +11,18 @@
 }:
 
 let
+  overrides = import ../lib/overrides.nix { inherit lib; };
+
+  anipySrcPinned =
+    overrides.againstRev "anipy-cli" "95462338a48cb8910c7b783ed081b69d2147e5c2"
+      (anipySrc.rev or "unknown")
+      anipySrc;
+
   anipyApiPr = pkgs-unstable.python3Packages.buildPythonPackage {
     pname = "anipy-api";
     version = "3.8.16";
     pyproject = true;
-    src = "${anipySrc}/api";
+    src = "${anipySrcPinned}/api";
     build-system = [ pkgs-unstable.python3Packages.poetry-core ];
     dependencies = with pkgs-unstable.python3Packages; [
       python-ffmpeg
@@ -39,7 +46,7 @@ let
     pname = "anipy-cli";
     version = "3.8.16";
     pyproject = true;
-    src = "${anipySrc}/cli";
+    src = "${anipySrcPinned}/cli";
     build-system = [ pkgs-unstable.python3Packages.poetry-core ];
     dependencies = with pkgs-unstable.python3Packages; [
       pyyaml
@@ -118,11 +125,13 @@ let
   # Both curd providers (allanime, animepahe) are Cloudflare-gated; curd's plain
   # Go client can't pass the challenge. FlareSolverr solves it once, this patch
   # makes curd replay the cf_clearance + matching UA on every provider request.
-  curdPatched = curd.overrideAttrs (old: {
-    postPatch = (old.postPatch or "") + ''
-      cp ${../curd/zz_cf_inject.go} internal/zz_cf_inject.go
-    '';
-  });
+  curdPatched = overrides.againstVersion "curd" "2.0.5" (lib.removeSuffix "\n" curd.version) (
+    curd.overrideAttrs (old: {
+      postPatch = (old.postPatch or "") + ''
+        cp ${../curd/zz_cf_inject.go} internal/zz_cf_inject.go
+      '';
+    })
+  );
 
   curd-cf-refresh = pkgs.writeShellApplication {
     name = "curd-cf-refresh";
@@ -201,16 +210,18 @@ in
     ghostscript
     mpv
     yt-dlp
-    (pkgs-unstable.ani-cli.overrideAttrs (old: {
-      version = "4.15.0-unstable-2026-08-01";
-      runtimeInputs = (old.runtimeInputs or [ ]) ++ [ pkgs.botan3 ];
-      src = pkgs.fetchFromGitHub {
-        owner = "pystardust";
-        repo = "ani-cli";
-        rev = "489087b541eb1457393b997fdd3589ffe7a8d6a2";
-        hash = "sha256-nl4c0ASIvoBylnk/F4AxVxQl68de9kWPwnNtiTOLzZc=";
-      };
-    }))
+    (overrides.againstVersion "ani-cli" "4.15.0-unstable-2026-08-01" pkgs-unstable.ani-cli.version (
+      pkgs-unstable.ani-cli.overrideAttrs (old: {
+        version = "4.15.0-unstable-2026-08-01";
+        runtimeInputs = (old.runtimeInputs or [ ]) ++ [ pkgs.botan3 ];
+        src = pkgs.fetchFromGitHub {
+          owner = "pystardust";
+          repo = "ani-cli";
+          rev = "489087b541eb1457393b997fdd3589ffe7a8d6a2";
+          hash = "sha256-nl4c0ASIvoBylnk/F4AxVxQl68de9kWPwnNtiTOLzZc=";
+        };
+      })
+    ))
     claude-code
     codex-cli
     pkgs-unstable.codecrafters-cli

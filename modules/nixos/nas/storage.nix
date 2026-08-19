@@ -10,6 +10,7 @@
 let
   cfg = config.local.nas;
   scfg = cfg.storage;
+  overrides = import ../../../lib/overrides.nix { inherit lib; };
 
   dataMounts = lib.mapAttrsToList (name: _: "${scfg.diskRoot}/${name}") scfg.dataDisks;
 
@@ -142,25 +143,28 @@ in
 
     nixpkgs.overlays = [
       (final: prev: {
-        nilfs-utils = prev.nilfs-utils.overrideAttrs (old: rec {
-          version = "2.3.1";
-          src = final.fetchFromGitHub {
-            owner = "nilfs-dev";
-            repo = "nilfs-utils";
-            tag = "v${version}";
-            hash = "sha256-Sqg1pERzxc6H7eMJGv3XTgiC3/KXu/hqqZzl1vxM6E8=";
-          };
-          postPatch =
-            assert lib.assertMsg (lib.hasInfix "sbin/mkfs/mkfs.c" old.postPatch)
-              "nilfs-utils postPatch no longer references sbin/mkfs/mkfs.c; recheck the 2.3.1 overlay";
-            builtins.replaceStrings [ "sbin/mkfs/mkfs.c" ] [ "sbin/mkfs.c" ] old.postPatch;
-          nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ final.pkg-config ];
-          buildInputs = (old.buildInputs or [ ]) ++ [
-            final.libuuid
-            final.util-linux
-          ];
-          installFlags = (old.installFlags or [ ]) ++ [ "core_sbindir=${placeholder "out"}/sbin" ];
-        });
+        nilfs-utils = overrides.againstVersion "nilfs-utils" "2.2.12" prev.nilfs-utils.version (
+          prev.nilfs-utils.overrideAttrs (old: rec {
+            version = "2.3.1";
+            src = final.fetchFromGitHub {
+              owner = "nilfs-dev";
+              repo = "nilfs-utils";
+              tag = "v${version}";
+              hash = "sha256-Sqg1pERzxc6H7eMJGv3XTgiC3/KXu/hqqZzl1vxM6E8=";
+            };
+            postPatch = builtins.replaceStrings [ "sbin/mkfs/mkfs.c" ] [ "sbin/mkfs.c" ] (
+              overrides.containing "nilfs-utils" "sbin/mkfs/mkfs.c" old.postPatch
+            );
+            nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ final.pkg-config ];
+            buildInputs = (old.buildInputs or [ ]) ++ [
+              final.libuuid
+              final.util-linux
+            ];
+            installFlags = (old.installFlags or [ ]) ++ [
+              "core_sbindir=${placeholder "out"}/sbin"
+            ];
+          })
+        );
       })
     ];
 
