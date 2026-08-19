@@ -203,7 +203,8 @@ let
 
       # A pool path is served by mergerfs, so the owning branch is found by probing.
       resolve() {
-        target=$(readlink -f "$1")
+        # -m, not -f: a deleted file's parent may be gone too, and -f fails on that.
+        target=$(readlink -m "$1")
         branch=""
         case "$target" in
           ${cfg.dataRoot}/*)
