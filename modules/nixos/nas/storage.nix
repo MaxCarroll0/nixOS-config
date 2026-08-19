@@ -150,7 +150,10 @@ in
             tag = "v${version}";
             hash = "sha256-Sqg1pERzxc6H7eMJGv3XTgiC3/KXu/hqqZzl1vxM6E8=";
           };
-          postPatch = builtins.replaceStrings [ "sbin/mkfs/mkfs.c" ] [ "sbin/mkfs.c" ] old.postPatch;
+          postPatch =
+            assert lib.assertMsg (lib.hasInfix "sbin/mkfs/mkfs.c" old.postPatch)
+              "nilfs-utils postPatch no longer references sbin/mkfs/mkfs.c; recheck the 2.3.1 overlay";
+            builtins.replaceStrings [ "sbin/mkfs/mkfs.c" ] [ "sbin/mkfs.c" ] old.postPatch;
           nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ final.pkg-config ];
           buildInputs = (old.buildInputs or [ ]) ++ [
             final.libuuid

@@ -169,6 +169,10 @@ nilfs-utils = prev.nilfs-utils.overrideAttrs (old: rec {
 });
 ```
 
+No nixpkgs bump is in flight (last was [#445259](https://github.com/NixOS/nixpkgs/pull/445259),
+`2.2.11 -> 2.2.12`), so this overlay is needed until someone opens one. Bumping nixpkgs itself
+would need the same four changes below.
+
 Four things changed between 2.2.12 and 2.3.x, each producing a different failure:
 
 | Change | Failure without the override |
