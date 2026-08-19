@@ -22,6 +22,7 @@
     ../../modules/nixos/nas/cache.nix
     ../../modules/nixos/nas/unlock.nix
     ../../modules/nixos/nas/checkpoints.nix
+    ../../modules/nixos/nas/versions.nix
     ../../modules/nixos/fancontrol.nix
     ../../modules/nixos/gpio-pwm-fan.nix
     ../../modules/nixos/build-client.nix
@@ -203,6 +204,7 @@
       parityDevice = "/dev/sdc";
     };
     checkpoints.enable = true;
+    versions.enable = true;
   };
 
   local.power = {

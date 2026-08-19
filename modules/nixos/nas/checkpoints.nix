@@ -72,6 +72,72 @@ let
     '';
   };
 
+  at = pkgs.writeShellApplication {
+    name = "nas-at";
+    runtimeInputs = [
+      pkgs.nilfs-utils
+      pkgs.util-linux
+      pkgs.gawk
+      pkgs.coreutils
+    ];
+    text = ''
+      usage() {
+        echo "usage: nas-at '<YYYY-MM-DD HH:MM[:SS]>'   mount the array as it was" >&2
+        echo "       nas-at --release <NAME>            unmount it" >&2
+        echo "       nas-at --list                      show mounted views" >&2
+        exit 2
+      }
+
+      case "''${1:-}" in
+        --list)
+          findmnt -rno TARGET -t nilfs2 | grep '@AT-' || echo "none mounted"
+          exit 0
+          ;;
+        --release)
+          [ $# -eq 2 ] || usage
+          name=$2
+          ${forEachBranch ''
+            path="$branch/${ccfg.snapshotDir}/$name"
+            [ -d "$path" ] && { umount "$path" 2>/dev/null || true; rmdir "$path" 2>/dev/null || true; }
+          ''}
+          echo "released $name"
+          exit 0
+          ;;
+        "" ) usage ;;
+      esac
+
+      want=$(date -d "$1" +%s) || usage
+      name="@AT-$(date -u -d "@$want" +%Y.%m.%d-%H.%M.%S)"
+      found=0
+
+      ${forEachBranch ''
+        # Newest checkpoint at or before the requested time.
+        cno=$(lscp "$device" | awk -v want="$want" '
+          NR>1 && $1 ~ /^[0-9]+$/ {
+            cmd = "date -d \"" $2 " " $3 "\" +%s"; cmd | getline epoch; close(cmd)
+            if (epoch <= want && epoch > best) { best = epoch; keep = $1 }
+          }
+          END { if (keep != "") print keep }')
+
+        if [ -z "$cno" ]; then
+          echo "$branch: nothing retained at or before $1" >&2
+        else
+          target="$branch/${ccfg.snapshotDir}/$name"
+          mkdir -p "$target"
+          if mountpoint -q "$target" || mount -t nilfs2 -o "cp=$cno,ro" "$device" "$target"; then
+            echo "$branch: checkpoint $cno"
+            found=$((found + 1))
+          else
+            rmdir "$target" 2>/dev/null || true
+          fi
+        fi
+      ''}
+
+      [ "$found" -gt 0 ] || { echo "no branch had a checkpoint that old" >&2; exit 1; }
+      echo "${cfg.dataRoot}/${ccfg.snapshotDir}/$name"
+    '';
+  };
+
   metrics = pkgs.writeShellApplication {
     name = "nas-checkpoint-metrics";
     runtimeInputs = [
@@ -141,6 +207,7 @@ in
       promote
       window
       metrics
+      at
       pkgs.nilfs-utils
     ];
 
