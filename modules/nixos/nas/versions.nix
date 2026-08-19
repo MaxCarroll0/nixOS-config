@@ -120,15 +120,30 @@ let
         exit 2
       }
 
+      branches=( ${lib.escapeShellArgs (map (n: "${scfg.diskRoot}/${n}") (lib.attrNames nilfsBranches))} )
+
+      # A pool path is served by mergerfs, so the owning branch is found by probing.
       resolve() {
         target=$(readlink -f "$1")
-        branch=$(findmnt -no TARGET --target "$target")
-        while [ -n "$branch" ] && [ "$(findmnt -no FSTYPE --target "$branch")" != "nilfs2" ]; do
-          [ "$branch" = "/" ] && { echo "not on a NILFS2 branch: $target" >&2; exit 1; }
-          branch=$(dirname "$branch")
-        done
+        branch=""
+        case "$target" in
+          ${cfg.dataRoot}/*)
+            rel=''${target#"${cfg.dataRoot}"/}
+            for b in "''${branches[@]}"; do
+              [ -e "$b/$rel" ] && { branch=$b; break; }
+            done
+            ;;
+          *)
+            for b in "''${branches[@]}"; do
+              case "$target" in "$b"/*) branch=$b; rel=''${target#"$b"/}; break ;; esac
+            done
+            ;;
+        esac
+        if [ -z "$branch" ] && [ -n "''${rel:-}" ]; then
+          branch=$(sqlite3 -noheader ${db} "SELECT branch FROM inodes WHERE path='$rel' LIMIT 1;")
+        fi
+        [ -n "$branch" ] || { echo "not on a NILFS2 branch: $target" >&2; exit 1; }
         device=$(findmnt -no SOURCE "$branch")
-        rel=''${target#"$branch"/}
       }
 
       cmd=''${1:-}; shift || usage
