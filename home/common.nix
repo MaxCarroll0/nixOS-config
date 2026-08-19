@@ -122,6 +122,25 @@ let
     doCheck = false;
   };
 
+  # textual >=8.2.8 is only in unstable; 26.05 ships 8.2.6.
+  claude-swap = pkgs-unstable.python3Packages.buildPythonApplication {
+    pname = "claude-swap";
+    version = "0.25.0";
+    pyproject = true;
+    src = pkgs.fetchFromGitHub {
+      owner = "realiti4";
+      repo = "claude-swap";
+      rev = "v0.25.0";
+      hash = "sha256-BDfwyH7h7Ii7QYaunHDnf0Epk5nUEd8OdOH3QCf1CJU=";
+    };
+    build-system = [ pkgs-unstable.python3Packages.hatchling ];
+    dependencies = with pkgs-unstable.python3Packages; [
+      textual
+      truststore
+    ];
+    doCheck = false;
+  };
+
   # Both curd providers (allanime, animepahe) are Cloudflare-gated; curd's plain
   # Go client can't pass the challenge. FlareSolverr solves it once, this patch
   # makes curd replay the cf_clearance + matching UA on every provider request.
@@ -183,6 +202,7 @@ in
     google-meet
     arxiv-latex-mcp
     paper-search-mcp
+    claude-swap
     anipyCliPr
     pkgs-unstable.context7-mcp
     (lib.meta.setPrio 5 pkgs-unstable.mcp-server-sequential-thinking)
