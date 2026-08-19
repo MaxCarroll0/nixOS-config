@@ -415,10 +415,11 @@ the unit removes it in `ExecStartPre`), and the file cannot be renamed or trunca
 under it. Ingest therefore reads forward from a stored byte offset, and rotates only by deleting
 the file and restarting the watcher once it passes `rotateBytes` (64 MB).
 
-**The known weakness is missed events while the watcher is down.** A periodic pass reconciles by
-comparing each file's mtime against its newest recorded version. That detects *that* a file
-changed, not that it changed three times — an honest limit, and why it is a backstop rather than
-the primary path.
+**The known weakness is missed events while the watcher is down, and it is currently unmitigated.**
+The intended backstop is a periodic pass comparing each file's mtime against its newest recorded
+version, which detects *that* a file changed but not that it changed three times. **That pass is
+not built yet** — `versions.nix` defines only the per-branch watchers and the ingest timer, so a
+watcher outage silently loses those versions with nothing to repair the gap.
 
 Version *number* is the ordinal of a checkpoint within that inode's history, so "currently on
 version 12" is a `COUNT(*)` and the full timestamped list is one indexed range scan.
