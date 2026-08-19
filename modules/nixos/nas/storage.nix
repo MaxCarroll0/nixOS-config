@@ -34,17 +34,48 @@ let
     )
   );
 
+  arrayDevices =
+    lib.mapAttrsToList (_: d: d.device) scfg.dataDisks
+    ++ lib.optional (cfg.unlock.parityDevice or "" != "") cfg.unlock.parityDevice;
+
   sync = pkgs.writeShellApplication {
     name = "nas-snapraid-sync";
     runtimeInputs = [
       pkgs.snapraid
       pkgs.util-linux
+      pkgs.gawk
+      pkgs.smartmontools
     ];
     text = ''
       for m in ${lib.escapeShellArgs dataMounts} ${scfg.parityMount}; do
         mountpoint -q "$m" || exit 0
       done
+
+      for dev in ${lib.escapeShellArgs arrayDevices}; do
+        [ -b "$dev" ] || continue
+        if ! smartctl -H "$dev" | grep -q "PASSED"; then
+          echo "refusing to sync: $dev is not reporting SMART PASSED" >&2
+          exit 1
+        fi
+      done
+
       snapraid --conf ${snapraidConf} touch
+
+      # Parity is rewritten in place, so a mass deletion synced in is unrecoverable. diff exits
+      # non-zero whenever anything differs, so the gate reads the counts rather than the status.
+      diff_out=$(snapraid --conf ${snapraidConf} diff || true)
+      removed=$(printf '%s\n' "$diff_out" | awk '$2 == "removed" { print $1; exit }')
+      updated=$(printf '%s\n' "$diff_out" | awk '$2 == "updated" { print $1; exit }')
+      removed=''${removed:-0}
+      updated=''${updated:-0}
+      echo "diff: removed=$removed updated=$updated"
+
+      if [ "$removed" -gt ${toString scfg.maxRemoved} ] || [ "$updated" -gt ${toString scfg.maxUpdated} ]; then
+        echo "refusing to sync: removed=$removed (max ${toString scfg.maxRemoved}), updated=$updated (max ${toString scfg.maxUpdated})." >&2
+        echo "Parity still reflects the previous state. Investigate, then run snapraid sync by hand if this was intended." >&2
+        exit 1
+      fi
+
       snapraid --conf ${snapraidConf} sync
     '';
   };
@@ -163,6 +194,30 @@ in
       description = "Only scrub blocks older than this many days.";
     };
 
+    syncMemoryHigh = lib.mkOption {
+      type = lib.types.str;
+      default = "512M";
+      description = "Reclaim pressure point for sync and scrub; the measured peak is 545 MB.";
+    };
+
+    syncMemoryMax = lib.mkOption {
+      type = lib.types.str;
+      default = "896M";
+      description = "Hard cap for sync and scrub. Safe to kill: both resume from the content file.";
+    };
+
+    maxRemoved = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 500;
+      description = "Deletions above which the nightly sync refuses to touch parity.";
+    };
+
+    maxUpdated = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 5000;
+      description = "Modifications above which the nightly sync refuses to touch parity.";
+    };
+
     cleanerConfig = lib.mkOption {
       type = lib.types.path;
       default = ./nilfs_cleanerd.conf;
@@ -277,6 +332,8 @@ in
         ExecStart = lib.getExe sync;
         Nice = 15;
         IOSchedulingClass = "idle";
+        MemoryHigh = scfg.syncMemoryHigh;
+        MemoryMax = scfg.syncMemoryMax;
       };
     };
 
@@ -287,6 +344,8 @@ in
         ExecStart = lib.getExe scrub;
         Nice = 19;
         IOSchedulingClass = "idle";
+        MemoryHigh = scfg.syncMemoryHigh;
+        MemoryMax = scfg.syncMemoryMax;
       };
     };
 
