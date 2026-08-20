@@ -1215,11 +1215,23 @@ Outstanding: the VictoriaMetrics migration (est. ~380 MB) and a Grafana trim.
   reading 864 GB and writing 850 GB, and peaked at **545.2 MB with 68.7 MB of swap**. On a 2 GB
   box that is a quarter of RAM, so the `MemoryMax` this item calls for is more necessary than the
   original estimate suggested, and 81% of the wait time was parity I/O rather than hashing.
-- **SnapRAID sync hardening**: the sync unit must run a pre-sync `snapraid diff`, abort when
-  deletion or modification counts exceed a threshold, refuse to sync when a disk is missing
-  or SMART-degraded, and scrub only against a synced array. SnapRAID itself offers only the
-  binary `--force-empty` and no configurable threshold, so the threshold logic is ours to
-  implement.
+- **SnapRAID sync hardening: built and proven.** `nas-snapraid-sync` now runs `snapraid diff`
+  between `touch` and `sync`, parses the `removed` and `updated` counts, and refuses when either
+  exceeds `maxRemoved` (500) or `maxUpdated` (5000). It also refuses when any array device is not
+  reporting SMART `PASSED`. It **fails the unit** rather than exiting 0, so a refusal is visible in
+  `systemctl --failed` instead of looking like a quiet success.
+
+  Verified on the live array: 600 files were created and synced in (allowed, `Everything OK`), the
+  parity file's mtime and size were recorded, all 600 were deleted, and the sync then refused:
+
+  ```
+  diff: removed=600 updated=0
+  refusing to sync: removed=600 (max 500), updated=0 (max 5000).
+  Parity still reflects the previous state.
+  ```
+
+  Parity's mtime and size were byte-for-byte unchanged across the destructive step. Clearing a
+  refusal is deliberate: run `snapraid sync` by hand once the change is confirmed to be intended.
 - **Spin-down versus drive temperature**: `modules/nixos/storage.nix` warns that
   node_exporter's hwmon collector reads `drivetemp` on every scrape and resets the spin-down
   timer, and offers `local.monitoring.exporter.hwmonChipExclude`. Excluding the NAS drives
