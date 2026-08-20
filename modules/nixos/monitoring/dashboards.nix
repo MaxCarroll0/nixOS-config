@@ -2418,6 +2418,43 @@ let
       (dashboardLink "Overview" "overview")
     ];
     panels = livePanels [
+      (stat {
+        title = "Unclean resets";
+        description = "Boots that followed a power loss or hard reset rather than a clean shutdown.";
+        w = 6;
+        h = 4;
+        targets = [
+          (target {
+            expr = ''max by (instance) (node_boot_unclean_total{instance=~"$host"})'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (stat {
+        title = "Since last unclean reset";
+        description = "Time since the most recent hard reset. Rising is healthy; a drop to zero means it just happened.";
+        unit = "s";
+        w = 6;
+        h = 4;
+        targets = [
+          (target {
+            expr = ''time() - max by (instance) (node_boot_last_unclean_timestamp_seconds{instance=~"$host"} > 0)'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
+      (ts {
+        title = "Unclean resets over time";
+        description = "Each step is a host coming back from a hard reset. Flat is healthy.";
+        w = 12;
+        h = 4;
+        targets = [
+          (target {
+            expr = ''max by (instance) (node_boot_unclean_total{instance=~"$host"})'';
+            legend = "{{instance}}";
+          })
+        ];
+      })
       (ts {
         title = "CPU core utilisation envelope";
         w = 24;
