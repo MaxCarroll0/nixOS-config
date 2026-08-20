@@ -29,6 +29,9 @@
   # arctic_fan_controller, for the 10-port USB fan controller, is new in 7.2.
   boot.kernelPackages = pkgs-unstable.linuxPackages_testing;
 
+  # Headless, so a running RC kernel is only recoverable via a visible menu.
+  boot.loader.timeout = 5;
+
   boot.extraModulePackages = [ config.boot.kernelPackages.zenpower ];
   boot.kernelModules = [ "zenpower" ];
 

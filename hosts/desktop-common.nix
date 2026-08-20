@@ -31,7 +31,7 @@
     rotateEvery = "6h";
   };
 
-  boot.loader.timeout = 0;
+  boot.loader.timeout = lib.mkDefault 0;
 
   systemd.services.tailscaled.after = lib.mkForce [ "sops-install-secrets.service" ];
 
