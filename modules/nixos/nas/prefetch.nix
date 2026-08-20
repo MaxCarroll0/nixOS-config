@@ -60,6 +60,12 @@ let
         case $path in "$branch"/*) ;; *) continue ;; esac
         case $path in *"/${cfg.checkpoints.snapshotDir or "snapshots"}/"*) continue ;; esac
 
+        comm=''${line#*'"comm":"'}
+        comm=''${comm%%'"'*}
+        case $comm in ${
+          lib.concatStringsSep " | " (map (c: "${c}") pcfg.ignoreCommands)
+        }) continue ;; esac
+
         dir=$(dirname "$path")
         now=$(date +%s)
         prev=''${last_warm[$dir]:-0}
@@ -111,6 +117,19 @@ in
       type = lib.types.ints.positive;
       default = 512 * 1024 * 1024;
       description = "Byte budget per open, so one large folder cannot evict the whole cache.";
+    };
+
+    ignoreCommands = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [
+        "snapraid"
+        "nas-prefetch"
+        "dd"
+        "fatrace"
+        "rsync"
+        "nilfs_cleanerd"
+      ];
+      description = "Bulk readers whose opens must not trigger read-ahead; a scrub would otherwise warm the whole array.";
     };
 
     metricsFile = lib.mkOption {
