@@ -1,0 +1,273 @@
+tempSensorPollingRate: 2s
+tempRollingWindowSize: 12
+
+sensors:
+  - id: cpu
+    hwmon:
+      platform: zenpower
+      index: 1
+
+  - id: vrm
+    hwmon:
+      platform: gigabyte_wmi
+      index: 5
+
+  - id: case
+    cmd:
+      exec: /run/current-system/sw/bin/case-temp-millicelsius
+
+curves:
+  - id: cpu_curve
+    linear:
+      sensor: cpu
+      steps:
+        - 30: 0%
+        - 60: 10%
+        - 70: 50%
+        - 80: 100%
+
+  - id: pump_curve
+    linear:
+      sensor: cpu
+      steps:
+        - 30: 40%
+        - 60: 60%
+        - 80: 100%
+
+  - id: vrm_curve
+    linear:
+      sensor: vrm
+      steps:
+        - 45: 20%
+        - 60: 40%
+        - 75: 70%
+        - 85: 100%
+
+  - id: extract_curve
+    staircase:
+      sensor: case
+      hysteresis:
+        down: 5
+      steps:
+        - 35: 18%
+        - 55: 25%
+        - 70: 40%
+        - 80: 70%
+        - 88: 100%
+
+  - id: intake_bottom_1_curve
+    staircase:
+      sensor: case
+      hysteresis:
+        down: 5
+      steps:
+        - 45: 0%
+        - 48: 20%
+        - 62: 28%
+        - 76: 55%
+        - 88: 100%
+
+  - id: intake_side_1_curve
+    staircase:
+      sensor: case
+      hysteresis:
+        down: 5
+      steps:
+        - 52: 0%
+        - 55: 20%
+        - 68: 28%
+        - 79: 55%
+        - 89: 100%
+
+  - id: intake_bottom_2_curve
+    staircase:
+      sensor: case
+      hysteresis:
+        down: 5
+      steps:
+        - 58: 0%
+        - 61: 20%
+        - 72: 30%
+        - 82: 60%
+        - 90: 100%
+
+  - id: intake_side_2_curve
+    staircase:
+      sensor: case
+      hysteresis:
+        down: 5
+      steps:
+        - 63: 0%
+        - 66: 20%
+        - 76: 32%
+        - 85: 62%
+        - 92: 100%
+
+  - id: intake_bottom_3_curve
+    staircase:
+      sensor: case
+      hysteresis:
+        down: 5
+      steps:
+        - 68: 0%
+        - 71: 22%
+        - 80: 40%
+        - 88: 70%
+        - 94: 100%
+
+  - id: intake_side_3_curve
+    staircase:
+      sensor: case
+      hysteresis:
+        down: 5
+      steps:
+        - 72: 0%
+        - 75: 25%
+        - 83: 45%
+        - 90: 75%
+        - 95: 100%
+
+fans:
+  - id: cpu_fan
+    hwmon:
+      platform: it8792
+      rpmChannel: 1
+      pwmChannel: 1
+    curve: cpu_curve
+    neverStop: false
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 5
+    controlMode:
+      onExit: restore
+    minPwm: 0
+    startPwm: 40
+    maxPwm: 255
+
+  - id: pump
+    hwmon:
+      platform: it8792
+      rpmChannel: 2
+      pwmChannel: 2
+    curve: pump_curve
+    neverStop: true
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 5
+    controlMode:
+      onExit: restore
+    minPwm: 100
+    startPwm: 120
+    maxPwm: 255
+
+  - id: vrm_fan
+    hwmon:
+      platform: arctic
+      rpmChannel: 1
+      pwmChannel: 1
+    curve: vrm_curve
+    neverStop: false
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 8
+    minPwm: 0
+    startPwm: 40
+    maxPwm: 255
+
+  - id: extract
+    hwmon:
+      platform: arctic
+      rpmChannel: 2
+      pwmChannel: 2
+    curve: extract_curve
+    neverStop: true
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 5
+    minPwm: 40
+    startPwm: 60
+    maxPwm: 255
+
+  - id: intake_bottom_1
+    hwmon:
+      platform: arctic
+      rpmChannel: 3
+      pwmChannel: 3
+    curve: intake_bottom_1_curve
+    neverStop: false
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 5
+    minPwm: 0
+    startPwm: 60
+    maxPwm: 255
+
+  - id: intake_bottom_2
+    hwmon:
+      platform: arctic
+      rpmChannel: 4
+      pwmChannel: 4
+    curve: intake_bottom_2_curve
+    neverStop: false
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 5
+    minPwm: 0
+    startPwm: 60
+    maxPwm: 255
+
+  - id: intake_bottom_3
+    hwmon:
+      platform: arctic
+      rpmChannel: 5
+      pwmChannel: 5
+    curve: intake_bottom_3_curve
+    neverStop: false
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 5
+    minPwm: 0
+    startPwm: 60
+    maxPwm: 255
+
+  - id: intake_side_1
+    hwmon:
+      platform: arctic
+      rpmChannel: 6
+      pwmChannel: 6
+    curve: intake_side_1_curve
+    neverStop: false
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 5
+    minPwm: 0
+    startPwm: 60
+    maxPwm: 255
+
+  - id: intake_side_2
+    hwmon:
+      platform: arctic
+      rpmChannel: 7
+      pwmChannel: 7
+    curve: intake_side_2_curve
+    neverStop: false
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 5
+    minPwm: 0
+    startPwm: 60
+    maxPwm: 255
+
+  - id: intake_side_3
+    hwmon:
+      platform: arctic
+      rpmChannel: 8
+      pwmChannel: 8
+    curve: intake_side_3_curve
+    neverStop: false
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 5
+    minPwm: 0
+    startPwm: 60
+    maxPwm: 255

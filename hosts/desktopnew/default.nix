@@ -1,6 +1,42 @@
 # New AMD desktop hardware (Gigabyte board, post 2026-08-11 swap).
 
-{ config, pkgs-unstable, ... }:
+{
+  config,
+  pkgs,
+  pkgs-unstable,
+  ...
+}:
+
+let
+  # Case airflow tracks whichever of GPU, VRM or chipset is hottest; Tdie peaks
+  # at 53 C under full load and would leave the later fan stages dormant.
+  caseTemp = pkgs.writeShellApplication {
+    name = "case-temp-millicelsius";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      max=0
+      for name in /sys/class/hwmon/*/name; do
+        chip=''${name%/name}
+        inputs=()
+        case "$(cat "$name")" in
+          zenpower) inputs=("$chip/temp1_input") ;;
+          amdgpu) inputs=("$chip/temp1_input") ;;
+          gigabyte_wmi) inputs=("$chip/temp2_input" "$chip/temp5_input") ;;
+          *) continue ;;
+        esac
+        for input in "''${inputs[@]}"; do
+          if [ -r "$input" ]; then
+            value=$(cat "$input")
+            if [ "$value" -gt "$max" ]; then
+              max=$value
+            fi
+          fi
+        done
+      done
+      echo "$max"
+    '';
+  };
+in
 
 {
   imports = [
@@ -26,11 +62,10 @@
     configFile = ./fan2go.yaml;
   };
 
+  environment.systemPackages = [ caseTemp ];
+
   # arctic_fan_controller, for the 10-port USB fan controller, is new in 7.2.
   boot.kernelPackages = pkgs-unstable.linuxPackages_testing;
-
-  # Headless, so a running RC kernel is only recoverable via a visible menu.
-  boot.loader.timeout = 5;
 
   boot.extraModulePackages = [ config.boot.kernelPackages.zenpower ];
   boot.kernelModules = [ "zenpower" ];
