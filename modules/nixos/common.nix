@@ -168,7 +168,10 @@ let
 in
 
 {
-  imports = [ ./nix-observer.nix ];
+  imports = [
+    ./nix-observer.nix
+    ./unclean-boot.nix
+  ];
 
   options.local.users.sopsPasswords = lib.mkOption {
     type = lib.types.attrsOf lib.types.str;

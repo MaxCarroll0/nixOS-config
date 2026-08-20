@@ -1331,6 +1331,14 @@ in
         summary = "{{ $labels.branch }} is {{ $value | humanizePercentage }} full. A full NILFS2 stops accepting writes; clean versions or add capacity.";
       })
       (threshold {
+        uid = "unclean-boot";
+        title = "Host reset uncleanly";
+        expr = "max by (instance) (node_boot_was_unclean)";
+        value = 0;
+        for' = "0s";
+        summary = "{{ $labels.instance }} came up after a hard reset or power loss, not a clean shutdown. Check power delivery; the last healthy sample before the cut is in `below`.";
+      })
+      (threshold {
         uid = "nas-array-unmounted";
         title = "NAS array not mounted";
         expr = "absent(nas_branch_used_ratio)";
