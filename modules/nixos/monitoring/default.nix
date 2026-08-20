@@ -636,18 +636,6 @@ in
         settings.live.max_connections = 0;
         settings."auth.anonymous".enabled = false;
 
-        # The header is trustworthy only because nginx overwrites it from the tailscale
-        # identity and refuses requests that arrive without one.
-        settings."auth.proxy" = {
-          enabled = true;
-          header_name = "X-WEBAUTH-USER";
-          header_property = "username";
-          headers = "Name:X-WEBAUTH-NAME";
-          auto_sign_up = true;
-          enable_login_token = true;
-          whitelist = "127.0.0.1";
-        };
-
         provision.datasources.settings = {
           apiVersion = 1;
           deleteDatasources = [

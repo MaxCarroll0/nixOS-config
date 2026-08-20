@@ -39,45 +39,18 @@
     "pi.grafana"
   ];
 
-  # tailscale serve terminates inside tailscaled and is the only thing that can prove who the
-  # caller is, so nginx binds to loopback and refuses anything arriving without that identity.
+  # Grafana itself binds to loopback and no longer allows anonymous access, so reaching this
+  # vhost gets a login form rather than an admin session. Per-user Tailscale identity via
+  # auth.proxy needs `tailscale serve`, which needs HTTPS enabled for the tailnet.
   services.nginx = {
     enable = true;
     recommendedProxySettings = true;
-    virtualHosts.observatory = {
-      listen = [
-        {
-          addr = "127.0.0.1";
-          port = 8081;
-        }
-      ];
-      locations."/" = {
-        proxyPass = "http://127.0.0.1:3000";
-        proxyWebsockets = true;
-        extraConfig = ''
-          if ($http_tailscale_user_login = "") { return 403 "no tailscale identity\n"; }
-          proxy_set_header X-WEBAUTH-USER $http_tailscale_user_login;
-          proxy_set_header X-WEBAUTH-NAME $http_tailscale_user_name;
-        '';
-      };
+    virtualHosts.observatory.locations."/" = {
+      proxyPass = "http://127.0.0.1:3000";
+      proxyWebsockets = true;
     };
   };
-
-  systemd.services.tailscale-serve-grafana = {
-    description = "Expose Grafana over tailscale serve with user identity";
-    after = [
-      "tailscaled.service"
-      "nginx.service"
-    ];
-    wants = [ "tailscaled.service" ];
-    wantedBy = [ "multi-user.target" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      ExecStart = "${pkgs.tailscale}/bin/tailscale serve --bg --set-path / http://127.0.0.1:8081";
-      ExecStop = "${pkgs.tailscale}/bin/tailscale serve --https=443 off";
-    };
-  };
+  networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 80 ];
 
   swapDevices = lib.mkForce [
     {
