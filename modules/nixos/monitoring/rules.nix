@@ -1331,6 +1331,14 @@ in
         summary = "{{ $labels.branch }} is {{ $value | humanizePercentage }} full. A full NILFS2 stops accepting writes; clean versions or add capacity.";
       })
       (threshold {
+        uid = "nas-array-unmounted";
+        title = "NAS array not mounted";
+        expr = "absent(nas_branch_used_ratio)";
+        value = 0;
+        for' = "30m";
+        summary = "No NAS branch is reporting. The array is locked or unmounted, so nothing is being versioned or backed up.";
+      })
+      (threshold {
         uid = "nas-metrics-stale";
         title = "NAS checkpoint metrics stale";
         expr = "time() - max(nas_metrics_timestamp_seconds)";

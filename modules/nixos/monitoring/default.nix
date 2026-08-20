@@ -600,6 +600,7 @@ in
 
     (lib.mkIf cfg.grafana.enable {
       sops.secrets."grafana-secret-key".owner = "grafana";
+      sops.secrets."grafana-admin-password".owner = "grafana";
       systemd.services.grafana = {
         after = [ "sops-install-secrets.service" ];
         wants = [ "sops-install-secrets.service" ];
@@ -623,6 +624,7 @@ in
         };
         settings.dashboards.default_home_dashboard_path = "${dashboardDir "overview"}/home.json";
         settings.security.secret_key = "$__file{${config.sops.secrets."grafana-secret-key".path}}";
+        settings.security.admin_password = "$__file{${config.sops.secrets."grafana-admin-password".path}}";
         settings."unified_alerting.state_history" = {
           enabled = true;
           backend = "annotations";
