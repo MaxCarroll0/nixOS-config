@@ -56,6 +56,8 @@
 
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../keys/max.pub ];
 
+  users.users.max.linger = true;
+
   local.wifi = {
     ssid = "Gigaclear_FA8E";
     pskSecret = "wifi-psk";

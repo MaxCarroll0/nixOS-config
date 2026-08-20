@@ -16,6 +16,7 @@
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/server/build-host.nix
     ../../modules/nixos/pam-ssh-agent-sudo.nix
+    ../../modules/nixos/nas/accounts.nix
     ../../modules/nixos/nas/unlock.nix
   ];
 
@@ -112,6 +113,8 @@
     timeoutSeconds = 90;
   };
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
+
+  users.users.max.linger = true;
 
   boot.loader.grub.extraEntries = /* bash */ ''
     menuentry "Ubuntu iso" {
