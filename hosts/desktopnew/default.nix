@@ -1,6 +1,6 @@
 # New AMD desktop hardware (Gigabyte board, post 2026-08-11 swap).
 
-{ config, ... }:
+{ config, pkgs-unstable, ... }:
 
 {
   imports = [
@@ -25,6 +25,9 @@
     enable = true;
     configFile = ./fan2go.yaml;
   };
+
+  # arctic_fan_controller, for the 10-port USB fan controller, is new in 7.2.
+  boot.kernelPackages = pkgs-unstable.linuxPackages_testing;
 
   boot.extraModulePackages = [ config.boot.kernelPackages.zenpower ];
   boot.kernelModules = [ "zenpower" ];
