@@ -1429,3 +1429,34 @@ Stated plainly so none of them is a surprise later:
 6. This NAS is not a backup, and has no offsite copy until Stage 8.
 7. Losing the whole pi loses the data's confidentiality protection only against drive-level
    theft, not against an attacker who also has the laptop and tailnet access.
+
+## 18. Power: three hard resets in one night
+
+On 2026-08-19/20 the pi hard-reset three times: 20:49, 00:38 and 02:54. Each was abrupt, with the
+journal ending mid-activity and no shutdown sequence.
+
+**It is not software.** `below` samples every 5s and shows the machine healthy in the sample before
+each death: ~300 MB free, zero swap, zero blocked processes, 2-4 running. A watchdog timeout would
+have left a trail of degraded samples over its 60s window; there is none. `throttled=0x0` and
+EXT5V reads 5.04 V at idle, which does not rule out a transient sag under load.
+
+**The third reset happened while the full scrub was reading all three disks**, which is the
+heaviest current draw this hardware ever sees: a Pi 5 plus three HDDs through a SATA HAT. That
+correlation is the strongest evidence available and points at power delivery.
+
+Consequences observed, all recovered cleanly:
+
+- The array stays locked after a reset, by design, so nothing mounts unattended and nothing was
+  damaged. 435 GB intact each time.
+- A reset mid-deploy leaves deploy-rs stuck at `Activating profile`; the generation still advances.
+- A scrub interrupted by the reset reports `Result=success` having scrubbed nothing, because the
+  array vanished underneath it. `snapraid status` reporting all content files "on the same disk" is
+  the tell that the branches are unmounted.
+
+`modules/nixos/unclean-boot.nix` now records this without help: a marker written on clean shutdown,
+absent after a hard reset. It caught the 02:54 event unaided and exported
+`node_boot_unclean_total 4` with a journal warning, surfaced on the System dashboard and alerting
+at `for: 0s`.
+
+**Do not re-run a full scrub until the power question is settled**; it is the most demanding
+workload available and has now been adjacent to a reset twice.
