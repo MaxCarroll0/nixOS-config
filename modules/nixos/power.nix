@@ -221,11 +221,9 @@ let
         exit 0
       fi
 
-      for pid in $(pgrep -f "[.]tailscaled-wrapped be-child ssh" || true); do
-        if [ "$(ps -o etimes= -p "$pid" 2>/dev/null || echo 0)" -ge 60 ]; then
-          exit 0
-        fi
-      done
+      if pgrep -f "[.]tailscaled-wrapped be-child ssh" >/dev/null 2>&1; then
+        exit 0
+      fi
 
       threshold=$(( $(date +%s) - ${toString (cfg.idle.autosuspend.idleMinutes * 60)} ))
       for pty in /dev/pts/*; do

@@ -16,7 +16,7 @@ let
     name = "unclean-boot-record";
     runtimeInputs = [
       pkgs.coreutils
-      pkgs.systemd
+      pkgs.util-linux
       pkgs.gawk
     ];
     text = ''
