@@ -125,9 +125,13 @@ in
         name = "nas-prefetch-${name}";
         value = {
           description = "Warm folders on ${name} when a file is opened";
-          wantedBy = [ (mountUnit name) ];
+          wantedBy = [
+            (mountUnit name)
+            "multi-user.target"
+          ];
           partOf = [ (mountUnit name) ];
           after = [ (mountUnit name) ];
+          unitConfig.ConditionPathIsMountPoint = "${scfg.diskRoot}/${name}";
           serviceConfig = {
             ExecStart = "${lib.getExe warm} ${scfg.diskRoot}/${name}";
             WorkingDirectory = "${scfg.diskRoot}/${name}";

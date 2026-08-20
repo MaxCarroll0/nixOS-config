@@ -327,7 +327,10 @@ in
         name: _:
         lib.nameValuePair "nas-versions-watch-${name}" {
           description = "Record writes on ${name} for version history";
-          wantedBy = [ "${mountUnit name}" ];
+          wantedBy = [
+            "${mountUnit name}"
+            "multi-user.target"
+          ];
           partOf = [ "${mountUnit name}" ];
           after = [ "${mountUnit name}" ];
           serviceConfig = {
