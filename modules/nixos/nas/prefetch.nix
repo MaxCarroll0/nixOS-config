@@ -65,6 +65,7 @@ let
         prev=''${last_warm[$dir]:-0}
         if [ $((now - prev)) -lt ${toString pcfg.cooldownSeconds} ]; then
           skipped=$((skipped + 1))
+          if [ $((skipped % 50)) -eq 0 ]; then publish; fi
           continue
         fi
         last_warm[$dir]=$now

@@ -695,6 +695,27 @@ in
         };
       };
 
+      # admin_password only applies when grafana first creates its database, so an existing
+      # install keeps the old password and the break-glass path silently does not work.
+      systemd.services.grafana-admin-password = {
+        description = "Reset the Grafana admin password from sops";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "grafana.service" ];
+        wants = [ "grafana.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          User = "grafana";
+          StateDirectory = "grafana";
+          WorkingDirectory = "/var/lib/grafana";
+          ExecStart = pkgs.writeShellScript "grafana-admin-password" ''
+            exec ${config.services.grafana.package}/bin/grafana cli \
+              --homepath ${config.services.grafana.package}/share/grafana \
+              --configOverrides "cfg:default.paths.data=/var/lib/grafana" \
+              admin reset-admin-password "$(cat ${config.sops.secrets."grafana-admin-password".path})"
+          '';
+        };
+      };
+
       systemd.services.grafana-alert-duration-tracker = {
         description = "Track Grafana alert condition start times";
         after = [
