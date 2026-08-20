@@ -39,17 +39,45 @@
     "pi.grafana"
   ];
 
-  # Grafana remains on its private service port. This tailnet-only proxy gives
-  # it a memorable, port-free browser address: http://observatory.
+  # tailscale serve terminates inside tailscaled and is the only thing that can prove who the
+  # caller is, so nginx binds to loopback and refuses anything arriving without that identity.
   services.nginx = {
     enable = true;
     recommendedProxySettings = true;
-    virtualHosts.observatory.locations."/" = {
-      proxyPass = "http://127.0.0.1:3000";
-      proxyWebsockets = true;
+    virtualHosts.observatory = {
+      listen = [
+        {
+          addr = "127.0.0.1";
+          port = 8081;
+        }
+      ];
+      locations."/" = {
+        proxyPass = "http://127.0.0.1:3000";
+        proxyWebsockets = true;
+        extraConfig = ''
+          if ($http_tailscale_user_login = "") { return 403 "no tailscale identity\n"; }
+          proxy_set_header X-WEBAUTH-USER $http_tailscale_user_login;
+          proxy_set_header X-WEBAUTH-NAME $http_tailscale_user_name;
+        '';
+      };
     };
   };
-  networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 80 ];
+
+  systemd.services.tailscale-serve-grafana = {
+    description = "Expose Grafana over tailscale serve with user identity";
+    after = [
+      "tailscaled.service"
+      "nginx.service"
+    ];
+    wants = [ "tailscaled.service" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${pkgs.tailscale}/bin/tailscale serve --bg --set-path / http://127.0.0.1:8081";
+      ExecStop = "${pkgs.tailscale}/bin/tailscale serve --https=443 off";
+    };
+  };
 
   swapDevices = lib.mkForce [
     {

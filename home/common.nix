@@ -314,6 +314,16 @@ in
     };
   };
 
+  systemd.user.services.claude-swap-auto = {
+    Unit.Description = "claude-swap account auto-switching";
+    Install.WantedBy = [ "default.target" ];
+    Service = {
+      ExecStart = "${claude-swap}/bin/claude-swap auto --model all";
+      Restart = "always";
+      RestartSec = 30;
+    };
+  };
+
   # Writable copy (not a store symlink) so curd can rewrite it at runtime;
   # replaced on every switch so the repo file stays the source of truth.
   home.activation.curdConf = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''

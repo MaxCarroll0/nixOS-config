@@ -1,0 +1,564 @@
+Identity added: /home/max/.ssh/id_ed25519 (max@nixos)
+@nix {"action":"msg","level":4,"msg":"evaluating file '«nix-internal»/derivation-internal.nix'"}
+@nix {"action":"msg","level":1,"msg":"\u001b[35;1mwarning:\u001b[0m Git tree '/home/max/.config/nix' is dirty"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '/home/max/.config/nix/flake.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '/home/max/.config/nix/flake.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:hyprwm/hyprland-plugins/81516add9b432b6ffc9f0906b92c9302c479c236?narHash=sha256-dLAwup4XzcAo4xo%2BBcVcNXNMXUnoHsY4X3HrZ17jgPs%3D»/flake.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:hyprwm/hyprland-plugins/81516add9b432b6ffc9f0906b92c9302c479c236?narHash=sha256-dLAwup4XzcAo4xo%2BBcVcNXNMXUnoHsY4X3HrZ17jgPs%3D»/flake.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«flakes-internal»/call-flake.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:serokell/deploy-rs/f6f2359a6cb7e3c51ea673bcb39933ac2622350d?narHash=sha256-1JTy9/LyITSBP1a4WZ9tmOv2yDh9OTbA3YUJbQHiMYc%3D»/flake.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:numtide/flake-utils/11707dc2f618dd54ca8739b309ec4fc024de578b?narHash=sha256-l0KFg5HjrsfsO/JpG%2Br7fRrqm12kzFHyUHqHCVpMMbI%3D»/flake.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:numtide/flake-utils/11707dc2f618dd54ca8739b309ec4fc024de578b?narHash=sha256-l0KFg5HjrsfsO/JpG%2Br7fRrqm12kzFHyUHqHCVpMMbI%3D»/lib.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:nix-systems/default/da67096a3b9bf56a91d16901293e51ba5b49a27e?narHash=sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768%3D»/flake.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:nix-systems/default/da67096a3b9bf56a91d16901293e51ba5b49a27e?narHash=sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768%3D»/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/flake.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/minfeatures.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/impure.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/trivial.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/lists.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/systems/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/attrsets.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/systems/architectures.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/systems/inspect.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/systems/parse.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/strings.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/types.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/modules.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/config.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/options.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/debug.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/stdenv/generic/problems.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/stdenv/booter.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/stdenv/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/systems/platforms.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/stdenv/linux/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/stdenv/linux/stage0.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/customisation.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/bash/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/bash/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/bash/2.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/stage0-posix/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/stage0-posix/kaem/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/utils.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/stage.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/fixed-points.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/variants.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/aliases.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/asserts.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/all-packages.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/by-name-overlay.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/splice.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/trivial-builders/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/stdenv/adapters.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/stdenv/generic/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/bintools-wrapper/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/binutils/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/coreutils/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnugrep/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/stdenv/generic/make-derivation.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/stdenv/generic/check-meta.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/binutils/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gcc/glibc.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/tools/misc/binutils/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/cc-wrapper/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/glibc/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/licenses/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/licenses/helpers.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/licenses/operators.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/licenses/licenses.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/systems/doubles.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gcc/latest.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/binutils/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnumake/musl.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnused/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gawk/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/diffutils/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/findutils/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/python/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/bison/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnutar/latest.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/xz/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/coreutils/musl.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gcc/10.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnugrep/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gzip/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/bzip2/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gcc/4.6.cxx.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gcc/4.6.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnupatch/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnutar/musl.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/tinycc/musl.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/coreutils/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/stage0-posix/mescc-tools-extra/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/bash/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/tinycc/mes.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/tinycc/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnumake/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/stage0-posix/mescc-tools/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/stage0-posix/platforms.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/stage0-posix/bootstrap-sources.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/stage0-posix/mescc-tools-boot.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/stage0-posix/hex0.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '<nix/fetchurl.nix>'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/tinycc/bootstrappable.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/mes/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/fetchurl/boot.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/fetchurl/mirrors.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/mes/nyacc.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/mes/libc.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/ln-boot/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnumake/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/coreutils/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnutar/mes.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnutar/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnused/mes.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnused/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/musl/tcc.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/musl/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gawk/mes.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gawk/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/musl/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/zlib/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/versions.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnum4/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/linux-headers/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/lib/cmake.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/lib/meson.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/bzip2/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/diffutils/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/findutils/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gawk/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnumake/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnupatch/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnused/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gnutar/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/gzip/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/patchelf/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/xz/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/tools/misc/patchelf/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/all.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/versions.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/meta.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/common/libgcc.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/common/builder.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/common/checksum.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/common/meta.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/glibc/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/glibc/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/kernel-headers/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/gmp/6.x.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/isl/0.20.0.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/isl/generic.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/libmpc/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/mp/mpfr/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/zlib/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/gettext/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/gn/gnu-config/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/shells/bash/5.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/shells/bash/bash-5.3-patches.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/bi/bison/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/filesystem.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/gn/gnum4/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/perl/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/perl/interpreter.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/libxcrypt/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ex/expand-response-params/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/common/extra-target-flags.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/common/dependencies.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/common/configure-flags.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/common/platform-flags.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/tools/misc/texinfo/packages.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/tools/misc/texinfo/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/wh/which/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/tools/misc/autoconf/2.69.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/patches/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/nuke-references/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/replace-vars/replace-vars-with.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/common/pre-configure.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/gcc/common/strip-attributes.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/python/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/python/cpython/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/python/passthrufun.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/python/setup-hook.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/replace-vars/replace-vars.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/libidn2/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/libunistring/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/misc/coreutils/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/acl/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/attr/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/text/gnugrep/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/rust/1_95.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/rust/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/rust/make-rust-platform.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/rust/build-rust-package/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/rust/rustc-wrapper/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/rust/rustc.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/rust/bootstrap.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/rust/binary.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/compression/xz/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/rust/import-cargo-lock.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/fetchurl/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/deprecated/misc.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/fetchers.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/compression/gzip/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/compression/bzip2/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/tools/misc/autoconf/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/tools/misc/automake/automake-1.18.x.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/tools/misc/libtool/libtool2.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/misc/file/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/text/diffutils/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/misc/findutils/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/text/gawk/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/gn/gnumake/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/pkg-config-wrapper/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/pk/pkg-config-unwrapped/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ve/versionCheckHook/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/text/gnused/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/gn/gnutar/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/pcre2/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/glibc/locales.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/text/gnupatch/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ed/ed/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/lz/lzip/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/heirloom/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/heirloom-devtools/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/linux/minimal-bootstrap/musl/static.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/stdenv/generic/common-path.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/cu/curlMinimal/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/openssl/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ma/makeBinaryWrapper/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/libssh2/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/kr/krb5/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ke/keyutils/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/by/byacc/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ng/nghttp2/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ca/cargo-auditable/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ca/cargo-auditable/builder.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/rust/cargo-auditable-cargo-wrapper.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/rust/hooks/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/rust/cargo.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/br/brotli/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/cm/cmake/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ex/expat/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/libarchive/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/libxml2/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/libxml2/common.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/libuv/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/rh/rhash/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/libedit/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/ncurses/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/c-/c-ares/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/libev/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/fetchpatch/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/text/patchutils/0.3.3.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/text/patchutils/generic.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/in/installShellFiles/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/cu/cunit/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/tz/tzdata/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/lz/lzo/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/compression/zstd/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/fetchgithub/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/fetchzip/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/lib/sources.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/fetchgit/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/fetchgitlab/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/un/unzip/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/libidn2/no-bootstrap-reference.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ng/nghttp3/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/ngtcp2/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/libpsl/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/libxslt/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/pu/publicsuffix-list/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/libffiReal/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ut/util-linux/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/linux-pam/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/sqlite/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/mp/mpdecimal/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/bl/bluez-headers/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/gd/gdbm/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/readline/8.3.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/de/dejagnu/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/tcl-packages.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/tcl-modules/by-name/ex/expect/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/tcl/8.6.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/tcl/generic.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/tcl/mk-tcl-derivation.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/libcap_ng/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/sqlite/archive-version.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/sw/swig/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/tools/misc/automake/automake-1.16.x.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/libraries/readline/readline-8.3-patches.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/au/autoconf-archive/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ma/mailcap/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/data/sgml+xml/stylesheets/xslt/docbook-xsl/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/data/sgml+xml/schemas/xml-dtd/docbook/4.3.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/data/sgml+xml/schemas/xml-dtd/docbook/generic.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/gt/gtk-doc/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/python-packages.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/python/hooks/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/python-aliases.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/python/python-packages-base.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/python/mk-python-derivation.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pygments/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/lxml/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/fetchpypi/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/python/wrap-python.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/hatchling/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/testers/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/os-specific/windows/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/build/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/flit-core/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/wheel/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/bootstrap/build/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/bootstrap/flit-core/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/flit/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/bootstrap/installer/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/installer/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pyproject-hooks/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/packaging/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/tomli/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/bootstrap/packaging/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/editables/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pathspec/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pluggy/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/trove-classifiers/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/setuptools-scm/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/setuptools/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/typing-extensions/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/calver/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/cython/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/me/meson/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ni/ninja/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/re/re2c/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/as/asciidoc/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/data/sgml+xml/schemas/xml-dtd/docbook/4.5.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pytest/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pytest-mock/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/iniconfig/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pytest-asyncio/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/au/auto-patchelf/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/python/with-packages.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/python/wrapper.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/buildenv/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pyelftools/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/rust/fetch-cargo-vendor.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/writers/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/writers/data.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/writers/scripts.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/flake8/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/mccabe/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pycodestyle/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pyflakes/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/da/dash/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/interpreters/python/pypy/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/python2-packages.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/requests/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/tomli-w/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pysocks/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/certifi/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/charset-normalizer/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/idna/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/urllib3/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ca/cacert/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/buildcatrust/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/mypy/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/librt/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/mypy/extensions.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/types-psutil/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/types-setuptools/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/attrs/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/filelock/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pytest-xdist/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/psutil/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/hatch-vcs/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pytest-timeout/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/gi/git/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/zl/zlib-ng/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/gt/gtest/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/de/deterministic-uname/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/top-level/perl-packages.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ge/getopt/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pexpect/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/ptyprocess/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/execnet/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/gevent/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/cffi/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pycparser/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/importlib-metadata/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/zope-event/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/zope-interface/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/greenlet/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/toml/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/zipp/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/python-modules/pytest-instafail/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/rust/lib/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/ru/rust-jemalloc-sys/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/je/jemalloc/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/llvm/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/llvm/common/common-let.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/llvm/common/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/llvm/common/llvm/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/by-name/li/libpfm/package.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/tools/misc/binutils/libbfd.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/llvm/common/tblgen.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/development/compilers/llvm/common/patches.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/build-support/remove-references-to/default.nix'"}
+@nix {"action":"msg","level":4,"msg":"evaluating file '«github:NixOS/nixpkgs/02e08985a27c65ffd33d434eeb2e660a2e4dc84d?narHash=sha256-QvnceIGTBeDvDd9oCn%2BGvdsnkquliuwbVgpiRH68qaQ%3D»/pkgs/tools/package-management/nix-prefetch-scripts/default.nix'"}
+@nix {"action":"start","id":13096063955107840,"level":5,"parent":0,"text":"copying '«github:serokell/deploy-rs/f6f2359a6cb7e3c51ea673bcb39933ac2622350d?narHash=sha256-1JTy9/LyITSBP1a4WZ9tmOv2yDh9OTbA3YUJbQHiMYc%3D»/' to the store","type":0}
+@nix {"action":"stop","id":13096063955107840}
+@nix {"action":"start","id":13096141264519168,"level":6,"parent":0,"text":"querying info about missing paths","type":0}
+@nix {"action":"stop","id":13096141264519168}
+@nix {"action":"start","id":13096141264519169,"level":0,"parent":0,"text":"","type":102}
+@nix {"action":"start","id":13096141264519170,"level":0,"parent":0,"text":"","type":104}
+@nix {"action":"start","id":13096141264519171,"level":0,"parent":0,"text":"","type":103}
+@nix {"action":"result","fields":[0,0,0,0],"id":13096141264519170,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":13096141264519171,"type":105}
+@nix {"action":"result","fields":[101,0],"id":13096141264519169,"type":106}
+@nix {"action":"result","fields":[100,0],"id":13096141264519169,"type":106}
+@nix {"action":"start","id":13096141264519172,"level":6,"parent":0,"text":"querying info about missing paths","type":0}
+@nix {"action":"stop","id":13096141264519172}
+@nix {"action":"result","fields":[0,1,0,0],"id":13096141264519170,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":13096141264519171,"type":105}
+@nix {"action":"result","fields":[101,0],"id":13096141264519169,"type":106}
+@nix {"action":"result","fields":[100,0],"id":13096141264519169,"type":106}
+@nix {"action":"result","fields":[0,0,0,0],"id":13096141264519170,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":13096141264519171,"type":105}
+@nix {"action":"result","fields":[101,0],"id":13096141264519169,"type":106}
+@nix {"action":"result","fields":[100,0],"id":13096141264519169,"type":106}
+@nix {"action":"stop","id":13096141264519171}
+@nix {"action":"stop","id":13096141264519170}
+@nix {"action":"stop","id":13096141264519169}
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Evaluating flake in /home/max/.config/nix
+warning: Git tree '/home/max/.config/nix' is dirty
+evaluation warning: The default value of `wayland.windowManager.hyprland.configType` has changed from `"hyprlang"` to `"lua"`.
+                    You are currently using the legacy default (`"hyprlang"`) because `home.stateVersion` is less than "26.05".
+                    To silence this warning and keep legacy behavior, set:
+                      wayland.windowManager.hyprland.configType = "hyprlang";
+                    To adopt the new default behavior, set:
+                      wayland.windowManager.hyprland.configType = "lua";
+trace: warning: You have enabled hyprland.systemd.enable or listed plugins in hyprland.plugins but do not have any configuration in hyprland.settings, hyprland.extraConfig or hyprland.submaps. This is almost certainly a mistake.
+evaluation warning: nixfmt-rfc-style is now the same as pkgs.nixfmt which should be used instead.
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] The following profiles are going to be deployed:
+[desktopnew.system]
+user = "root"
+ssh_user = "max"
+path = "/nix/store/v1ri4imh579zqpmsikc9cdjrj7jiik4w-activatable-nixos-system-desktopnew-26.05.20260814.02e0898"
+hostname = "100.106.140.88"
+ssh_opts = ["-A", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
+
+[desktopnew.home]
+user = "max"
+ssh_user = "max"
+path = "/nix/store/7bilr5xaqpls2y4wgfcrjf8qr64fdcp4-activatable-home-manager-generation"
+hostname = "100.106.140.88"
+ssh_opts = ["-A", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
+
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Building profile `system` for node `desktopnew`
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Building profile `system` for node `desktopnew`
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Building profile `home` for node `desktopnew`
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Copying profile `system` to node `desktopnew`
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Building profile `home` for node `desktopnew`
+Warning: Permanently added '100.106.140.88' (ED25519) to the list of known hosts.
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Copying profile `home` to node `desktopnew`
+copying 24 paths...
+copying path '/nix/store/5abmb0gq5n4vj27glnxs14fmm9vvghns-nixos-system-desktopnew-26.05.20260814.02e0898-activate-rs' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/2jqhx9m6mp3l815ac9rn3s7ifs4m4lmi-session-activity' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/nqn0ahpza5p4l4hqwhkgbs5yan618xbn-unit-script-deep-sleep-escalate-start' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/537ady39v2xxasg6kwxxm7k26rv5y1rc-hosts' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/3jvlca429srrdpl8s969hnncrhgwgyn5-system-path' to 'ssh://max@100.106.140.88'...
+Warning: Permanently added '100.106.140.88' (ED25519) to the list of known hosts.
+copying 0 paths...
+copying path '/nix/store/b3mycfv5vxg6lxaqm6gy6wnfvif457cn-nftables-rules' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/ml73y9hcjr3hsrhsh1qilazhcrzvybbd-unit-deep-sleep-escalate.service' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/93l2hlj98916i7ylna92zl18sj0v2wag-X-Restart-Triggers-polkit' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/0css36vn2s3h1yjm2xhpvsgi6vmixcw2-unit-accounts-daemon.service' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/nh4hr5ypgz3iw0pfmcqyba5dxkbwvmhn-dbus-1' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/rsj8vzlxl3wlg1ziyzxfwha3c2y8w6rg-autosuspend.conf' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/wwblvjhla89nfcj9nkn4wv5jpqz3nxkk-etc-hostname' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/7a5j6x9nnl48phbba0abd69mfvkk810w-unit-nftables.service' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/qc15z25jplc5r3dbgvd8q9ljwy02mz8x-nixos-system-desktopnew-26.05.20260814.02e0898-activate-path' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/b102w2zq8jp6mcq0bbrzd8f7n58n5nb7-unit-polkit.service' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/8f9bwar6gc13wqbhq6dzynv3wwfikrxa-X-Restart-Triggers-dbus-broker' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/lm79ac3fivmmqjv8j6g92h4l34w14w8s-unit-autosuspend.service' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/0r0z4j4mv4fvc0ipd4gldc42gc8fy04v-unit-dbus-broker.service' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/qlbgy9i9yjp4kb949ls3g4b7amk55k8z-unit-dbus-broker.service' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/sbld2x7czqj43y6zn3zb43yyc3r59dkc-system-units' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/hr56vd4akcwzsjjc0ivj76xxc18havn2-user-units' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/2n7si0lrc7p9vgcsxa7xyywiyq3f3iba-etc' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/39yp5zd7gq05vxszbz2avnznhp7xr2wh-nixos-system-desktopnew-26.05.20260814.02e0898' to 'ssh://max@100.106.140.88'...
+copying path '/nix/store/v1ri4imh579zqpmsikc9cdjrj7jiik4w-activatable-nixos-system-desktopnew-26.05.20260814.02e0898' to 'ssh://max@100.106.140.88'...
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Activating profile `system` for node `desktopnew`
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Creating activation waiter
+Warning: Permanently added '100.106.140.88' (ED25519) to the list of known hosts.
+Warning: Permanently added '100.106.140.88' (ED25519) to the list of known hosts.
+⭐ ℹ️ [activate] [[38;5;51mINFO[0m] Activating profile
+👀 ℹ️ [wait] [[38;5;51mINFO[0m] Waiting for confirmation event...
+[?25l[?2026h[1m⏱ 0s[0m[?2026l[?2026h[1G[2K[1m[32mFinished at 01:05:44 after 0s[0m[0m[?2026l[?25h
+Checking switch inhibitors... done
+updating GRUB 2 menu...
+stopping the following units: accounts-daemon.service, autosuspend.service
+activating the configuration...
+sops-install-secrets: Imported /etc/ssh/ssh_host_ed25519_key as age key with fingerprint age1dsvv2wangclezl745vqlvvmcggaszc4fcxu84ks7qphm5tupq98srdtgx8
+setting up /etc...
+sops-install-secrets: Imported /etc/ssh/ssh_host_ed25519_key as age key with fingerprint age1dsvv2wangclezl745vqlvvmcggaszc4fcxu84ks7qphm5tupq98srdtgx8
+reloading user units for max...
+reloading the following user units: dbus-broker.service
+restarting the following user units: nixos-activation.service
+restarting sysinit-reactivation.target
+reloading the following units: dbus-broker.service, nftables.service
+restarting the following units: polkit.service
+starting the following units: accounts-daemon.service, autosuspend.service
+⭐ ℹ️ [activate] [[38;5;51mINFO[0m] Activation succeeded!
+⭐ ℹ️ [activate] [[38;5;51mINFO[0m] Magic rollback is enabled, setting up confirmation hook...
+👀 ℹ️ [wait] [[38;5;51mINFO[0m] Found canary file, done waiting!
+⭐ ℹ️ [activate] [[38;5;51mINFO[0m] Waiting for confirmation event...
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Success activating, attempting to confirm activation
+Warning: Permanently added '100.106.140.88' (ED25519) to the list of known hosts.
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Deployment confirmed.
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Activating profile `home` for node `desktopnew`
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Creating activation waiter
+Warning: Permanently added '100.106.140.88' (ED25519) to the list of known hosts.
+Warning: Permanently added '100.106.140.88' (ED25519) to the list of known hosts.
+⭐ ℹ️ [activate] [[38;5;51mINFO[0m] Activating profile
+👀 ℹ️ [wait] [[38;5;51mINFO[0m] Waiting for confirmation event...
+[?25l[?2026h[1m[32mFinished at 01:06:05 after 0s[0m[0m[?2026l[?25h
+Starting Home Manager activation
+[?25l[?2026h[1m[32mFinished at 01:06:05 after 0s[0m[0m[?2026l[?25h
+Activating checkFilesChanged
+Activating checkLinkTargets
+Activating writeBoundary
+No change so reusing latest profile generation
+Activating claudeSettings
+Activating curdConf
+Activating exercismConf
+Activating installPackages
+
+You have configured the Exercism command-line client:
+
+Config dir:                       /home/max/.config/exercism
+Token:         (-t, --token)      85968bb0-4e7b-4625-bf17-10267b54c618
+Workspace:     (-w, --workspace)  /home/max/exercism
+API Base URL:  (-a, --api)        https://api.exercism.org/v1
+
+[?25l[?2026hreplacing old 'home-manager-path'
+installing 'home-manager-path'
+[1m[32mFinished at 01:06:06 after 0s[0m[0m[?2026l[?25h
+Activating migrateGhAccounts
+Activating linkGeneration
+Cleaning up orphan links from /home/max
+Creating home file links in /home/max
+Activating onFilesChange
+Activating reloadSystemd
+⭐ ℹ️ [activate] [[38;5;51mINFO[0m] Activation succeeded!
+⭐ ℹ️ [activate] [[38;5;51mINFO[0m] Magic rollback is enabled, setting up confirmation hook...
+👀 ℹ️ [wait] [[38;5;51mINFO[0m] Found canary file, done waiting!
+⭐ ℹ️ [activate] [[38;5;51mINFO[0m] Waiting for confirmation event...
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Success activating, attempting to confirm activation
+Warning: Permanently added '100.106.140.88' (ED25519) to the list of known hosts.
+🚀 ℹ️ [deploy] [[38;5;51mINFO[0m] Deployment confirmed.
+EXIT=0

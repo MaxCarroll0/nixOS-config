@@ -611,15 +611,13 @@ in
         serviceConfig.MemoryHigh = "224M";
       };
 
-      networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 3000 ];
-
       services.grafana = {
         enable = true;
         declarativePlugins = [
           pkgs.grafanaPlugins.grafana-metricsdrilldown-app
         ];
         settings.server = {
-          http_addr = "0.0.0.0";
+          http_addr = "127.0.0.1";
           http_port = 3000;
         };
         settings.dashboards.default_home_dashboard_path = "${dashboardDir "overview"}/home.json";
@@ -636,9 +634,18 @@ in
           check_for_plugin_updates = false;
         };
         settings.live.max_connections = 0;
-        settings."auth.anonymous" = {
+        settings."auth.anonymous".enabled = false;
+
+        # The header is trustworthy only because nginx overwrites it from the tailscale
+        # identity and refuses requests that arrive without one.
+        settings."auth.proxy" = {
           enabled = true;
-          org_role = "Admin";
+          header_name = "X-WEBAUTH-USER";
+          header_property = "username";
+          headers = "Name:X-WEBAUTH-NAME";
+          auto_sign_up = true;
+          enable_login_token = true;
+          whitelist = "127.0.0.1";
         };
 
         provision.datasources.settings = {
