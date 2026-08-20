@@ -28,6 +28,7 @@ let
     ];
     text = ''
       branch=$1
+      cd "$branch"
       declare -A last_warm
       warmed_files=0
       warmed_bytes=0
@@ -50,7 +51,7 @@ let
         mv "$tmp" ${pcfg.metricsFile}
       }
 
-      trap publish EXIT
+      trap 'publish; exit 0' EXIT TERM INT
 
       while IFS= read -r line; do
         case $line in *'"path":"'*) ;; *) continue ;; esac
