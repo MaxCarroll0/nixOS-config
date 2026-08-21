@@ -134,10 +134,13 @@ Desktop state restores buffers and frames after a clean restart into the current
             (let ((byte-compile-verbose nil)
                   (byte-compile-warnings nil))
               (byte-compile-file elisp))
-            (load (if (file-readable-p (concat elisp "c"))
-                      (concat elisp "c")
-                    elisp)
-                  nil nil t)
+            (let ((default-directory (file-name-directory source))
+                  (envrc--lighter nil)
+                  (inhibit-message t))
+              (load (if (file-readable-p (concat elisp "c"))
+                        (concat elisp "c")
+                      elisp)
+                    nil nil t))
             (message "Reloaded complete Emacs configuration"))
         (when (buffer-live-p source-buffer)
           (with-current-buffer source-buffer
@@ -615,6 +618,17 @@ Small task workflows use Ellama's command map.
 Explicit completion popup with documentation and Meow navigation.
 #+begin_src emacs-lisp
 
+(defun my/completion-symbol-p (candidate)
+  "Return non-nil when CANDIDATE starts with punctuation rather than a letter."
+  (and (> (length candidate) 0)
+       (not (string-match-p "\\`[[:alnum:]_]" candidate))))
+
+(defun my/completion-sort-symbols-first (candidates)
+  "Sort CANDIDATES by length and alphabetically, symbols before letters."
+  (let ((sorted (corfu-sort-length-alpha candidates)))
+    (nconc (seq-filter #'my/completion-symbol-p sorted)
+           (seq-remove #'my/completion-symbol-p sorted))))
+
 (defun my/corfu-toggle ()
   "Toggle the Corfu completion popup."
   (interactive)
@@ -855,6 +869,7 @@ Explicit completion popup with documentation and Meow navigation.
                         ((>= (length server) arity) (seq-take server arity))
                         (t (my/type-holes-from-parts parts arity)))))
       (setq entry (plist-put entry :arity (or arity 0)))
+      (setq entry (plist-put entry :holes holes))
       (setq entry (plist-put entry :tier
                              (if (and exact (equal exact arity)) 0 1)))
       (setq entry (plist-put entry :template
@@ -890,16 +905,109 @@ Explicit completion popup with documentation and Meow navigation.
                    my/type-completion-arities)
         cached))))
 
+(defconst my/ocaml-operator-characters "!$%&*+./:<=>?@^|~-")
+
+(defun my/ocaml-operator-bounds ()
+  "Return the bounds of the OCaml operator token ending at point."
+  (save-excursion
+    (let ((end (point)))
+      (skip-chars-backward my/ocaml-operator-characters)
+      (let ((start (point)))
+        (when (and (< start end)
+                   (or (bobp)
+                       (not (memq (char-syntax (char-before)) '(?w ?_)))))
+          (cons start end))))))
+
+(defvar my/type-completion-delegate-styles '(orderless basic))
+
+(defun my/type-hole-pattern (string)
+  "Return STRING with a bare OCaml hole reduced to an empty prefix."
+  (if (equal string "_") "" string))
+
+(defmacro my/type-hole-delegate (string body)
+  "Evaluate BODY on STRING reduced by `my/type-hole-pattern'."
+  `(let* ((completion-styles my/type-completion-delegate-styles)
+          (completion-category-overrides nil)
+          (completion-category-defaults nil)
+          (pattern (my/type-hole-pattern ,string)))
+     ,body))
+
+(defun my/type-hole-try-completion (string table predicate point)
+  "Try completion of STRING in TABLE, ignoring a bare OCaml hole."
+  (my/type-hole-delegate
+   string
+   (completion-try-completion pattern table predicate
+                              (min point (length pattern)))))
+
+(defun my/type-hole-all-completions (string table predicate point)
+  "List completions of STRING in TABLE, ignoring a bare OCaml hole."
+  (my/type-hole-delegate
+   string
+   (completion-all-completions pattern table predicate
+                               (min point (length pattern)))))
+
+(add-to-list 'completion-styles-alist
+             (list 'my/type-hole
+                   #'my/type-hole-try-completion
+                   #'my/type-hole-all-completions
+                   "Ignore a bare OCaml hole in the completion pattern."))
+
+(defvar my/completion-hide-qualified nil)
+
+(defun my/completion-toggle-qualified ()
+  "Toggle whether module-qualified candidates are offered."
+  (interactive)
+  (setq my/completion-hide-qualified (not my/completion-hide-qualified))
+  (message "Module-qualified completions %s"
+           (if my/completion-hide-qualified "hidden" "shown")))
+
+(defun my/completion-qualified-p (candidate)
+  "Return non-nil when CANDIDATE names a value inside a module."
+  (and (string-search "." candidate) t))
+
+(defun my/completion-qualified-context-p (beginning)
+  "Return non-nil when a module path already precedes BEGINNING."
+  (save-excursion
+    (goto-char beginning)
+    (and (looking-back "\\_<[A-Z][A-Za-z0-9_']*\\."
+                       (max (point-min) (- beginning 128)))
+         t)))
+
+(defun my/type-completion-correct-p (candidate)
+  "Return non-nil when CANDIDATE yields the expected type."
+  (when-let* ((entry (my/type-completion-entry candidate)))
+    (eq (plist-get entry :tier) 0)))
+
+(defun my/type-completion-settled-p ()
+  "Return non-nil when the symbol at point already has the expected type."
+  (when-let* ((my/type-completion-wanted)
+              (bounds (bounds-of-thing-at-point 'symbol))
+              (text (buffer-substring-no-properties (car bounds) (cdr bounds)))
+              (entry (and my/type-completion-index
+                          (gethash text my/type-completion-index))))
+    (and (eq (plist-get entry :tier) 0)
+         (zerop (plist-get entry :arity)))))
+
+(defun my/type-completion-deprecated-p (candidate)
+  "Return non-nil when CANDIDATE is marked deprecated by the language server."
+  (when-let* ((item (my/completion-lsp-item candidate)))
+    (or (eq (plist-get item :deprecated) t)
+        (and (seq-contains-p (plist-get item :tags) 1) t))))
+
 (defun my/type-completion-sort-key (candidate index)
   "Return CANDIDATE's packed rank, falling back to its server order INDEX."
-  (if-let* ((entry (my/type-completion-entry candidate)))
-      (logior (ash (plist-get entry :tier) 20)
-              (ash (min (plist-get entry :arity) 15) 16)
-              (min (plist-get entry :rank) 65535))
-    (if-let* (((< index my/type-completion-rank-limit))
-              (arity (my/type-completion-arity candidate)))
-        (logior (ash (min arity 15) 16) (min index 65535))
-      (logior (ash 2 20) (min index 65535)))))
+  (let ((deprecated (if (my/type-completion-deprecated-p candidate) 1 0)))
+    (if-let* ((entry (my/type-completion-entry candidate)))
+        (logior (ash (plist-get entry :tier) 21)
+                (ash deprecated 20)
+                (ash (min (plist-get entry :arity) 15) 16)
+                (min (plist-get entry :rank) 65535))
+      (if-let* (((< index my/type-completion-rank-limit))
+                (arity (my/type-completion-arity candidate)))
+          (logior (ash deprecated 20)
+                  (ash (min arity 15) 16)
+                  (min index 65535))
+        (logior (ash 2 21) (ash deprecated 20) (min index 65535))))))
 
 (defun my/completion-sort-candidates (candidates)
   "Rank CANDIDATES by the language server's own type ordering."
@@ -1340,6 +1448,7 @@ Explicit completion popup with documentation and Meow navigation.
   (corfu-preview-current nil)
   (corfu-quit-at-boundary 'separator)
   (corfu-quit-no-match 'separator)
+  (corfu-sort-function #'my/completion-sort-symbols-first)
   (corfu-echo-delay 0)
   :init
   (global-corfu-mode)
@@ -1367,10 +1476,37 @@ Cursor motion triggers the preview, so it runs off the command loop on an idle t
 
 #+begin_src emacs-lisp
 
+(defvar-local my/completion-preview-dismissed nil)
+
+(defun my/completion-preview-state ()
+  "Return a token identifying the current point and buffer contents."
+  (cons (point) (buffer-chars-modified-tick)))
+
+(defun my/completion-preview-dismiss ()
+  "Hide the inline preview until point or the buffer changes."
+  (interactive)
+  (setq my/completion-preview-dismissed (my/completion-preview-state))
+  (completion-preview-active-mode -1))
+
+(defun my/completion-preview-ambiguous-p ()
+  "Return non-nil when an untyped preview is one of several candidates."
+  (and (not my/type-completion-expected)
+       (cdr (completion-preview--get 'completion-preview-suffixes))
+       t))
+
 (defun my/completion-preview-without-probe (original &rest arguments)
-  "Run ORIGINAL preview update without starting a server type probe."
+  "Run ORIGINAL preview update, keeping only unambiguous or typed candidates."
   (let ((my/type-completion-inhibit-probe t))
-    (apply original arguments)))
+    (cond
+     ((equal my/completion-preview-dismissed (my/completion-preview-state))
+      (completion-preview-active-mode -1))
+     ((my/type-completion-settled-p)
+      (completion-preview-active-mode -1))
+     (t
+      (apply original arguments)
+      (when (and completion-preview-active-mode
+                 (my/completion-preview-ambiguous-p))
+        (completion-preview-active-mode -1))))))
 
 (use-package completion-preview
   :ensure nil
@@ -1379,6 +1515,7 @@ Cursor motion triggers the preview, so it runs off the command loop on an idle t
         ("C-i" . nil)
         ("TAB" . completion-preview-insert)
         ("<tab>" . completion-preview-insert)
+        ("S-SPC" . my/completion-preview-dismiss)
         ("C-<return>" . nil))
   :custom
   (completion-preview-minimum-symbol-length nil)
@@ -1470,7 +1607,9 @@ Orderless with Corfu
   (orderless-style-dispatchers '(orderless-affix-dispatch))
   (orderless-component-separator #'orderless-escapable-split-on-space)
   (completion-styles '(orderless basic))
-  (completion-category-overrides '((file (styles partial-completion))))
+  (completion-category-overrides
+   '((file (styles partial-completion))
+     (my/type-completion (styles my/type-hole))))
   (completion-category-defaults nil) ;; Disable defaults, use our settings
   (completion-pcm-leading-wildcard t)) ;; Emacs 31: partial-completion behaves like substring
 
@@ -1515,7 +1654,9 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
           (wanted my/type-completion-wanted)
           (rank 0)
           candidates)
-      (dolist (entry (append my/type-completion-construct-results
+      (dolist (entry (append (my/type-completion-collection-entries
+                              my/type-completion-expected)
+                             my/type-completion-construct-results
                              my/type-completion-results))
         (setq entry (my/type-entry-annotate entry wanted rank))
         (puthash (plist-get entry :name) entry index)
@@ -1575,15 +1716,20 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
                     :constructible suggestion
                     :kind 'construct)
               entries))
-      (when (member "[]" suggestions)
-        (push (list :name "list literal […]"
-                    :typ expected :kind 'collection :collection 'list)
-              entries))
-      (when (member "[||]" suggestions)
-        (push (list :name "array literal [|…|]"
-                    :typ expected :kind 'collection :collection 'array)
-              entries))
       (nreverse entries)))
+
+  (defun my/type-completion-collection-entries (expected)
+    "Return repeatable literal entries when EXPECTED is a collection type."
+    (when-let* ((parts (my/type-arrow-parts expected))
+                ((= (length parts) 1))
+                (text (car parts)))
+      (cond
+       ((string-suffix-p " list" text)
+        (list (list :name "[ _ ]" :typ expected
+                    :kind 'collection :collection 'list)))
+       ((string-suffix-p " array" text)
+        (list (list :name "[| _ |]" :typ expected
+                    :kind 'collection :collection 'array))))))
 
   (defun my/type-completion-construct-request (key)
     "Request OCaml-LSP constructions at point and install them under KEY."
@@ -1609,10 +1755,40 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
            :deferred 'my/type-completion-construct))
       (error nil)))
 
+  (defun my/type-completion-hole-p (beginning end)
+    "Return non-nil when BEGINNING to END spans a bare OCaml hole."
+    (and (= (- end beginning) 1)
+         (string= (buffer-substring-no-properties beginning end) "_")))
+
+  (defun my/type-completion-enclosing-request (key)
+    "Request the enclosing type at point and install it under KEY."
+    (condition-case nil
+        (let ((buffer (current-buffer))
+              (generation my/type-completion-generation)
+              (server (eglot--current-server-or-lose))
+              (params (ocaml-eglot-req--TypeEnclosingParams
+                       (eglot--pos-to-lsp-position) 0 0)))
+          (jsonrpc-async-request
+           server :ocamllsp/typeEnclosing params
+           :success-fn
+           (lambda (result)
+             (when-let* ((expected (my/type-normalize (plist-get result :type))))
+               (my/type-completion-receive
+                buffer generation key
+                (lambda ()
+                  (setq my/type-completion-expected expected
+                        my/type-completion-wanted (my/type-canonical expected))
+                  (my/type-completion-request expected key)
+                  (my/type-completion-construct-request key)))))
+           :error-fn #'ignore
+           :timeout-fn #'ignore
+           :timeout 2.0
+           :deferred 'my/type-completion-enclosing))
+      (error nil)))
+
   (defun my/type-completion-expected-ocaml (beginning end)
     "Return OCaml-LSP's expected type at completion bounds BEGINNING and END."
-    (if (and (= (- end beginning) 1)
-             (string= (buffer-substring-no-properties beginning end) "_"))
+    (if (my/type-completion-hole-p beginning end)
         (save-excursion
           (goto-char beginning)
           (my/type-completion-enclosing-at-point))
@@ -1712,8 +1888,18 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
     "Return non-nil when ranking state is current for BEGINNING and END."
     (let ((key (my/type-completion-position-key beginning end)))
       (cond
-       ((equal key my/type-completion-key) t)
-       (my/type-completion-inhibit-probe nil)
+       ((and (equal key my/type-completion-key)
+             my/type-completion-expected)
+        t)
+       (my/type-completion-inhibit-probe
+        (when (and (not (equal key my/type-completion-key))
+                   (my/type-completion-ocaml-p)
+                   (my/type-completion-hole-p beginning end))
+          (my/type-completion-reset key)
+          (save-excursion
+            (goto-char beginning)
+            (my/type-completion-enclosing-request key)))
+        nil)
        (t
         (my/type-completion-reset key)
         (when-let* ((expected
@@ -1732,8 +1918,9 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
                 (propertize type 'face 'font-lock-function-name-face))
       (and original (funcall original candidate))))
 
-  (defun my/type-completion-table (table)
-    "Augment completion TABLE with semantic candidates and type ranking."
+  (defun my/type-completion-table (table qualified)
+    "Augment completion TABLE with semantic candidates and type ranking.
+QUALIFIED non-nil keeps module-qualified candidates."
     (lambda (string predicate action)
       (cond
        ((eq action 'metadata)
@@ -1741,6 +1928,7 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
                (properties (copy-tree (cdr metadata)))
                (annotation
                 (alist-get 'annotation-function properties)))
+          (setf (alist-get 'category properties) 'my/type-completion)
           (setf (alist-get 'display-sort-function properties)
                 #'my/completion-sort-candidates)
           (setf (alist-get 'annotation-function properties)
@@ -1748,11 +1936,17 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
                  #'my/type-completion-annotation annotation))
           (cons 'metadata properties)))
        ((eq action t)
-        (let ((effective (if (equal string "_") "" string)))
-          (my/type-merge-candidates
-           (all-completions effective table predicate)
-           (all-completions effective my/type-completion-candidates
-                            predicate))))
+        (let* ((effective (my/type-hole-pattern string))
+               (merged
+                (my/type-merge-candidates
+                 (all-completions effective table predicate)
+                 (all-completions effective my/type-completion-candidates
+                                  predicate))))
+          (when (and my/completion-hide-qualified (not qualified))
+            (setq merged (seq-remove #'my/completion-qualified-p merged)))
+          (if my/type-completion-inhibit-probe
+              (seq-filter #'my/type-completion-correct-p merged)
+            merged)))
        ((eq action 'lambda)
         (or (test-completion string table predicate)
             (and my/type-completion-index
@@ -1772,24 +1966,21 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
            (my/type-yas-snippet constructible) beginning beginning))
         (insert constructible))))
 
-  (defun my/yas-tag-repeat-snippet (separator &optional field-number)
-    "Mark the innermost snippet repeatable at optional FIELD-NUMBER."
-    (when-let* ((snippet (car (yas-active-snippets)))
-                (control (yas--snippet-control-overlay snippet)))
-      (overlay-put control 'my/ocaml-repeat-separator separator)
-      (overlay-put control 'my/ocaml-repeat-field field-number)))
-
-  (defun my/type-completion-expand-collection (kind beginning)
-    "Replace the completion at BEGINNING with a repeatable collection KIND."
+  (defun my/type-completion-expand-structured (node beginning)
+    "Replace the completion at BEGINNING with structured NODE."
     (delete-region beginning (point))
     (require 'yasnippet)
     (unless (bound-and-true-p yas-minor-mode)
       (yas-minor-mode 1))
-    (let* ((arrayp (eq kind 'array))
-           (template (if arrayp "[| ${1:_}$0 |]" "[ ${1:_}$0 ]"))
-           (start (point)))
-      (yas-expand-snippet template start start)
-      (my/yas-tag-repeat-snippet "; ")))
+    (my/ocaml-place node (my/ocaml-node-focus node)))
+
+  (defun my/type-completion-expand-collection (kind beginning)
+    "Replace the completion at BEGINNING with a structured collection KIND."
+    (delete-region beginning (point))
+    (require 'yasnippet)
+    (unless (bound-and-true-p yas-minor-mode)
+      (yas-minor-mode 1))
+    (my/ocaml-place (my/ocaml-collection kind) '(:elements 0)))
 
   (defun my/ocaml-and-binding-context-p (name beginning)
     "Return non-nil when NAME is valid after a matching let operator."
@@ -1863,12 +2054,22 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
             (my/type-completion-yas-template candidate beginning))
            (snippet (or (and entry (plist-get entry :snippet))
                         (my/type-completion-local-snippet candidate)))
-           (constructible (and entry (plist-get entry :constructible))))
+           (constructible (and entry (plist-get entry :constructible)))
+           (holes (and entry (plist-get entry :holes)))
+           (structured
+            (and entry
+                 (or (and (eq (plist-get entry :kind) 'construct)
+                          (my/ocaml-node-from-constructible constructible))
+                     (and holes
+                          (my/ocaml-application
+                           (plist-get entry :name) holes))))))
       (cond
        ((and (eq status 'finished) collection)
         (my/type-completion-expand-collection collection beginning))
        ((and (eq status 'finished) yas-template)
         (my/type-completion-expand-yas yas-template beginning))
+       ((and (eq status 'finished) structured)
+        (my/type-completion-expand-structured structured beginning))
        ((and (eq status 'finished) snippet)
         (my/type-completion-expand-yas snippet beginning))
        ((and (eq status 'finished)
@@ -1886,11 +2087,18 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
     "Return composed CAPF ranked by the language server's type ordering."
     (when-let* ((result (and my/completion-super-capf
                              (funcall my/completion-super-capf))))
+      (when-let* (((my/type-completion-ocaml-p))
+                  (operator (my/ocaml-operator-bounds)))
+        (setf (nth 0 result) (car operator)
+              (nth 1 result) (cdr operator)))
       (let ((beginning (nth 0 result))
             (end (nth 1 result)))
         (when (and (my/type-completion-ensure beginning end)
                    my/type-completion-expected)
-          (setf (nth 2 result) (my/type-completion-table (nth 2 result)))
+          (setf (nth 2 result)
+                (my/type-completion-table
+                 (nth 2 result)
+                 (my/completion-qualified-context-p beginning)))
           (let ((original
                  (plist-get (nthcdr 3 result) :exit-function)))
             (setf (plist-get (nthcdr 3 result) :exit-function)
@@ -2722,67 +2930,20 @@ Reveal code upon cursor entry.
       ("record" . "type ${1:t} = {\n  ${2:field} : ${3:type};\n}")
       ("variant" . "type ${1:t} =\n  | ${2:Constructor}\n  | ${3:Constructor_of} of ${4:type}")))
 
-  (defvar my/ocaml-yas-repeat-fields
-    '(("module" . 2)
-      ("modtype" . 2)
-      ("functor" . 4)
-      ("letmod" . 2))
-    "Body fields which accept repeated nested OCaml declarations.")
-
-  (defvar my/ocaml-yas-repeat-templates
-    (let ((table (make-hash-table :test #'equal)))
-      (dolist (entry my/ocaml-yas-repeat-fields table)
-        (when-let* ((template (cdr (assoc (car entry) my/ocaml-yas-snippets))))
-          (puthash template (cdr entry) table)))))
-
-  (defun my/yas-tag-ocaml-body-after-expand (template &rest _)
-    "Mark a freshly expanded OCaml TEMPLATE's body as repeatable."
-    (when-let* ((field-number
-                 (and (stringp template)
-                      (gethash template my/ocaml-yas-repeat-templates))))
-      (my/yas-tag-repeat-snippet 'ocaml-declaration field-number)))
-
-  (advice-remove 'yas-expand-snippet #'my/yas-tag-ocaml-body-after-expand)
-  (advice-add 'yas-expand-snippet :after #'my/yas-tag-ocaml-body-after-expand)
-
   (yas-define-snippets
    'tuareg-mode
    (mapcar (lambda (snippet)
              (list (car snippet) (cdr snippet) (car snippet)))
            my/ocaml-yas-snippets))
 
-  (defvar my/yas-after-tab-map
-    (let ((map (make-sparse-keymap)))
-      (define-key map (kbd "RET") #'my/yas-finish-innermost)
-      (define-key map (kbd "<return>") #'my/yas-finish-innermost)
-      (define-key map (kbd "DEL") #'my/yas-backward-field)
-      (define-key map (kbd "<backspace>") #'my/yas-backward-field)
-      map))
+  (defun my/yas-enter-insert-state (&rest _)
+    "Switch to Meow insert state so snippet fields are directly editable."
+    (when (and (bound-and-true-p meow-mode)
+               (not (bound-and-true-p meow-insert-mode)))
+      (meow--switch-state 'insert)))
 
-  (defun my/yas-current-repeat-separator ()
-    "Return the current snippet's repeat separator, if any."
-    (when-let* ((snippet (car (yas-active-snippets)))
-                (control (yas--snippet-control-overlay snippet))
-                (separator
-                 (overlay-get control 'my/ocaml-repeat-separator))
-                (active-field
-                 (overlay-get yas--active-field-overlay 'yas--field)))
-      (let ((repeat-field
-             (overlay-get control 'my/ocaml-repeat-field)))
-        (when (or (null repeat-field)
-                  (= repeat-field (yas--field-number active-field)))
-          separator))))
-
-  (defun my/yas-repeat-field (separator)
-    "Append a nested Yas field preceded by SEPARATOR."
-    (goto-char (yas--field-end
-                (overlay-get yas--active-field-overlay 'yas--field)))
-    (if (eq separator 'ocaml-declaration)
-        (newline-and-indent)
-      (insert separator))
-    (let ((start (point)))
-      (yas-expand-snippet "${1:_}" start start)
-      (my/yas-tag-repeat-snippet separator)))
+  (advice-remove 'yas-expand-snippet #'my/yas-enter-insert-state)
+  (advice-add 'yas-expand-snippet :after #'my/yas-enter-insert-state)
 
   (defun my/yas-current-ocaml-trigger-p ()
     "Return non-nil when the active field contains an OCaml trigger."
@@ -2794,16 +2955,14 @@ Reveal code upon cursor entry.
              my/ocaml-yas-snippets)))
 
   (defun my/yas-forward-field ()
-    "Move forward in Yas, extending repeatable OCaml snippets as needed."
+    "Accept an inline preview, else extend or advance the active snippet."
     (interactive)
     (cond
+     ((bound-and-true-p completion-preview-active-mode)
+      (completion-preview-insert))
      ((and (my/yas-current-ocaml-trigger-p) (yas-expand)))
-     ((my/yas-current-repeat-separator)
-      (my/yas-repeat-field (my/yas-current-repeat-separator)))
      (t
-      (yas-next-field-or-maybe-expand)))
-    (when (yas-active-snippets)
-      (set-transient-map my/yas-after-tab-map)))
+      (yas-next-field-or-maybe-expand))))
 
   (defun my/yas-finish-innermost ()
     "Finish the innermost active Yasnippet."
@@ -2811,14 +2970,14 @@ Reveal code upon cursor entry.
     (when-let* ((snippet (car (yas-active-snippets))))
       (yas-exit-snippet snippet)))
 
-  (defun my/yas-backward-field ()
-    "Move to the previous field in the active Yasnippet."
-    (interactive)
-    (when (yas-active-snippets)
-      (yas-prev-field)))
-
   (define-key yas-keymap (kbd "TAB") #'my/yas-forward-field)
-  (define-key yas-keymap (kbd "<tab>") #'my/yas-forward-field))
+  (define-key yas-keymap (kbd "<tab>") #'my/yas-forward-field)
+  (define-key yas-keymap (kbd "S-TAB") #'yas-prev-field)
+  (define-key yas-keymap (kbd "<backtab>") #'yas-prev-field)
+  (define-key yas-keymap (kbd "S-<return>") #'my/yas-finish-innermost)
+  (define-key yas-keymap (kbd "S-RET") #'my/yas-finish-innermost)
+  (define-key yas-keymap (kbd "C-<return>") #'yas-exit-all-snippets)
+  (define-key yas-keymap (kbd "C-g") #'yas-abort-snippet))
 
 (defun my/ocaml-insert-yas-snippet (key)
   "Insert the OCaml Yasnippet identified by KEY."
@@ -2918,6 +3077,1019 @@ Reveal code upon cursor entry.
   (with-eval-after-load 'ocaml-eglot
     (setcdr ocaml-eglot-mode-map nil)
     (define-key ocaml-eglot-mode-map (kbd "C-c .") #'my/ocaml-menu)))
+
+#+end_src
+
+*** Structured snippets
+OCaml constructs expand into a model that TAB extends, M-TAB cycles between valid alternative forms, RET walks fields and S-RET ends. Each structural edit re-renders the construct and reindents it.
+
+#+begin_src emacs-lisp
+
+(defvar-local my/ocaml-snippet nil)
+
+(defun my/ocaml-path-get (root path)
+  (let ((node root))
+    (dolist (step path node)
+      (setq node (if (integerp step) (nth step node) (plist-get node step))))))
+
+(defun my/ocaml-path-set (root path value)
+  (let* ((parent (my/ocaml-path-get root (butlast path)))
+         (step (car (last path))))
+    (if (integerp step)
+        (setf (nth step parent) value)
+      (plist-put parent step value))))
+
+(defvar my/ocaml-render-counter nil)
+(defvar my/ocaml-render-fields nil)
+
+(defun my/ocaml-field (path default)
+  (let ((number (setq my/ocaml-render-counter (1+ my/ocaml-render-counter))))
+    (push (cons number path) my/ocaml-render-fields)
+    (format "${%d:%s}" number (or default "_"))))
+
+(defvar my/ocaml-renderers (make-hash-table :test #'eq))
+
+(defmacro my/ocaml-define-renderer (kind arguments &rest body)
+  (declare (indent 2))
+  `(puthash ',kind (lambda ,arguments ,@body) my/ocaml-renderers))
+
+(defun my/ocaml-render (node path)
+  (funcall (gethash (plist-get node :kind) my/ocaml-renderers) node path))
+
+(defun my/ocaml-render-root (node)
+  (let ((my/ocaml-render-counter 0)
+        (my/ocaml-render-fields nil))
+    (let ((text (my/ocaml-render node nil)))
+      (list :template (concat text "$0")
+            :fields (nreverse my/ocaml-render-fields)))))
+
+(defun my/ocaml-hole (path value)
+  (if (and value (not (equal value "_")))
+      value
+    (my/ocaml-field path "_")))
+
+(my/ocaml-define-renderer type-decl (node path)
+  (let ((params (plist-get node :params))
+        (body (plist-get node :body)))
+    (concat "type "
+            (cond
+             ((null params) "")
+             ((cdr params)
+              (concat "("
+                      (string-join
+                       (cl-loop for p in params for i from 0
+                                collect (my/ocaml-field
+                                         (append path (list :params i)) p))
+                       ", ")
+                      ") "))
+             (t (concat (my/ocaml-field (append path (list :params 0))
+                                        (car params))
+                        " ")))
+            (my/ocaml-field (append path '(:name)) (plist-get node :name))
+            " = "
+            (progn (ignore body) (my/ocaml-render-slot node path :body)))))
+
+(my/ocaml-define-renderer variant (node path)
+  (string-join
+   (cl-loop for c in (plist-get node :constructors)
+            for i from 0
+            collect (my/ocaml-render c (append path (list :constructors i))))
+   " "))
+
+(my/ocaml-define-renderer constructor (node path)
+  (concat "| "
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          (if (plist-get node :payload)
+              (concat " of "
+                      (my/ocaml-field (append path '(:payload))
+                                      (plist-get node :payload)))
+            "")))
+
+(my/ocaml-define-renderer record (node path)
+  (concat "{ "
+          (string-join
+           (cl-loop for f in (plist-get node :fields)
+                    for i from 0
+                    collect (my/ocaml-render f (append path (list :fields i))))
+           "; ")
+          " }"))
+
+(my/ocaml-define-renderer record-field (node path)
+  (concat (if (plist-get node :mutable) "mutable " "")
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          " : "
+          (my/ocaml-field (append path '(:type)) (plist-get node :type))))
+
+(my/ocaml-define-renderer let-group (node path)
+  (concat "let "
+          (string-join
+           (cl-loop for b in (plist-get node :bindings)
+                    for i from 0
+                    collect (my/ocaml-render b (append path (list :bindings i))))
+           " and ")
+          " in "
+          (my/ocaml-hole-field node path :body)))
+
+(my/ocaml-define-renderer let-binding (node path)
+  (concat (if (plist-get node :standalone) "let " "")
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          (mapconcat
+           (lambda (i)
+             (concat " " (my/ocaml-render (nth i (plist-get node :params))
+                                          (append path (list :params i)))))
+           (number-sequence 0 (1- (length (plist-get node :params))))
+           "")
+          (if (plist-get node :annotation)
+              (concat " : " (my/ocaml-field (append path '(:annotation))
+                                            (plist-get node :annotation)))
+            "")
+          " = "
+          (my/ocaml-hole-field node path :value)))
+
+(my/ocaml-define-renderer param (node path)
+  (let* ((name (my/ocaml-field (append path '(:name)) (plist-get node :name)))
+         (annotation (plist-get node :annotation))
+         (default (plist-get node :default))
+         (typed (and annotation
+                     (concat " : " (my/ocaml-field
+                                    (append path '(:annotation)) annotation))))
+         (valued (and default
+                      (concat " = " (my/ocaml-field
+                                     (append path '(:default)) default)))))
+    (pcase (plist-get node :label)
+      ('optional
+       (if (or typed valued)
+           (concat "?(" name typed valued ")")
+         (concat "?" name)))
+      ('labelled
+       (if typed (concat "~(" name typed ")") (concat "~" name)))
+      (_
+       (if typed (concat "(" name typed ")") name)))))
+
+(my/ocaml-define-renderer module-decl (node path)
+  (concat "module "
+          (if (eq (plist-get node :form) 'recursive) "rec " "")
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          (mapconcat
+           (lambda (i)
+             (concat " (" (my/ocaml-render
+                           (nth i (plist-get node :params))
+                           (append path (list :params i))) ")"))
+           (number-sequence 0 (1- (length (plist-get node :params))))
+           "")
+          (if (plist-get node :signature)
+              (concat " : " (my/ocaml-render (plist-get node :signature)
+                                             (append path '(:signature))))
+            "")
+          " = "
+          (my/ocaml-render-slot node path :body)))
+
+(my/ocaml-define-renderer module-param (node path)
+  (concat (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          " : "
+          (my/ocaml-field (append path '(:signature))
+                          (plist-get node :signature))))
+
+(my/ocaml-define-renderer signature-ref (node path)
+  (concat (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          (mapconcat
+           (lambda (i)
+             (let ((c (nth i (plist-get node :constraints))))
+               (concat (if (zerop i) " with " " and ")
+                       (my/ocaml-render c (append path (list :constraints i))))))
+           (number-sequence 0 (1- (length (plist-get node :constraints))))
+           "")))
+
+(my/ocaml-define-renderer constraint (node path)
+  (concat (if (eq (plist-get node :what) 'module) "module " "type ")
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          (if (plist-get node :destructive) " := " " = ")
+          (my/ocaml-field (append path '(:value)) (plist-get node :value))))
+
+(my/ocaml-define-renderer signature-body (node path)
+  (concat "sig "
+          (string-join
+           (cl-loop for i in (plist-get node :items)
+                    for n from 0
+                    collect (my/ocaml-render i (append path (list :items n))))
+           " ")
+          " end"))
+
+(my/ocaml-define-renderer struct-body (node path)
+  (concat "struct "
+          (string-join
+           (cl-loop for i in (plist-get node :items)
+                    for n from 0
+                    collect (my/ocaml-render i (append path (list :items n))))
+           " ")
+          " end"))
+
+(my/ocaml-define-renderer module-alias (node path)
+  (my/ocaml-field (append path '(:target)) (plist-get node :target)))
+
+(my/ocaml-define-renderer functor-app (node path)
+  (concat (my/ocaml-field (append path '(:functor)) (plist-get node :functor))
+          "("
+          (my/ocaml-field (append path '(:argument)) (plist-get node :argument))
+          ")"))
+
+(my/ocaml-define-renderer val-item (node path)
+  (concat "val "
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          " : "
+          (my/ocaml-field (append path '(:type)) (plist-get node :type))))
+
+(my/ocaml-define-renderer match-expr (node path)
+  (concat "match "
+          (my/ocaml-hole-field node path :scrutinee)
+          " with "
+          (string-join
+           (cl-loop for a in (plist-get node :arms)
+                    for i from 0
+                    collect (my/ocaml-render a (append path (list :arms i))))
+           " ")))
+
+(my/ocaml-define-renderer match-arm (node path)
+  (concat "| "
+          (pcase (plist-get node :pattern-form)
+            ('as-binding
+             (concat "(" (my/ocaml-field (append path '(:pattern))
+                                         (plist-get node :pattern))
+                     " as " (my/ocaml-field (append path '(:alias))
+                                            (plist-get node :alias)) ")"))
+            ('or-pattern
+             (concat (my/ocaml-field (append path '(:pattern))
+                                     (plist-get node :pattern))
+                     " | " (my/ocaml-field (append path '(:alternative))
+                                           (plist-get node :alternative))))
+            (_ (my/ocaml-field (append path '(:pattern))
+                               (plist-get node :pattern))))
+          (if (plist-get node :guard)
+              (concat " when " (my/ocaml-field (append path '(:guard))
+                                               (plist-get node :guard)))
+            "")
+          " -> "
+          (my/ocaml-hole-field node path :body)))
+
+(my/ocaml-define-renderer application (node path)
+  (concat (my/ocaml-field (append path '(:head)) (plist-get node :head))
+          (mapconcat
+           (lambda (i)
+             (concat " " (my/ocaml-render (nth i (plist-get node :arguments))
+                                          (append path (list :arguments i)))))
+           (number-sequence 0 (1- (length (plist-get node :arguments))))
+           "")))
+
+(my/ocaml-define-renderer argument (node path)
+  (pcase (plist-get node :label-kind)
+    ('labelled (concat "~" (plist-get node :label) ":"
+                       (my/ocaml-field (append path '(:value))
+                                       (plist-get node :value))))
+    (_ (my/ocaml-field (append path '(:value)) (plist-get node :value)))))
+
+(my/ocaml-define-renderer collection (node path)
+  (let ((elements
+         (string-join
+          (cl-loop for e in (plist-get node :elements)
+                   for i from 0
+                   collect (my/ocaml-field (append path (list :elements i)) e))
+          "; ")))
+    (if (eq (plist-get node :style) 'array)
+        (concat "[| " elements " |]")
+      (concat "[ " elements " ]"))))
+
+(defun my/ocaml-collection (style)
+  (list :kind 'collection :style style :elements (list "_")))
+
+(my/ocaml-define-renderer record-literal (node path)
+  (concat "{ "
+          (string-join
+           (cl-loop for f in (plist-get node :fields)
+                    for i from 0
+                    collect (concat (car f) " = "
+                                    (my/ocaml-field
+                                     (append path (list :fields i)) (cdr f))))
+           "; ")
+          " }"))
+
+(my/ocaml-define-renderer constructor-app (node path)
+  (concat (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          (mapconcat
+           (lambda (i)
+             (concat " " (my/ocaml-field (append path (list :arguments i))
+                                         (nth i (plist-get node :arguments)))))
+           (number-sequence 0 (1- (length (plist-get node :arguments))))
+           "")))
+
+(defun my/ocaml-record-literal (names)
+  (list :kind 'record-literal
+        :fields (mapcar (lambda (n) (cons n "_")) names)))
+
+(defun my/ocaml-application (name holes)
+  (list :kind 'application :head name
+        :arguments
+        (mapcar
+         (lambda (hole)
+           (if (string-match "\\`~\\([^:]+\\):" hole)
+               (list :kind 'argument :label (match-string 1 hole)
+                     :label-kind 'labelled :value "_" :alternatives nil)
+             (list :kind 'argument :label nil :label-kind nil
+                   :value "_" :alternatives nil)))
+         holes)))
+
+(defun my/ocaml-node-from-constructible (text)
+  "Return a structured node for merlin construction TEXT, when recognised."
+  (when (stringp text)
+    (let ((trimmed (string-trim text)))
+      (cond
+       ((string-match "\\`{\\(.*\\)}\\'" trimmed)
+        (let ((names (delq nil
+                           (mapcar (lambda (part)
+                                     (let ((field (string-trim part)))
+                                       (when (string-match
+                                              "\\`\\([A-Za-z_][A-Za-z0-9_']*\\)[[:space:]]*="
+                                              field)
+                                         (match-string 1 field))))
+                                   (split-string (match-string 1 trimmed)
+                                                 ";" t)))))
+          (when names (my/ocaml-record-literal names))))
+       ((string-match "\\`\\[|\\(.*\\)|\\]\\'" trimmed)
+        (my/ocaml-collection 'array))
+       ((string-match "\\`\\[\\(.*\\)\\]\\'" trimmed)
+        (my/ocaml-collection 'list))
+       ((string-match "\\`\\([A-Z][A-Za-z0-9_'.]*\\)\\(\\([[:space:]]+_\\)*\\)\\'"
+                      trimmed)
+        (list :kind 'constructor-app
+              :name (match-string 1 trimmed)
+              :arguments (make-list
+                          (length (split-string (or (match-string 2 trimmed) "")
+                                                "[[:space:]]+" t))
+                          "_")))))))
+
+(defun my/ocaml-node-focus (node)
+  "Return the path of NODE's first editable slot."
+  (pcase (plist-get node :kind)
+    ('record-literal '(:fields 0))
+    ('collection '(:elements 0))
+    ('constructor-app (if (plist-get node :arguments) '(:arguments 0) '(:name)))
+    ('application (if (plist-get node :arguments)
+                      '(:arguments 0 :value)
+                    '(:head)))))
+
+(defun my/ocaml-match-arm (pattern)
+  (list :kind 'match-arm :pattern pattern :pattern-form nil
+        :guard nil :alias nil :alternative nil :body nil))
+
+(defun my/ocaml-default-match ()
+  (list :kind 'match-expr :scrutinee nil
+        :arms (list (my/ocaml-match-arm "pat"))))
+
+(defun my/ocaml-pattern-name (index)
+  (if (zerop index) "pat" (format "pat%d" (1+ index))))
+
+(defun my/ocaml-signature-ref (name)
+  (list :kind 'signature-ref :name name :constraints nil))
+
+(defun my/ocaml-constraint-name (index)
+  (nth (min index 3) (list "t" "u" "v" "w")))
+
+(defun my/ocaml-constraint (name)
+  (list :kind 'constraint :what 'type :name name :value "_" :destructive nil))
+
+(defun my/ocaml-default-module ()
+  (list :kind 'module-decl :form 'plain :name "M"
+        :params nil :signature nil :body nil))
+
+(defun my/ocaml-struct-body ()
+  (list :kind 'struct-body :items (list (my/ocaml-default-type))))
+
+(defun my/ocaml-signature-items (text)
+  "Return the declarations named in signature TEXT."
+  (when (stringp text)
+    (let* ((body (if (string-match
+                      "\\_<sig\\_>\\(\\(?:.\\|\n\\)*\\)\\_<end\\_>" text)
+                     (match-string 1 text)
+                   text))
+           (position 0)
+           (found nil))
+      (while (string-match
+              "\\_<\\(val\\|type\\)\\_>[[:space:]]+\\([A-Za-z_][A-Za-z0-9_']*\\)"
+              body position)
+        (push (list (match-beginning 0) (match-string 1 body)
+                    (match-string 2 body) (match-end 0))
+              found)
+        (setq position (match-end 0)))
+      (setq found (nreverse found))
+      (cl-loop for entry in found
+               for index from 0
+               for stop = (if (nth (1+ index) found)
+                              (nth 0 (nth (1+ index) found))
+                            (length body))
+               collect
+               (list :sort (intern (nth 1 entry))
+                     :name (nth 2 entry)
+                     :type (let ((rest (string-trim
+                                        (substring body (nth 3 entry) stop))))
+                             (when (string-prefix-p ":" rest)
+                               (string-trim (substring rest 1)))))))))
+
+(defun my/ocaml-signature-lookup (name)
+  "Return the declarations of module type NAME through standard LSP hover."
+  (when (and name (not (string-empty-p name))
+             (fboundp 'eglot-managed-p) (eglot-managed-p))
+    (save-excursion
+      (when (re-search-backward (concat "\\_<" (regexp-quote name) "\\_>")
+                                (max (point-min) (- (point) 400)) t)
+        (my/ocaml-signature-items (my/eglot-hover-text))))))
+
+(defun my/ocaml-item-from-declaration (declaration)
+  "Return a body node implementing signature DECLARATION."
+  (pcase (plist-get declaration :sort)
+    ('type (list :kind 'type-decl :params nil
+                 :name (plist-get declaration :name) :body nil))
+    ('val (let* ((holes (my/type-holes-from-parts
+                         (my/type-arrow-parts (plist-get declaration :type))
+                         (my/type-arrow-count (plist-get declaration :type)))))
+            (list :kind 'let-binding
+                  :name (plist-get declaration :name)
+                  :params (mapcar
+                           (lambda (hole)
+                             (let ((param (my/ocaml-param "x")))
+                               (when (string-match "\\`~\\([^:]+\\):" hole)
+                                 (plist-put param :name (match-string 1 hole))
+                                 (plist-put param :label 'labelled))
+                               param))
+                           holes)
+                  :annotation nil :value nil)))))
+
+(defun my/ocaml-body-options (root path)
+  "Return the body item alternatives available at PATH in ROOT."
+  (let* ((decl (my/ocaml-enclosing-module root path))
+         (signature (and decl (plist-get decl :signature)))
+         (name (and signature (eq (plist-get signature :kind) 'signature-ref)
+                    (plist-get signature :name)))
+         (declared (my/ocaml-signature-lookup name)))
+    (mapcar (lambda (item)
+              (if (eq (plist-get item :kind) 'let-binding)
+                  (plist-put (copy-sequence item) :standalone t)
+                item))
+            (append (delq nil (mapcar #'my/ocaml-item-from-declaration declared))
+                    (list (my/ocaml-default-type)
+                          (my/ocaml-let-binding "x"))))))
+
+(defun my/ocaml-enclosing-module (root path)
+  "Return the module declaration enclosing PATH in ROOT."
+  (let ((remaining path)
+        found)
+    (while (and remaining (not found))
+      (let ((node (my/ocaml-path-get root (butlast remaining))))
+        (when (and (listp node) (eq (plist-get node :kind) 'module-decl))
+          (setq found node)))
+      (setq remaining (butlast remaining)))
+    (or found (when (eq (plist-get root :kind) 'module-decl) root))))
+
+(defun my/ocaml-module-param-name (index)
+  (nth (min index 3) '("X" "Y" "Z" "W")))
+
+(defun my/ocaml-hole-field (node path slot)
+  "Render NODE's SLOT as text or as a hole field at PATH."
+  (let ((value (plist-get node slot)))
+    (if (and value (not (equal value "_")))
+        (my/ocaml-field (append path (list slot)) value)
+      (my/ocaml-field (append path (list slot)) "_"))))
+
+(defun my/ocaml-render-slot (node path slot)
+  "Render NODE's SLOT, which may hold a hole, plain text, or a child node."
+  (let ((value (plist-get node slot)))
+    (cond
+     ((null value) (my/ocaml-field (append path (list slot)) "_"))
+     ((stringp value) (my/ocaml-field (append path (list slot)) value))
+     (t (my/ocaml-render value (append path (list slot)))))))
+
+(defun my/ocaml-param (name)
+  (list :kind 'param :name name :label nil :annotation nil :default nil))
+
+(defun my/ocaml-let-binding (name)
+  (list :kind 'let-binding :name name :params nil :annotation nil :value nil))
+
+(defun my/ocaml-default-let ()
+  (list :kind 'let-group
+        :bindings (list (my/ocaml-let-binding "x"))
+        :body nil))
+
+(defun my/ocaml-param-name (index)
+  (nth (min index 3) '("y" "z" "w" "v")))
+
+(defun my/ocaml-binding-name (index)
+  (nth (min index 3) '("x" "y" "z" "w")))
+
+(defun my/ocaml-constructor (name)
+  (list :kind 'constructor :name name :payload nil))
+
+(defun my/ocaml-record-field (name)
+  (list :kind 'record-field :name name :type "t" :mutable nil))
+
+(defun my/ocaml-default-type ()
+  (list :kind 'type-decl :params nil :name "t" :body nil))
+
+(defun my/ocaml-constructor-name (index)
+  (format "Ctr%d" (1+ index)))
+
+(defun my/ocaml-field-name (index)
+  (if (zerop index) "field" (format "field%d" (1+ index))))
+
+(defun my/ocaml-next-field (root path)
+  "Return the field path following PATH in ROOT's render order."
+  (let* ((fields (plist-get (my/ocaml-render-root root) :fields))
+         (paths (mapcar #'cdr fields))
+         (index (cl-position path paths :test #'equal)))
+    (cond
+     ((null index) (car paths))
+     ((< (1+ index) (length paths)) (nth (1+ index) paths))
+     (t nil))))
+
+(defun my/ocaml-advance (root path)
+  "Create a slot at PATH, else move on, else append a sibling."
+  (or (my/ocaml-expand root path)
+      (my/ocaml-next-field root path)
+      (my/ocaml-append-sibling root path)
+      path))
+
+(defun my/ocaml-owner (root path)
+  "Return the node owning PATH and the slot within it."
+  (if (integerp (car (last path)))
+      (cons (my/ocaml-path-get root (butlast (butlast path)))
+            (car (last (butlast path))))
+    (cons (my/ocaml-path-get root (butlast path))
+          (car (last path)))))
+
+(defun my/ocaml-expand (root path)
+  "Create a new slot at PATH in ROOT. Return the path to focus, or nil."
+  (let* ((owner-path (my/ocaml-owner-path root path))
+         (slot (cdr (my/ocaml-owner root path)))
+         (owner (my/ocaml-path-get root owner-path))
+         (kind (and (listp owner) (plist-get owner :kind))))
+    (cond
+     ((and (eq kind 'type-decl) (eq slot :body)
+           (let ((body (plist-get owner :body)))
+             (or (null body) (equal body "_"))))
+      (plist-put owner :body
+                 (list :kind 'variant
+                       :constructors (list (my/ocaml-constructor "Ctr1"))))
+      (append owner-path '(:body :constructors 0 :name)))
+
+     ((and (eq kind 'constructor) (eq slot :name)
+           (not (plist-get owner :payload)))
+      (plist-put owner :payload "t")
+      (append owner-path '(:payload)))
+
+     ((and (eq kind 'let-binding) (eq slot :name))
+      (let ((params (plist-get owner :params)))
+        (plist-put owner :params
+                   (append params
+                           (list (my/ocaml-param
+                                  (my/ocaml-param-name (length params))))))
+        (append owner-path (list :params (length params) :name))))
+
+     ((and (eq kind 'let-binding) (eq slot :value))
+      (my/ocaml-append-binding root owner-path))
+
+     ((and (eq kind 'param) (eq slot :name)
+           (eq (plist-get owner :label) 'optional)
+           (not (plist-get owner :default)))
+      (plist-put owner :default "0")
+      (append owner-path '(:default)))
+
+     ((and (eq kind 'param) (memq slot '(:name :default))
+           (not (plist-get owner :annotation)))
+      (plist-put owner :annotation "t")
+      (append owner-path '(:annotation)))
+
+     ((and (eq kind 'module-decl) (eq slot :name)
+           (not (plist-get owner :signature)))
+      (plist-put owner :signature (my/ocaml-signature-ref "S"))
+      (append owner-path '(:signature :name)))
+
+     ((and (eq kind 'module-decl) (eq slot :name)
+           (eq (plist-get owner :form) 'functor))
+      (let ((params (plist-get owner :params)))
+        (plist-put owner :params
+                   (append params
+                           (list (list :kind 'module-param
+                                       :name (my/ocaml-module-param-name
+                                              (length params))
+                                       :signature "S"))))
+        (append owner-path (list :params (length params) :name))))
+
+     ((and (eq kind 'module-param) (eq slot :signature))
+      (let* ((decl-path (butlast (butlast owner-path)))
+             (decl (my/ocaml-path-get root decl-path))
+             (params (plist-get decl :params)))
+        (plist-put decl :params
+                   (append params
+                           (list (list :kind 'module-param
+                                       :name (my/ocaml-module-param-name
+                                              (length params))
+                                       :signature "S"))))
+        (append decl-path (list :params (length params) :name))))
+
+     ((and (eq kind 'module-decl) (eq slot :body)
+           (let ((body (plist-get owner :body)))
+             (or (null body) (equal body "_"))))
+      (plist-put owner :body (my/ocaml-struct-body))
+      (append owner-path '(:body :items 0 :name)))
+
+     ((and (eq kind 'signature-ref) (memq slot '(:name)))
+      (let ((constraints (plist-get owner :constraints)))
+        (plist-put owner :constraints
+                   (append constraints
+                           (list (my/ocaml-constraint
+                                  (my/ocaml-constraint-name (length constraints))))))
+        (append owner-path
+                (list :constraints (length constraints) :name))))
+
+     ((and (eq kind 'match-arm) (eq slot :body))
+      (let* ((expr-path (butlast (butlast owner-path)))
+             (expr (my/ocaml-path-get root expr-path))
+             (arms (plist-get expr :arms)))
+        (plist-put expr :arms
+                   (append arms
+                           (list (my/ocaml-match-arm
+                                  (my/ocaml-pattern-name (length arms))))))
+        (append expr-path (list :arms (length arms) :pattern))))
+
+     ((and (eq kind 'constraint) (eq slot :value))
+      (let* ((ref-path (butlast (butlast owner-path)))
+             (ref (my/ocaml-path-get root ref-path))
+             (constraints (plist-get ref :constraints)))
+        (plist-put ref :constraints
+                   (append constraints
+                           (list (my/ocaml-constraint
+                                  (my/ocaml-constraint-name (length constraints))))))
+        (append ref-path (list :constraints (length constraints) :name))))
+
+     ((and (eq kind 'collection) (eq slot :elements))
+      (let ((elements (plist-get owner :elements)))
+        (plist-put owner :elements (append elements (list "_")))
+        (append owner-path (list :elements (length elements)))))
+
+     ((and (eq kind 'constructor-app) (eq slot :arguments))
+      (let ((arguments (plist-get owner :arguments)))
+        (plist-put owner :arguments (append arguments (list "_")))
+        (append owner-path (list :arguments (length arguments)))))
+
+     ((and (eq kind 'record-literal) (eq slot :fields))
+      nil)
+
+     ((my/ocaml-struct-item-path root path)
+      (let* ((body-path (my/ocaml-struct-item-path root path))
+             (body (my/ocaml-path-get root body-path))
+             (items (plist-get body :items))
+             (fresh (car (my/ocaml-body-options root path))))
+        (plist-put body :items (append items (list fresh)))
+        (append body-path (list :items (length items) :name)))))))
+
+(defun my/ocaml-struct-item-path (root path)
+  "Return the path of the struct body containing PATH, if any."
+  (let ((remaining path)
+        found)
+    (while (and remaining (not found))
+      (let* ((candidate (butlast remaining))
+             (node (my/ocaml-path-get root candidate)))
+        (when (and (listp node) (eq (plist-get node :kind) 'struct-body))
+          (setq found candidate)))
+      (setq remaining (butlast remaining)))
+    found))
+
+(defun my/ocaml-append-binding (root owner-path)
+  "Append an `and' binding after the binding at OWNER-PATH."
+  (let* ((index (car (last owner-path)))
+         (group-path (butlast (butlast owner-path)))
+         (group (my/ocaml-path-get root group-path))
+         (bindings (plist-get group :bindings)))
+    (plist-put group :bindings
+               (append bindings
+                       (list (my/ocaml-let-binding
+                              (my/ocaml-binding-name (length bindings))))))
+    (ignore index)
+    (append group-path (list :bindings (length bindings) :name))))
+
+(defconst my/ocaml-repetitions
+  '((:constructors . my/ocaml-constructor-name)
+    (:fields . my/ocaml-field-name)))
+
+(defun my/ocaml-append-sibling (root path)
+  "Append a sibling in the innermost repetition enclosing PATH."
+  (let ((remaining path))
+    (catch 'appended
+      (while remaining
+        (let* ((index (car (last remaining)))
+               (list-path (butlast remaining))
+               (slot (car (last list-path)))
+               (entry (assq slot my/ocaml-repetitions)))
+          (when (and (integerp index) entry)
+            (let* ((container-path (butlast list-path))
+                   (container (my/ocaml-path-get root container-path))
+                   (items (plist-get container slot))
+                   (fresh (pcase slot
+                            (:constructors
+                             (my/ocaml-constructor
+                              (funcall (cdr entry) (length items))))
+                            (:fields
+                             (my/ocaml-record-field
+                              (funcall (cdr entry) (length items)))))))
+              (plist-put container slot (append items (list fresh)))
+              (throw 'appended
+                     (append container-path
+                             (list slot (length items) :name))))))
+        (setq remaining (butlast remaining)))
+      nil)))
+
+(defun my/ocaml-options (root path)
+  "Return the alternatives available at PATH in ROOT."
+  (let* ((slot (car (last path)))
+         (owner-path (butlast path))
+         (owner (my/ocaml-path-get root owner-path))
+         (kind (plist-get owner :kind)))
+    (cond
+     ((and (eq kind 'type-decl) (eq slot :name))
+      '(nil ("'a") ("'a" "'b")))
+     ((and (eq kind 'type-decl) (memq slot '(:params)))
+      '(nil ("'a") ("'a" "'b")))
+     ((and (eq kind 'record-field) (eq slot :name))
+      '(nil t)))))
+
+(defun my/ocaml-cycle (root path)
+  "Cycle the alternative at PATH in ROOT. Return the path to focus."
+  (pcase-let* ((`(,owner . ,slot) (my/ocaml-owner root path))
+               (kind (and (listp owner) (plist-get owner :kind)))
+               (owner-path (my/ocaml-owner-path root path)))
+    (cond
+     ((my/ocaml-struct-item-default-p root path)
+      (let* ((body-path (my/ocaml-struct-item-path root path))
+             (body (my/ocaml-path-get root body-path))
+             (items (plist-get body :items))
+             (index (car (last (my/ocaml-struct-item-index root path))))
+             (options (my/ocaml-body-options root path))
+             (current (nth index items))
+             (position (or (cl-position-if
+                            (lambda (option)
+                              (and (eq (plist-get option :kind)
+                                       (plist-get current :kind))
+                                   (equal (plist-get option :name)
+                                          (plist-get current :name))))
+                            options)
+                           -1))
+             (next (nth (mod (1+ position) (length options)) options)))
+        (setf (nth index items) next)
+        (append body-path (list :items index :name))))
+
+     ((and (eq kind 'type-decl) (memq slot '(:name :params)))
+      (let* ((options '(nil ("'a") ("'a" "'b")))
+             (current (plist-get owner :params))
+             (index (or (cl-position current options :test #'equal) 0))
+             (next (nth (mod (1+ index) (length options)) options)))
+        (plist-put owner :params (copy-sequence next))
+        (if next
+            (append owner-path '(:params 0))
+          (append owner-path '(:name)))))
+
+     ((and (eq kind 'record-field) (memq slot '(:name :type)))
+      (plist-put owner :mutable (not (plist-get owner :mutable)))
+      (append owner-path '(:name)))
+
+     ((eq kind 'param)
+      (let* ((options '(nil labelled optional))
+             (index (or (cl-position (plist-get owner :label) options) 0))
+             (next (nth (mod (1+ index) (length options)) options)))
+        (plist-put owner :label next)
+        (unless (eq next 'optional) (plist-put owner :default nil))
+        (append owner-path '(:name))))
+
+     ((and (eq kind 'let-binding) (memq slot '(:name :annotation)))
+      (plist-put owner :annotation
+                 (and (not (plist-get owner :annotation)) "t"))
+      (append owner-path
+              (if (plist-get owner :annotation) '(:annotation) '(:name))))
+
+     ((and (eq kind 'module-decl) (eq slot :name))
+      (let* ((options '(plain functor recursive))
+             (index (or (cl-position (plist-get owner :form) options) 0))
+             (next (nth (mod (1+ index) (length options)) options)))
+        (plist-put owner :form next)
+        (plist-put owner :params
+                   (when (eq next 'functor)
+                     (list (list :kind 'module-param
+                                 :name "X" :signature "S"))))
+        (when (plist-get owner :auto-signature)
+          (plist-put owner :signature nil)
+          (plist-put owner :auto-signature nil))
+        (when (and (eq next 'recursive) (not (plist-get owner :signature)))
+          (plist-put owner :signature (my/ocaml-signature-ref "S"))
+          (plist-put owner :auto-signature t))
+        (append owner-path '(:name))))
+
+     ((and (eq kind 'signature-ref) (eq slot :name))
+      (let* ((decl-path (butlast owner-path))
+             (decl (my/ocaml-path-get root decl-path)))
+        (plist-put decl :signature
+                   (list :kind 'signature-body
+                         :items (list (list :kind 'val-item
+                                            :name "x" :type "t"))))
+        (append decl-path '(:signature :items 0 :name))))
+
+     ((and (eq kind 'signature-body) (eq slot :items))
+      (let* ((decl-path (butlast owner-path))
+             (decl (my/ocaml-path-get root decl-path)))
+        (plist-put decl :signature (my/ocaml-signature-ref "S"))
+        (append decl-path '(:signature :name))))
+
+     ((and (eq kind 'constraint) (memq slot '(:name :value)))
+      (let ((destructive (plist-get owner :destructive))
+            (what (plist-get owner :what)))
+        (cond
+         ((and (eq what 'type) (not destructive))
+          (plist-put owner :destructive t))
+         ((eq what 'type)
+          (plist-put owner :what 'module)
+          (plist-put owner :destructive nil))
+         ((not destructive) (plist-put owner :destructive t))
+         (t (plist-put owner :what 'type)
+            (plist-put owner :destructive nil))))
+      (append owner-path '(:name)))
+
+     ((and (eq kind 'match-arm) (memq slot '(:pattern :guard :alias
+                                             :alternative :body)))
+      (let* ((options '(nil guard or-pattern as-binding))
+             (current (if (plist-get owner :guard) 'guard
+                        (plist-get owner :pattern-form)))
+             (index (or (cl-position current options) 0))
+             (next (nth (mod (1+ index) (length options)) options)))
+        (plist-put owner :guard (when (eq next 'guard) "g"))
+        (plist-put owner :pattern-form (unless (eq next 'guard) next))
+        (when (eq next 'or-pattern)
+          (plist-put owner :alternative "pat2"))
+        (when (eq next 'as-binding)
+          (plist-put owner :alias "x"))
+        (append owner-path '(:pattern))))
+
+     ((and (eq kind 'argument) (memq slot '(:value)))
+      (let* ((available (plist-get owner :alternatives))
+             (current (plist-get owner :label))
+             (index (or (cl-position current available :test #'equal) -1))
+             (next (nth (mod (1+ index) (length available)) available)))
+        (when available
+          (plist-put owner :label next)
+          (plist-put owner :label-kind (and next 'labelled)))
+        (append owner-path '(:value))))
+
+     ((and (eq kind 'struct-body) (eq slot :items))
+      nil))))
+
+(defun my/ocaml-struct-item-index (root path)
+  "Return the PATH prefix selecting a struct body item."
+  (let ((body-path (my/ocaml-struct-item-path root path)))
+    (when body-path
+      (seq-take path (+ (length body-path) 2)))))
+
+(defconst my/ocaml-default-item-names '((type-decl . "t") (let-binding . "x")))
+
+(defun my/ocaml-struct-item-default-p (root path)
+  "Return non-nil when PATH selects a struct item still holding its default."
+  (when-let* ((item-path (my/ocaml-struct-item-index root path))
+              (item (my/ocaml-path-get root item-path))
+              (default (alist-get (plist-get item :kind)
+                                  my/ocaml-default-item-names)))
+    (equal (plist-get item :name) default)))
+
+(defun my/ocaml-owner-path (root path)
+  "Return the path of the node owning PATH."
+  (ignore root)
+  (if (integerp (car (last path)))
+      (butlast (butlast path))
+    (butlast path)))
+
+(defun my/ocaml-snippet-region ()
+  "Return the active snippet's bounds."
+  (when-let* ((snippet (car (yas-active-snippets)))
+              (overlay (yas--snippet-control-overlay snippet)))
+    (cons (overlay-start overlay) (overlay-end overlay))))
+
+(defun my/ocaml-sync ()
+  "Copy the active snippet's field text back into the model."
+  (when-let* ((state my/ocaml-snippet)
+              (snippet (car (yas-active-snippets))))
+    (let ((root (plist-get state :root))
+          (fields (plist-get state :fields)))
+      (dolist (field (yas--snippet-fields snippet))
+        (when-let* ((path (cdr (assq (yas--field-number field) fields)))
+                    (text (buffer-substring-no-properties
+                           (yas--field-start field) (yas--field-end field))))
+          (unless (string-empty-p text)
+            (my/ocaml-path-set root path text)))))))
+
+(defun my/ocaml-focus-field (focus)
+  "Move point to the field whose path is FOCUS."
+  (when-let* ((state my/ocaml-snippet)
+              (snippet (car (yas-active-snippets)))
+              (number (car (rassoc focus (plist-get state :fields))))
+              (field (seq-find (lambda (f) (= (yas--field-number f) number))
+                               (yas--snippet-fields snippet))))
+    (goto-char (yas--field-start field))
+    (yas--move-to-field snippet field)
+    t))
+
+(defun my/ocaml-format-region (start end)
+  "Reindent the construct between START and END."
+  (when (derived-mode-p 'tuareg-mode)
+    (ignore-errors (indent-region start end))))
+
+(defun my/ocaml-place (root focus)
+  "Render ROOT at point as a snippet and focus FOCUS."
+  (let* ((rendered (my/ocaml-render-root root))
+         (start (point)))
+    (setq my/ocaml-snippet
+          (list :root root :fields (plist-get rendered :fields)))
+    (yas-expand-snippet (plist-get rendered :template) start start)
+    (when-let* ((region (my/ocaml-snippet-region)))
+      (my/ocaml-format-region (car region) (cdr region)))
+    (my/ocaml-focus-field focus)))
+
+(defun my/ocaml-current-path ()
+  "Return the model path of the active snippet field."
+  (when-let* ((state my/ocaml-snippet)
+              (overlay (bound-and-true-p yas--active-field-overlay))
+              (field (overlay-get overlay 'yas--field)))
+    (cdr (assq (yas--field-number field) (plist-get state :fields)))))
+
+(defun my/ocaml-restructure (mutate)
+  "Sync, apply MUTATE to the model, then re-render and refocus."
+  (when-let* ((state my/ocaml-snippet)
+              (path (my/ocaml-current-path)))
+    (my/ocaml-sync)
+    (let* ((root (plist-get state :root))
+           (focus (funcall mutate root path)))
+      (when focus
+        (atomic-change-group
+          (let ((region (my/ocaml-snippet-region)))
+            (when-let* ((snippet (car (yas-active-snippets))))
+              (yas-exit-snippet snippet))
+            (delete-region (car region) (cdr region))
+            (goto-char (car region))
+            (my/ocaml-place root focus)))
+        t))))
+
+(defun my/ocaml-structured-tab ()
+  "Expand, move on, or append a sibling in the active construct."
+  (interactive)
+  (or (my/ocaml-restructure #'my/ocaml-advance)
+      (yas-next-field-or-maybe-expand)))
+
+(defun my/ocaml-structured-cycle ()
+  "Cycle the alternative under point in the active construct."
+  (interactive)
+  (my/ocaml-restructure #'my/ocaml-cycle))
+
+(defun my/ocaml-start-type ()
+  "Insert a structured OCaml type declaration."
+  (interactive)
+  (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+  (my/ocaml-place (my/ocaml-default-type) '(:name)))
+
+(provide 'engine)
+
+(defun my/ocaml-start-let ()
+  "Insert a structured OCaml let binding."
+  (interactive)
+  (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+  (my/ocaml-place (my/ocaml-default-let) '(:bindings 0 :name)))
+
+(defun my/ocaml-start-module ()
+  "Insert a structured OCaml module declaration."
+  (interactive)
+  (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+  (my/ocaml-place (my/ocaml-default-module) '(:name)))
+
+(defun my/ocaml-start-match ()
+  "Insert a structured OCaml match expression."
+  (interactive)
+  (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+  (my/ocaml-place (my/ocaml-default-match) '(:scrutinee)))
+
+(defun my/ocaml-start-record ()
+  "Insert a structured OCaml record type."
+  (interactive)
+  (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+  (my/ocaml-place
+   (list :kind 'type-decl :params nil :name "t"
+         :body (list :kind 'record
+                     :fields (list (my/ocaml-record-field "field"))))
+   '(:body :fields 0 :name)))
+
+(with-eval-after-load 'yasnippet
+  (define-key yas-keymap (kbd "M-TAB") #'my/ocaml-structured-cycle)
+  (define-key yas-keymap (kbd "M-<tab>") #'my/ocaml-structured-cycle)
+  (define-key yas-keymap (kbd "C-M-i") #'my/ocaml-structured-cycle))
 
 #+end_src
 
