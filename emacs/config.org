@@ -61,6 +61,13 @@ Desktop state restores buffers and frames after a clean restart into the current
   :init
   (desktop-save-mode 1))
 
+(use-package server
+  :ensure nil
+  :demand t
+  :config
+  (unless (server-running-p)
+    (server-start)))
+
 (defvar my/restart-emacs-from-profile-p nil)
 
 (defun my/start-emacs-from-profile ()
@@ -124,7 +131,13 @@ Desktop state restores buffers and frames after a clean restart into the current
               (org-babel-tangle)
               (set-buffer-modified-p nil)
               (setq buffer-file-name nil))
-            (load elisp nil nil t)
+            (let ((byte-compile-verbose nil)
+                  (byte-compile-warnings nil))
+              (byte-compile-file elisp))
+            (load (if (file-readable-p (concat elisp "c"))
+                      (concat elisp "c")
+                    elisp)
+                  nil nil t)
             (message "Reloaded complete Emacs configuration"))
         (when (buffer-live-p source-buffer)
           (with-current-buffer source-buffer
@@ -627,32 +640,31 @@ Explicit completion popup with documentation and Meow navigation.
 (require 'treesit)
 
 (defvar-local my/type-completion-expected nil)
+(defvar-local my/type-completion-wanted nil)
 (defvar-local my/type-completion-results nil)
 (defvar-local my/type-completion-construct-results nil)
+(defvar-local my/type-completion-index nil)
+(defvar-local my/type-completion-candidates nil)
 (defvar-local my/type-completion-key nil)
 (defvar-local my/type-completion-generation 0)
 (defvar-local my/type-completion-state nil)
-(defvar my/type-parse-cache (make-hash-table :test #'equal))
 
 (defun my/type-completion-entry (candidate)
   "Return CANDIDATE's OCaml semantic completion entry."
   (when (and (stringp candidate) (> (length candidate) 0))
     (or (get-text-property 0 'my/type-search-entry candidate)
-        (seq-find
-         (lambda (entry)
-           (equal (plist-get entry :name)
-                  (substring-no-properties candidate)))
-         (append my/type-completion-construct-results
-                 my/type-completion-results)))))
+        (and my/type-completion-index
+             (gethash (substring-no-properties candidate)
+                      my/type-completion-index)))))
 
 (defun my/type-normalize (type)
   "Normalize whitespace and Markdown fences in TYPE."
   (when (stringp type)
-    (let ((text (string-trim type)))
-      (setq text (replace-regexp-in-string "```[^\n]*\n?" "" text))
-      (setq text (replace-regexp-in-string "```" "" text))
-      (setq text (replace-regexp-in-string "[[:space:]]+" " " text))
-      (string-trim text))))
+    (let ((text type))
+      (when (string-search "```" text)
+        (setq text (replace-regexp-in-string
+                    "```[^\n]*\n?\\|```" "" text t t)))
+      (string-trim (replace-regexp-in-string "[[:space:]]+" " " text t t)))))
 
 (defun my/type-remove-candidate-prefix (type candidate)
   "Remove CANDIDATE's optional signature prefix from TYPE."
@@ -673,149 +685,108 @@ Explicit completion popup with documentation and Meow navigation.
       (treesit-node-check node 'missing)
       (string= (treesit-node-type node) "ERROR")))
 
-(defun my/type-node-form (node variables)
-  "Convert OCaml type NODE to an alpha-normalized form using VARIABLES."
-  (let ((kind (treesit-node-type node)))
-    (cond
-     ((member kind '("parenthesized_type" "type_constraint"))
-      (my/type-node-form
-       (or (treesit-node-child-by-field-name node "type")
-           (treesit-node-child node 0 t))
-       variables))
-     ((string= kind "type_variable")
-      (let* ((text (treesit-node-text node t))
-             (known (gethash text variables)))
-        (unless known
-          (setq known (hash-table-count variables))
-          (puthash text known variables))
-        (list :var known)))
-     ((string= kind "function_type")
-      (list :arrow
-            (my/type-node-form
-             (treesit-node-child-by-field-name node "domain") variables)
-            (my/type-node-form
-             (treesit-node-child-by-field-name node "codomain") variables)))
-     ((zerop (treesit-node-child-count node t))
-      (list (intern (concat ":" kind)) (treesit-node-text node t)))
-     (t
-      (cons (intern (concat ":" kind))
-            (cl-loop for index below (treesit-node-child-count node t)
-                     for child = (treesit-node-child node index t)
-                     collect (my/type-node-form child variables)))))))
+(defun my/type-enclosed-p (text)
+  "Return non-nil when TEXT is wrapped in one balanced pair of parentheses."
+  (and (> (length text) 1)
+       (eq (aref text 0) ?\()
+       (eq (aref text (1- (length text))) ?\))
+       (let ((depth 0)
+             (inner t))
+         (dotimes (index (length text))
+           (pcase (aref text index)
+             (?\( (setq depth (1+ depth)))
+             (?\) (setq depth (1- depth))))
+           (when (and (zerop depth) (< index (1- (length text))))
+             (setq inner nil)))
+         inner)))
 
-(defun my/type-parse-ocaml (type &optional candidate)
-  "Parse TYPE structurally with Tree-sitter, removing CANDIDATE's prefix."
-  (when-let* ((text (my/type-remove-candidate-prefix type candidate))
-              ((treesit-language-available-p 'ocaml)))
-    (let* ((missing (make-symbol "missing"))
-           (cached (gethash text my/type-parse-cache missing)))
-      (if (not (eq cached missing))
-          cached
-        (when (> (hash-table-count my/type-parse-cache) 1000)
-          (clrhash my/type-parse-cache))
-        (puthash
-         text
-         (with-temp-buffer
-           (insert "type __completion = " text)
-           (treesit-parser-create 'ocaml)
-           (let* ((root (treesit-buffer-root-node 'ocaml))
-                  (binding
-                   (cdr (car (treesit-query-capture
-                              root '((type_binding) @binding)))))
-                  (node
-                   (and binding
-                        (or
-                         (treesit-node-child-by-field-name
-                          binding "equation")
-                         (treesit-node-child-by-field-name
-                          binding "body")))))
-             (when (and node (not (my/type-treesit-error-p root)))
-               (list :raw text
-                     :form
-                     (my/type-node-form
-                      node (make-hash-table :test #'equal))))))
-         my/type-parse-cache)))))
+(defun my/type-strip-parens (text)
+  "Return TEXT with any fully enclosing parentheses removed."
+  (if (my/type-enclosed-p text)
+      (my/type-strip-parens (string-trim (substring text 1 -1)))
+    text))
 
-(defun my/type-form-size (form)
-  "Return the structural size of FORM."
-  (if (consp form)
-      (1+ (cl-loop for child in (cdr form)
-                   sum (my/type-form-size child)))
-    1))
+(defun my/type-arrow-split (text)
+  "Split TEXT on its top-level function arrows."
+  (let ((depth 0)
+        (start 0)
+        (position 0)
+        (length (length text))
+        parts)
+    (while (< position length)
+      (pcase (aref text position)
+        ((or ?\( ?\[ ?{) (setq depth (1+ depth)))
+        ((or ?\) ?\] ?}) (setq depth (max 0 (1- depth))))
+        ((or ?- ?=)
+         (when (and (zerop depth)
+                    (< (1+ position) length)
+                    (eq (aref text (1+ position)) ?>))
+           (push (string-trim (substring text start position)) parts)
+           (setq position (1+ position)
+                 start (1+ position)))))
+      (setq position (1+ position)))
+    (push (string-trim (substring text start)) parts)
+    (nreverse parts)))
 
-(defun my/type-var-occurrences (form)
-  "Return the number of polymorphic variable occurrences in FORM."
-  (cond
-   ((eq (car-safe form) :var) 1)
-   ((consp form)
-    (cl-loop for child in (cdr form)
-             sum (my/type-var-occurrences child)))
-   (t 0)))
+(defun my/type-arrow-parts (type)
+  "Split TYPE on its top-level function arrows, flattening its codomain."
+  (when-let* ((text (my/type-normalize type)))
+    (let* ((parts (my/type-arrow-split (my/type-strip-parens text)))
+           (codomain (car (last parts)))
+           (inner (and (my/type-enclosed-p codomain)
+                       (my/type-arrow-split
+                        (my/type-strip-parens codomain)))))
+      (if (cdr inner)
+          (append (butlast parts) inner)
+        parts))))
 
-(defun my/type-arrow-suffixes (form)
-  "Return each function suffix of FORM with its applied-argument count."
-  (let ((current form)
-        (consumed 0)
-        result)
-    (push (cons consumed current) result)
-    (while (eq (car-safe current) :arrow)
-      (setq consumed (1+ consumed)
-            current (nth 2 current))
-      (push (cons consumed current) result))
-    (nreverse result)))
+(defun my/type-arrow-count (type)
+  "Return TYPE's number of top-level function arrows."
+  (max 0 (1- (length (my/type-arrow-parts type)))))
 
-(defun my/type-unification-distance (candidate expected bindings)
-  "Unify CANDIDATE with EXPECTED using BINDINGS and return specialization cost."
-  (cond
-   ((eq (car-safe candidate) :var)
-    (let* ((variable (cadr candidate))
-           (bound (assq variable (car bindings))))
-      (if bound
-          (and (equal (cdr bound) expected) 0)
-        (push (cons variable expected) (car bindings))
-        (my/type-form-size expected))))
-   ((eq (car-safe expected) :var)
-    (my/type-form-size candidate))
-   ((equal candidate expected) 0)
-   ((and (consp candidate) (consp expected)
-         (eq (car candidate) (car expected))
-         (= (length candidate) (length expected)))
-    (let ((total 0)
-          failed)
-      (cl-loop for left in (cdr candidate)
-               for right in (cdr expected)
-               for distance =
-               (my/type-unification-distance left right bindings)
-               if (null distance) do (setq failed t)
-               else do (setq total (+ total distance)))
-      (and (not failed) total)))
-   (t nil)))
+(defun my/type-canonical (type)
+  "Return TYPE with its top-level arrows written uniformly."
+  (when-let* ((parts (my/type-arrow-parts type)))
+    (string-join parts " -> ")))
 
-(defun my/type-poly-distance (candidate expected)
-  "Return CANDIDATE's consistent specialization distance to EXPECTED."
-  (my/type-unification-distance candidate expected (list nil)))
+(defun my/type-suffix-arity (parts wanted)
+  "Return how many leading PARTS to drop so the remainder spells WANTED."
+  (cl-loop for index below (length parts)
+           when (equal (string-join (nthcdr index parts) " -> ") wanted)
+           return index))
 
-(defun my/type-best-compatible-suffix (form expected)
-  "Return FORM's best suffix compatible with EXPECTED."
-  (car
-   (sort
-    (delq nil
-          (mapcar
-           (lambda (suffix)
-             (when-let* ((distance
-                         (my/type-poly-distance (cdr suffix) expected)))
-               (list distance
-                     (my/type-var-occurrences (cdr suffix))
-                     (car suffix))))
-           (my/type-arrow-suffixes form)))
-    #'my/type-score-less-p)))
+(defun my/type-return-arity (type expected)
+  "Return how many arguments of TYPE must be applied to obtain EXPECTED."
+  (when-let* ((parts (my/type-arrow-parts type))
+              (wanted (my/type-canonical expected)))
+    (my/type-suffix-arity parts wanted)))
 
-(defun my/type-form-label (form)
-  "Return the argument label nested in type FORM."
-  (cond
-   ((eq (car-safe form) :label_name) (cadr form))
-   ((consp form)
-    (seq-some #'my/type-form-label (cdr form)))))
+(defun my/type-argument-label (domain)
+  "Return DOMAIN's OCaml argument label, if it carries one."
+  (and (string-match "\\`[?~]?\\([a-z_][A-Za-z0-9_']*\\):[^:]" domain)
+       (match-string 1 domain)))
+
+(defun my/type-holes-from-parts (parts count)
+  "Return COUNT hole texts for the leading argument domains in PARTS."
+  (cl-loop for index below count
+           for label = (my/type-argument-label (or (nth index parts) ""))
+           collect (if label (format "~%s:_" label) "_")))
+
+(defun my/type-template-holes (template)
+  "Return TEMPLATE's head token and its hole tokens."
+  (when-let* ((tokens (split-string (string-trim (or template ""))
+                                    "[[:space:]]+" t)))
+    (cons (car tokens) (cdr tokens))))
+
+(defun my/type-number-hole (hole index)
+  "Return HOLE rewritten as Yasnippet field INDEX."
+  (format "%s${%d:_}" (substring hole 0 (1- (length hole))) index))
+
+(defun my/type-number-holes (holes)
+  "Return HOLES rewritten as consecutive Yasnippet fields."
+  (cl-loop for hole in holes
+           for index from 1
+           collect (my/type-number-hole hole index)))
 
 (defconst my/ocaml-word-infix-operators
   '("asr" "land" "lor" "lsl" "lsr" "lxor" "mod"))
@@ -844,53 +815,54 @@ Explicit completion popup with documentation and Meow navigation.
            (and (string-prefix-p "!" name)
                 (not (member name '("!=" "!==")))))))
 
-(defun my/type-drop-arrows (form count)
-  "Return FORM after consuming COUNT function arguments."
-  (let ((current form))
-    (while (and (> count 0) (eq (car-safe current) :arrow))
-      (setq current (nth 2 current)
-            count (1- count)))
-    (and (zerop count) current)))
-
-(defun my/type-operator-template (name arguments)
-  "Return natural OCaml application of operator NAME to ARGUMENTS holes."
-  (cond
-   ((zerop arguments) (format "( %s )" name))
-   ((my/ocaml-prefix-operator-p name)
-    (concat name " "
-            (mapconcat (lambda (_) "_")
-                       (number-sequence 1 arguments) " ")))
-   ((= arguments 1) (format "( %s ) _" name))
-   (t
-    (concat (format "(_ %s _)" name)
-            (if (> arguments 2) " " "")
-            (mapconcat (lambda (_) "_")
-                       (number-sequence 3 arguments) " ")))))
-
-(defun my/type-completion-template (candidate expected)
-  "Construct an applied expression for CANDIDATE producing EXPECTED."
-  (when-let* ((parsed
-               (my/type-parse-ocaml
-                (my/completion-candidate-detail candidate) candidate))
-              (wanted (my/type-parse-ocaml expected))
-              (form (plist-get parsed :form))
-              (expected-form (plist-get wanted :form))
-              (best (my/type-best-compatible-suffix form expected-form))
-              (arguments (nth 2 best))
-              (name (substring-no-properties candidate)))
+(defun my/type-operator-template (name holes)
+  "Return natural OCaml application of operator NAME to HOLES."
+  (let ((arguments (length holes)))
     (cond
-     ((my/ocaml-let-operator-p name) nil)
-     ((and best (my/ocaml-operator-p name))
-      (my/type-operator-template name arguments))
-     ((and best (> arguments 0))
-      (let ((current form)
-            holes)
-        (dotimes (_ arguments)
-          (let* ((domain (nth 1 current))
-                 (label (my/type-form-label domain)))
-            (push (if label (format "~%s:_" label) "_") holes)
-            (setq current (nth 2 current))))
-        (concat name " " (string-join (nreverse holes) " ")))))))
+     ((zerop arguments) (format "( %s )" name))
+     ((my/ocaml-prefix-operator-p name)
+      (concat name " " (string-join holes " ")))
+     ((= arguments 1) (format "( %s ) %s" name (car holes)))
+     (t
+      (concat (format "(%s %s %s)" (nth 0 holes) name (nth 1 holes))
+              (if (> arguments 2) " " "")
+              (string-join (nthcdr 2 holes) " "))))))
+
+(defun my/type-application (name holes)
+  "Return NAME applied to HOLES in its natural OCaml syntax."
+  (cond
+   ((my/ocaml-let-operator-p name) nil)
+   ((my/ocaml-operator-p name) (my/type-operator-template name holes))
+   (holes (concat name " " (string-join holes " ")))))
+
+(defun my/type-entry-annotate (entry wanted rank)
+  "Record ENTRY's server RANK and its application producing canonical WANTED."
+  (setq entry (plist-put entry :rank rank))
+  (if (memq (plist-get entry :kind) '(construct collection))
+      (progn
+        (setq entry (plist-put entry :tier 0))
+        (plist-put entry :arity 0))
+    (let* ((name (plist-get entry :name))
+           (parts (my/type-arrow-parts (plist-get entry :typ)))
+           (exact (and parts wanted (my/type-suffix-arity parts wanted)))
+           (server (cdr (my/type-template-holes
+                         (plist-get entry :constructible))))
+           (arity (or exact (and server (length server))))
+           (arity (and arity
+                       (max 0 (- arity
+                                 (if (my/ocaml-let-operator-p name) 2 0)))))
+           (holes (cond ((null arity) nil)
+                        ((>= (length server) arity) (seq-take server arity))
+                        (t (my/type-holes-from-parts parts arity)))))
+      (setq entry (plist-put entry :arity (or arity 0)))
+      (setq entry (plist-put entry :tier
+                             (if (and exact (equal exact arity)) 0 1)))
+      (setq entry (plist-put entry :template
+                             (and arity (my/type-application name holes))))
+      (plist-put entry :snippet
+                 (and arity
+                      (my/type-application
+                       name (my/type-number-holes holes)))))))
 
 (defun my/type-plausible-p (type)
   "Return non-nil when TYPE looks like type text rather than source code."
@@ -900,85 +872,83 @@ Explicit completion popup with documentation and Meow navigation.
          (not (string-match-p
                "\\_<\\(?:let\\|fun\\|function\\|match\\)\\_>" type)))))
 
-(defun my/type-completion-score (candidate expected index)
-  "Return CANDIDATE's lexicographic type score for EXPECTED and INDEX."
-  (let* ((entry (my/type-completion-entry candidate))
-         (parsed
-          (my/type-parse-ocaml
-           (my/completion-candidate-detail candidate) candidate))
-         (wanted (my/type-parse-ocaml expected))
-         (form (plist-get parsed :form))
-         (name (substring-no-properties candidate))
-         (form (if (my/ocaml-let-operator-p name)
-                   (my/type-drop-arrows form 2)
-                 form))
-         (expected-form (plist-get wanted :form))
-         (raw-size (length (or (plist-get parsed :raw) "")))
-         (suffixes (and form (my/type-arrow-suffixes form)))
-         (exact
-          (and expected-form
-               (seq-find (lambda (suffix)
-                           (equal (cdr suffix) expected-form))
-                         suffixes)))
-         (poly
-          (and form expected-form
-               (my/type-best-compatible-suffix form expected-form))))
-    (cond
-     ((and exact (zerop (car exact)))
-      (list 0 0 raw-size index))
-     (exact
-      (list 1 (car exact) raw-size index))
-     ((eq (car-safe form) :var)
-      (list 2 0 raw-size index))
-     (poly
-      (list 3 (nth 0 poly) (nth 1 poly) (nth 2 poly) raw-size index))
-     ((or entry (my/completion-lsp-item candidate))
-      (list 4 index))
-     (t (list 5 index)))))
+(defvar my/type-completion-rank-limit 200)
+(defvar my/type-completion-inhibit-probe nil)
+(defvar-local my/type-completion-arities nil)
 
-(defun my/type-score-less-p (left right)
-  "Return non-nil when score LEFT precedes score RIGHT."
-  (catch 'answer
-    (while (and left right)
-      (cond
-       ((< (car left) (car right)) (throw 'answer t))
-       ((> (car left) (car right)) (throw 'answer nil)))
-      (setq left (cdr left)
-            right (cdr right)))
-    (< (length left) (length right))))
+(defun my/type-completion-arity (candidate)
+  "Return how many of CANDIDATE's arguments yield the expected type."
+  (when-let* ((wanted my/type-completion-wanted)
+              (detail (my/completion-candidate-detail candidate))
+              (key (my/type-remove-candidate-prefix detail candidate)))
+    (unless my/type-completion-arities
+      (setq my/type-completion-arities (make-hash-table :test #'equal)))
+    (let ((cached (gethash key my/type-completion-arities 'absent)))
+      (if (eq cached 'absent)
+          (puthash key
+                   (my/type-suffix-arity (my/type-arrow-parts key) wanted)
+                   my/type-completion-arities)
+        cached))))
 
-(defun my/completion-sort-candidates (expected candidates)
-  "Rank CANDIDATES by EXPECTED type while preserving server order."
-  (let ((index 0)
-        decorated)
-    (dolist (candidate candidates)
-      (push (cons candidate
-                  (my/type-completion-score candidate expected index))
-            decorated)
-      (setq index (1+ index)))
+(defun my/type-completion-sort-key (candidate index)
+  "Return CANDIDATE's packed rank, falling back to its server order INDEX."
+  (if-let* ((entry (my/type-completion-entry candidate)))
+      (logior (ash (plist-get entry :tier) 20)
+              (ash (min (plist-get entry :arity) 15) 16)
+              (min (plist-get entry :rank) 65535))
+    (if-let* (((< index my/type-completion-rank-limit))
+              (arity (my/type-completion-arity candidate)))
+        (logior (ash (min arity 15) 16) (min index 65535))
+      (logior (ash 2 20) (min index 65535)))))
+
+(defun my/completion-sort-candidates (candidates)
+  "Rank CANDIDATES by the language server's own type ordering."
+  (let ((index -1))
     (mapcar
-     #'car
+     #'cdr
      (cl-stable-sort
-      (nreverse decorated)
-      (lambda (left right)
-        (my/type-score-less-p (cdr left) (cdr right)))))))
+      (mapcar (lambda (candidate)
+                (cons (my/type-completion-sort-key
+                       candidate (setq index (1+ index)))
+                      candidate))
+              candidates)
+      #'< :key #'car))))
+
+(defvar my/ocaml-parse-buffer nil)
+(defvar my/ocaml-value-name-query nil)
+
+(defun my/ocaml-parse-buffer ()
+  "Return the shared buffer holding the reusable OCaml parser."
+  (unless (buffer-live-p my/ocaml-parse-buffer)
+    (setq my/ocaml-parse-buffer (get-buffer-create " *ocaml-parse*" t))
+    (with-current-buffer my/ocaml-parse-buffer
+      (treesit-parser-create 'ocaml)))
+  my/ocaml-parse-buffer)
+
+(defun my/ocaml-value-name-query ()
+  "Return the compiled Tree-sitter query matching OCaml value names."
+  (or my/ocaml-value-name-query
+      (setq my/ocaml-value-name-query
+            (treesit-query-compile 'ocaml '((value_name) @name)))))
 
 (defun my/type-expression-hole-ranges (expression)
   "Return Tree-sitter ranges of typed holes in OCaml EXPRESSION."
-  (when (treesit-language-available-p 'ocaml)
-    (with-temp-buffer
-      (insert "let __completion = " expression)
-      (let ((offset (1+ (length "let __completion = "))))
-        (treesit-parser-create 'ocaml)
-        (let ((root (treesit-buffer-root-node 'ocaml)))
-          (unless (my/type-treesit-error-p root)
-            (cl-loop for capture in
-                     (treesit-query-capture root '((value_name) @name))
-                     for node = (cdr capture)
-                     when (string= (treesit-node-text node t) "_")
-                     collect
-                     (cons (- (treesit-node-start node) offset)
-                           (- (treesit-node-end node) offset)))))))))
+  (when (and (stringp expression) (treesit-language-available-p 'ocaml))
+    (condition-case nil
+        (with-current-buffer (my/ocaml-parse-buffer)
+          (erase-buffer)
+          (insert "let __completion = " expression)
+          (let ((offset (1+ (length "let __completion = ")))
+                (root (treesit-buffer-root-node 'ocaml)))
+            (unless (my/type-treesit-error-p root)
+              (cl-loop for capture in
+                       (treesit-query-capture root (my/ocaml-value-name-query))
+                       for node = (cdr capture)
+                       when (string= (treesit-node-text node t) "_")
+                       collect
+                       (cons (- (treesit-node-start node) offset)
+                             (- (treesit-node-end node) offset))))))
+      (error nil))))
 
 (defun my/type-yas-snippet (expression)
   "Convert typed holes in server-produced EXPRESSION to Yasnippet fields."
@@ -1015,27 +985,33 @@ Explicit completion popup with documentation and Meow navigation.
    ((listp contents)
     (mapconcat #'my/eglot-markup-text contents "\n"))))
 
-(defun my/eglot-hover-type ()
-  "Return plausible type text from the standard LSP hover request."
+(defun my/eglot-code-blocks (text)
+  "Return the fenced code blocks of Markdown TEXT in document order."
+  (let ((position 0)
+        blocks)
+    (while (string-match "```[^\n]*\n\\(\\(?:.\\|\n\\)*?\\)\n```" text position)
+      (push (string-trim (match-string 1 text)) blocks)
+      (setq position (match-end 0)))
+    (nreverse blocks)))
+
+(defun my/eglot-hover-text ()
+  "Return the plain text of the standard LSP hover response at point."
   (when (and (fboundp 'eglot-managed-p) (eglot-managed-p))
     (condition-case nil
         (when-let* ((server (eglot--current-server-or-lose))
                     (response
                      (jsonrpc-request
                       server :textDocument/hover
-                      (eglot--TextDocumentPositionParams)))
-                    (text
-                     (my/eglot-markup-text (plist-get response :contents))))
-          (let ((position 0)
-                blocks)
-            (while (string-match
-                    "```[^\n]*\n\\(\\(?:.\\|\n\\)*?\\)\n```"
-                    text position)
-              (push (match-string 1 text) blocks)
-              (setq position (match-end 0)))
-            (let ((type (my/type-normalize (or (car blocks) text))))
-              (and (my/type-plausible-p type) type))))
+                      (eglot--TextDocumentPositionParams))))
+          (my/eglot-markup-text (plist-get response :contents)))
       (error nil))))
+
+(defun my/eglot-hover-type ()
+  "Return plausible type text from the standard LSP hover request."
+  (when-let* ((text (my/eglot-hover-text))
+              (type (my/type-normalize
+                     (or (car (last (my/eglot-code-blocks text))) text))))
+    (and (my/type-plausible-p type) type)))
 
 (defun my/eglot-signature-parameter-type ()
   "Return the active parameter type from standard LSP signature help."
@@ -1080,14 +1056,10 @@ Explicit completion popup with documentation and Meow navigation.
               (my/type-normalize text))))
       (error nil))))
 
-(defun my/completion-expected-type ()
-  "Return the best expected type available through standard LSP."
-  (or (my/eglot-signature-parameter-type)
-      (my/eglot-hover-type)))
-
 (defvar-local my/corfu-filter-kind nil)
 (defvar-local my/corfu-filter-regexp "")
 (defvar-local my/corfu-filter-candidates nil)
+(defvar-local my/corfu-filter-values nil)
 (defvar-local my/corfu-filter-exit nil)
 (defvar-local my/corfu-filter-error nil)
 
@@ -1101,6 +1073,12 @@ Explicit completion popup with documentation and Meow navigation.
       (or (my/type-normalize
            (my/completion-candidate-detail candidate)) "")
     (substring-no-properties candidate)))
+
+(defun my/corfu-filter-snapshot (kind candidates)
+  "Snapshot CANDIDATES together with their KIND filter values."
+  (setq my/corfu-filter-kind kind
+        my/corfu-filter-candidates (copy-sequence candidates)
+        my/corfu-filter-values (mapcar #'my/corfu-filter-value candidates)))
 
 (defun my/corfu-filter-highlight (text)
   "Return TEXT with active regexp matches highlighted."
@@ -1167,24 +1145,23 @@ Explicit completion popup with documentation and Meow navigation.
       (let* ((case-fold-search completion-ignore-case)
              (current (and (>= corfu--index 0)
                            (nth corfu--index corfu--candidates)))
-             (filtered
-              (if (string-empty-p my/corfu-filter-regexp)
-                  (copy-sequence my/corfu-filter-candidates)
-                (seq-filter
-                 (lambda (candidate)
-                   (string-match-p my/corfu-filter-regexp
-                                   (my/corfu-filter-value candidate)))
-                 my/corfu-filter-candidates))))
+             (empty (string-empty-p my/corfu-filter-regexp))
+             (position 0)
+             (selected nil)
+             (filtered nil))
+        (cl-loop for candidate in my/corfu-filter-candidates
+                 for value in my/corfu-filter-values
+                 when (or empty (string-match-p my/corfu-filter-regexp value))
+                 do (when (eq candidate current) (setq selected position))
+                    (push candidate filtered)
+                    (setq position (1+ position)))
+        (setq filtered (nreverse filtered))
         (setq my/corfu-filter-error nil)
         (setq corfu--candidates filtered
               corfu--total (length filtered)
               corfu--scroll 0
               corfu--preselect (if filtered 0 -1)
-              corfu--index
-              (or (and current
-                       (cl-position current filtered
-                                    :test #'equal-including-properties))
-                  corfu--preselect))
+              corfu--index (or selected corfu--preselect))
         (my/corfu-filter-popup)
         (my/corfu-filter-show-prompt))
     (invalid-regexp
@@ -1204,6 +1181,7 @@ Explicit completion popup with documentation and Meow navigation.
   (setq my/corfu-filter-kind nil
         my/corfu-filter-regexp ""
         my/corfu-filter-candidates nil
+        my/corfu-filter-values nil
         my/corfu-filter-error nil)
   (remove-hook 'post-command-hook #'my/corfu-filter-show-prompt 'local))
 
@@ -1277,11 +1255,9 @@ Explicit completion popup with documentation and Meow navigation.
     (user-error "No active completion popup"))
   (if (eq my/corfu-filter-kind kind)
       (my/corfu-filter-cancel)
-    (unless my/corfu-filter-kind
-      (setq my/corfu-filter-candidates
-            (copy-sequence corfu--candidates)))
-    (setq my/corfu-filter-kind kind
-          my/corfu-filter-regexp ""
+    (my/corfu-filter-snapshot
+     kind (or my/corfu-filter-candidates corfu--candidates))
+    (setq my/corfu-filter-regexp ""
           my/corfu-filter-error nil)
     (my/corfu-filter-deactivate)
     (setq my/corfu-filter-exit
@@ -1387,7 +1363,14 @@ Explicit completion popup with documentation and Meow navigation.
 ** Inline preview
 The first semantic completion can appear at an empty expected-type position and is accepted with =TAB=.
 
+Cursor motion triggers the preview, so it runs off the command loop on an idle timer and never starts a language-server type probe of its own; it ranks by the server's own order until an explicit completion has probed that position.
+
 #+begin_src emacs-lisp
+
+(defun my/completion-preview-without-probe (original &rest arguments)
+  "Run ORIGINAL preview update without starting a server type probe."
+  (let ((my/type-completion-inhibit-probe t))
+    (apply original arguments)))
 
 (use-package completion-preview
   :ensure nil
@@ -1399,12 +1382,15 @@ The first semantic completion can appear at an empty expected-type position and 
         ("C-<return>" . nil))
   :custom
   (completion-preview-minimum-symbol-length nil)
+  (completion-preview-idle-delay 0.2)
   :init
   (global-completion-preview-mode)
   :config
   (dolist (command '(forward-char backward-char next-line previous-line
                      meow-left meow-right meow-next meow-prev))
-    (add-to-list 'completion-preview-commands command)))
+    (add-to-list 'completion-preview-commands command))
+  (advice-add #'completion-preview--update
+              :around #'my/completion-preview-without-probe))
 
 #+end_src
 
@@ -1507,24 +1493,46 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
         (put-text-property 0 1 'my/type-search-entry entry candidate))
       candidate))
 
-  (defun my/type-merge-candidates (base entries)
-    "Merge BASE completion candidates with OCaml-LSP type-search ENTRIES."
-    (let ((by-name (make-hash-table :test #'equal))
+  (defun my/type-merge-candidates (base semantic)
+    "Merge BASE completion candidates with prebuilt SEMANTIC candidates."
+    (let ((seen (make-hash-table :test #'equal))
           result)
-      (dolist (entry entries)
-        (puthash (plist-get entry :name) entry by-name))
       (dolist (candidate base)
-        (let* ((copy (copy-sequence candidate))
-               (entry
-                (gethash (substring-no-properties candidate) by-name)))
+        (let ((entry (my/type-completion-entry candidate))
+              (copy (copy-sequence candidate)))
           (when (and entry (> (length copy) 0))
             (put-text-property 0 1 'my/type-search-entry entry copy)
-            (remhash (plist-get entry :name) by-name))
+            (puthash (substring-no-properties candidate) t seen))
           (push copy result)))
-      (maphash (lambda (_ entry)
-                 (push (my/type-semantic-candidate entry) result))
-               by-name)
+      (dolist (candidate semantic)
+        (unless (gethash (substring-no-properties candidate) seen)
+          (push candidate result)))
       (nreverse result)))
+
+  (defun my/type-completion-reindex ()
+    "Index the semantic results and precompute their applications."
+    (let ((index (make-hash-table :test #'equal))
+          (wanted my/type-completion-wanted)
+          (rank 0)
+          candidates)
+      (dolist (entry (append my/type-completion-construct-results
+                             my/type-completion-results))
+        (setq entry (my/type-entry-annotate entry wanted rank))
+        (puthash (plist-get entry :name) entry index)
+        (push (my/type-semantic-candidate entry) candidates)
+        (setq rank (1+ rank)))
+      (setq my/type-completion-index index
+            my/type-completion-candidates (nreverse candidates))))
+
+  (defun my/type-completion-receive (buffer generation key install)
+    "Run INSTALL in BUFFER when GENERATION and KEY are still current."
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when (and (= generation my/type-completion-generation)
+                   (equal key my/type-completion-key))
+          (funcall install)
+          (my/type-completion-reindex)
+          (my/type-completion-refresh-display buffer generation)))))
 
   (defun my/type-completion-ocaml-p ()
     "Return non-nil when this buffer supports OCaml-LSP type search."
@@ -1557,66 +1565,90 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
             (my/type-normalize (plist-get result :type)))
         (error nil))))
 
-  (defun my/type-completion-construct-at-point (expected)
-    "Return OCaml-LSP construction entries for EXPECTED at point."
+  (defun my/type-completion-construct-entries (suggestions)
+    "Return semantic entries for OCaml-LSP construction SUGGESTIONS."
+    (let ((expected my/type-completion-expected)
+          entries)
+      (dolist (suggestion suggestions)
+        (push (list :name suggestion
+                    :typ expected
+                    :constructible suggestion
+                    :kind 'construct)
+              entries))
+      (when (member "[]" suggestions)
+        (push (list :name "list literal […]"
+                    :typ expected :kind 'collection :collection 'list)
+              entries))
+      (when (member "[||]" suggestions)
+        (push (list :name "array literal [|…|]"
+                    :typ expected :kind 'collection :collection 'array)
+              entries))
+      (nreverse entries)))
+
+  (defun my/type-completion-construct-request (key)
+    "Request OCaml-LSP constructions at point and install them under KEY."
     (condition-case nil
-        (let* ((position (eglot--pos-to-lsp-position))
-               (response
-                (ocaml-eglot-req--construct position 1 "none"))
-               (suggestions (append (plist-get response :result) nil))
-               entries)
-          (dolist (suggestion suggestions)
-            (push (list :name suggestion
-                        :typ expected
-                        :constructible suggestion
-                        :kind 'construct)
-                  entries))
-          (when (member "[]" suggestions)
-            (push (list :name "list literal […]"
-                        :typ expected :kind 'collection :collection 'list)
-                  entries))
-          (when (member "[||]" suggestions)
-            (push (list :name "array literal [|…|]"
-                        :typ expected :kind 'collection :collection 'array)
-                  entries))
-          (nreverse entries))
+        (let ((buffer (current-buffer))
+              (generation my/type-completion-generation)
+              (server (eglot--current-server-or-lose))
+              (params (ocaml-eglot-req--ConstructParams
+                       (eglot--pos-to-lsp-position) 1 "none")))
+          (jsonrpc-async-request
+           server :ocamllsp/construct params
+           :success-fn
+           (lambda (response)
+             (my/type-completion-receive
+              buffer generation key
+              (lambda ()
+                (setq my/type-completion-construct-results
+                      (my/type-completion-construct-entries
+                       (append (plist-get response :result) nil))))))
+           :error-fn #'ignore
+           :timeout-fn #'ignore
+           :timeout 2.0
+           :deferred 'my/type-completion-construct))
       (error nil)))
 
-  (defun my/type-completion-context-at-point ()
-    "Return the expected type and cache construction entries at point."
-    (when-let* ((expected (my/type-completion-enclosing-at-point)))
-      (setq my/type-completion-construct-results
-            (my/type-completion-construct-at-point expected))
-      expected))
-
   (defun my/type-completion-expected-ocaml (beginning end)
-    "Return the expected type at completion bounds BEGINNING and END."
+    "Return OCaml-LSP's expected type at completion bounds BEGINNING and END."
     (if (and (= (- end beginning) 1)
              (string= (buffer-substring-no-properties beginning end) "_"))
         (save-excursion
           (goto-char beginning)
-          (my/type-completion-context-at-point))
+          (my/type-completion-enclosing-at-point))
       (let ((original (buffer-substring-no-properties beginning end))
-            (original-point (point))
             (modified (buffer-modified-p))
+            (origin (copy-marker (point)))
+            (start (copy-marker beginning))
+            (finish (copy-marker end t))
+            (buffer-undo-list t)
+            (inhibit-redisplay t)
             result)
-        (let ((buffer-undo-list t)
-              (inhibit-redisplay t))
-          (unwind-protect
-              (progn
-                (delete-region beginning end)
-                (goto-char beginning)
-                (insert "_")
-                (goto-char beginning)
-                (eglot--signal-textDocument/didChange)
-                (setq result (my/type-completion-context-at-point)))
-            (delete-region beginning (1+ beginning))
-            (goto-char beginning)
-            (insert original)
-            (goto-char original-point)
-            (eglot--signal-textDocument/didChange)
-            (set-buffer-modified-p modified)))
+        (unwind-protect
+            (progn
+              (delete-region start finish)
+              (goto-char start)
+              (insert "_")
+              (goto-char start)
+              (eglot--signal-textDocument/didChange)
+              (setq result (my/type-completion-enclosing-at-point)))
+          (delete-region start finish)
+          (goto-char start)
+          (insert original)
+          (goto-char origin)
+          (eglot--signal-textDocument/didChange)
+          (set-buffer-modified-p modified)
+          (set-marker origin nil)
+          (set-marker start nil)
+          (set-marker finish nil))
         result)))
+
+  (defun my/type-completion-expected-at-point (beginning end)
+    "Return the expected type at BEGINNING and END through standard LSP."
+    (or (my/eglot-signature-parameter-type)
+        (if (my/type-completion-ocaml-p)
+            (my/type-completion-expected-ocaml beginning end)
+          (my/eglot-hover-type))))
 
   (defun my/type-completion-refresh-display (buffer generation)
     "Refresh completion UI in BUFFER for matching GENERATION."
@@ -1631,13 +1663,8 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
             (completion-preview--try-update)))))))
 
   (defun my/type-completion-request (expected key)
-    "Request candidates compatible with EXPECTED and cache them under KEY."
-    (setq my/type-completion-key key
-          my/type-completion-expected expected
-          my/type-completion-results nil
-          my/type-completion-state 'pending
-          my/type-completion-generation
-          (1+ my/type-completion-generation))
+    "Request candidates compatible with EXPECTED and install them under KEY."
+    (setq my/type-completion-state 'pending)
     (let* ((buffer (current-buffer))
            (generation my/type-completion-generation)
            (server (eglot--current-server-or-lose))
@@ -1649,41 +1676,54 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
        server :ocamllsp/typeSearch params
        :success-fn
        (lambda (response)
-         (when (buffer-live-p buffer)
-           (with-current-buffer buffer
-             (when (and (= generation my/type-completion-generation)
-                        (equal key my/type-completion-key))
-               (setq my/type-completion-results (append response nil)
-                     my/type-completion-state 'ready)
-               (my/type-completion-refresh-display buffer generation)))))
+         (my/type-completion-receive
+          buffer generation key
+          (lambda ()
+            (setq my/type-completion-results (append response nil)
+                  my/type-completion-state 'ready))))
        :error-fn
        (lambda (_error)
-         (when (buffer-live-p buffer)
-           (with-current-buffer buffer
-             (when (= generation my/type-completion-generation)
-               (setq my/type-completion-state 'error)))))
+         (my/type-completion-receive
+          buffer generation key
+          (lambda () (setq my/type-completion-state 'error))))
        :timeout-fn
        (lambda ()
-         (when (buffer-live-p buffer)
-           (with-current-buffer buffer
-             (when (= generation my/type-completion-generation)
-               (setq my/type-completion-state 'timeout)))))
+         (my/type-completion-receive
+          buffer generation key
+          (lambda () (setq my/type-completion-state 'timeout))))
        :timeout 2.0
        :deferred 'my/type-completion)))
 
+  (defun my/type-completion-reset (key)
+    "Discard ranking state and start a new generation for KEY."
+    (setq my/type-completion-key key
+          my/type-completion-expected nil
+          my/type-completion-wanted nil
+          my/type-completion-results nil
+          my/type-completion-construct-results nil
+          my/type-completion-index nil
+          my/type-completion-candidates nil
+          my/type-completion-arities (make-hash-table :test #'equal)
+          my/type-completion-state nil
+          my/type-completion-generation
+          (1+ my/type-completion-generation)))
+
   (defun my/type-completion-ensure (beginning end)
-    "Ensure semantic results exist for bounds BEGINNING and END."
-    (when (my/type-completion-ocaml-p)
-      (let ((key (my/type-completion-position-key beginning end)))
-        (unless (equal key my/type-completion-key)
-          (setq my/type-completion-key key
-                my/type-completion-expected nil
-                my/type-completion-results nil
-                my/type-completion-construct-results nil
-                my/type-completion-state nil)
-          (when-let* ((expected
-                       (my/type-completion-expected-ocaml beginning end)))
-            (my/type-completion-request expected key))))))
+    "Return non-nil when ranking state is current for BEGINNING and END."
+    (let ((key (my/type-completion-position-key beginning end)))
+      (cond
+       ((equal key my/type-completion-key) t)
+       (my/type-completion-inhibit-probe nil)
+       (t
+        (my/type-completion-reset key)
+        (when-let* ((expected
+                     (my/type-completion-expected-at-point beginning end)))
+          (setq my/type-completion-expected expected
+                my/type-completion-wanted (my/type-canonical expected))
+          (when (my/type-completion-ocaml-p)
+            (my/type-completion-request expected key)
+            (my/type-completion-construct-request key))
+          t)))))
 
   (defun my/type-completion-annotation (original candidate)
     "Run ORIGINAL annotation or show CANDIDATE's type-search type."
@@ -1692,8 +1732,8 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
                 (propertize type 'face 'font-lock-function-name-face))
       (and original (funcall original candidate))))
 
-  (defun my/type-completion-table (table expected entries)
-    "Augment completion TABLE with EXPECTED-type ENTRIES and ranking."
+  (defun my/type-completion-table (table)
+    "Augment completion TABLE with semantic candidates and type ranking."
     (lambda (string predicate action)
       (cond
        ((eq action 'metadata)
@@ -1702,28 +1742,22 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
                (annotation
                 (alist-get 'annotation-function properties)))
           (setf (alist-get 'display-sort-function properties)
-                (apply-partially
-                 #'my/completion-sort-candidates expected))
+                #'my/completion-sort-candidates)
           (setf (alist-get 'annotation-function properties)
                 (apply-partially
                  #'my/type-completion-annotation annotation))
           (cons 'metadata properties)))
        ((eq action t)
-        (let* ((effective (if (equal string "_") "" string))
-               (semantic
-                (mapcar #'my/type-semantic-candidate entries))
-               (matching
-                (all-completions effective semantic predicate))
-               (selected
-                (delq nil
-                      (mapcar #'my/type-completion-entry matching))))
+        (let ((effective (if (equal string "_") "" string)))
           (my/type-merge-candidates
-           (all-completions effective table predicate) selected)))
+           (all-completions effective table predicate)
+           (all-completions effective my/type-completion-candidates
+                            predicate))))
        ((eq action 'lambda)
         (or (test-completion string table predicate)
-            (seq-some (lambda (entry)
-                        (equal string (plist-get entry :name)))
-                      entries)))
+            (and my/type-completion-index
+                 (gethash string my/type-completion-index)
+                 t)))
        (t (complete-with-action action table string predicate)))))
 
   (defun my/type-completion-expand (constructible beginning)
@@ -1807,29 +1841,40 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
       (yas-minor-mode 1))
     (yas-expand-snippet template beginning beginning))
 
-  (defun my/type-completion-exit
-      (original beginning expected candidate status)
+  (defun my/type-completion-local-snippet (candidate)
+    "Return an OCaml application snippet for a plain CANDIDATE."
+    (when-let* (((my/type-completion-ocaml-p))
+                (detail (my/completion-candidate-detail candidate))
+                (arity (my/type-completion-arity candidate))
+                ((> arity 0)))
+      (my/type-application
+       (substring-no-properties candidate)
+       (my/type-number-holes
+        (my/type-holes-from-parts
+         (my/type-arrow-parts
+          (my/type-remove-candidate-prefix detail candidate))
+         arity)))))
+
+  (defun my/type-completion-exit (original beginning candidate status)
     "Apply semantic CANDIDATE or run ORIGINAL exit function for STATUS."
     (let* ((entry (my/type-completion-entry candidate))
            (collection (and entry (plist-get entry :collection)))
            (yas-template
             (my/type-completion-yas-template candidate beginning))
-           (constructible
-            (or (and entry (plist-get entry :constructible))
-                (my/type-completion-template candidate expected)))
-           (name (and entry (plist-get entry :name))))
+           (snippet (or (and entry (plist-get entry :snippet))
+                        (my/type-completion-local-snippet candidate)))
+           (constructible (and entry (plist-get entry :constructible))))
       (cond
        ((and (eq status 'finished) collection)
         (my/type-completion-expand-collection collection beginning))
        ((and (eq status 'finished) yas-template)
         (my/type-completion-expand-yas yas-template beginning))
+       ((and (eq status 'finished) snippet)
+        (my/type-completion-expand-yas snippet beginning))
        ((and (eq status 'finished)
-               (stringp constructible)
-               (not (string-empty-p constructible))
-               (or (my/type-expression-hole-ranges constructible)
-                   (not (equal constructible
-                               (or name
-                                   (substring-no-properties candidate))))))
+             (stringp constructible)
+             (not (string-empty-p constructible))
+             (my/type-expression-hole-ranges constructible))
         (my/type-completion-expand constructible beginning))
        (t
         (when (and original
@@ -1838,30 +1883,19 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
           (funcall original candidate status))))))
 
   (defun my/completion-ranked-capf ()
-    "Return composed CAPF with LSP type search and structural ranking."
+    "Return composed CAPF ranked by the language server's type ordering."
     (when-let* ((result (and my/completion-super-capf
                              (funcall my/completion-super-capf))))
       (let ((beginning (nth 0 result))
-            (end (nth 1 result))
-            expected)
-        (my/type-completion-ensure beginning end)
-        (setq expected
-              (if (my/type-completion-ocaml-p)
-                  my/type-completion-expected
-                (my/completion-expected-type)))
-        (when expected
-          (setf (nth 2 result)
-                (my/type-completion-table
-                 (nth 2 result)
-                 expected
-                 (append my/type-completion-results
-                         my/type-completion-construct-results)))
+            (end (nth 1 result)))
+        (when (and (my/type-completion-ensure beginning end)
+                   my/type-completion-expected)
+          (setf (nth 2 result) (my/type-completion-table (nth 2 result)))
           (let ((original
                  (plist-get (nthcdr 3 result) :exit-function)))
             (setf (plist-get (nthcdr 3 result) :exit-function)
                   (apply-partially
-                   #'my/type-completion-exit
-                   original beginning expected)))))
+                   #'my/type-completion-exit original beginning)))))
       result))
 
   (defun my/completion-refresh-capfs ()
@@ -2211,25 +2245,10 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
 (defun my/eglot-type-at-point ()
   "Echo only the LSP type signature at point."
   (interactive)
-  (let* ((server (eglot--current-server-or-lose))
-         (params (eglot--TextDocumentPositionParams))
-         (resp (jsonrpc-request server :textDocument/hover params))
-         (contents (and resp (plist-get resp :contents)))
-         (text (cond ((stringp contents) contents)
-                     ((and contents (plist-get contents :value))
-                      (plist-get contents :value))
-                     ((vectorp contents)
-                      (mapconcat (lambda (c) (if (stringp c) c (plist-get c :value)))
-                                 contents "\n"))))
-         (blocks (and text
-                      (let ((pos 0) acc)
-                        (while (string-match "```[a-z-]*\n\\(\\(?:.\\|\n\\)*?\\)\n```" text pos)
-                          (push (string-trim (match-string 1 text)) acc)
-                          (setq pos (match-end 0)))
-                        (nreverse acc)))))
-    (if blocks
-        (message "%s" (car (last blocks)))
-      (user-error "No type info at point"))))
+  (if-let* ((text (my/eglot-hover-text))
+            (blocks (my/eglot-code-blocks text)))
+      (message "%s" (car (last blocks)))
+    (user-error "No type info at point")))
 
 (defun my/eglot-completion-detail (result)
   "Expose an Eglot completion candidate's type to completion UIs."
@@ -2250,7 +2269,6 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
 (defvar-local my/eglot-documentation-source-buffer nil)
 (defvar-local my/eglot-documentation-symbol nil)
 (defvar my/eglot-documentation-history nil)
-(defvar my/eglot-documentation-max-requests 4)
 (defconst my/eglot-documentation--semantic-kinds
   '(2 3 4 5 6 7 8 9 10 11 12 13 20 21 22 23 25)
   "LSP completion kinds which can carry a type or signature.")
@@ -2275,27 +2293,6 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
       (get-text-property 0 'consult--candidate candidate)
     candidate))
 
-(defun my/eglot-documentation--location (symbol)
-  "Return SYMBOL's concrete LSP location, if available."
-  (let ((location (plist-get symbol :location)))
-    (and (plist-get location :range) location)))
-
-(defun my/eglot-documentation--capability (server capability)
-  "Return SERVER's enabled CAPABILITY."
-  (and (not (memq capability eglot-ignored-server-capabilities))
-       (plist-get (eglot--capabilities server) capability)))
-
-(defun my/eglot-documentation--key (symbol)
-  "Return a stable cache key for SYMBOL."
-  (or (when-let* ((location (my/eglot-documentation--location symbol))
-                  (uri (plist-get location :uri))
-                  (start (plist-get (plist-get location :range) :start)))
-        (list uri (plist-get start :line) (plist-get start :character)))
-      (list (plist-get symbol :name)
-            (plist-get symbol :kind)
-            (plist-get symbol :containerName)
-            (plist-get symbol :data))))
-
 (defun my/eglot-documentation--summary (text)
   "Return a compact annotation from Eldoc TEXT."
   (when text
@@ -2307,267 +2304,29 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
       (unless (string-empty-p summary)
         (truncate-string-to-width summary 120 nil nil "…")))))
 
-(defun my/eglot-documentation--display (symbol text source-buffer)
-  "Display SYMBOL and TEXT in Eldoc for SOURCE-BUFFER."
-  (when text
-    (let ((name (or (plist-get symbol :name) (plist-get symbol :label))))
-      (eldoc-display-in-buffer
-       (list (list text
-                   :thing name
-                   :face 'font-lock-function-name-face))
-       t)
-      (with-current-buffer (eldoc-doc-buffer)
-        (setq-local my/eglot-documentation-source-buffer source-buffer)
-        (setq-local my/eglot-documentation-symbol name)
-        (local-set-key (kbd "C-c C-d") #'my/eglot-symbol-documentation)))))
+(defun my/eglot-documentation--markup-value (markup)
+  "Return MARKUP's plain text without rendering it."
+  (cond
+   ((stringp markup) markup)
+   ((plist-get markup :value) (plist-get markup :value))))
 
-(defun my/eglot-documentation--drain (cache)
-  "Start queued CACHE requests up to the concurrency limit."
-  (while (and (gethash :queue cache)
-              (< (or (gethash :active cache) 0)
-                 my/eglot-documentation-max-requests))
-    (let ((request (pop (gethash :queue cache))))
-      (puthash :active (1+ (or (gethash :active cache) 0)) cache)
-      (funcall
-       request
-       (lambda ()
-         (puthash :active (1- (gethash :active cache)) cache)
-         (my/eglot-documentation--drain cache))))))
-
-(defun my/eglot-documentation--enqueue (cache request)
-  "Queue REQUEST in CACHE and start it when capacity is available."
-  (puthash :queue (nconc (gethash :queue cache) (list request)) cache)
-  (my/eglot-documentation--drain cache))
-
-(defun my/eglot-documentation--finish-request (entry cache key refresh done)
-  "Finish one part of ENTRY and notify CACHE, KEY, and REFRESH."
-  (setf (plist-get entry :remaining) (1- (plist-get entry :remaining)))
-  (when (zerop (plist-get entry :remaining))
-    (let ((text (string-join
-                 (delete-dups (delq nil (nreverse (plist-get entry :parts))))
-                 "\n\n")))
-      (setf (plist-get entry :status) 'ready
-            (plist-get entry :text) (unless (string-empty-p text) text)
-            (plist-get entry :summary)
-            (my/eglot-documentation--summary text))
-      (puthash key entry cache)
-      (funcall refresh entry)
-      (funcall done))))
-
-(defun my/eglot-documentation--request-at-location
-    (server symbol location cache key refresh)
-  "Request SERVER documentation for SYMBOL at LOCATION."
-  (let* ((uri (plist-get location :uri))
-         (position (plist-get (plist-get location :range) :start))
-         (params `(:textDocument (:uri ,uri) :position ,position))
-         (hover-p (my/eglot-documentation--capability server :hoverProvider))
-         (signature-p
-          (my/eglot-documentation--capability server :signatureHelpProvider))
-         (entry (list :status 'queued
-                      :remaining (+ (if hover-p 1 0) (if signature-p 1 0))
-                      :parts nil)))
-    (puthash key entry cache)
-    (my/eglot-documentation--enqueue
-     cache
-     (lambda (done)
-       (setf (plist-get entry :status) 'pending)
-       (if (zerop (plist-get entry :remaining))
-           (progn
-             (setf (plist-get entry :status) 'ready)
-             (funcall refresh entry)
-             (funcall done))
-         (when hover-p
-           (jsonrpc-async-request
-            server :textDocument/hover params
-            :success-fn
-            (lambda (hover)
-              (when-let* ((contents (plist-get hover :contents))
-                          ((not (seq-empty-p contents))))
-                (push (eglot--hover-info contents (plist-get hover :range))
-                      (plist-get entry :parts)))
-              (my/eglot-documentation--finish-request
-               entry cache key refresh done))
-            :error-fn
-            (lambda (&rest _)
-              (my/eglot-documentation--finish-request
-               entry cache key refresh done))))
-         (when signature-p
-           (jsonrpc-async-request
-            server :textDocument/signatureHelp params
-            :success-fn
-            (lambda (result)
-              (let* ((signatures (plist-get result :signatures))
-                     (active-signature (or (plist-get result :activeSignature) 0))
-                     (active-parameter (or (plist-get result :activeParameter) 0)))
-                (when (and (vectorp signatures) (> (length signatures) 0))
-                  (push
-                   (mapconcat
-                    (lambda (signature)
-                      (eglot--sig-info
-                       signature
-                       (and (eq signature (aref signatures active-signature))
-                            active-parameter)
-                       nil))
-                    signatures "\n")
-                   (plist-get entry :parts))))
-              (my/eglot-documentation--finish-request
-               entry cache key refresh done))
-            :error-fn
-            (lambda (&rest _)
-              (my/eglot-documentation--finish-request
-               entry cache key refresh done)))))))))
-
-(defun my/eglot-documentation--request (server symbol cache refresh)
-  "Return cached documentation for SYMBOL or request it from SERVER."
-  (let* ((key (my/eglot-documentation--key symbol))
-         (entry (gethash key cache)))
-    (cond
-     (entry entry)
-     ((my/eglot-documentation--location symbol)
-      (my/eglot-documentation--request-at-location
-       server symbol (my/eglot-documentation--location symbol)
-       cache key refresh)
-      (gethash key cache))
-     ((plist-get
-       (my/eglot-documentation--capability server :workspaceSymbolProvider)
-       :resolveProvider)
-      (let ((pending (list :status 'queued :remaining 1 :parts nil)))
-        (puthash key pending cache)
-        (my/eglot-documentation--enqueue
-         cache
-         (lambda (done)
-           (setf (plist-get pending :status) 'pending)
-           (jsonrpc-async-request
-            server :workspaceSymbol/resolve symbol
-            :success-fn
-            (lambda (resolved)
-              (if-let* ((location (my/eglot-documentation--location resolved)))
-                  (my/eglot-documentation--request-at-location
-                   server resolved location cache key refresh)
-                (setf (plist-get pending :status) 'ready)
-                (funcall refresh pending))
-              (funcall done))
-            :error-fn
-            (lambda (&rest _)
-              (setf (plist-get pending :status) 'ready)
-              (funcall refresh pending)
-              (funcall done)))))
-        pending))
-     (t
-      (setq entry (list :status 'ready :text nil :summary nil))
-      (puthash key entry cache)
-      entry))))
-
-(defun my/eglot-documentation--candidate (symbol)
-  "Transform an LSP SYMBOL into a Consult candidate."
-  (let* ((name (plist-get symbol :name))
-         (kind-name (or (alist-get (plist-get symbol :kind)
-                                  eglot--symbol-kind-names)
-                        "Other"))
-         (location (my/eglot-documentation--location symbol))
-         (uri (plist-get location :uri))
-         (start (plist-get (plist-get location :range) :start))
-         (path (and uri (eglot-uri-to-path uri)))
-         (where
-          (cond
-           (path
-            (format "%s:%d"
-                    (let ((relative (file-relative-name path)))
-                      (if (string-prefix-p ".." relative)
-                          (abbreviate-file-name path)
-                        relative))
-                    (1+ (plist-get start :line))))
-           ((plist-get symbol :containerName)
-            (plist-get symbol :containerName))
-           (t "unresolved"))))
-    (propertize (format "%s  %s" name where)
-                'consult--type
-                (or (car (rassoc kind-name consult-eglot-narrow))
-                    (car (rassoc "Other" consult-eglot-narrow)))
-                'consult--candidate symbol)))
-
-(defun my/eglot-documentation--annotation (server cache minibuffer candidate)
-  "Return an annotation for CANDIDATE, requesting it from SERVER if needed."
-  (let* ((symbol (my/eglot-documentation--symbol candidate))
-         (kind (or (alist-get (plist-get symbol :kind) eglot--symbol-kind-names)
-                   "Other"))
-         (container (plist-get symbol :containerName))
-         (refresh
-          (lambda (_entry)
-            (when (buffer-live-p minibuffer)
-              (with-current-buffer minibuffer
-                (when (and (minibufferp) (bound-and-true-p vertico--input))
-                  (vertico--exhibit))))))
-         (entry (my/eglot-documentation--request
-                 server symbol cache refresh))
-         (summary (plist-get entry :summary)))
-    (concat "  " kind
-            (if container (concat "  " container) "")
-            (if summary (concat "  " summary) ""))))
-
-(defun my/eglot-documentation--state (server cache source-buffer)
-  "Return a Consult state displaying SERVER symbols through Eldoc."
-  (let ((current nil)
-        (active t)
-        (saved-window-configuration (current-window-configuration))
-        (eldoc-buffer (ignore-errors (eldoc-doc-buffer)))
-        (saved-eldoc nil))
-    (when (buffer-live-p eldoc-buffer)
-      (setq saved-eldoc
-            (with-current-buffer eldoc-buffer
-              (buffer-substring (point-min) (point-max)))))
-    (lambda (action candidate)
-      (pcase action
-        ('preview
-         (setq current (my/eglot-documentation--symbol candidate))
-         (when current
-           (let* ((selected current)
-                  (show
-                   (lambda (entry)
-                     (when (and active (equal selected current))
-                       (my/eglot-documentation--display
-                        selected (plist-get entry :text) source-buffer))))
-                  (entry (my/eglot-documentation--request
-                          server selected cache show)))
-             (when (eq (plist-get entry :status) 'ready)
-               (funcall show entry)))))
-        ('exit
-         (setq active nil))
-        ('return
-         (if-let* ((selected (my/eglot-documentation--symbol candidate)))
-             (let* ((show
-                     (lambda (entry)
-                       (my/eglot-documentation--display
-                        selected (plist-get entry :text) source-buffer)))
-                    (entry (my/eglot-documentation--request
-                            server selected cache show)))
-               (when (eq (plist-get entry :status) 'ready)
-                 (funcall show entry)))
-           (set-window-configuration saved-window-configuration)
-           (when (buffer-live-p eldoc-buffer)
-             (with-current-buffer eldoc-buffer
-               (let ((inhibit-read-only t))
-                 (erase-buffer)
-                 (when saved-eldoc (insert saved-eldoc)))))))))))
-
-(defun my/eglot-documentation--completion-text (item mode)
-  "Return ITEM's LSP documentation and type text for MODE."
-  (let* ((detail (plist-get item :detail))
-         (documentation (plist-get item :documentation))
-         (parts
-          (delq nil
-                (list
-                 (and (stringp detail)
-                      (not (string-empty-p detail))
-                      (eglot--format-markup detail mode))
-                 (and documentation
-                      (eglot--format-markup documentation mode))))))
+(defun my/eglot-documentation--text (item)
+  "Return ITEM's LSP detail and documentation as plain text."
+  (let ((parts
+         (delq nil
+               (mapcar (lambda (markup)
+                         (when-let* ((text (my/eglot-documentation--markup-value
+                                            markup))
+                                     ((not (string-empty-p text))))
+                           text))
+                       (list (plist-get item :detail)
+                             (plist-get item :documentation))))))
     (unless (null parts)
       (string-join (delete-dups parts) "\n\n"))))
 
-(defun my/eglot-documentation--semantic-item-p (item mode)
-  "Return non-nil when completion ITEM can have Eldoc in MODE."
-  (or (my/eglot-documentation--completion-text item mode)
+(defun my/eglot-documentation--semantic-item-p (item)
+  "Return non-nil when completion ITEM can carry a type or signature."
+  (or (my/eglot-documentation--text item)
       (memq (plist-get item :kind)
             my/eglot-documentation--semantic-kinds)))
 
@@ -2606,69 +2365,22 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
           (insert original)
           (goto-char saved-point)
           (set-buffer-modified-p saved-modified)))
-      (seq-filter
-       (lambda (item)
-         (my/eglot-documentation--semantic-item-p item major-mode))
-       (delete-dups items)))))
+      (seq-filter #'my/eglot-documentation--semantic-item-p
+                  (delete-dups items)))))
 
-(defun my/eglot-documentation--completion-key (item)
-  "Return a stable cache key for completion ITEM."
-  (list (plist-get item :label)
-        (plist-get item :kind)
-        (plist-get item :detail)
-        (plist-get item :data)))
-
-(defun my/eglot-documentation--completion-candidate (item mode)
-  "Return a Consult candidate for completion ITEM in MODE."
+(defun my/eglot-documentation--completion-candidate (item)
+  "Return a Consult candidate for completion ITEM."
   (let* ((label (plist-get item :label))
          (kind-name (or (alist-get (plist-get item :kind) eglot--kind-names)
                         "Other"))
          (detail (my/eglot-documentation--summary
-                  (my/eglot-documentation--completion-text item mode))))
+                  (my/eglot-documentation--text item))))
     (propertize
      (if detail (format "%s  %s" label detail) label)
      'consult--type
      (or (car (rassoc kind-name consult-eglot-narrow))
          (car (rassoc "Other" consult-eglot-narrow)))
      'consult--candidate item)))
-
-(defun my/eglot-documentation--completion-request
-    (server item mode cache refresh)
-  "Return cached ITEM documentation or resolve it through SERVER."
-  (let* ((key (my/eglot-documentation--completion-key item))
-         (entry (gethash key cache)))
-    (or entry
-        (let ((text (my/eglot-documentation--completion-text item mode)))
-          (setq entry (list :status 'ready :item item :text text))
-          (puthash key entry cache)
-          (when (and (plist-get item :data)
-                     (plist-get
-                      (my/eglot-documentation--capability
-                       server :completionProvider)
-                      :resolveProvider))
-            (setf (plist-get entry :status) 'queued)
-            (my/eglot-documentation--enqueue
-             cache
-             (lambda (done)
-               (setf (plist-get entry :status) 'pending)
-               (jsonrpc-async-request
-                server :completionItem/resolve item
-                :success-fn
-                (lambda (resolved)
-                  (setf (plist-get entry :status) 'ready
-                        (plist-get entry :item) resolved
-                        (plist-get entry :text)
-                        (or (my/eglot-documentation--completion-text
-                             resolved mode)
-                            text))
-                  (funcall refresh entry)
-                  (funcall done))
-                :error-fn
-                (lambda (&rest _)
-                  (setf (plist-get entry :status) 'ready)
-                  (funcall refresh entry)
-                  (funcall done))))))
-          entry))))
 
 (defun my/eglot-documentation--completion-state (source-buffer)
   "Return a Consult state running Eldoc on temporary completions."
@@ -2747,15 +2459,11 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
             my/eglot-documentation-source-buffer))
          (_ (unless (buffer-live-p source-buffer)
               (user-error "LSP documentation needs an originating Eglot buffer")))
-         (mode (buffer-local-value 'major-mode source-buffer))
          (items (my/eglot-documentation--completion-items source-buffer))
          (_ (unless items
               (user-error "The language server returned no documented completions")))
          (candidates
-          (mapcar
-           (lambda (item)
-             (my/eglot-documentation--completion-candidate item mode))
-           items)))
+          (mapcar #'my/eglot-documentation--completion-candidate items)))
     (consult--read
      candidates
      :prompt "LSP documentation: "
@@ -3021,15 +2729,17 @@ Reveal code upon cursor entry.
       ("letmod" . 2))
     "Body fields which accept repeated nested OCaml declarations.")
 
+  (defvar my/ocaml-yas-repeat-templates
+    (let ((table (make-hash-table :test #'equal)))
+      (dolist (entry my/ocaml-yas-repeat-fields table)
+        (when-let* ((template (cdr (assoc (car entry) my/ocaml-yas-snippets))))
+          (puthash template (cdr entry) table)))))
+
   (defun my/yas-tag-ocaml-body-after-expand (template &rest _)
     "Mark a freshly expanded OCaml TEMPLATE's body as repeatable."
-    (when-let* ((snippet-definition
-                 (seq-find (lambda (entry)
-                             (equal template (cdr entry)))
-                           my/ocaml-yas-snippets))
-                (field-number
-                 (cdr (assoc (car snippet-definition)
-                             my/ocaml-yas-repeat-fields))))
+    (when-let* ((field-number
+                 (and (stringp template)
+                      (gethash template my/ocaml-yas-repeat-templates))))
       (my/yas-tag-repeat-snippet 'ocaml-declaration field-number)))
 
   (advice-remove 'yas-expand-snippet #'my/yas-tag-ocaml-body-after-expand)
