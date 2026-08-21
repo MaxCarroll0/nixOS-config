@@ -115,7 +115,9 @@ Desktop state restores buffers and frames after a clean restart into the current
             (and (buffer-live-p source-buffer)
                  (with-current-buffer source-buffer
                    (buffer-chars-modified-tick))))
-           (directory (make-temp-file "emacs-config-" t))
+           (directory (let ((cache (locate-user-emacs-file "config-reload/")))
+                        (make-directory cache t)
+                        cache))
            (copy (expand-file-name "config.org" directory))
            (elisp (expand-file-name "config.el" directory)))
       (unwind-protect
@@ -147,7 +149,7 @@ Desktop state restores buffers and frames after a clean restart into the current
             (set-buffer-modified-p
              (or source-modified
                  (/= source-tick (buffer-chars-modified-tick))))))
-        (delete-directory directory t)))))
+        ))))
 
 #+end_src
 
@@ -853,7 +855,7 @@ Explicit completion popup with documentation and Meow navigation.
 (defun my/type-entry-annotate (entry wanted rank)
   "Record ENTRY's server RANK and its application producing canonical WANTED."
   (setq entry (plist-put entry :rank rank))
-  (if (memq (plist-get entry :kind) '(construct collection))
+  (if (memq (plist-get entry :kind) '(construct collection snippet))
       (progn
         (setq entry (plist-put entry :tier 0))
         (plist-put entry :arity 0))
@@ -887,6 +889,18 @@ Explicit completion popup with documentation and Meow navigation.
          (not (string-match-p "\\(?:(\\*\\|\\*)\\)" type))
          (not (string-match-p
                "\\_<\\(?:let\\|fun\\|function\\|match\\)\\_>" type)))))
+
+(defvar-local my/type-completion-input "")
+
+(defun my/type-completion-prefix-match-p (candidate)
+  "Return non-nil when CANDIDATE begins with the text typed so far."
+  (or (string-empty-p my/type-completion-input)
+      (let ((name (substring-no-properties candidate))
+            (case-fold-search completion-ignore-case))
+        (or (string-prefix-p my/type-completion-input name t)
+            (when-let* ((tail (and (string-match "\\.\\([^.]*\\)\\'" name)
+                                   (match-string 1 name))))
+              (string-prefix-p my/type-completion-input tail t))))))
 
 (defvar my/type-completion-rank-limit 200)
 (defvar my/type-completion-inhibit-probe nil)
@@ -934,11 +948,18 @@ Explicit completion popup with documentation and Meow navigation.
      ,body))
 
 (defun my/type-hole-try-completion (string table predicate point)
-  "Try completion of STRING in TABLE, ignoring a bare OCaml hole."
+  "Try completion of STRING in TABLE, ignoring a bare OCaml hole.
+At a bare hole nothing is inserted unless it completes a whole candidate,
+so the popup gets a chance to appear instead of a partial prefix."
   (my/type-hole-delegate
    string
-   (completion-try-completion pattern table predicate
-                              (min point (length pattern)))))
+   (let ((result (completion-try-completion pattern table predicate
+                                            (min point (length pattern)))))
+     (if (and (equal string "_")
+              (consp result)
+              (not (test-completion (car result) table predicate)))
+         (cons string point)
+       result))))
 
 (defun my/type-hole-all-completions (string table predicate point)
   "List completions of STRING in TABLE, ignoring a bare OCaml hole."
@@ -997,18 +1018,24 @@ Explicit completion popup with documentation and Meow navigation.
 
 (defun my/type-completion-sort-key (candidate index)
   "Return CANDIDATE's packed rank, falling back to its server order INDEX."
-  (let ((deprecated (if (my/type-completion-deprecated-p candidate) 1 0)))
+  (let ((deprecated (if (my/type-completion-deprecated-p candidate) 1 0))
+        (prefix (if (my/type-completion-prefix-match-p candidate) 0 1)))
     (if-let* ((entry (my/type-completion-entry candidate)))
-        (logior (ash (plist-get entry :tier) 21)
-                (ash deprecated 20)
+        (logior (ash (plist-get entry :tier) 22)
+                (ash deprecated 21)
+                (ash prefix 20)
                 (ash (min (plist-get entry :arity) 15) 16)
                 (min (plist-get entry :rank) 65535))
       (if-let* (((< index my/type-completion-rank-limit))
                 (arity (my/type-completion-arity candidate)))
-          (logior (ash deprecated 20)
+          (logior (ash deprecated 21)
+                  (ash prefix 20)
                   (ash (min arity 15) 16)
                   (min index 65535))
-        (logior (ash 2 21) (ash deprecated 20) (min index 65535))))))
+        (logior (ash (if (my/completion-lsp-item candidate) 2 3) 22)
+                (ash deprecated 21)
+                (ash prefix 20)
+                (min index 65535))))))
 
 (defun my/completion-sort-candidates (candidates)
   "Rank CANDIDATES by the language server's own type ordering."
@@ -1688,7 +1715,9 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
           (wanted my/type-completion-wanted)
           (rank 0)
           candidates)
-      (dolist (entry (append (my/type-completion-collection-entries
+      (dolist (entry (append (my/type-completion-snippet-entries
+                              my/type-completion-expected)
+                             (my/type-completion-operator-entries
                               my/type-completion-expected)
                              my/type-completion-construct-results
                              my/type-completion-results))
@@ -1764,6 +1793,62 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
        ((string-suffix-p " array" text)
         (list (list :name "[| _ |]" :typ expected
                     :kind 'collection :collection 'array))))))
+
+  (defconst my/ocaml-snippet-catalogue
+    '(("[ _ ]"    list-literal  "'a list"  my/ocaml-snippet-list)
+      ("[| _ |]"  array-literal "'a array" my/ocaml-snippet-array)
+      ("{ _ }"    record-value  "record"   my/ocaml-snippet-record-value)
+      ("let"      binding       "'a"       my/ocaml-default-let)
+      ("match"    match         "'a"       my/ocaml-default-match)
+      ("type"     type          "unit"     my/ocaml-default-type)
+      ("module"   module        "unit"     my/ocaml-default-module)))
+
+  (defun my/ocaml-snippet-list () (my/ocaml-collection 'list))
+  (defun my/ocaml-snippet-array () (my/ocaml-collection 'array))
+  (defun my/ocaml-snippet-record-value () (my/ocaml-record-literal '("field")))
+
+  (defun my/ocaml-snippet-applicable-p (sort expected)
+    "Return non-nil when snippet SORT can produce EXPECTED."
+    (let ((text (car (last (my/type-arrow-parts (or expected ""))))))
+      (pcase sort
+        ('list-literal (and text (string-suffix-p " list" text)))
+        ('array-literal (and text (string-suffix-p " array" text)))
+        ('record-value (and text (not (string-match-p "\\`'" text))))
+        ('type (null expected))
+        ('module (null expected))
+        (_ t))))
+
+  (defun my/type-completion-snippet-entries (expected)
+    "Return snippet candidates that can produce EXPECTED."
+    (delq nil
+          (mapcar
+           (lambda (spec)
+             (pcase-let ((`(,name ,sort ,typ ,builder) spec))
+               (when (my/ocaml-snippet-applicable-p sort expected)
+                 (list :name name
+                       :typ (if (member sort '(list-literal array-literal
+                                               record-value))
+                                (or expected typ)
+                              typ)
+                       :kind 'snippet
+                       :builder builder))))
+           my/ocaml-snippet-catalogue)))
+
+  (defun my/type-completion-operator-entries (expected)
+    "Return operator snippet candidates producing EXPECTED."
+    (when-let* ((text (car (last (my/type-arrow-parts (or expected ""))))))
+      (delq nil
+            (mapcar
+             (lambda (operator)
+               (when (member text '("int" "float"))
+                 (list :name (format "(_ %s _)" operator)
+                       :typ expected
+                       :kind 'snippet
+                       :builder nil
+                       :constructible (format "(_ %s _)" operator))))
+             (if (equal text "float")
+                 '("+." "-." "*." "/.")
+               '("+" "-" "*" "/" "mod"))))))
 
   (defun my/type-completion-construct-request (key)
     "Request OCaml-LSP constructions at point and install them under KEY."
@@ -2001,11 +2086,21 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
             (my/type-completion-construct-request key))
           t)))))
 
+  (defun my/type-completion-underline-match (type)
+    "Underline the span of TYPE that satisfies the expected type."
+    (let* ((text (propertize (copy-sequence type)
+                             'face 'font-lock-function-name-face))
+           (wanted my/type-completion-wanted)
+           (start (and wanted (string-match (regexp-quote wanted) text))))
+      (when start
+        (add-face-text-property start (+ start (length wanted))
+                                'underline t text))
+      text))
+
   (defun my/type-completion-annotation (original candidate)
     "Run ORIGINAL annotation or show CANDIDATE's type-search type."
     (if-let* ((type (my/completion-candidate-detail candidate)))
-        (concat " "
-                (propertize type 'face 'font-lock-function-name-face))
+        (concat " " (my/type-completion-underline-match type))
       (and original (funcall original candidate))))
 
   (defun my/type-completion-table (table qualified)
@@ -2026,6 +2121,7 @@ QUALIFIED non-nil keeps module-qualified candidates."
                  #'my/type-completion-annotation annotation))
           (cons 'metadata properties)))
        ((eq action t)
+        (setq my/type-completion-input (my/type-hole-pattern string))
         (let* ((effective (my/type-hole-pattern string))
                (merged
                 (my/type-merge-candidates
@@ -2035,7 +2131,12 @@ QUALIFIED non-nil keeps module-qualified candidates."
           (when (and my/completion-hide-qualified (not qualified))
             (setq merged (seq-remove #'my/completion-qualified-p merged)))
           (if my/type-completion-inhibit-probe
-              (seq-filter #'my/type-completion-correct-p merged)
+              (seq-filter
+               (lambda (candidate)
+                 (and (my/type-completion-correct-p candidate)
+                      (my/type-completion-prefix-match-p candidate)
+                      (not (my/type-completion-deprecated-p candidate))))
+               merged)
             merged)))
        ((eq action 'lambda)
         (or (test-completion string table predicate)
@@ -2122,6 +2223,24 @@ QUALIFIED non-nil keeps module-qualified candidates."
       (yas-minor-mode 1))
     (yas-expand-snippet template beginning beginning))
 
+  (defun my/type-completion-module-p (candidate)
+    "Return non-nil when CANDIDATE names a module rather than a value."
+    (when-let* ((item (my/completion-lsp-item candidate)))
+      (memq (plist-get item :kind) '(9 10))))
+
+  (defun my/type-completion-module-position-p ()
+    "Return non-nil when point expects a module path rather than a value."
+    (save-excursion
+      (skip-chars-backward "A-Za-z0-9_'.")
+      (looking-back "\\_<\\(?:open\\|include\\|module\\)[[:space:]]+"
+                    (max (point-min) (- (point) 32)))))
+
+  (defun my/type-completion-module-snippet (candidate)
+    "Return a snippet entering CANDIDATE's module path in value position."
+    (when (and (my/type-completion-module-p candidate)
+               (not (my/type-completion-module-position-p)))
+      (concat (substring-no-properties candidate) ".${1:_}")))
+
   (defun my/type-completion-local-snippet (candidate)
     "Return an OCaml application snippet for a plain CANDIDATE."
     (when-let* (((my/type-completion-ocaml-p))
@@ -2142,13 +2261,16 @@ QUALIFIED non-nil keeps module-qualified candidates."
            (collection (and entry (plist-get entry :collection)))
            (yas-template
             (my/type-completion-yas-template candidate beginning))
-           (snippet (or (and entry (plist-get entry :snippet))
+           (snippet (or (my/type-completion-module-snippet candidate)
+                        (and entry (plist-get entry :snippet))
                         (my/type-completion-local-snippet candidate)))
            (constructible (and entry (plist-get entry :constructible)))
            (holes (and entry (plist-get entry :holes)))
            (structured
             (and entry
-                 (or (and (eq (plist-get entry :kind) 'construct)
+                 (or (when-let* ((builder (plist-get entry :builder)))
+                       (funcall builder))
+                     (and (memq (plist-get entry :kind) '(construct snippet))
                           (my/ocaml-node-from-constructible constructible))
                      (and holes
                           (my/ocaml-application
@@ -2173,6 +2295,20 @@ QUALIFIED non-nil keeps module-qualified candidates."
                        (my/completion-lsp-item candidate)))
           (funcall original candidate status))))))
 
+  (defun my/completion-preview-source-p (candidate)
+    "Return non-nil when CANDIDATE may appear in the inline preview."
+    (or (my/completion-lsp-item candidate)
+        (my/type-completion-entry candidate)
+        (nth 3 (syntax-ppss))))
+
+  (defun my/completion-preview-table (table)
+    "Restrict TABLE to sources the inline preview is allowed to show."
+    (lambda (string predicate action)
+      (if (eq action t)
+          (seq-filter #'my/completion-preview-source-p
+                      (all-completions string table predicate))
+        (complete-with-action action table string predicate))))
+
   (defun my/completion-ranked-capf ()
     "Return composed CAPF ranked by the language server's type ordering."
     (when-let* ((result (and my/completion-super-capf
@@ -2193,7 +2329,9 @@ QUALIFIED non-nil keeps module-qualified candidates."
                  (plist-get (nthcdr 3 result) :exit-function)))
             (setf (plist-get (nthcdr 3 result) :exit-function)
                   (apply-partially
-                   #'my/type-completion-exit original beginning)))))
+                   #'my/type-completion-exit original beginning))))
+        (when my/type-completion-inhibit-probe
+          (setf (nth 2 result) (my/completion-preview-table (nth 2 result)))))
       result))
 
   (defun my/completion-refresh-capfs ()
@@ -2252,6 +2390,24 @@ Prefer tree-sitter modes when their grammar and mode are available.
 #+end_src
 
 * Languages
+
+Completion behaviour shared by every language server, built on standard LSP only:
+
+- *Server-side ranking* — candidates keep the server's own order
+  (=sortText=), and are never re-scored locally. See [[Cape]].
+- *Expected type at point* — =textDocument/signatureHelp= then
+  =textDocument/hover=, both asynchronous, cached per position. See [[Corfu]].
+- *Return-type matching* — a paren-aware split of the type on top-level =->= or
+  =>=, so a candidate ranks by what it returns once applied.
+- *Inline preview restraint* — the grey preview appears only where its candidate
+  is known type correct, collapses to the prefix all candidates share, and is
+  dismissed with =S-SPC=.
+- *Deprecated last* — LSP =deprecated= and tag =1= sink within their group.
+- *Ordering* — type-correct first, then prefix matches, then other server
+  candidates, with dabbrev and file completion last.
+- *Module-qualified toggle* — =my/completion-toggle-qualified= hides dotted
+  names until a module prefix is typed.
+
 ** Embedded languages
 
 Polymode gives Org, Markdown, noweb, and Nix strings their language's full major mode.
@@ -2606,7 +2762,11 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
   "Return MARKUP's plain text without rendering it."
   (cond
    ((stringp markup) markup)
-   ((plist-get markup :value) (plist-get markup :value))))
+   ((vectorp markup)
+    (mapconcat #'my/eglot-documentation--markup-value markup "\n"))
+   ((and (listp markup) (plist-get markup :value)) (plist-get markup :value))
+   ((listp markup)
+    (mapconcat #'my/eglot-documentation--markup-value markup "\n"))))
 
 (defun my/eglot-documentation--text (item)
   "Return ITEM's LSP detail and documentation as plain text."
@@ -2738,7 +2898,10 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
            (if-let* ((item (my/eglot-documentation--symbol candidate)))
                (progn
                  (document item)
-                 (restore))
+                 (restore)
+                 (when-let* ((buffer (ignore-errors (eldoc-doc-buffer t)))
+                             (window (get-buffer-window buffer)))
+                   (select-window window)))
              (restore)
              (set-window-configuration saved-window-configuration)
              (when (buffer-live-p eldoc-buffer)
@@ -2993,9 +3156,7 @@ Reveal code upon cursor entry.
 
   (setq my/ocaml-yas-snippets
     '(("if" . "(if ${1:condition} then\n  ${2:_}\nelse\n  ${3:_})")
-      ("match" . "begin match ${1:value} with\n| ${2:pattern} -> ${3:_}\nend")
       ("try" . "(try ${1:_} with\n| ${2:exception} -> ${3:_})")
-      ("let" . "let ${1:x} = ${2:_} in\n${3:_}")
       ("letr" . "let rec ${1:f} ${2:x} = ${3:_} in\n${4:_}")
       ("fun" . "(fun ${1:x} -> ${2:_})")
       ("function" . "(function\n| ${1:pattern} -> ${2:_})")
@@ -3004,21 +3165,18 @@ Reveal code upon cursor entry.
       ("while" . "while ${1:condition} do\n  ${2:_}\ndone")
       ("for" . "for ${1:i} = ${2:start} to ${3:finish} do\n  ${4:_}\ndone")
       ("fordown" . "for ${1:i} = ${2:start} downto ${3:finish} do\n  ${4:_}\ndone")
-      ("module" . "module ${1:M} = struct\n  ${2:_}\nend")
       ("modtype" . "module type ${1:S} = sig\n  ${2:_}\nend")
       ("functor" . "module ${1:F} (${2:M} : ${3:S}) = struct\n  ${4:_}\nend")
       ("letmod" . "let module ${1:M} = struct\n  ${2:_}\nend in\n${3:_}")
       ("firstmod" . "(module ${1:M} : ${2:S})")
       ("open" . "open ${1:M}")
       ("include" . "include ${1:M}")
-      ("type" . "type ${1:t} = ${2:type}")
       ("abstract" . "type ${1:t}")
       ("val" . "val ${1:name} : ${2:type}")
       ("exception" . "exception ${1:Exception}${2: of ${3:type}}")
       ("external" . "external ${1:name} : ${2:type} = ${3:\"primitive\"}")
       ("modsig" . "module ${1:M} : ${2:S}")
-      ("record" . "type ${1:t} = {\n  ${2:field} : ${3:type};\n}")
-      ("variant" . "type ${1:t} =\n  | ${2:Constructor}\n  | ${3:Constructor_of} of ${4:type}")))
+      ))
 
   (yas-define-snippets
    'tuareg-mode
@@ -3044,12 +3202,17 @@ Reveal code upon cursor entry.
                (yas--field-start field) (yas--field-end field)))
              my/ocaml-yas-snippets)))
 
-  (defun my/yas-forward-field ()
-    "Accept an inline preview, else extend or advance the active snippet."
-    (interactive)
+  (defun my/yas-forward-field (&optional argument)
+    "Accept a preview, else extend the construct, else advance a field.
+A negative ARGUMENT moves to the previous field instead."
+    (interactive "P")
     (cond
+     ((and argument (< (prefix-numeric-value argument) 0))
+      (yas-prev-field))
      ((bound-and-true-p completion-preview-active-mode)
       (completion-preview-insert))
+     ((and (bound-and-true-p my/ocaml-snippet)
+           (my/ocaml-restructure #'my/ocaml-advance)))
      ((and (my/yas-current-ocaml-trigger-p) (yas-expand)))
      (t
       (yas-next-field-or-maybe-expand))))
@@ -3062,8 +3225,8 @@ Reveal code upon cursor entry.
 
   (define-key yas-keymap (kbd "TAB") #'my/yas-forward-field)
   (define-key yas-keymap (kbd "<tab>") #'my/yas-forward-field)
-  (define-key yas-keymap (kbd "S-TAB") #'yas-prev-field)
-  (define-key yas-keymap (kbd "<backtab>") #'yas-prev-field)
+  (define-key yas-keymap (kbd "S-TAB") #'my/ocaml-structured-cycle)
+  (define-key yas-keymap (kbd "<backtab>") #'my/ocaml-structured-cycle)
   (define-key yas-keymap (kbd "S-<return>") #'my/yas-finish-innermost)
   (define-key yas-keymap (kbd "S-RET") #'my/yas-finish-innermost)
   (define-key yas-keymap (kbd "C-<return>") #'yas-exit-all-snippets)
@@ -3071,7 +3234,6 @@ Reveal code upon cursor entry.
 
 (defun my/ocaml-insert-yas-snippet (key)
   "Insert the OCaml Yasnippet identified by KEY."
-  (interactive)
   (require 'yasnippet)
   (unless (bound-and-true-p yas-minor-mode)
     (yas-minor-mode 1))
@@ -3086,9 +3248,9 @@ Reveal code upon cursor entry.
      (my/ocaml-insert-yas-snippet ,key)))
 
 (my/define-ocaml-snippet-command my/ocaml-snippet-if "if")
-(my/define-ocaml-snippet-command my/ocaml-snippet-match "match")
+(defalias (quote my/ocaml-snippet-match) (function my/ocaml-start-match))
 (my/define-ocaml-snippet-command my/ocaml-snippet-try "try")
-(my/define-ocaml-snippet-command my/ocaml-snippet-let "let")
+(defalias (quote my/ocaml-snippet-let) (function my/ocaml-start-let))
 (my/define-ocaml-snippet-command my/ocaml-snippet-let-rec "letr")
 (my/define-ocaml-snippet-command my/ocaml-snippet-fun "fun")
 (my/define-ocaml-snippet-command my/ocaml-snippet-function "function")
@@ -3097,15 +3259,15 @@ Reveal code upon cursor entry.
 (my/define-ocaml-snippet-command my/ocaml-snippet-while "while")
 (my/define-ocaml-snippet-command my/ocaml-snippet-for "for")
 (my/define-ocaml-snippet-command my/ocaml-snippet-for-down "fordown")
-(my/define-ocaml-snippet-command my/ocaml-snippet-module "module")
+(defalias (quote my/ocaml-snippet-module) (function my/ocaml-start-module))
 (my/define-ocaml-snippet-command my/ocaml-snippet-module-type "modtype")
 (my/define-ocaml-snippet-command my/ocaml-snippet-functor "functor")
 (my/define-ocaml-snippet-command my/ocaml-snippet-local-module "letmod")
 (my/define-ocaml-snippet-command my/ocaml-snippet-first-module "firstmod")
 (my/define-ocaml-snippet-command my/ocaml-snippet-open "open")
 (my/define-ocaml-snippet-command my/ocaml-snippet-include "include")
-(my/define-ocaml-snippet-command my/ocaml-snippet-record "record")
-(my/define-ocaml-snippet-command my/ocaml-snippet-variant "variant")
+(defalias (quote my/ocaml-snippet-record) (function my/ocaml-insert-record-value))
+(defalias (quote my/ocaml-snippet-variant) (function my/ocaml-start-type))
 
 (use-package transient
   :ensure nil
@@ -3136,8 +3298,8 @@ Reveal code upon cursor entry.
       ("w" "while" my/ocaml-snippet-while)
       ("o" "for" my/ocaml-snippet-for)
       ("O" "for downto" my/ocaml-snippet-for-down)
-      ("r" "record type" my/ocaml-snippet-record)
-      ("v" "variant type" my/ocaml-snippet-variant)
+      ("r" "record value" my/ocaml-snippet-record)
+      ("v" "type" my/ocaml-snippet-variant)
       ("m" "modules…" my/ocaml-module-menu)]
      ["Types and docs"
       ("T" "type enclosing" ocaml-eglot-type-enclosing)
@@ -4131,17 +4293,20 @@ OCaml constructs expand into a model that TAB extends, M-TAB cycles between vali
 
 (defun my/ocaml-structured-tab ()
   "Expand, move on, or append a sibling in the active construct."
+  (declare (modes tuareg-mode))
   (interactive)
   (or (my/ocaml-restructure #'my/ocaml-advance)
       (yas-next-field-or-maybe-expand)))
 
 (defun my/ocaml-structured-cycle ()
   "Cycle the alternative under point in the active construct."
+  (declare (modes tuareg-mode))
   (interactive)
   (my/ocaml-restructure #'my/ocaml-cycle))
 
 (defun my/ocaml-start-type ()
   "Insert a structured OCaml type declaration."
+  (declare (modes tuareg-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-default-type) '(:name)))
@@ -4150,24 +4315,35 @@ OCaml constructs expand into a model that TAB extends, M-TAB cycles between vali
 
 (defun my/ocaml-start-let ()
   "Insert a structured OCaml let binding."
+  (declare (modes tuareg-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-default-let) '(:bindings 0 :name)))
 
 (defun my/ocaml-start-module ()
   "Insert a structured OCaml module declaration."
+  (declare (modes tuareg-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-default-module) '(:name)))
 
 (defun my/ocaml-start-match ()
   "Insert a structured OCaml match expression."
+  (declare (modes tuareg-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-default-match) '(:scrutinee)))
 
+(defun my/ocaml-insert-record-value ()
+  "Insert a structured OCaml record value."
+  (declare (modes tuareg-mode))
+  (interactive)
+  (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+  (my/ocaml-place (my/ocaml-record-literal '("field")) '(:fields 0)))
+
 (defun my/ocaml-start-record ()
   "Insert a structured OCaml record type."
+  (declare (modes tuareg-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place
@@ -4216,6 +4392,26 @@ Sly drives SBCL directly; no LSP.
 
 ** OCaml
 Installed dependency sources retain Eglot navigation without standalone Flymake diagnostics.
+
+OCaml-specific behaviour on top of the shared completion described under [[Languages]]:
+
+- *Type-directed candidates* — =ocamllsp/typeSearch= supplies values whose return
+  type matches the hole, already ranked by merlin's cost; =ocamllsp/construct=
+  supplies type-correct constructions. See [[Cape]].
+- *Typed holes* — a bare =_= completes as an empty prefix and is replaced by the
+  chosen candidate, via a dedicated completion style. See [[Corfu]].
+- *Structured snippets* — constructs are a model that =TAB= extends, =S-TAB=
+  cycles between valid alternative forms, =RET= walks fields and =S-RET= ends;
+  a negative prefix (=C-- TAB=) steps back. See [[Structured snippets]].
+- *Snippets as candidates* — literals, operators and constructs appear in the
+  completion list gated by the expected type, so =[= offers a list and =*= offers
+  =(_ * _)= only where those typecheck.
+- *Signature-driven bodies* — a module annotated =: S= offers the items declared
+  by =S= with their names fixed and arity taken from the declared type.
+- *Applications* — arity comes from the expected type, labelled arguments render
+  with their labels, and optional arguments stay omitted until =TAB= adds them.
+- *Menu* — =C-c .= collects snippets, type queries, navigation and refactors.
+
 #+begin_src emacs-lisp
 (use-package tuareg :mode ("\\.ml[ily]?\\'" . tuareg-mode))
 
