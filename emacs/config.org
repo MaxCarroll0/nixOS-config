@@ -1067,6 +1067,55 @@ so the popup gets a chance to appear instead of a partial prefix."
       (setq my/ocaml-value-name-query
             (treesit-query-compile 'ocaml '((value_name) @name)))))
 
+(defvar my/ocaml-leaf-query nil)
+
+(defun my/ocaml-leaf-query ()
+  "Return the compiled query matching pattern variables and value names."
+  (or my/ocaml-leaf-query
+      (setq my/ocaml-leaf-query
+            (treesit-query-compile
+             'ocaml '([(value_pattern) (value_name)] @leaf)))))
+
+(defun my/ocaml-leaf-ranges (expression)
+  "Return ranges of EXPRESSION's pattern variables and typed holes."
+  (when (and (stringp expression) (treesit-language-available-p 'ocaml))
+    (condition-case nil
+        (with-current-buffer (my/ocaml-parse-buffer)
+          (erase-buffer)
+          (insert "let __destruct = " expression)
+          (let ((offset (1+ (length "let __destruct = ")))
+                (root (treesit-buffer-root-node 'ocaml)))
+            (unless (my/type-treesit-error-p root)
+              (sort
+               (cl-loop for capture in
+                        (treesit-query-capture root (my/ocaml-leaf-query))
+                        for node = (cdr capture)
+                        for text = (treesit-node-text node t)
+                        for start = (- (treesit-node-start node) offset)
+                        when (and (>= start 0)
+                                  (or (string= (treesit-node-type node)
+                                               "value_pattern")
+                                      (string= text "_")))
+                        collect (list start
+                                      (- (treesit-node-end node) offset)
+                                      text))
+               (lambda (left right) (< (car left) (car right)))))))
+      (error nil))))
+
+(defun my/ocaml-leaf-snippet (expression)
+  "Return EXPRESSION with each pattern variable and hole as a Yas field."
+  (let ((ranges (my/ocaml-leaf-ranges expression))
+        (position 0)
+        (field 0)
+        pieces)
+    (dolist (range ranges)
+      (push (substring expression position (nth 0 range)) pieces)
+      (setq field (1+ field))
+      (push (format "${%d:%s}" field (nth 2 range)) pieces)
+      (setq position (nth 1 range)))
+    (push (substring expression position) pieces)
+    (apply #'concat (nreverse pieces))))
+
 (defun my/type-expression-hole-ranges (expression)
   "Return Tree-sitter ranges of typed holes in OCaml EXPRESSION."
   (when (and (stringp expression) (treesit-language-available-p 'ocaml))
@@ -3314,7 +3363,7 @@ A negative ARGUMENT moves to the previous field instead."
       ("y" "type definition" ocaml-eglot-find-type-definition)
       ("q" "alternate file" ocaml-eglot-alternate-file)
       ("c" "construct" ocaml-eglot-construct)
-      ("x" "destruct" ocaml-eglot-destruct)
+      ("x" "destruct" my/ocaml-destruct)
       ("[" "previous hole" ocaml-eglot-hole-prev :transient t)
       ("]" "next hole" ocaml-eglot-hole-next :transient t)
       ("p" "previous phrase" ocaml-eglot-phrase-prev :transient t)
@@ -3333,7 +3382,7 @@ A negative ARGUMENT moves to the previous field instead."
 #+end_src
 
 *** Structured snippets
-OCaml constructs expand into a model that TAB extends, M-TAB cycles between valid alternative forms, RET walks fields and S-RET ends. Each structural edit re-renders the construct and reindents it.
+OCaml constructs expand into a model that TAB extends, S-TAB cycles between valid alternative forms, RET walks fields and S-RET ends. A negative prefix (C-- TAB) steps back. Each structural edit re-renders the construct and reindents it.
 
 #+begin_src emacs-lisp
 
@@ -4282,6 +4331,7 @@ OCaml constructs expand into a model that TAB extends, M-TAB cycles between vali
     (let* ((root (plist-get state :root))
            (focus (funcall mutate root path)))
       (when focus
+        (undo-boundary)
         (atomic-change-group
           (let ((region (my/ocaml-snippet-region)))
             (when-let* ((snippet (car (yas-active-snippets))))
@@ -4289,6 +4339,7 @@ OCaml constructs expand into a model that TAB extends, M-TAB cycles between vali
             (delete-region (car region) (cdr region))
             (goto-char (car region))
             (my/ocaml-place root focus)))
+        (undo-boundary)
         t))))
 
 (defun my/ocaml-structured-tab ()
@@ -4333,6 +4384,32 @@ OCaml constructs expand into a model that TAB extends, M-TAB cycles between vali
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-default-match) '(:scrutinee)))
+
+(defun my/ocaml-enclosing-match-bounds ()
+  "Return the bounds of the match expression surrounding point."
+  (when (treesit-language-available-p 'ocaml)
+    (when-let* ((node (treesit-node-at (point) 'ocaml))
+                (match (treesit-parent-until
+                        node (lambda (candidate)
+                               (member (treesit-node-type candidate)
+                                       '("match_expression"
+                                         "function_expression")))
+                        t)))
+      (cons (treesit-node-start match) (treesit-node-end match)))))
+
+(defun my/ocaml-destruct ()
+  "Destructure at point and expose every pattern and body as a Yas field."
+  (declare (modes tuareg-mode))
+  (interactive)
+  (call-interactively #'ocaml-eglot-destruct)
+  (when-let* ((bounds (my/ocaml-enclosing-match-bounds))
+              (text (buffer-substring-no-properties (car bounds) (cdr bounds)))
+              (snippet (my/ocaml-leaf-snippet text))
+              ((not (equal snippet text))))
+    (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+    (delete-region (car bounds) (cdr bounds))
+    (goto-char (car bounds))
+    (yas-expand-snippet snippet (car bounds) (car bounds))))
 
 (defun my/ocaml-insert-record-value ()
   "Insert a structured OCaml record value."
