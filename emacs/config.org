@@ -655,6 +655,7 @@ Explicit completion popup with documentation and Meow navigation.
 
 (defvar-local my/type-completion-expected nil)
 (defvar-local my/type-completion-wanted nil)
+(defvar-local my/type-completion-probed nil)
 (defvar-local my/type-completion-results nil)
 (defvar-local my/type-completion-construct-results nil)
 (defvar-local my/type-completion-index nil)
@@ -1121,19 +1122,12 @@ Explicit completion popup with documentation and Meow navigation.
                      (or (car (last (my/eglot-code-blocks text))) text))))
     (and (my/type-plausible-p type) type)))
 
-(defun my/eglot-signature-parameter-type ()
-  "Return the active parameter type from standard LSP signature help."
-  (when (and (fboundp 'eglot-managed-p) (eglot-managed-p))
-    (condition-case nil
-        (when-let* ((server (eglot--current-server-or-lose))
-                    ((eglot-server-capable :signatureHelpProvider))
-                    (response
-                     (jsonrpc-request
-                      server :textDocument/signatureHelp
-                      (eglot--TextDocumentPositionParams)))
-                    (signatures (plist-get response :signatures))
-                    ((> (length signatures) 0)))
-          (let* ((signature-index
+(defun my/eglot-signature-type (response)
+  "Return the active parameter type in signature help RESPONSE."
+  (condition-case nil
+      (when-let* ((signatures (plist-get response :signatures))
+                  ((> (length signatures) 0)))
+        (let* ((signature-index
                   (or (plist-get response :activeSignature) 0))
                  (signature
                   (aref signatures
@@ -1162,6 +1156,17 @@ Explicit completion popup with documentation and Meow navigation.
                     (replace-regexp-in-string
                      "\\`.*\\(?:::\\|:\\)[[:space:]]*" "" text))
               (my/type-normalize text))))
+    (error nil)))
+
+(defun my/eglot-signature-parameter-type ()
+  "Return the active parameter type from standard LSP signature help."
+  (when (and (fboundp 'eglot-managed-p) (eglot-managed-p))
+    (condition-case nil
+        (when-let* ((server (eglot--current-server-or-lose))
+                    ((eglot-server-capable :signatureHelpProvider)))
+          (my/eglot-signature-type
+           (jsonrpc-request server :textDocument/signatureHelp
+                            (eglot--TextDocumentPositionParams))))
       (error nil))))
 
 (defvar-local my/corfu-filter-kind nil)
@@ -1488,25 +1493,54 @@ Cursor motion triggers the preview, so it runs off the command loop on an idle t
   (setq my/completion-preview-dismissed (my/completion-preview-state))
   (completion-preview-active-mode -1))
 
+(defun my/completion-preview-typed-context-p ()
+  "Return non-nil when this position could carry a type expectation."
+  (and (fboundp 'eglot-managed-p) (eglot-managed-p)))
+
+(defun my/completion-preview-allowed-p ()
+  "Return non-nil when a preview here can be known to be type correct."
+  (or (not (my/completion-preview-typed-context-p))
+      my/type-completion-probed))
+
 (defun my/completion-preview-ambiguous-p ()
-  "Return non-nil when an untyped preview is one of several candidates."
-  (and (not my/type-completion-expected)
-       (cdr (completion-preview--get 'completion-preview-suffixes))
-       t))
+  "Return non-nil when several candidates remain behind the preview."
+  (and (cdr (completion-preview--get 'completion-preview-suffixes)) t))
+
+(defun my/completion-preview-trim-to-common ()
+  "Reduce an ambiguous preview to the prefix every candidate shares."
+  (condition-case nil
+      (let* ((overlay completion-preview--overlay)
+             (beg (completion-preview--get 'completion-preview-beg))
+             (typed (- (overlay-start overlay) beg))
+             (common (substring-no-properties
+                      (or (completion-preview--get
+                           'completion-preview-common)
+                          ""))))
+        (if (> (length common) typed)
+            (progn
+              (overlay-put overlay 'completion-preview-suffixes (list ""))
+              (overlay-put overlay 'completion-preview-index 0)
+              (overlay-put overlay 'after-string
+                           (propertize (substring common typed)
+                                       'face 'completion-preview-common
+                                       'mouse-face
+                                       'completion-preview-highlight
+                                       'keymap completion-preview--mouse-map)))
+          (completion-preview-active-mode -1)))
+    (error (completion-preview-active-mode -1))))
 
 (defun my/completion-preview-without-probe (original &rest arguments)
-  "Run ORIGINAL preview update, keeping only unambiguous or typed candidates."
+  "Run ORIGINAL preview update only where candidates are known type correct."
   (let ((my/type-completion-inhibit-probe t))
-    (cond
-     ((equal my/completion-preview-dismissed (my/completion-preview-state))
-      (completion-preview-active-mode -1))
-     ((my/type-completion-settled-p)
-      (completion-preview-active-mode -1))
-     (t
+    (if (or (equal my/completion-preview-dismissed
+                   (my/completion-preview-state))
+            (my/type-completion-settled-p)
+            (not (my/completion-preview-allowed-p)))
+        (completion-preview-active-mode -1)
       (apply original arguments)
       (when (and completion-preview-active-mode
                  (my/completion-preview-ambiguous-p))
-        (completion-preview-active-mode -1))))))
+        (my/completion-preview-trim-to-common)))))
 
 (use-package completion-preview
   :ensure nil
@@ -1772,19 +1806,71 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
            server :ocamllsp/typeEnclosing params
            :success-fn
            (lambda (result)
-             (when-let* ((expected (my/type-normalize (plist-get result :type))))
+             (let ((expected (my/type-normalize (plist-get result :type))))
                (my/type-completion-receive
                 buffer generation key
                 (lambda ()
-                  (setq my/type-completion-expected expected
-                        my/type-completion-wanted (my/type-canonical expected))
-                  (my/type-completion-request expected key)
-                  (my/type-completion-construct-request key)))))
-           :error-fn #'ignore
-           :timeout-fn #'ignore
+                  (setq my/type-completion-probed t)
+                  (when expected
+                    (setq my/type-completion-expected expected
+                          my/type-completion-wanted
+                          (my/type-canonical expected))
+                    (my/type-completion-request expected key)
+                    (my/type-completion-construct-request key))))))
+           :error-fn
+           (lambda (&rest _)
+             (my/type-completion-receive
+              buffer generation key
+              (lambda () (setq my/type-completion-probed t))))
+           :timeout-fn
+           (lambda ()
+             (my/type-completion-receive
+              buffer generation key
+              (lambda () (setq my/type-completion-probed t))))
            :timeout 2.0
            :deferred 'my/type-completion-enclosing))
       (error nil)))
+
+  (defun my/type-completion-signature-request (key)
+    "Determine the expected type from signature help without blocking."
+    (condition-case nil
+        (let ((buffer (current-buffer))
+              (generation my/type-completion-generation)
+              (server (eglot--current-server-or-lose))
+              (params (eglot--TextDocumentPositionParams))
+              (settle
+               (lambda (expected)
+                 (setq my/type-completion-probed t)
+                 (when expected
+                   (setq my/type-completion-expected expected
+                         my/type-completion-wanted
+                         (my/type-canonical expected))
+                   (when (my/type-completion-ocaml-p)
+                     (my/type-completion-request expected
+                                                 my/type-completion-key))))))
+          (if (eglot-server-capable :signatureHelpProvider)
+              (jsonrpc-async-request
+               server :textDocument/signatureHelp params
+               :success-fn
+               (lambda (response)
+                 (my/type-completion-receive
+                  buffer generation key
+                  (lambda ()
+                    (funcall settle (my/eglot-signature-type response)))))
+               :error-fn
+               (lambda (&rest _)
+                 (my/type-completion-receive
+                  buffer generation key
+                  (lambda () (funcall settle nil))))
+               :timeout-fn
+               (lambda ()
+                 (my/type-completion-receive
+                  buffer generation key
+                  (lambda () (funcall settle nil))))
+               :timeout 2.0
+               :deferred 'my/type-completion-signature)
+            (setq my/type-completion-probed t)))
+      (error (setq my/type-completion-probed t))))
 
   (defun my/type-completion-expected-ocaml (beginning end)
     "Return OCaml-LSP's expected type at completion bounds BEGINNING and END."
@@ -1881,6 +1967,7 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
           my/type-completion-candidates nil
           my/type-completion-arities (make-hash-table :test #'equal)
           my/type-completion-state nil
+          my/type-completion-probed nil
           my/type-completion-generation
           (1+ my/type-completion-generation)))
 
@@ -1893,15 +1980,18 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
         t)
        (my/type-completion-inhibit-probe
         (when (and (not (equal key my/type-completion-key))
-                   (my/type-completion-ocaml-p)
-                   (my/type-completion-hole-p beginning end))
+                   (my/completion-preview-typed-context-p))
           (my/type-completion-reset key)
-          (save-excursion
-            (goto-char beginning)
-            (my/type-completion-enclosing-request key)))
+          (if (and (my/type-completion-ocaml-p)
+                   (my/type-completion-hole-p beginning end))
+              (save-excursion
+                (goto-char beginning)
+                (my/type-completion-enclosing-request key))
+            (my/type-completion-signature-request key)))
         nil)
        (t
         (my/type-completion-reset key)
+        (setq my/type-completion-probed t)
         (when-let* ((expected
                      (my/type-completion-expected-at-point beginning end)))
           (setq my/type-completion-expected expected
