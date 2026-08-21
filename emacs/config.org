@@ -2172,6 +2172,8 @@ QUALIFIED non-nil keeps module-qualified candidates."
        ((eq action t)
         (setq my/type-completion-input (my/type-hole-pattern string))
         (let* ((effective (my/type-hole-pattern string))
+               (completion-regexp-list
+                (unless (string-empty-p effective) completion-regexp-list))
                (merged
                 (my/type-merge-candidates
                  (all-completions effective table predicate)
@@ -4297,7 +4299,8 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
               (field (seq-find (lambda (f) (= (yas--field-number f) number))
                                (yas--snippet-fields snippet))))
     (goto-char (yas--field-start field))
-    (yas--move-to-field snippet field)
+    (when (memq field (yas--snippet-fields snippet))
+      (yas--move-to-field snippet field))
     t))
 
 (defun my/ocaml-format-region (start end)
@@ -4325,6 +4328,8 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
 
 (defun my/ocaml-restructure (mutate)
   "Sync, apply MUTATE to the model, then re-render and refocus."
+  (unless (yas-active-snippets)
+    (setq my/ocaml-snippet nil))
   (when-let* ((state my/ocaml-snippet)
               (path (my/ocaml-current-path)))
     (my/ocaml-sync)
