@@ -171,6 +171,7 @@ in
   };
 
   services.xserver.xkb.layout = "gb";
+  services.xserver.xkb.options = "caps:escape";
   hardware.keyboard.qmk.enable = true;
 
   programs.firefox = {
