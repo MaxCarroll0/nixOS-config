@@ -26,6 +26,10 @@ in
         printf -v remote_args ' %q' "$@"
         exec ${pkgs.tailscale}/bin/tailscale ssh desktopnew "$remote_command$remote_args"
       '')
+      (pkgs.writeShellScriptBin "emacs-restart-profile" ''
+        ${pkgs.coreutils}/bin/tail --pid="$1" -f /dev/null
+        exec /home/max/.nix-profile/bin/emacs
+      '')
     ];
 
     programs.emacs = {
@@ -130,6 +134,7 @@ in
               haskell-mode
               idris2-mode
               tuareg
+              ocaml-eglot
               dune
               ocamlformat
               scala-mode
@@ -145,6 +150,7 @@ in
               yasnippet
               nov
               consult
+              consult-eglot
               marginalia
               embark
               embark-consult
