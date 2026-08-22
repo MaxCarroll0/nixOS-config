@@ -864,7 +864,7 @@ Explicit completion popup with documentation and Meow navigation.
 (defun my/type-entry-annotate (entry wanted rank)
   "Record ENTRY's server RANK and its application producing canonical WANTED."
   (setq entry (plist-put entry :rank rank))
-  (if (memq (plist-get entry :kind) '(construct collection))
+  (if (memq (plist-get entry :kind) '(construct collection record))
       (progn
         (setq entry (plist-put entry :tier 0))
         (plist-put entry :arity 0))
@@ -978,6 +978,16 @@ Explicit completion popup with documentation and Meow navigation.
                    (or (bobp)
                        (not (memq (char-syntax (char-before)) '(?w ?_)))))
           (cons start end))))))
+
+(defun my/ocaml-literal-prefix-bounds ()
+  "Return bounds for an incomplete OCaml collection or record literal."
+  (let ((end (point)))
+    (cond
+     ((and (>= (- end (point-min)) 2)
+           (equal (buffer-substring-no-properties (- end 2) end) "[|"))
+      (cons (- end 2) end))
+     ((memq (char-before) '(?\[ ?{))
+      (cons (1- end) end)))))
 
 (defun my/type-hole-pattern (string)
   "Return STRING with a bare OCaml hole reduced to an empty prefix."
@@ -2151,6 +2161,23 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
              candidate)))
        my/type-completion-candidates)))
 
+  (defun my/type-completion-literal-prefix-candidates (string)
+    "Return fallback structured candidates for literal prefix STRING."
+    (let* ((spec
+            (pcase string
+              ("[" (list "[]" 'collection :collection 'list))
+              ("[|" (list "[||]" 'collection :collection 'array))
+              ("{" (list "{}" 'record :record-fields
+                         (my/ocaml-record-options my/type-completion-expected)))))
+           (name (car spec)))
+      (when (and name
+                 (not (and my/type-completion-index
+                           (gethash name my/type-completion-index))))
+        (list
+         (my/type-semantic-candidate
+          (append (list :name name :kind (cadr spec) :tier 2 :rank 65535)
+                  (cddr spec)))))))
+
   (defun my/type-completion-reindex ()
     "Index the semantic results and precompute their applications."
     (let ((index (make-hash-table :test #'equal))
@@ -2160,6 +2187,8 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
           candidates)
       (dolist (tagged
                `((construct . ,my/type-completion-construct-results)
+                 (construct . ,(my/type-completion-literal-entries
+                                 my/type-completion-expected))
                  (type-search . ,my/type-completion-results)
                  (snippet . ,(my/type-completion-snippet-entries
                               my/type-completion-expected))
@@ -2228,42 +2257,73 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
             (my/type-normalize (plist-get result :type)))
         (error nil))))
 
-  (defun my/type-completion-construct-entries (suggestions)
+  (defun my/type-completion-construct-at-point (expected)
+    "Return constructions for the hole at point with EXPECTED type."
+    (when (and expected
+               (ocaml-eglot-req--server-capable
+                :experimental :ocamllsp :handleConstruct))
+      (condition-case nil
+          (let* ((params (ocaml-eglot-req--ConstructParams
+                          (eglot--pos-to-lsp-position) 1 "none"))
+                 (response
+                  (ocaml-eglot-req--send
+                   :ocamllsp/construct params :immediate t :timeout 0.35)))
+            (my/type-completion-construct-entries
+             (append (plist-get response :result) nil) expected))
+        (error nil))))
+
+  (defun my/type-completion-construct-entries (suggestions &optional type)
     "Return semantic entries for OCaml-LSP construction SUGGESTIONS."
-    (let ((expected my/type-completion-expected)
+    (let ((expected (or type my/type-completion-expected))
           entries)
       (dolist (suggestion suggestions)
-        (push (list :name suggestion
-                    :typ expected
-                    :constructible suggestion
-                    :kind 'construct)
-              entries))
+        (let ((record-fields
+               (my/ocaml-record-construction-fields suggestion)))
+          (push (cond
+                 ((equal suggestion "[]")
+                  (list :name "[]" :typ expected :kind 'collection
+                        :collection 'list :constructible suggestion))
+                 ((equal suggestion "[||]")
+                  (list :name "[||]" :typ expected :kind 'collection
+                        :collection 'array :constructible suggestion))
+                 (record-fields
+                  (list :name "{}" :typ expected :kind 'record
+                        :record-fields record-fields
+                        :constructible suggestion))
+                 (t
+                  (list :name suggestion :typ expected
+                        :constructible suggestion :kind 'construct)))
+                entries)))
       (nreverse entries)))
 
-  (defun my/type-completion-collection-entries (expected)
-    "Return repeatable literal entries when EXPECTED is a collection type."
+  (defun my/type-completion-literal-entries (expected)
+    "Return empty structured literals compatible with EXPECTED."
     (when-let* ((parts (my/type-arrow-parts expected))
                 ((= (length parts) 1))
                 (text (car parts)))
       (cond
        ((string-suffix-p " list" text)
-        (list (list :name "[ _ ]" :typ expected
+        (list (list :name "[]" :typ expected
                     :kind 'collection :collection 'list)))
        ((string-suffix-p " array" text)
-        (list (list :name "[| _ |]" :typ expected
-                    :kind 'collection :collection 'array))))))
+        (list (list :name "[||]" :typ expected
+                    :kind 'collection :collection 'array)))
+       (t
+        (when-let* ((fields (my/ocaml-record-fields expected)))
+          (list (list :name "{}" :typ expected :kind 'record
+                      :record-fields fields)))))))
 
   (defconst my/ocaml-snippet-registry
     '((:id "list" :label "list" :group expression :key "["
-       :command my/ocaml-start-list :name "[ _ ]" :trigger "["
+       :command my/ocaml-start-list :name "[]" :trigger "["
        :sort list-literal :builder my/ocaml-snippet-list)
       (:id "array" :label "array" :group expression :key "|"
-       :command my/ocaml-start-array :name "[| _ |]" :trigger "[|"
+       :command my/ocaml-start-array :name "[||]" :trigger "[|"
        :sort array-literal :builder my/ocaml-snippet-array)
       (:id "apply" :label "application" :group expression :key "a"
        :command my/ocaml-start-application)
       (:id "record" :label "record value" :group expression :key "r"
-       :command my/ocaml-snippet-record :name "{ _ }" :trigger "{"
+       :command my/ocaml-snippet-record :name "{}" :trigger "{"
        :sort record-value :builder my/ocaml-snippet-record-value)
       (:id "if" :label "if" :group expression :key "i"
        :command my/ocaml-snippet-if
@@ -2341,7 +2401,26 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
   (defun my/ocaml-snippet-array () (my/ocaml-collection 'array))
   (defun my/ocaml-snippet-record-value ()
     (my/ocaml-record-literal
-     (or (my/ocaml-record-fields my/type-completion-expected) '("field"))))
+     (my/ocaml-record-options my/type-completion-expected)))
+
+  (defun my/ocaml-record-options (expected)
+    "Return ordered record fields from construction results or EXPECTED."
+    (or (seq-some (lambda (entry) (plist-get entry :record-fields))
+                  my/type-completion-construct-results)
+        (my/ocaml-record-fields expected)))
+
+  (defun my/ocaml-record-construction-fields (text)
+    "Return ordered fields from an LSP record construction TEXT."
+    (when (and (stringp text)
+               (string-match "\\`{\\(.*\\)}\\'" (string-trim text)))
+      (delq nil
+            (mapcar
+             (lambda (part)
+               (when (string-match
+                      "\\`[[:space:]]*\\([A-Za-z_][A-Za-z0-9_'.]*\\)[[:space:]]*="
+                      part)
+                 (match-string 1 part)))
+             (split-string (match-string 1 (string-trim text)) ";" t)))))
 
   (defun my/ocaml-record-fields (expected)
     "Return EXPECTED's record field names, when it names a record type."
@@ -2543,7 +2622,10 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
               (insert "_")
               (goto-char start)
               (eglot--signal-textDocument/didChange)
-              (setq result (my/type-completion-enclosing-at-point)))
+              (setq result (my/type-completion-enclosing-at-point))
+              (when (and result (member original '("[" "[|" "{")))
+                (setq my/type-completion-construct-results
+                      (my/type-completion-construct-at-point result))))
           (delete-region start finish)
           (goto-char start)
           (insert original)
@@ -2663,7 +2745,8 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
             (my/type-completion-reindex))
           (when (and expected ocaml)
             (my/type-completion-request expected key)
-            (my/type-completion-construct-request key))
+            (unless my/type-completion-construct-results
+              (my/type-completion-construct-request key)))
           (or expected ocaml))))))
 
   (defun my/type-completion-underline-match (type)
@@ -2715,7 +2798,9 @@ completion replaces a bare `_', whose text must not filter the candidates."
                    (all-completions effective table predicate))
                  (all-completions
                   effective
-                  (my/type-completion-semantic-candidates qualifier)
+                  (append
+                   (my/type-completion-semantic-candidates qualifier)
+                   (my/type-completion-literal-prefix-candidates effective))
                   predicate))))
           (when qualifier
             (setq merged
@@ -2756,7 +2841,8 @@ completion replaces a bare `_', whose text must not filter the candidates."
     (require 'yasnippet)
     (unless (bound-and-true-p yas-minor-mode)
       (yas-minor-mode 1))
-    (my/ocaml-place (my/ocaml-collection kind) '(:elements 0)))
+    (let ((node (my/ocaml-collection kind)))
+      (my/ocaml-place node (my/ocaml-node-focus node))))
 
   (defun my/ocaml-and-binding-context-p (name beginning)
     "Return non-nil when NAME is valid after a matching let operator."
@@ -2856,7 +2942,12 @@ completion replaces a bare `_', whose text must not filter the candidates."
                 (and my/type-completion-trigger-index
                      (gethash (substring-no-properties candidate)
                               my/type-completion-trigger-index))))
-           (collection (and entry (plist-get entry :collection)))
+           (collection
+            (or (and entry (plist-get entry :collection))
+                (pcase (substring-no-properties candidate)
+                  ("[]" 'list)
+                  ("[||]" 'array))))
+           (record-fields (and entry (plist-get entry :record-fields)))
            (yas-template
             (my/type-completion-yas-template candidate beginning))
            (snippet (or (my/type-completion-module-snippet candidate)
@@ -2866,7 +2957,9 @@ completion replaces a bare `_', whose text must not filter the candidates."
            (holes (and entry (plist-get entry :holes)))
            (structured
             (and entry
-                 (or (when-let* ((builder (plist-get entry :builder)))
+                 (or (and (eq (plist-get entry :kind) 'record)
+                          (my/ocaml-record-literal record-fields))
+                     (when-let* ((builder (plist-get entry :builder)))
                        (funcall builder))
                      (and (memq (plist-get entry :kind) '(construct snippet))
                           (my/ocaml-node-from-constructible constructible))
@@ -2977,31 +3070,39 @@ completion replaces a bare `_', whose text must not filter the candidates."
 
   (defun my/completion-ranked-capf ()
     "Return composed CAPF ranked by the language server's type ordering."
-    (when-let* ((result (and my/completion-super-capf
-                             (funcall my/completion-super-capf))))
-      (when-let* (((my/type-completion-ocaml-p))
-                  (operator (my/ocaml-operator-bounds)))
-        (setf (nth 0 result) (car operator)
-              (nth 1 result) (cdr operator)))
-      (let ((beginning (nth 0 result))
-            (end (nth 1 result)))
-        (setcdr (nthcdr 2 result)
-                (plist-put (nthcdr 3 result)
-                           :my/completion-beginning beginning))
-        (when (my/type-completion-ensure beginning end)
-          (setf (nth 2 result)
-                (my/type-completion-table
-                 (nth 2 result)
-                 (my/completion-qualifier-before beginning)
-                 (my/type-completion-hole-p beginning end)))
-          (let ((original
-                 (plist-get (nthcdr 3 result) :exit-function)))
-            (setf (plist-get (nthcdr 3 result) :exit-function)
-                  (apply-partially
-                   #'my/type-completion-exit original beginning))))
-        (when my/type-completion-inhibit-probe
-          (setf (nth 2 result) (my/completion-preview-table (nth 2 result)))))
-      result))
+    (let* ((literal (and (derived-mode-p 'tuareg-mode)
+                         (my/ocaml-literal-prefix-bounds)))
+           (result (and my/completion-super-capf
+                        (funcall my/completion-super-capf))))
+      (when (and literal
+                 (or (null result) (/= (nth 0 result) (car literal))))
+        (setq result (list (car literal) (cdr literal) nil :exclusive 'no)))
+      (when result
+        (when-let* (((my/type-completion-ocaml-p))
+                    (operator
+                     (and (not literal) (my/ocaml-operator-bounds))))
+          (setf (nth 0 result) (car operator)
+                (nth 1 result) (cdr operator)))
+        (let ((beginning (nth 0 result))
+              (end (nth 1 result)))
+          (setcdr (nthcdr 2 result)
+                  (plist-put (nthcdr 3 result)
+                             :my/completion-beginning beginning))
+          (when (my/type-completion-ensure beginning end)
+            (setf (nth 2 result)
+                  (my/type-completion-table
+                   (nth 2 result)
+                   (my/completion-qualifier-before beginning)
+                   (my/type-completion-hole-p beginning end)))
+            (let ((original
+                   (plist-get (nthcdr 3 result) :exit-function)))
+              (setf (plist-get (nthcdr 3 result) :exit-function)
+                    (apply-partially
+                     #'my/type-completion-exit original beginning))))
+          (when my/type-completion-inhibit-probe
+            (setf (nth 2 result)
+                  (my/completion-preview-table (nth 2 result)))))
+        result)))
 
   (defun my/completion-refresh-capfs ()
     "Compose completion sources for the current buffer."
@@ -4304,30 +4405,47 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
     (_ (my/ocaml-field (append path '(:value)) (plist-get node :value)))))
 
 (my/ocaml-define-renderer collection (node path)
-  (let ((elements
-         (string-join
-          (cl-loop for e in (plist-get node :elements)
-                   for i from 0
-                   collect (my/ocaml-field (append path (list :elements i)) e))
-          "; ")))
-    (if (eq (plist-get node :style) 'array)
-        (concat "[| " elements " |]")
-      (concat "[ " elements " ]"))))
+  (let* ((values (plist-get node :elements))
+         (elements
+          (string-join
+           (cl-loop for e in values
+                    for i from 0
+                    collect (my/ocaml-field
+                             (append path (list :elements i)) e))
+           "; ")))
+    (cond
+     ((and (eq (plist-get node :style) 'array) values)
+      (concat "[| " elements " |]"))
+     ((eq (plist-get node :style) 'array)
+      (concat "[|" (my/ocaml-field (append path '(:elements)) "") "|]"))
+     (values (concat "[ " elements " ]"))
+     (t (concat "[" (my/ocaml-field (append path '(:elements)) "") "]")))))
 
 (defun my/ocaml-collection (style)
-  (list :kind 'collection :style style :elements (list "_")))
+  (list :kind 'collection :style style :elements nil))
 
 (my/ocaml-define-renderer record-literal (node path)
-  (concat "{ "
+  (let* ((fields (plist-get node :fields))
+         (base (plist-get node :base))
+         (body
           (string-join
-           (cl-loop for f in (plist-get node :fields)
+           (cl-loop for field in fields
                     for i from 0
-                    collect (concat (plist-get f :name) " = "
-                                    (my/ocaml-field
-                                     (append path (list :fields i :value))
-                                     (plist-get f :value))))
-           "; ")
-          " }"))
+                    collect
+                    (concat (plist-get field :name) " = "
+                            (my/ocaml-field
+                             (append path (list :fields i :value))
+                             (plist-get field :value))))
+           "; ")))
+    (cond
+     ((and base fields)
+      (concat "{ " (my/ocaml-field (append path '(:base)) base)
+              " with " body " }"))
+     (base
+      (concat "{ " (my/ocaml-field (append path '(:base)) base)
+              " with " (my/ocaml-field (append path '(:fields)) "") "}"))
+     (fields (concat "{ " body " }"))
+     (t (concat "{" (my/ocaml-field (append path '(:fields)) "") "}")))))
 
 (my/ocaml-define-renderer constructor-app (node path)
   (concat (my/ocaml-field (append path '(:name)) (plist-get node :name))
@@ -4338,11 +4456,8 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
            (number-sequence 0 (1- (length (plist-get node :arguments))))
            "")))
 
-(defun my/ocaml-record-literal (names)
-  (list :kind 'record-literal
-        :fields (mapcar (lambda (name)
-                          (list :name name :value "_"))
-                        names)))
+(defun my/ocaml-record-literal (&optional options)
+  (list :kind 'record-literal :field-options options :fields nil :base nil))
 
 (defun my/ocaml-application (name holes)
   (list :kind 'application :head name
@@ -4388,8 +4503,12 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 (defun my/ocaml-node-focus (node)
   "Return the path of NODE's first editable slot."
   (pcase (plist-get node :kind)
-    ('record-literal '(:fields 0 :value))
-    ('collection '(:elements 0))
+    ('record-literal
+     (cond ((plist-get node :base) '(:base))
+           ((plist-get node :fields) '(:fields 0 :value))
+           (t '(:fields))))
+    ('collection
+     (if (plist-get node :elements) '(:elements 0) '(:elements)))
     ('constructor-app (if (plist-get node :arguments) '(:arguments 0) '(:name)))
     ('application (if (plist-get node :arguments)
                       '(:arguments 0 :value)
@@ -4610,6 +4729,32 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
     (cons (my/ocaml-path-get root (butlast path))
           (car (last path)))))
 
+(defun my/ocaml-record-entry (name)
+  "Return an editable record entry named NAME."
+  (list :kind 'record-entry :name name :value "_"))
+
+(defun my/ocaml-record-unused-fields (record &optional except)
+  "Return RECORD field options unused outside index EXCEPT."
+  (let ((used
+         (cl-loop for field in (plist-get record :fields)
+                  for index from 0
+                  unless (eql index except)
+                  collect (plist-get field :name))))
+    (seq-remove (lambda (name) (member name used))
+                (plist-get record :field-options))))
+
+(defun my/ocaml-record-add-field (record path)
+  "Append RECORD's next unused field and return its focus below PATH."
+  (let* ((fields (plist-get record :fields))
+         (options (plist-get record :field-options))
+         (name (or (car (my/ocaml-record-unused-fields record))
+                   (and (null options)
+                        (my/ocaml-field-name (length fields))))))
+    (when name
+      (plist-put record :fields
+                 (append fields (list (my/ocaml-record-entry name))))
+      (append path (list :fields (length fields) :value)))))
+
 (defun my/ocaml-expand (root path)
   "Create a new slot at PATH in ROOT. Return the path to focus, or nil."
   (let* ((owner-path (my/ocaml-owner-path root path))
@@ -4755,13 +4900,21 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
         (plist-put owner :elements (append elements (list "_")))
         (append owner-path (list :elements (length elements)))))
 
+     ((and (eq kind 'record-literal) (eq slot :fields))
+      (my/ocaml-record-add-field owner owner-path))
+
+     ((and (eq kind 'record-entry) (eq slot :value))
+      (let* ((record-path (butlast owner-path 2))
+             (record (my/ocaml-path-get root record-path))
+             (index (car (last owner-path)))
+             (fields (plist-get record :fields)))
+        (when (= index (1- (length fields)))
+          (my/ocaml-record-add-field record record-path))))
+
      ((and (eq kind 'constructor-app) (eq slot :arguments))
       (let ((arguments (plist-get owner :arguments)))
         (plist-put owner :arguments (append arguments (list "_")))
         (append owner-path (list :arguments (length arguments)))))
-
-     ((and (eq kind 'record-literal) (eq slot :fields))
-      nil)
 
      ((my/ocaml-struct-item-path root path)
       (let* ((body-path (my/ocaml-struct-item-path root path))
@@ -4847,6 +5000,28 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
                (kind (and (listp owner) (plist-get owner :kind)))
                (owner-path (my/ocaml-owner-path root path)))
     (cond
+     ((and (eq kind 'record-literal) (eq slot :fields))
+      (plist-put owner :base "_")
+      (append owner-path '(:base)))
+
+     ((and (eq kind 'record-literal) (eq slot :base))
+      (plist-put owner :base nil)
+      (append owner-path
+              (if (plist-get owner :fields) '(:fields 0 :value) '(:fields))))
+
+     ((and (eq kind 'record-entry) (eq slot :value))
+      (let* ((record-path (butlast owner-path 2))
+             (record (my/ocaml-path-get root record-path))
+             (index (car (last owner-path)))
+             (options (my/ocaml-record-unused-fields record index))
+             (current (plist-get owner :name))
+             (position (or (cl-position current options :test #'equal) -1))
+             (next (and (> (length options) 1)
+                        (nth (mod (1+ position) (length options)) options))))
+        (when (and next (not (equal next current)))
+          (plist-put owner :name next)
+          (append owner-path '(:value)))))
+
      ((my/ocaml-struct-item-default-p root path)
       (let* ((body-path (my/ocaml-struct-item-path root path))
              (body (my/ocaml-path-get root body-path))
@@ -5059,10 +5234,15 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
         (fields (plist-get state :fields)))
     (dolist (field (yas--snippet-fields snippet))
       (when-let* ((path (cdr (assq (yas--field-number field) fields))))
-        (my/ocaml-path-set
-         root path
-         (buffer-substring-no-properties
-          (yas--field-start field) (yas--field-end field)))))))
+        (let ((text
+               (buffer-substring-no-properties
+                (yas--field-start field) (yas--field-end field))))
+          (my/ocaml-path-set
+           root path
+           (if (and (string-empty-p text)
+                    (memq (car (last path)) '(:elements :fields)))
+               nil
+             text)))))))
 
 (defun my/ocaml-focus-field (snippet state focus)
   "Move to FOCUS in SNIPPET using STATE's field map."
@@ -5213,14 +5393,16 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
   (declare (modes tuareg-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
-  (my/ocaml-place (my/ocaml-collection 'list) '(:elements 0)))
+  (let ((node (my/ocaml-collection 'list)))
+    (my/ocaml-place node (my/ocaml-node-focus node))))
 
 (defun my/ocaml-start-array ()
   "Insert a structured OCaml array."
   (declare (modes tuareg-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
-  (my/ocaml-place (my/ocaml-collection 'array) '(:elements 0)))
+  (let ((node (my/ocaml-collection 'array)))
+    (my/ocaml-place node (my/ocaml-node-focus node))))
 
 (defun my/ocaml-enclosing-match-bounds ()
   "Return the bounds of the match expression surrounding point."
@@ -5253,8 +5435,10 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
   (declare (modes tuareg-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
-  (my/ocaml-place
-   (my/ocaml-record-literal '("field")) '(:fields 0 :value)))
+  (let ((node
+         (my/ocaml-record-literal
+          (my/ocaml-record-options my/type-completion-expected))))
+    (my/ocaml-place node (my/ocaml-node-focus node))))
 
 (defun my/ocaml-start-record ()
   "Insert a structured OCaml record type."
