@@ -4015,6 +4015,8 @@ Reveal code upon cursor entry.
 *** Digestif LSP
 
 *** YASnippet
+OCaml snippet names and operators expand directly with =TAB= when no completion preview is active.
+
 #+begin_src emacs-lisp
 
 (use-package yasnippet
@@ -4041,6 +4043,76 @@ Reveal code upon cursor entry.
    (mapcar (lambda (snippet)
              (list (car snippet) (cdr snippet) (car snippet)))
            my/ocaml-yas-snippets))
+
+  (defconst my/ocaml-direct-operator-triggers
+    '("+." "-." "*." "/." "+" "-" "*" "/" "mod"))
+
+  (defun my/ocaml-direct-trigger-bounds (trigger)
+    "Return bounds when TRIGGER is the complete token before point."
+    (let ((start (- (point) (length trigger))))
+      (when (and (>= start (point-min))
+                 (equal trigger
+                        (buffer-substring-no-properties start (point)))
+                 (if (string-match-p "\\`[[:word:]_]" trigger)
+                     (and (or (= start (point-min))
+                              (not (memq (char-syntax (char-before start))
+                                         '(?w ?_))))
+                          (or (= (point) (point-max))
+                              (not (memq (char-syntax (char-after))
+                                         '(?w ?_)))))
+                   (if (my/ocaml-operator-p trigger)
+                       (equal (my/ocaml-operator-bounds)
+                              (cons start (point)))
+                     t)))
+        (cons start (point)))))
+
+  (defun my/ocaml-direct-trigger ()
+    "Return the structured snippet trigger immediately before point."
+    (seq-some
+     (lambda (entry)
+       (let ((trigger (car entry)))
+         (when-let* ((bounds (my/ocaml-direct-trigger-bounds trigger)))
+           (list :bounds bounds :action (cdr entry)))))
+     (sort
+      (append
+       (delq nil
+             (mapcar
+              (lambda (spec)
+                (when (and (plist-get spec :command)
+                           (not (plist-get spec :template)))
+                  (cons (or (plist-get spec :trigger)
+                            (plist-get spec :name)
+                            (plist-get spec :id))
+                        (plist-get spec :command))))
+              my/ocaml-snippet-registry))
+       (mapcar (lambda (operator) (cons operator operator))
+               my/ocaml-direct-operator-triggers))
+      (lambda (left right) (> (length (car left)) (length (car right)))))))
+
+  (defun my/ocaml-expand-direct-trigger ()
+    "Expand the structured OCaml snippet trigger before point."
+    (when-let* ((trigger (my/ocaml-direct-trigger))
+                (bounds (plist-get trigger :bounds))
+                (action (plist-get trigger :action)))
+      (delete-region (car bounds) (cdr bounds))
+      (if (stringp action)
+          (yas-expand-snippet
+           (format "(${1:_} %s ${2:_})" action) (point) (point))
+        (funcall action))
+      t))
+
+  (defun my/yas-expand-or-indent ()
+    "Accept a preview, expand a snippet trigger, or indent."
+    (interactive)
+    (cond
+     ((bound-and-true-p completion-preview-active-mode)
+      (my/completion-preview-accept))
+     ((and (derived-mode-p 'tuareg-mode)
+           (my/ocaml-expand-direct-trigger)))
+     ((yas-expand))
+     (t (indent-for-tab-command))))
+
+  (define-key yas-minor-mode-map (kbd "TAB") #'my/yas-expand-or-indent)
 
   (defun my/yas-enter-insert-state (&rest _)
     "Switch to Meow insert state so snippet fields are directly editable."
