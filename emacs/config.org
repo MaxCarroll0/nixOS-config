@@ -665,6 +665,7 @@ Explicit completion popup with documentation and Meow navigation.
 (defvar-local my/type-completion-candidates nil)
 (defvar-local my/type-completion-key nil)
 (defvar-local my/type-completion-generation 0)
+(defvar-local my/type-completion-revision 0)
 (defvar-local my/type-completion-state nil)
 
 (defun my/type-completion-probe-ready-p ()
@@ -2270,9 +2271,12 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
       (with-current-buffer buffer
         (when (and (= generation my/type-completion-generation)
                    (equal key my/type-completion-key))
-          (funcall install)
-          (my/type-completion-reindex)
-          (my/type-completion-refresh-display buffer generation)))))
+          (let ((revision (cl-incf my/type-completion-revision)))
+            (funcall install)
+            (my/type-completion-reindex)
+            (when (= revision my/type-completion-revision)
+              (my/type-completion-refresh-display buffer generation))
+            (my/type-completion-reindex))))))
 
   (defun my/type-completion-ocaml-p ()
     "Return non-nil when this buffer supports OCaml-LSP type search."
@@ -2453,9 +2457,51 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
 
   (defun my/ocaml-record-options (expected)
     "Return ordered record fields from construction results or EXPECTED."
-    (or (seq-some (lambda (entry) (plist-get entry :record-fields))
-                  my/type-completion-construct-results)
+    (or (seq-some
+         (lambda (entry)
+           (when (and (plist-get entry :record-fields)
+                      (or (null expected)
+                          (equal (my/type-canonical
+                                  (or (plist-get entry :typ) ""))
+                                 (my/type-canonical expected))))
+             (plist-get entry :record-fields)))
+         my/type-completion-construct-results)
         (my/ocaml-record-fields expected)))
+
+  (defun my/ocaml-hole-bounds-at-point ()
+    "Return bounds of the bare hole at or immediately before point."
+    (save-excursion
+      (when (and (> (point) (point-min))
+                 (eq (char-before) ?_))
+        (backward-char))
+      (when (eq (char-after) ?_)
+        (let ((start (point))
+              (end (1+ (point))))
+          (when (and (or (= start (point-min))
+                         (not (memq (char-syntax (char-before start))
+                                    '(?w ?_))))
+                     (or (= end (point-max))
+                         (not (memq (char-syntax (char-after end))
+                                    '(?w ?_)))))
+            (cons start end))))))
+
+  (defun my/ocaml-record-options-at-point ()
+    "Return record fields for the expected type at the current hole."
+    (let* ((hole (my/ocaml-hole-bounds-at-point))
+           (expected
+            (or (and hole
+                     (save-excursion
+                       (goto-char (car hole))
+                       (my/type-completion-enclosing-at-point)))
+                my/type-completion-expected)))
+      (or (when (and hole expected (my/type-completion-ocaml-p))
+            (when-let* ((entries
+                         (save-excursion
+                           (goto-char (car hole))
+                           (my/type-completion-construct-at-point expected))))
+              (setq my/type-completion-construct-results entries)
+              (my/ocaml-record-options expected)))
+          (my/ocaml-record-options expected))))
 
   (defun my/ocaml-record-construction-fields (text)
     "Return ordered fields from an LSP record construction TEXT."
@@ -2496,7 +2542,7 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
       (pcase sort
         ('list-literal (and text (string-suffix-p " list" text)))
         ('array-literal (and text (string-suffix-p " array" text)))
-        ('record-value (and expected (my/ocaml-record-fields expected) t))
+        ('record-value (and expected (my/ocaml-record-options expected) t))
         (_ t))))
 
   (defun my/type-completion-snippet-entries (expected)
@@ -2535,14 +2581,14 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
                  '("+." "-." "*." "/.")
                '("+" "-" "*" "/" "mod"))))))
 
-  (defun my/type-completion-construct-request (key)
-    "Request OCaml-LSP constructions at point and install them under KEY."
+  (defun my/type-completion-construct-request (key &optional position expected)
+    "Request OCaml-LSP constructions at POSITION and install them under KEY."
     (condition-case nil
         (let ((buffer (current-buffer))
               (generation my/type-completion-generation)
               (server (eglot--current-server-or-lose))
               (params (ocaml-eglot-req--ConstructParams
-                       (eglot--pos-to-lsp-position) 1 "none")))
+                       (or position (eglot--pos-to-lsp-position)) 1 "none")))
           (jsonrpc-async-request
            server :ocamllsp/construct params
            :success-fn
@@ -2552,7 +2598,8 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
               (lambda ()
                 (setq my/type-completion-construct-results
                       (my/type-completion-construct-entries
-                       (append (plist-get response :result) nil))))))
+                       (append (plist-get response :result) nil)
+                       expected)))))
            :error-fn #'ignore
            :timeout-fn #'ignore
            :timeout 2.0
@@ -2571,10 +2618,10 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
         (let ((buffer (current-buffer))
               (generation my/type-completion-generation)
               (server (eglot--current-server-or-lose))
-              (params (ocaml-eglot-req--TypeEnclosingParams
-                       (eglot--pos-to-lsp-position) 0 0)))
+              (position (eglot--pos-to-lsp-position)))
           (jsonrpc-async-request
-           server :ocamllsp/typeEnclosing params
+           server :ocamllsp/typeEnclosing
+           (ocaml-eglot-req--TypeEnclosingParams position 0 0)
            :success-fn
            (lambda (result)
              (let ((expected (my/type-normalize (plist-get result :type))))
@@ -2590,7 +2637,8 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
                             (unless (my/type-unconstrained-p canonical)
                               canonical)))
                     (my/type-completion-request expected key)
-                    (my/type-completion-construct-request key))))))
+                    (my/type-completion-construct-request
+                     key position expected))))))
            :error-fn
            (lambda (&rest _)
              (my/type-completion-receive
@@ -2747,6 +2795,7 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
           my/type-completion-trigger-index nil
           my/type-completion-candidates nil
           my/type-completion-arities (make-hash-table :test #'equal)
+          my/type-completion-revision 0
           my/type-completion-state nil
           my/type-completion-probed nil
           my/type-completion-generation
@@ -2794,7 +2843,8 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
           (when (and expected ocaml)
             (my/type-completion-request expected key)
             (unless my/type-completion-construct-results
-              (my/type-completion-construct-request key)))
+              (my/type-completion-construct-request
+               key (eglot--pos-to-lsp-position) expected)))
           (or expected ocaml))))))
 
   (defun my/type-completion-underline-match (type)
@@ -5554,9 +5604,13 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
   (declare (modes tuareg-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
-  (let ((node
-         (my/ocaml-record-literal
-          (my/ocaml-record-options my/type-completion-expected))))
+  (let* ((hole (my/ocaml-hole-bounds-at-point))
+         (node
+          (my/ocaml-record-literal
+           (my/ocaml-record-options-at-point))))
+    (when hole
+      (delete-region (car hole) (cdr hole))
+      (goto-char (car hole)))
     (my/ocaml-place node (my/ocaml-node-focus node))))
 
 (defun my/ocaml-start-record ()
