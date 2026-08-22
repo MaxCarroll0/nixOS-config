@@ -766,6 +766,10 @@ Explicit completion popup with documentation and Meow navigation.
   (when-let* ((parts (my/type-arrow-parts type)))
     (string-join parts " -> ")))
 
+(defun my/type-unconstrained-p (type)
+  "Return non-nil when TYPE is a bare type variable."
+  (and type (string-match-p "\\`'[A-Za-z_][A-Za-z0-9_']*\\'" (string-trim type))))
+
 (defun my/type-suffix-arity (parts wanted)
   "Return how many leading PARTS to drop so the remainder spells WANTED."
   (cl-loop for index below (length parts)
@@ -874,7 +878,11 @@ Explicit completion popup with documentation and Meow navigation.
       (setq entry (plist-put entry :arity (or arity 0)))
       (setq entry (plist-put entry :holes holes))
       (setq entry (plist-put entry :tier
-                             (if (and exact (equal exact arity)) 0 1)))
+                             (cond
+                              ((and exact (equal exact arity)) 0)
+                              ((null (plist-get entry :typ)) 1)
+                              (wanted 3)
+                              (t 0))))
       (setq entry (plist-put entry :template
                              (and arity (my/type-application name holes))))
       (plist-put entry :snippet
@@ -950,18 +958,12 @@ Explicit completion popup with documentation and Meow navigation.
      ,body))
 
 (defun my/type-hole-try-completion (string table predicate point)
-  "Try completion of STRING in TABLE, ignoring a bare OCaml hole.
-At a bare hole nothing is inserted unless it completes a whole candidate,
-so the popup gets a chance to appear instead of a partial prefix."
+  "Try completion of STRING in TABLE without ever rewriting it."
   (my/type-hole-delegate
    string
    (let ((result (completion-try-completion pattern table predicate
                                             (min point (length pattern)))))
-     (if (and (equal string "_")
-              (consp result)
-              (not (test-completion (car result) table predicate)))
-         (cons string point)
-       result))))
+     (if (consp result) (cons string point) result))))
 
 (defun my/type-hole-all-completions (string table predicate point)
   "List completions of STRING in TABLE, ignoring a bare OCaml hole."
@@ -999,8 +1001,9 @@ so the popup gets a chance to appear instead of a partial prefix."
 
 (defun my/type-completion-correct-p (candidate)
   "Return non-nil when CANDIDATE yields the expected type."
-  (when-let* ((entry (my/type-completion-entry candidate)))
-    (eq (plist-get entry :tier) 0)))
+  (or (null my/type-completion-wanted)
+      (when-let* ((entry (my/type-completion-entry candidate)))
+        (eq (plist-get entry :tier) 0))))
 
 (defun my/type-completion-settled-p ()
   "Return non-nil when the symbol at point already has the expected type."
@@ -1034,10 +1037,17 @@ so the popup gets a chance to appear instead of a partial prefix."
                   (ash prefix 20)
                   (ash (min arity 15) 16)
                   (min index 65535))
-        (logior (ash (if (my/completion-lsp-item candidate) 2 3) 22)
+        (logior (ash (my/type-completion-untyped-tier candidate) 22)
                 (ash deprecated 21)
                 (ash prefix 20)
                 (min index 65535))))))
+
+(defun my/type-completion-untyped-tier (candidate)
+  "Return the tier for CANDIDATE when no type entry was found for it."
+  (cond
+   ((not (my/completion-lsp-item candidate)) 2)
+   ((and my/type-completion-probed my/type-completion-wanted) 3)
+   (t 0)))
 
 (defun my/completion-sort-candidates (candidates)
   "Rank CANDIDATES by the language server's own type ordering."
@@ -1532,6 +1542,7 @@ so the popup gets a chance to appear instead of a partial prefix."
   (corfu-quit-at-boundary 'separator)
   (corfu-quit-no-match 'separator)
   (corfu-sort-function #'my/completion-sort-symbols-first)
+  (corfu-on-exact-match 'show)
   (corfu-echo-delay 0)
   :init
   (global-corfu-mode)
@@ -1677,7 +1688,9 @@ Cursor motion triggers the preview, so it runs off the command loop on an idle t
                      meow-left meow-right meow-next meow-prev))
     (add-to-list 'completion-preview-commands command))
   (advice-add #'completion-preview--update
-              :around #'my/completion-preview-without-probe))
+              :around #'my/completion-preview-without-probe)
+  (advice-add #'completion-preview--show
+              :after #'my/completion-preview-render-snippet))
 
 #+end_src
 
@@ -2192,7 +2205,9 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
         (when-let* ((expected
                      (my/type-completion-expected-at-point beginning end)))
           (setq my/type-completion-expected expected
-                my/type-completion-wanted (my/type-canonical expected))
+                my/type-completion-wanted
+                (let ((canonical (my/type-canonical expected)))
+                  (unless (my/type-unconstrained-p canonical) canonical)))
           (my/type-completion-reindex)
           (when (my/type-completion-ocaml-p)
             (my/type-completion-request expected key)
