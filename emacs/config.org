@@ -4221,6 +4221,15 @@ A negative ARGUMENT moves to the previous field instead."
 (defalias (quote my/ocaml-snippet-record) (function my/ocaml-insert-record-value))
 (defalias (quote my/ocaml-snippet-variant) (function my/ocaml-start-type))
 
+(defun my/ocaml-menu ()
+  "Open the OCaml snippets and language-server menu."
+  (declare (modes tuareg-mode))
+  (interactive)
+  (require 'transient)
+  (unless (fboundp 'my/ocaml-menu-transient)
+    (my/define-ocaml-transients))
+  (transient-setup 'my/ocaml-menu-transient))
+
 (use-package transient
   :ensure nil
   :config
@@ -4253,7 +4262,7 @@ A negative ARGUMENT moves to the previous field instead."
           (transient-define-prefix my/ocaml-module-menu ()
             "Insert OCaml module forms."
             ,modules)
-          (transient-define-prefix my/ocaml-menu ()
+          (transient-define-prefix my/ocaml-menu-transient ()
             "OCaml snippets and language-server actions."
             [["Insert"
               ("e" "expressions…" my/ocaml-expression-menu)
@@ -5701,6 +5710,7 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
   (define-key yas-keymap (kbd "C-M-i") #'my/ocaml-structured-cycle))
 
 (with-eval-after-load 'tuareg
+  (define-key tuareg-mode-map (kbd "C-c .") #'my/ocaml-menu)
   (define-key tuareg-mode-map (kbd "S-TAB") #'my/ocaml-structured-cycle)
   (define-key tuareg-mode-map (kbd "<backtab>") #'my/ocaml-structured-cycle)
   (define-key tuareg-mode-map (kbd "<iso-lefttab>")
