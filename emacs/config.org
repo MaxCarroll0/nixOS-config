@@ -1049,16 +1049,13 @@ Explicit completion popup with documentation and Meow navigation.
 
 (defun my/type-completion-tier (candidate &optional index)
   "Return the ranking class CANDIDATE belongs to at server order INDEX."
+  (ignore index)
   (if-let* ((entry (my/type-completion-entry candidate)))
       (cond
        ((eq (plist-get entry :kind) 'snippet) 1)
        ((not my/type-completion-wanted) 2)
        (t (min (plist-get entry :tier) 2)))
-    (if (and my/type-completion-wanted
-             (< (or index 0) my/type-completion-rank-limit)
-             (my/type-completion-arity candidate))
-        0
-      2)))
+    2))
 
 (defun my/type-completion-top-tier (candidates)
   "Return CANDIDATES restricted to the best class any of them reaches."
@@ -2760,7 +2757,7 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
            (server (eglot--current-server-or-lose))
            (params
             (ocaml-eglot-req--SearchParams
-             (concat ":" expected) 200 :json-false "plaintext")))
+             expected 200 :json-false "plaintext")))
       (eglot--signal-textDocument/didChange)
       (jsonrpc-async-request
        server :ocamllsp/typeSearch params
