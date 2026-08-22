@@ -1695,7 +1695,9 @@ Positions without an expected type require three typed characters before preview
 
 (defun my/completion-preview-allowed-p ()
   "Return non-nil when completion tiers are available for previewing."
-  (or (not (my/completion-preview-typed-context-p))
+  (or (and (derived-mode-p 'tuareg-mode)
+           (my/ocaml-literal-prefix-bounds))
+      (not (my/completion-preview-typed-context-p))
       (my/type-completion-probe-ready-p)))
 
 (defun my/completion-preview-ambiguous-p ()
@@ -1916,7 +1918,7 @@ Positions without an expected type require three typed characters before preview
         ("C-<return>" . nil))
   :custom
   (completion-preview-minimum-symbol-length nil)
-  (completion-preview-idle-delay 0.2)
+  (completion-preview-idle-delay 0.05)
   :init
   (global-completion-preview-mode)
   :config
@@ -3192,7 +3194,8 @@ completion replaces a bare `_', whose text must not filter the candidates."
           (setcdr (nthcdr 2 result)
                   (plist-put (nthcdr 3 result)
                              :my/completion-beginning beginning))
-          (when (my/type-completion-ensure beginning end)
+          (when (or (my/type-completion-ensure beginning end)
+                    (and literal my/type-completion-inhibit-probe))
             (setf (nth 2 result)
                   (my/type-completion-table
                    (nth 2 result)
