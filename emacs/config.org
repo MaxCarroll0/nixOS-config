@@ -884,6 +884,10 @@ Explicit completion popup with documentation and Meow navigation.
       (setq entry (plist-put entry :holes holes))
       (setq entry (plist-put entry :tier
                              (cond
+                              ((and wanted
+                                    (eq (plist-get entry :source)
+                                        'type-search))
+                               0)
                               ((and exact (equal exact arity)) 0)
                               ((null (plist-get entry :typ)) 1)
                               (wanted 3)
@@ -904,21 +908,45 @@ Explicit completion popup with documentation and Meow navigation.
                "\\_<\\(?:let\\|fun\\|function\\|match\\)\\_>" type)))))
 
 (defvar-local my/type-completion-input "")
+(defvar-local my/type-completion-qualifier "")
+(defvar my/type-completion-delegate-styles '(orderless basic))
+
+(defun my/type-completion-match-name (candidate)
+  "Return the complete source name matched by CANDIDATE."
+  (let* ((name (substring-no-properties candidate))
+         (entry (my/type-completion-entry candidate))
+         (semantic-name (and entry (plist-get entry :name))))
+    (cond
+     ((string-empty-p my/type-completion-qualifier) name)
+     ((and semantic-name
+           (string-prefix-p my/type-completion-qualifier semantic-name))
+      semantic-name)
+     ((my/completion-lsp-item candidate)
+      (concat my/type-completion-qualifier name))
+     (t name))))
 
 (defun my/type-completion-prefix-match-p (candidate)
   "Return non-nil when CANDIDATE begins with the text typed so far."
   (or (string-empty-p my/type-completion-input)
-      (let* ((name (substring-no-properties candidate))
+      (let* ((name (my/type-completion-match-name candidate))
              (entry (my/type-completion-entry candidate))
              (trigger (plist-get entry :trigger))
-             (semantic (or entry (my/completion-lsp-item candidate)))
              (fold completion-ignore-case))
         (or (string-prefix-p my/type-completion-input name fold)
-            (and trigger (string-prefix-p my/type-completion-input trigger fold))
-            (when-let* ((semantic)
-                        (tail (and (string-match "\\.\\([^.]*\\)\\'" name)
-                                   (match-string 1 name))))
-              (string-prefix-p my/type-completion-input tail fold))))))
+            (and (string-empty-p my/type-completion-qualifier)
+                 trigger
+                 (string-prefix-p my/type-completion-input trigger fold))))))
+
+(defun my/type-completion-orderless-match-p (candidate)
+  "Return non-nil when CANDIDATE matches the complete completion input."
+  (let ((completion-styles my/type-completion-delegate-styles)
+        (completion-category-overrides nil)
+        (completion-category-defaults nil))
+    (and (completion-all-completions
+          my/type-completion-input
+          (list (my/type-completion-match-name candidate))
+          nil (length my/type-completion-input))
+         t)))
 
 (defvar my/type-completion-rank-limit 200)
 (defvar my/type-completion-inhibit-probe nil)
@@ -950,8 +978,6 @@ Explicit completion popup with documentation and Meow navigation.
                    (or (bobp)
                        (not (memq (char-syntax (char-before)) '(?w ?_)))))
           (cons start end))))))
-
-(defvar my/type-completion-delegate-styles '(orderless basic))
 
 (defun my/type-hole-pattern (string)
   "Return STRING with a bare OCaml hole reduced to an empty prefix."
@@ -999,13 +1025,16 @@ Explicit completion popup with documentation and Meow navigation.
   "Return non-nil when CANDIDATE names a value inside a module."
   (and (string-search "." candidate) t))
 
-(defun my/completion-qualified-context-p (beginning)
-  "Return non-nil when a module path already precedes BEGINNING."
+(defun my/completion-qualifier-before (beginning)
+  "Return the complete module qualifier preceding BEGINNING."
   (save-excursion
     (goto-char beginning)
-    (and (looking-back "\\_<[A-Z][A-Za-z0-9_']*\\."
-                       (max (point-min) (- beginning 128)))
-         t)))
+    (let ((end (point)))
+      (skip-chars-backward "A-Za-z0-9_'.")
+      (let ((text (buffer-substring-no-properties (point) end)))
+        (when (string-match-p
+               "\\`\\(?:[A-Z][A-Za-z0-9_']*\\.\\)+\\'" text)
+          text)))))
 
 (defun my/type-completion-tier (candidate &optional index)
   "Return the ranking class CANDIDATE belongs to at server order INDEX."
@@ -1736,7 +1765,6 @@ At a bare hole, completion considers every candidate in the best tier and previe
                   (base (or (completion-preview--get
                              'completion-preview-base)
                             ""))
-                  (typed (+ (length base) (- (overlay-start overlay) beg)))
                   (common (substring-no-properties
                            (or (completion-preview--get
                                 'completion-preview-common)
@@ -1746,8 +1774,17 @@ At a bare hole, completion considers every candidate in the best tier and previe
                   (name (concat base common suffix))
                   (candidate (my/completion-preview-candidate name))
                   (full (my/type-completion-preview-text candidate beginning))
-                  ((> (length full) typed)))
-        (my/completion-preview-put-rendered (substring full typed)))
+                  (replacement-beginning
+                   (my/type-completion-replacement-beginning
+                    beginning full))
+                  (typed
+                   (buffer-substring-no-properties
+                    replacement-beginning (overlay-start overlay))))
+        (if (string-prefix-p typed full)
+            (my/completion-preview-put-rendered
+             (substring full (length typed)))
+          (my/completion-preview-put-hole-rendered
+           full (cons replacement-beginning (overlay-start overlay)))))
     (error nil)))
 
 (defun my/completion-preview-accept-hole (bounds)
@@ -2078,19 +2115,41 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
 
   (defun my/type-merge-candidates (base semantic)
     "Merge BASE completion candidates with prebuilt SEMANTIC candidates."
-    (let ((seen (make-hash-table :test #'equal))
+    (let ((semantic-index (make-hash-table :test #'equal))
+          (seen (make-hash-table :test #'equal))
           result)
+      (dolist (candidate semantic)
+        (puthash (substring-no-properties candidate) candidate semantic-index))
       (dolist (candidate base)
-        (let ((entry (my/type-completion-entry candidate))
-              (copy (copy-sequence candidate)))
+        (let* ((name (substring-no-properties candidate))
+               (semantic-candidate (gethash name semantic-index))
+               (entry (and semantic-candidate
+                           (my/type-completion-entry semantic-candidate)))
+               (copy (copy-sequence candidate)))
           (when (and entry (> (length copy) 0))
-            (put-text-property 0 1 'my/type-search-entry entry copy)
-            (puthash (substring-no-properties candidate) t seen))
+            (put-text-property 0 1 'my/type-search-entry entry copy))
+          (puthash name t seen)
           (push copy result)))
       (dolist (candidate semantic)
         (unless (gethash (substring-no-properties candidate) seen)
           (push candidate result)))
       (nreverse result)))
+
+  (defun my/type-completion-semantic-candidates (qualifier)
+    "Return semantic candidates using tail names after QUALIFIER."
+    (if (not qualifier)
+        my/type-completion-candidates
+      (mapcar
+       (lambda (candidate)
+         (let* ((entry (my/type-completion-entry candidate))
+                (name (and entry (plist-get entry :name))))
+           (if (and name (string-prefix-p qualifier name))
+               (let ((tail (substring name (length qualifier))))
+                 (when (> (length tail) 0)
+                   (put-text-property 0 1 'my/type-search-entry entry tail))
+                 tail)
+             candidate)))
+       my/type-completion-candidates)))
 
   (defun my/type-completion-reindex ()
     "Index the semantic results and precompute their applications."
@@ -2099,21 +2158,34 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
           (wanted my/type-completion-wanted)
           (rank 0)
           candidates)
-      (dolist (entry (append my/type-completion-construct-results
-                             my/type-completion-results
-                             (my/type-completion-snippet-entries
-                              my/type-completion-expected)
-                             (my/type-completion-operator-entries
-                              my/type-completion-expected)))
-        (setq entry (my/type-entry-annotate entry wanted rank))
-        (puthash (plist-get entry :name) entry index)
-        (when-let* ((trigger (plist-get entry :trigger)))
-          (puthash trigger entry trigger-index))
-        (push (my/type-semantic-candidate entry) candidates)
-        (setq rank (1+ rank)))
+      (dolist (tagged
+               `((construct . ,my/type-completion-construct-results)
+                 (type-search . ,my/type-completion-results)
+                 (snippet . ,(my/type-completion-snippet-entries
+                              my/type-completion-expected))
+                 (snippet . ,(my/type-completion-operator-entries
+                              my/type-completion-expected))))
+        (dolist (original (cdr tagged))
+          (let ((entry (copy-sequence original)))
+            (setq entry (plist-put entry :source (car tagged)))
+            (setq entry (my/type-entry-annotate entry wanted rank))
+            (let* ((name (plist-get entry :name))
+                   (previous (gethash name index)))
+              (when (or (null previous)
+                        (< (plist-get entry :tier)
+                           (plist-get previous :tier)))
+                (puthash name entry index))
+              (when-let* ((trigger (plist-get entry :trigger)))
+                (puthash trigger entry trigger-index))
+              (unless previous
+                (push name candidates)))
+            (setq rank (1+ rank)))))
       (setq my/type-completion-index index
             my/type-completion-trigger-index trigger-index
-            my/type-completion-candidates (nreverse candidates))))
+            my/type-completion-candidates
+            (mapcar (lambda (name)
+                      (my/type-semantic-candidate (gethash name index)))
+                    (nreverse candidates)))))
 
   (defun my/type-completion-receive (buffer generation key install)
     "Run INSTALL in BUFFER when GENERATION and KEY are still current."
@@ -2181,14 +2253,89 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
         (list (list :name "[| _ |]" :typ expected
                     :kind 'collection :collection 'array))))))
 
-  (defconst my/ocaml-snippet-catalogue
-    '(("[ _ ]"   "["     list-literal  my/ocaml-snippet-list)
-      ("[| _ |]" "[|"    array-literal my/ocaml-snippet-array)
-      ("{ _ }"   "{"     record-value  my/ocaml-snippet-record-value)
-      ("let"     "let"   binding       my/ocaml-default-let)
-      ("match"   "match" match         my/ocaml-default-match)
-      ("type"    "type"  type          my/ocaml-default-type)
-      ("module"  "module" module       my/ocaml-default-module)))
+  (defconst my/ocaml-snippet-registry
+    '((:id "list" :label "list" :group expression :key "["
+       :command my/ocaml-start-list :name "[ _ ]" :trigger "["
+       :sort list-literal :builder my/ocaml-snippet-list)
+      (:id "array" :label "array" :group expression :key "|"
+       :command my/ocaml-start-array :name "[| _ |]" :trigger "[|"
+       :sort array-literal :builder my/ocaml-snippet-array)
+      (:id "apply" :label "application" :group expression :key "a"
+       :command my/ocaml-start-application)
+      (:id "record" :label "record value" :group expression :key "r"
+       :command my/ocaml-snippet-record :name "{ _ }" :trigger "{"
+       :sort record-value :builder my/ocaml-snippet-record-value)
+      (:id "if" :label "if" :group expression :key "i"
+       :command my/ocaml-snippet-if
+       :template "(if ${1:condition} then\n  ${2:_}\nelse\n  ${3:_})")
+      (:id "match" :label "match" :group expression :key "m"
+       :command my/ocaml-snippet-match :name "match" :trigger "match"
+       :sort match :builder my/ocaml-default-match)
+      (:id "try" :label "try" :group expression :key "t"
+       :command my/ocaml-snippet-try
+       :template "(try ${1:_} with\n| ${2:exception} -> ${3:_})")
+      (:id "fun" :label "fun" :group expression :key "f"
+       :command my/ocaml-snippet-fun
+       :template "(fun ${1:x} -> ${2:_})")
+      (:id "function" :label "function" :group expression :key "F"
+       :command my/ocaml-snippet-function
+       :template "(function\n| ${1:pattern} -> ${2:_})")
+      (:id "begin" :label "begin/end" :group expression :key "b"
+       :command my/ocaml-snippet-begin
+       :template "begin\n  ${1:_}\nend")
+      (:id "seq" :label "sequence" :group expression :key ";"
+       :command my/ocaml-snippet-sequence
+       :template "${1:_};\n${2:_}")
+      (:id "while" :label "while" :group expression :key "w"
+       :command my/ocaml-snippet-while
+       :template "while ${1:condition} do\n  ${2:_}\ndone")
+      (:id "for" :label "for" :group expression :key "o"
+       :command my/ocaml-snippet-for
+       :template "for ${1:i} = ${2:start} to ${3:finish} do\n  ${4:_}\ndone")
+      (:id "fordown" :label "for downto" :group expression :key "O"
+       :command my/ocaml-snippet-for-down
+       :template "for ${1:i} = ${2:start} downto ${3:finish} do\n  ${4:_}\ndone")
+      (:id "let" :label "let" :group declaration :key "l"
+       :command my/ocaml-snippet-let :name "let" :trigger "let"
+       :sort binding :builder my/ocaml-default-let)
+      (:id "letr" :label "let rec" :group declaration :key "L"
+       :command my/ocaml-snippet-let-rec
+       :template "let rec ${1:f} ${2:x} = ${3:_} in\n${4:_}")
+      (:id "type" :label "type" :group declaration :key "t"
+       :command my/ocaml-snippet-variant :name "type" :trigger "type"
+       :sort type :builder my/ocaml-default-type)
+      (:id "abstract" :label "abstract type" :group declaration :key "a"
+       :command my/ocaml-snippet-abstract :template "type ${1:t}")
+      (:id "val" :label "val" :group declaration :key "v"
+       :command my/ocaml-snippet-val :template "val ${1:name} : ${2:type}")
+      (:id "exception" :label "exception" :group declaration :key "e"
+       :command my/ocaml-snippet-exception
+       :template "exception ${1:Exception}${2: of ${3:type}}")
+      (:id "external" :label "external" :group declaration :key "x"
+       :command my/ocaml-snippet-external
+       :template "external ${1:name} : ${2:type} = ${3:\"primitive\"}")
+      (:id "module" :label "module" :group module :key "m"
+       :command my/ocaml-snippet-module :name "module" :trigger "module"
+       :sort module :builder my/ocaml-default-module)
+      (:id "modtype" :label "module type" :group module :key "t"
+       :command my/ocaml-snippet-module-type
+       :template "module type ${1:S} = sig\n  ${2:_}\nend")
+      (:id "functor" :label "functor" :group module :key "f"
+       :command my/ocaml-snippet-functor
+       :template "module ${1:F} (${2:M} : ${3:S}) = struct\n  ${4:_}\nend")
+      (:id "letmod" :label "local module" :group module :key "l"
+       :command my/ocaml-snippet-local-module
+       :template "let module ${1:M} = struct\n  ${2:_}\nend in\n${3:_}")
+      (:id "firstmod" :label "first-class module" :group module :key "p"
+       :command my/ocaml-snippet-first-module
+       :template "(module ${1:M} : ${2:S})")
+      (:id "open" :label "open" :group module :key "o"
+       :command my/ocaml-snippet-open :template "open ${1:M}")
+      (:id "include" :label "include" :group module :key "i"
+       :command my/ocaml-snippet-include :template "include ${1:M}")
+      (:id "modsig" :label "module signature" :group module :key "s"
+       :command my/ocaml-snippet-module-signature
+       :template "module ${1:M} : ${2:S}")))
 
   (defun my/ocaml-snippet-list () (my/ocaml-collection 'list))
   (defun my/ocaml-snippet-array () (my/ocaml-collection 'array))
@@ -2230,17 +2377,18 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
     (delq nil
           (mapcar
            (lambda (spec)
-             (pcase-let ((`(,name ,trigger ,sort ,builder) spec))
-               (when (my/ocaml-snippet-applicable-p sort expected)
-                 (list :name name
-                       :trigger trigger
-                       :typ (when (memq sort '(list-literal array-literal
-                                               record-value))
-                              expected)
-                       :kind 'snippet
-                       :sort sort
-                       :builder builder))))
-           my/ocaml-snippet-catalogue)))
+             (when-let* ((name (plist-get spec :name))
+                         (sort (plist-get spec :sort))
+                         ((my/ocaml-snippet-applicable-p sort expected)))
+               (list :name name
+                     :trigger (plist-get spec :trigger)
+                     :typ (when (memq sort '(list-literal array-literal
+                                             record-value))
+                            expected)
+                     :kind 'snippet
+                     :sort sort
+                     :builder (plist-get spec :builder))))
+           my/ocaml-snippet-registry)))
 
   (defun my/type-completion-operator-entries (expected)
     "Return operator snippet candidates producing EXPECTED."
@@ -2535,9 +2683,9 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
         (concat " " (my/type-completion-underline-match type))
       (and original (funcall original candidate))))
 
-  (defun my/type-completion-table (table qualified &optional hole)
+  (defun my/type-completion-table (table qualifier &optional hole)
     "Augment completion TABLE with semantic candidates and type ranking.
-QUALIFIED non-nil keeps module-qualified candidates.  HOLE non-nil means the
+QUALIFIER is the module path before the CAPF bounds.  HOLE non-nil means the
 completion replaces a bare `_', whose text must not filter the candidates."
     (lambda (string predicate action)
       (cond
@@ -2554,7 +2702,10 @@ completion replaces a bare `_', whose text must not filter the candidates."
                  #'my/type-completion-annotation annotation))
           (cons 'metadata properties)))
        ((eq action t)
-        (setq my/type-completion-input (my/type-hole-pattern string))
+        (setq my/type-completion-qualifier (or qualifier "")
+              my/type-completion-input
+              (concat my/type-completion-qualifier
+                      (my/type-hole-pattern string)))
         (let* ((effective (my/type-hole-pattern string))
                (completion-regexp-list
                 (unless hole completion-regexp-list))
@@ -2562,9 +2713,14 @@ completion replaces a bare `_', whose text must not filter the candidates."
                 (my/type-merge-candidates
                  (unless (eq my/type-completion-probed 'pending)
                    (all-completions effective table predicate))
-                 (all-completions effective my/type-completion-candidates
-                                  predicate))))
-          (when (and my/completion-hide-qualified (not qualified))
+                 (all-completions
+                  effective
+                  (my/type-completion-semantic-candidates qualifier)
+                  predicate))))
+          (when qualifier
+            (setq merged
+                  (seq-filter #'my/type-completion-orderless-match-p merged)))
+          (when (and my/completion-hide-qualified (not qualifier))
             (setq merged (seq-remove #'my/completion-qualified-p merged)))
           merged))
        ((eq action 'lambda)
@@ -2677,7 +2833,7 @@ completion replaces a bare `_', whose text must not filter the candidates."
                 (arity (my/type-completion-arity candidate))
                 ((> arity 0)))
       (my/type-application
-       (substring-no-properties candidate)
+       (my/type-completion-match-name candidate)
        (my/type-number-holes
         (my/type-holes-from-parts
          (my/type-arrow-parts
@@ -2749,6 +2905,15 @@ completion replaces a bare `_', whose text must not filter the candidates."
     (when-let* ((action (my/type-completion-action candidate beginning)))
       (my/type-completion-action-preview action)))
 
+  (defun my/type-completion-replacement-beginning (beginning expansion)
+    "Return the source beginning replaced by semantic EXPANSION."
+    (let ((qualifier (my/completion-qualifier-before beginning)))
+      (if (and qualifier
+               (or (string-prefix-p qualifier expansion)
+                   (string-prefix-p (concat "(" qualifier) expansion)))
+          (- beginning (length qualifier))
+        beginning)))
+
   (defun my/type-completion-apply-action (action beginning)
     "Apply semantic ACTION, replacing text from BEGINNING through point."
     (pcase (plist-get action :kind)
@@ -2773,10 +2938,17 @@ completion replaces a bare `_', whose text must not filter the candidates."
                      (gethash (substring-no-properties candidate)
                               my/completion-preview-candidates))
                 candidate)))
-    (let ((entry (my/type-completion-entry candidate))
-          (action (my/type-completion-action candidate beginning)))
+    (let* ((entry (my/type-completion-entry candidate))
+           (action (my/type-completion-action candidate beginning))
+           (expansion (and action
+                           (my/type-completion-action-preview action)))
+           (action-beginning
+            (if expansion
+                (my/type-completion-replacement-beginning
+                 beginning expansion)
+              beginning)))
       (if (and (eq status 'finished) action)
-          (my/type-completion-apply-action action beginning)
+          (my/type-completion-apply-action action action-beginning)
         (when (and original
                    (or (not entry)
                        (my/completion-lsp-item candidate)))
@@ -2820,7 +2992,7 @@ completion replaces a bare `_', whose text must not filter the candidates."
           (setf (nth 2 result)
                 (my/type-completion-table
                  (nth 2 result)
-                 (my/completion-qualified-context-p beginning)
+                 (my/completion-qualifier-before beginning)
                  (my/type-completion-hole-p beginning end)))
           (let ((original
                  (plist-get (nthcdr 3 result) :exit-function)))
@@ -3653,28 +3825,12 @@ Reveal code upon cursor entry.
     "OCaml snippets shared by Yasnippet and the OCaml transient.")
 
   (setq my/ocaml-yas-snippets
-    '(("if" . "(if ${1:condition} then\n  ${2:_}\nelse\n  ${3:_})")
-      ("try" . "(try ${1:_} with\n| ${2:exception} -> ${3:_})")
-      ("letr" . "let rec ${1:f} ${2:x} = ${3:_} in\n${4:_}")
-      ("fun" . "(fun ${1:x} -> ${2:_})")
-      ("function" . "(function\n| ${1:pattern} -> ${2:_})")
-      ("begin" . "begin\n  ${1:_}\nend")
-      ("seq" . "${1:_};\n${2:_}")
-      ("while" . "while ${1:condition} do\n  ${2:_}\ndone")
-      ("for" . "for ${1:i} = ${2:start} to ${3:finish} do\n  ${4:_}\ndone")
-      ("fordown" . "for ${1:i} = ${2:start} downto ${3:finish} do\n  ${4:_}\ndone")
-      ("modtype" . "module type ${1:S} = sig\n  ${2:_}\nend")
-      ("functor" . "module ${1:F} (${2:M} : ${3:S}) = struct\n  ${4:_}\nend")
-      ("letmod" . "let module ${1:M} = struct\n  ${2:_}\nend in\n${3:_}")
-      ("firstmod" . "(module ${1:M} : ${2:S})")
-      ("open" . "open ${1:M}")
-      ("include" . "include ${1:M}")
-      ("abstract" . "type ${1:t}")
-      ("val" . "val ${1:name} : ${2:type}")
-      ("exception" . "exception ${1:Exception}${2: of ${3:type}}")
-      ("external" . "external ${1:name} : ${2:type} = ${3:\"primitive\"}")
-      ("modsig" . "module ${1:M} : ${2:S}")
-      ))
+        (delq nil
+              (mapcar
+               (lambda (spec)
+                 (when-let* ((template (plist-get spec :template)))
+                   (cons (plist-get spec :id) template)))
+               my/ocaml-snippet-registry)))
 
   (yas-define-snippets
    'tuareg-mode
@@ -3780,41 +3936,51 @@ A negative ARGUMENT moves to the previous field instead."
 (my/define-ocaml-snippet-command my/ocaml-snippet-first-module "firstmod")
 (my/define-ocaml-snippet-command my/ocaml-snippet-open "open")
 (my/define-ocaml-snippet-command my/ocaml-snippet-include "include")
+(my/define-ocaml-snippet-command my/ocaml-snippet-abstract "abstract")
+(my/define-ocaml-snippet-command my/ocaml-snippet-val "val")
+(my/define-ocaml-snippet-command my/ocaml-snippet-exception "exception")
+(my/define-ocaml-snippet-command my/ocaml-snippet-external "external")
+(my/define-ocaml-snippet-command my/ocaml-snippet-module-signature "modsig")
 (defalias (quote my/ocaml-snippet-record) (function my/ocaml-insert-record-value))
 (defalias (quote my/ocaml-snippet-variant) (function my/ocaml-start-type))
 
 (use-package transient
   :ensure nil
   :config
-  (transient-define-prefix my/ocaml-module-menu ()
-    "Insert OCaml module forms."
-    [["Modules"
-      ("m" "module" my/ocaml-snippet-module)
-      ("t" "module type" my/ocaml-snippet-module-type)
-      ("f" "functor" my/ocaml-snippet-functor)
-      ("l" "local module" my/ocaml-snippet-local-module)
-      ("p" "first-class module" my/ocaml-snippet-first-module)
-      ("o" "open" my/ocaml-snippet-open)
-      ("i" "include" my/ocaml-snippet-include)]])
+  (defun my/ocaml-transient-group (group title)
+    "Return a transient group for snippet GROUP titled TITLE."
+    (vconcat
+     (list title)
+     (mapcar
+      (lambda (spec)
+        (list (plist-get spec :key)
+              (plist-get spec :label)
+              (plist-get spec :command)))
+      (seq-filter (lambda (spec) (eq (plist-get spec :group) group))
+                  my/ocaml-snippet-registry))))
 
-  (transient-define-prefix my/ocaml-menu ()
-    "OCaml snippets and language-server actions."
-    [["Insert"
-      ("i" "if" my/ocaml-snippet-if)
-      ("a" "match" my/ocaml-snippet-match)
-      ("t" "try" my/ocaml-snippet-try)
-      ("l" "let" my/ocaml-snippet-let)
-      ("L" "let rec" my/ocaml-snippet-let-rec)
-      ("f" "fun" my/ocaml-snippet-fun)
-      ("F" "function" my/ocaml-snippet-function)
-      ("b" "begin/end" my/ocaml-snippet-begin)
-      (";" "sequence" my/ocaml-snippet-sequence)
-      ("w" "while" my/ocaml-snippet-while)
-      ("o" "for" my/ocaml-snippet-for)
-      ("O" "for downto" my/ocaml-snippet-for-down)
-      ("r" "record value" my/ocaml-snippet-record)
-      ("v" "type" my/ocaml-snippet-variant)
-      ("m" "modules…" my/ocaml-module-menu)]
+  (defmacro my/define-ocaml-transients ()
+    "Define OCaml transients from the shared snippet registry."
+    (let ((expressions (my/ocaml-transient-group 'expression "Expressions"))
+          (declarations
+           (my/ocaml-transient-group 'declaration "Declarations"))
+          (modules (my/ocaml-transient-group 'module "Modules")))
+      `(progn
+         (transient-define-prefix my/ocaml-expression-menu ()
+           "Insert OCaml expressions."
+           ,expressions)
+         (transient-define-prefix my/ocaml-declaration-menu ()
+           "Insert OCaml declarations."
+           ,declarations)
+         (transient-define-prefix my/ocaml-module-menu ()
+           "Insert OCaml module forms."
+           ,modules)
+         (transient-define-prefix my/ocaml-menu ()
+           "OCaml snippets and language-server actions."
+           [["Insert"
+             ("e" "expressions…" my/ocaml-expression-menu)
+             ("l" "declarations…" my/ocaml-declaration-menu)
+             ("m" "modules…" my/ocaml-module-menu)]
      ["Types and docs"
       ("T" "type enclosing" ocaml-eglot-type-enclosing)
       ("E" "type expression" ocaml-eglot-type-expression)
@@ -3838,7 +4004,9 @@ A negative ARGUMENT moves to the previous field instead."
       ("u" "occurrences" ocaml-eglot-occurrences)
       ("R" "rename" ocaml-eglot-rename)
       ("X" "extract to toplevel" ocaml-eglot-refactor-extract-at-toplevel)
-      ("I" "infer interface" ocaml-eglot-infer-interface)]])
+      ("I" "infer interface" ocaml-eglot-infer-interface)]]))))
+
+  (my/define-ocaml-transients)
 
   (with-eval-after-load 'ocaml-eglot
     (setcdr ocaml-eglot-mode-map nil)
@@ -4504,6 +4672,21 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
       (plist-put owner :annotation "t")
       (append owner-path '(:annotation)))
 
+     ((and (eq kind 'argument) (eq slot :value))
+      (let* ((application-path (butlast owner-path 2))
+             (application (my/ocaml-path-get root application-path))
+             (index (car (last owner-path)))
+             (arguments (and (eq (plist-get application :kind) 'application)
+                             (plist-get application :arguments))))
+        (when (and arguments (= index (1- (length arguments))))
+          (plist-put application :arguments
+                     (append arguments
+                             (list (list :kind 'argument :label nil
+                                         :label-kind nil :value "_"
+                                         :alternatives nil))))
+          (append application-path
+                  (list :arguments (length arguments) :value)))))
+
      ((and (eq kind 'module-decl) (eq slot :name)
            (not (plist-get owner :signature)))
       (plist-put owner :signature (my/ocaml-signature-ref "S"))
@@ -5017,6 +5200,27 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-default-match) '(:scrutinee)))
+
+(defun my/ocaml-start-application ()
+  "Insert a structured OCaml function application."
+  (declare (modes tuareg-mode))
+  (interactive)
+  (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+  (my/ocaml-place (my/ocaml-application "_" '("_")) '(:head)))
+
+(defun my/ocaml-start-list ()
+  "Insert a structured OCaml list."
+  (declare (modes tuareg-mode))
+  (interactive)
+  (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+  (my/ocaml-place (my/ocaml-collection 'list) '(:elements 0)))
+
+(defun my/ocaml-start-array ()
+  "Insert a structured OCaml array."
+  (declare (modes tuareg-mode))
+  (interactive)
+  (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+  (my/ocaml-place (my/ocaml-collection 'array) '(:elements 0)))
 
 (defun my/ocaml-enclosing-match-bounds ()
   "Return the bounds of the match expression surrounding point."
