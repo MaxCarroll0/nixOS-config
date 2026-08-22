@@ -4675,6 +4675,27 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 (defun my/ocaml-default-type ()
   (list :kind 'type-decl :params nil :name "t" :body nil))
 
+(defun my/ocaml-type-application (declaration)
+  "Return DECLARATION's type constructor applied to its parameters."
+  (let ((params (plist-get declaration :params))
+        (name (plist-get declaration :name)))
+    (cond
+     ((null params) name)
+     ((cdr params) (format "(%s) %s" (string-join params ", ") name))
+     (t (format "%s %s" (car params) name)))))
+
+(defun my/ocaml-enclosing-type-decl (root path)
+  "Return the type declaration enclosing PATH in ROOT."
+  (or (and (eq (plist-get root :kind) 'type-decl) root)
+      (let ((candidate (butlast path))
+            found)
+        (while (and candidate (not found))
+          (let ((node (my/ocaml-path-get root candidate)))
+            (if (and (listp node) (eq (plist-get node :kind) 'type-decl))
+                (setq found node)
+              (setq candidate (butlast candidate)))))
+        found)))
+
 (defun my/ocaml-constructor-name (index)
   (format "Ctr%d" (1+ index)))
 
@@ -5002,6 +5023,14 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
                (kind (and (listp owner) (plist-get owner :kind)))
                (owner-path (my/ocaml-owner-path root path)))
     (cond
+     ((and (eq kind 'type-decl) (eq slot :body)
+           (let ((body (plist-get owner :body)))
+             (or (null body) (equal body "_"))))
+      (plist-put owner :body
+                 (list :kind 'record
+                       :fields (list (my/ocaml-record-field "field"))))
+      (append owner-path '(:body :fields 0 :name)))
+
      ((and (eq kind 'record-literal) (eq slot :fields))
       (plist-put owner :base "_")
       (append owner-path '(:base)))
@@ -5063,7 +5092,10 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
             (plist-put owner :result nil)
             (append owner-path
                     (if (plist-get owner :payload) '(:payload) '(:name))))
-        (plist-put owner :result "t")
+        (plist-put owner :result
+                   (or (my/ocaml-type-application
+                        (my/ocaml-enclosing-type-decl root path))
+                       "t"))
         (append owner-path '(:result))))
 
      ((eq kind 'param)
