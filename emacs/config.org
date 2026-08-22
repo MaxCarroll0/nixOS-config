@@ -666,6 +666,10 @@ Explicit completion popup with documentation and Meow navigation.
 (defvar-local my/type-completion-generation 0)
 (defvar-local my/type-completion-state nil)
 
+(defun my/type-completion-probe-ready-p ()
+  "Return non-nil after a successful typed or untyped probe."
+  (memq my/type-completion-probed '(typed untyped)))
+
 (defun my/type-completion-entry (candidate)
   "Return CANDIDATE's OCaml semantic completion entry."
   (when (and (stringp candidate) (> (length candidate) 0))
@@ -904,11 +908,14 @@ Explicit completion popup with documentation and Meow navigation.
   "Return non-nil when CANDIDATE begins with the text typed so far."
   (or (string-empty-p my/type-completion-input)
       (let* ((name (substring-no-properties candidate))
-             (trigger (plist-get (my/type-completion-entry candidate) :trigger))
+             (entry (my/type-completion-entry candidate))
+             (trigger (plist-get entry :trigger))
+             (semantic (or entry (my/completion-lsp-item candidate)))
              (fold completion-ignore-case))
         (or (string-prefix-p my/type-completion-input name fold)
             (and trigger (string-prefix-p my/type-completion-input trigger fold))
-            (when-let* ((tail (and (string-match "\\.\\([^.]*\\)\\'" name)
+            (when-let* ((semantic)
+                        (tail (and (string-match "\\.\\([^.]*\\)\\'" name)
                                    (match-string 1 name))))
               (string-prefix-p my/type-completion-input tail fold))))))
 
@@ -999,20 +1006,40 @@ Explicit completion popup with documentation and Meow navigation.
                        (max (point-min) (- beginning 128)))
          t)))
 
-(defun my/type-completion-correct-p (candidate)
-  "Return non-nil when CANDIDATE yields the expected type."
-  (or (null my/type-completion-wanted)
-      (when-let* ((entry (my/type-completion-entry candidate)))
-        (eq (plist-get entry :tier) 0))))
+(defun my/type-completion-tier (candidate &optional index)
+  "Return the ranking class CANDIDATE belongs to at server order INDEX."
+  (if-let* ((entry (my/type-completion-entry candidate)))
+      (cond
+       ((eq (plist-get entry :kind) 'snippet) 1)
+       ((not my/type-completion-wanted) 2)
+       (t (min (plist-get entry :tier) 2)))
+    (if (and my/type-completion-wanted
+             (< (or index 0) my/type-completion-rank-limit)
+             (my/type-completion-arity candidate))
+        0
+      2)))
+
+(defun my/type-completion-top-tier (candidates)
+  "Return CANDIDATES restricted to the best class any of them reaches."
+  (when candidates
+    (let* ((ranked
+            (cl-loop for candidate in candidates
+                     for index from 0
+                     collect (cons (my/type-completion-tier candidate index)
+                                   candidate)))
+           (best (seq-min (mapcar #'car ranked))))
+      (mapcar #'cdr (seq-filter (lambda (item) (eql (car item) best))
+                                ranked)))))
 
 (defun my/type-completion-settled-p ()
   "Return non-nil when the symbol at point already has the expected type."
   (when-let* ((my/type-completion-wanted)
               (bounds (bounds-of-thing-at-point 'symbol))
               (text (buffer-substring-no-properties (car bounds) (cdr bounds)))
+              ((not (equal text "_")))
               (entry (and my/type-completion-index
                           (gethash text my/type-completion-index))))
-    (and (eq (plist-get entry :tier) 0)
+    (and (eq (my/type-completion-tier text) 0)
          (zerop (plist-get entry :arity)))))
 
 (defun my/type-completion-deprecated-p (candidate)
@@ -1027,10 +1054,7 @@ Explicit completion popup with documentation and Meow navigation.
          (typed-arity (unless entry
                         (and (< index my/type-completion-rank-limit)
                              (my/type-completion-arity candidate)))))
-    (logior (ash (cond (entry (plist-get entry :tier))
-                       (typed-arity 0)
-                       (t (my/type-completion-untyped-tier candidate)))
-                 22)
+    (logior (ash (my/type-completion-tier candidate index) 22)
             (ash (if (my/type-completion-deprecated-p candidate) 1 0) 21)
             (ash (min (or (and entry (plist-get entry :arity))
                           typed-arity 0)
@@ -1038,13 +1062,6 @@ Explicit completion popup with documentation and Meow navigation.
                  17)
             (ash (if (my/type-completion-prefix-match-p candidate) 0 1) 16)
             (min (if entry (plist-get entry :rank) index) 65535))))
-
-(defun my/type-completion-untyped-tier (candidate)
-  "Return the tier for CANDIDATE when no type entry was found for it."
-  (cond
-   ((not (my/completion-lsp-item candidate)) 2)
-   ((and my/type-completion-results my/type-completion-wanted) 3)
-   (t 0)))
 
 (defun my/completion-sort-candidates (candidates)
   "Rank CANDIDATES by the language server's own type ordering."
@@ -1561,13 +1578,19 @@ Explicit completion popup with documentation and Meow navigation.
 #+end_src
 
 ** Inline preview
-The first semantic completion can appear at an empty expected-type position and is accepted with =TAB=.
+The best prefix-only completion tier appears inline and is accepted with =TAB=; ambiguous candidates show only their shared prefix, while a sole candidate shows its complete snippet expansion.
 
-Cursor motion triggers the preview, so it runs off the command loop on an idle timer and never starts a language-server type probe of its own; it ranks by the server's own order until an explicit completion has probed that position.
+Cursor motion triggers the preview from an idle timer without blocking on a language-server type probe. Already-correct terms suppress it, except for bare holes.
+
+At a bare hole, completion considers every candidate in the best tier and previews the result as a replacement for the underscore.
 
 #+begin_src emacs-lisp
 
 (defvar-local my/completion-preview-dismissed nil)
+(defvar-local my/completion-preview-candidates nil)
+(defvar-local my/completion-preview-hole-overlay nil)
+(defvar my/completion-preview-accepting nil)
+(defvar my/completion-preview-mouse-map nil)
 
 (defun my/completion-preview-state ()
   "Return a token identifying the current point and buffer contents."
@@ -1584,13 +1607,102 @@ Cursor motion triggers the preview, so it runs off the command loop on an idle t
   (and (fboundp 'eglot-managed-p) (eglot-managed-p)))
 
 (defun my/completion-preview-allowed-p ()
-  "Return non-nil when a preview here can be known to be type correct."
+  "Return non-nil when completion tiers are available for previewing."
   (or (not (my/completion-preview-typed-context-p))
-      my/type-completion-probed))
+      (my/type-completion-probe-ready-p)))
 
 (defun my/completion-preview-ambiguous-p ()
   "Return non-nil when several candidates remain behind the preview."
   (and (cdr (completion-preview--get 'completion-preview-suffixes)) t))
+
+(defun my/completion-preview-hole-bounds ()
+  "Return the bounds of the bare hole replaced by the current preview."
+  (when completion-preview--overlay
+    (let* ((props (completion-preview--get 'completion-preview-props))
+           (beginning (or (plist-get props :my/completion-beginning)
+                          (completion-preview--get 'completion-preview-beg)))
+           (end (completion-preview--get 'completion-preview-end)))
+      (when (and beginning end
+                 (equal (buffer-substring-no-properties beginning end) "_"))
+        (cons beginning end)))))
+
+(defun my/completion-preview-candidate (name)
+  "Return the original candidate represented by preview NAME."
+  (or (and my/completion-preview-candidates
+           (gethash name my/completion-preview-candidates))
+      name))
+
+(defun my/completion-preview-hide-hole ()
+  "Remove the visual replacement for a bare hole."
+  (when (overlayp my/completion-preview-hole-overlay)
+    (delete-overlay my/completion-preview-hole-overlay))
+  (setq my/completion-preview-hole-overlay nil))
+
+(defun my/completion-preview-put-rendered (text)
+  "Show TEXT without losing the canonical completion preview string."
+  (let* ((overlay completion-preview--overlay)
+         (current (overlay-get overlay 'after-string)))
+    (overlay-put overlay 'my/completion-preview-canonical current)
+    (setq text (copy-sequence text))
+    (unless (get-text-property 0 'face text)
+      (add-text-properties 0 (length text) '(face completion-preview) text))
+    (add-text-properties 0 (length text)
+                         (list 'mouse-face 'completion-preview-highlight
+                               'keymap my/completion-preview-mouse-map)
+                         text)
+    (overlay-put overlay 'my/completion-preview-rendered text)
+    (overlay-put overlay 'after-string text)))
+
+(defun my/completion-preview-reset-rendering ()
+  "Forget rendering state installed by the previous preview update."
+  (my/completion-preview-hide-hole)
+  (when completion-preview--overlay
+    (overlay-put completion-preview--overlay
+                 'my/completion-preview-canonical nil)
+    (overlay-put completion-preview--overlay
+                 'my/completion-preview-rendered nil)))
+
+(defun my/completion-preview-put-hole-rendered (text bounds)
+  "Show TEXT in place of the bare hole at BOUNDS."
+  (let ((current (overlay-get completion-preview--overlay 'after-string)))
+    (overlay-put completion-preview--overlay
+                 'my/completion-preview-canonical current)
+    (overlay-put completion-preview--overlay 'after-string ""))
+  (setq text (propertize (copy-sequence text)
+                         'face 'completion-preview
+                         'mouse-face 'completion-preview-highlight
+                         'keymap my/completion-preview-mouse-map))
+  (setq my/completion-preview-hole-overlay
+        (make-overlay (car bounds) (cdr bounds)))
+  (overlay-put my/completion-preview-hole-overlay 'display text))
+
+(defun my/completion-preview-render-hole ()
+  "Render the current preview as a replacement for a bare hole."
+  (condition-case nil
+      (when-let* ((bounds (my/completion-preview-hole-bounds))
+                  (base (or (completion-preview--get
+                             'completion-preview-base)
+                            ""))
+                  (common (substring-no-properties
+                           (or (completion-preview--get
+                                'completion-preview-common)
+                               ""))))
+        (if (my/completion-preview-ambiguous-p)
+            (let ((replacement (string-remove-prefix "_" common)))
+              (if (string-empty-p replacement)
+                  (completion-preview-active-mode -1)
+                (my/completion-preview-put-hole-rendered replacement bounds)))
+          (when-let* ((suffix (car (completion-preview--get
+                                    'completion-preview-suffixes)))
+                      (name (concat base common suffix))
+                      (candidate (my/completion-preview-candidate name))
+                      (replacement
+                       (or (my/type-completion-preview-text
+                            candidate (car bounds))
+                           (substring-no-properties candidate))))
+            (my/completion-preview-put-hole-rendered replacement bounds)))
+        t)
+    (error nil)))
 
 (defun my/completion-preview-trim-to-common ()
   "Reduce an ambiguous preview to the prefix every candidate shares."
@@ -1600,60 +1712,85 @@ Cursor motion triggers the preview, so it runs off the command loop on an idle t
              (typed (- (overlay-start overlay) beg))
              (common (substring-no-properties
                       (or (completion-preview--get
-                           'completion-preview-common)
+                          'completion-preview-common)
                           ""))))
         (if (> (length common) typed)
-            (progn
-              (overlay-put overlay 'completion-preview-suffixes (list ""))
-              (overlay-put overlay 'completion-preview-index 0)
-              (overlay-put overlay 'after-string
-                           (propertize (substring common typed)
-                                       'face 'completion-preview-common
-                                       'mouse-face
-                                       'completion-preview-highlight
-                                       'keymap completion-preview--mouse-map)))
+            (my/completion-preview-put-rendered
+             (propertize (substring common typed)
+                         'face 'completion-preview-common))
           (completion-preview-active-mode -1)))
     (error (completion-preview-active-mode -1))))
 
-(defun my/completion-preview-snippet-text (candidate)
-  "Return the full rendered form CANDIDATE would expand to, if any."
-  (when-let* ((entry (my/type-completion-entry candidate))
-              ((eq (plist-get entry :kind) 'snippet)))
-    (or (when-let* ((builder (plist-get entry :builder))
-                    (node (funcall builder))
-                    (rendered (my/ocaml-render-root node)))
-          (string-trim
-           (replace-regexp-in-string
-            "\\${[0-9]+:\\([^}]*\\)}" "\\1"
-            (replace-regexp-in-string
-             "\\$0\\'" "" (plist-get rendered :template)))))
-        (plist-get entry :constructible)
-        (plist-get entry :name))))
-
 (defun my/completion-preview-render-snippet ()
-  "Show the whole snippet in the preview when a snippet is being previewed."
+  "Show the whole expansion when exactly one candidate is being previewed."
   (condition-case nil
-      (when-let* ((overlay completion-preview--overlay)
+      (when-let* (((not (my/completion-preview-ambiguous-p)))
+                  (overlay completion-preview--overlay)
                   (beg (completion-preview--get 'completion-preview-beg))
-                  (typed (- (overlay-start overlay) beg))
+                  (beginning
+                   (or (plist-get
+                        (completion-preview--get 'completion-preview-props)
+                        :my/completion-beginning)
+                       beg))
+                  (base (or (completion-preview--get
+                             'completion-preview-base)
+                            ""))
+                  (typed (+ (length base) (- (overlay-start overlay) beg)))
                   (common (substring-no-properties
                            (or (completion-preview--get
                                 'completion-preview-common)
                                "")))
                   (suffix (car (completion-preview--get
                                 'completion-preview-suffixes)))
-                  (candidate (concat common suffix))
-                  (full (my/completion-preview-snippet-text candidate))
+                  (name (concat base common suffix))
+                  (candidate (my/completion-preview-candidate name))
+                  (full (my/type-completion-preview-text candidate beginning))
                   ((> (length full) typed)))
-        (overlay-put overlay 'after-string
-                     (propertize (substring full typed)
-                                 'face 'completion-preview
-                                 'mouse-face 'completion-preview-highlight
-                                 'keymap completion-preview--mouse-map)))
+        (my/completion-preview-put-rendered (substring full typed)))
     (error nil)))
 
+(defun my/completion-preview-accept-hole (bounds)
+  "Replace the bare hole at BOUNDS with the current preview."
+  (let* ((ambiguous (my/completion-preview-ambiguous-p))
+         (base (or (completion-preview--get 'completion-preview-base) ""))
+         (common (substring-no-properties
+                  (or (completion-preview--get 'completion-preview-common) "")))
+         (suffix (car (completion-preview--get 'completion-preview-suffixes)))
+         (name (and (not ambiguous) (concat base common suffix)))
+         (candidate (and name (my/completion-preview-candidate name)))
+         (replacement
+          (if ambiguous
+              (string-remove-prefix "_" common)
+            (substring-no-properties candidate)))
+         (exit-function
+          (plist-get (completion-preview--get 'completion-preview-props)
+                     :exit-function)))
+    (completion-preview-active-mode -1)
+    (delete-region (car bounds) (cdr bounds))
+    (goto-char (car bounds))
+    (insert replacement)
+    (when (and candidate (functionp exit-function))
+      (let ((my/completion-preview-accepting t))
+        (funcall exit-function candidate 'finished)))))
+
+(defun my/completion-preview-accept ()
+  "Accept a sole candidate, or insert only an ambiguous common prefix."
+  (interactive)
+  (let ((hole (my/completion-preview-hole-bounds)))
+    (cond
+     (hole
+      (my/completion-preview-accept-hole hole))
+     ((my/completion-preview-ambiguous-p)
+      (completion-preview-complete))
+     (t
+      (when-let* ((canonical
+                   (completion-preview--get 'my/completion-preview-canonical)))
+        (overlay-put completion-preview--overlay 'after-string canonical))
+      (let ((my/completion-preview-accepting t))
+        (completion-preview-insert))))))
+
 (defun my/completion-preview-without-probe (original &rest arguments)
-  "Run ORIGINAL preview update only where candidates are known type correct."
+  "Run ORIGINAL preview update without a synchronous type probe."
   (let ((my/type-completion-inhibit-probe t))
     (if (or (equal my/completion-preview-dismissed
                    (my/completion-preview-state))
@@ -1662,7 +1799,9 @@ Cursor motion triggers the preview, so it runs off the command loop on an idle t
         (completion-preview-active-mode -1)
       (apply original arguments)
       (when completion-preview-active-mode
-        (or (my/completion-preview-render-snippet)
+        (my/completion-preview-reset-rendering)
+        (or (my/completion-preview-render-hole)
+            (my/completion-preview-render-snippet)
             (when (my/completion-preview-ambiguous-p)
               (my/completion-preview-trim-to-common)))))))
 
@@ -1671,8 +1810,8 @@ Cursor motion triggers the preview, so it runs off the command loop on an idle t
   :bind
   (:map completion-preview-active-mode-map
         ("C-i" . nil)
-        ("TAB" . completion-preview-insert)
-        ("<tab>" . completion-preview-insert)
+        ("TAB" . my/completion-preview-accept)
+        ("<tab>" . my/completion-preview-accept)
         ("S-SPC" . my/completion-preview-dismiss)
         ("C-<return>" . nil))
   :custom
@@ -1681,13 +1820,17 @@ Cursor motion triggers the preview, so it runs off the command loop on an idle t
   :init
   (global-completion-preview-mode)
   :config
+  (setq my/completion-preview-mouse-map
+        (copy-keymap completion-preview--mouse-map))
+  (define-key my/completion-preview-mouse-map
+              (kbd "<mouse-1>") #'my/completion-preview-accept)
   (dolist (command '(forward-char backward-char next-line previous-line
                      meow-left meow-right meow-next meow-prev))
     (add-to-list 'completion-preview-commands command))
   (advice-add #'completion-preview--update
               :around #'my/completion-preview-without-probe)
-  (advice-add #'completion-preview--show
-              :after #'my/completion-preview-render-snippet))
+  (advice-add #'completion-preview-hide
+              :after #'my/completion-preview-hide-hole))
 
 #+end_src
 
@@ -2005,6 +2148,7 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
 
   (defun my/type-completion-enclosing-request (key)
     "Request the enclosing type at point and install it under KEY."
+    (setq my/type-completion-probed 'pending)
     (condition-case nil
         (let ((buffer (current-buffer))
               (generation my/type-completion-generation)
@@ -2019,26 +2163,29 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
                (my/type-completion-receive
                 buffer generation key
                 (lambda ()
-                  (setq my/type-completion-probed t)
+                  (setq my/type-completion-probed
+                        (if expected 'typed 'untyped))
                   (when expected
                     (setq my/type-completion-expected expected
                           my/type-completion-wanted
-                          (my/type-canonical expected))
+                          (let ((canonical (my/type-canonical expected)))
+                            (unless (my/type-unconstrained-p canonical)
+                              canonical)))
                     (my/type-completion-request expected key)
                     (my/type-completion-construct-request key))))))
            :error-fn
            (lambda (&rest _)
              (my/type-completion-receive
               buffer generation key
-              (lambda () (setq my/type-completion-probed t))))
+              (lambda () (setq my/type-completion-probed nil))))
            :timeout-fn
            (lambda ()
              (my/type-completion-receive
               buffer generation key
-              (lambda () (setq my/type-completion-probed t))))
+              (lambda () (setq my/type-completion-probed nil))))
            :timeout 2.0
            :deferred 'my/type-completion-enclosing))
-      (error nil)))
+      (error (setq my/type-completion-probed nil))))
 
   (defun my/type-completion-signature-request (key)
     "Determine the expected type from signature help without blocking."
@@ -2049,11 +2196,14 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
               (params (eglot--TextDocumentPositionParams))
               (settle
                (lambda (expected)
-                 (setq my/type-completion-probed t)
+                 (setq my/type-completion-probed
+                       (if expected 'typed 'untyped))
                  (when expected
                    (setq my/type-completion-expected expected
                          my/type-completion-wanted
-                         (my/type-canonical expected))
+                         (let ((canonical (my/type-canonical expected)))
+                           (unless (my/type-unconstrained-p canonical)
+                             canonical)))
                    (when (my/type-completion-ocaml-p)
                      (my/type-completion-request expected
                                                  my/type-completion-key))))))
@@ -2070,16 +2220,16 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
                (lambda (&rest _)
                  (my/type-completion-receive
                   buffer generation key
-                  (lambda () (funcall settle nil))))
+                  (lambda () (setq my/type-completion-probed nil))))
                :timeout-fn
                (lambda ()
                  (my/type-completion-receive
                   buffer generation key
-                  (lambda () (funcall settle nil))))
+                  (lambda () (setq my/type-completion-probed nil))))
                :timeout 2.0
                :deferred 'my/type-completion-signature)
-            (setq my/type-completion-probed t)))
-      (error (setq my/type-completion-probed t))))
+            (setq my/type-completion-probed 'untyped)))
+      (error (setq my/type-completion-probed nil))))
 
   (defun my/type-completion-expected-ocaml (beginning end)
     "Return OCaml-LSP's expected type at completion bounds BEGINNING and END."
@@ -2182,36 +2332,47 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
 
   (defun my/type-completion-ensure (beginning end)
     "Return non-nil when ranking state is current for BEGINNING and END."
-    (let ((key (my/type-completion-position-key beginning end)))
+    (let ((key (my/type-completion-position-key beginning end))
+          (hole (and (my/type-completion-ocaml-p)
+                     (my/type-completion-hole-p beginning end))))
       (cond
        ((and (equal key my/type-completion-key)
-             my/type-completion-expected)
+             (my/type-completion-probe-ready-p))
+        t)
+       ((and (equal key my/type-completion-key)
+             (eq my/type-completion-probed 'pending))
+        t)
+       (hole
+        (my/type-completion-reset key)
+        (my/type-completion-reindex)
+        (save-excursion
+          (goto-char beginning)
+          (my/type-completion-enclosing-request key))
         t)
        (my/type-completion-inhibit-probe
         (when (and (not (equal key my/type-completion-key))
                    (my/completion-preview-typed-context-p))
           (my/type-completion-reset key)
-          (if (and (my/type-completion-ocaml-p)
-                   (my/type-completion-hole-p beginning end))
-              (save-excursion
-                (goto-char beginning)
-                (my/type-completion-enclosing-request key))
-            (my/type-completion-signature-request key)))
+          (my/type-completion-signature-request key))
         nil)
        (t
         (my/type-completion-reset key)
-        (setq my/type-completion-probed t)
-        (when-let* ((expected
-                     (my/type-completion-expected-at-point beginning end)))
-          (setq my/type-completion-expected expected
-                my/type-completion-wanted
-                (let ((canonical (my/type-canonical expected)))
-                  (unless (my/type-unconstrained-p canonical) canonical)))
-          (my/type-completion-reindex)
-          (when (my/type-completion-ocaml-p)
+        (let ((expected
+               (my/type-completion-expected-at-point beginning end))
+              (ocaml (my/type-completion-ocaml-p)))
+          (setq my/type-completion-probed
+                (if expected 'typed 'untyped))
+          (when expected
+            (setq my/type-completion-expected expected
+                  my/type-completion-wanted
+                  (let ((canonical (my/type-canonical expected)))
+                    (unless (my/type-unconstrained-p canonical) canonical))))
+          (when (or expected ocaml)
+            (my/type-completion-reindex))
+          (when (and expected ocaml)
             (my/type-completion-request expected key)
             (my/type-completion-construct-request key))
-          t)))))
+          (or expected ocaml))))))
 
   (defun my/type-completion-underline-match (type)
     "Underline the span of TYPE that satisfies the expected type."
@@ -2251,23 +2412,17 @@ completion replaces a bare `_', whose text must not filter the candidates."
        ((eq action t)
         (setq my/type-completion-input (my/type-hole-pattern string))
         (let* ((effective (my/type-hole-pattern string))
+               (base-pattern (if hole string effective))
                (completion-regexp-list
                 (unless hole completion-regexp-list))
                (merged
                 (my/type-merge-candidates
-                 (all-completions effective table predicate)
+                 (all-completions base-pattern table predicate)
                  (all-completions effective my/type-completion-candidates
                                   predicate))))
           (when (and my/completion-hide-qualified (not qualified))
             (setq merged (seq-remove #'my/completion-qualified-p merged)))
-          (if my/type-completion-inhibit-probe
-              (seq-filter
-               (lambda (candidate)
-                 (and (my/type-completion-correct-p candidate)
-                      (my/type-completion-prefix-match-p candidate)
-                      (not (my/type-completion-deprecated-p candidate))))
-               merged)
-            merged)))
+          merged))
        ((eq action 'lambda)
         (or (test-completion string table predicate)
             (and my/type-completion-index
@@ -2385,8 +2540,17 @@ completion replaces a bare `_', whose text must not filter the candidates."
           (my/type-remove-candidate-prefix detail candidate))
          arity)))))
 
-  (defun my/type-completion-exit (original beginning candidate status)
-    "Apply semantic CANDIDATE or run ORIGINAL exit function for STATUS."
+  (defun my/type-completion-yas-display (template)
+    "Return TEMPLATE with Yas fields reduced to their visible defaults."
+    (let ((text (copy-sequence template)))
+      (while (string-match "\\${[0-9]+:\\([^${}]*\\)}" text)
+        (setq text (replace-match (match-string 1 text) t t text)))
+      (setq text (replace-regexp-in-string
+                  "\\${[0-9]+}\\|\\$[0-9]+" "" text t))
+      (string-trim-right text)))
+
+  (defun my/type-completion-action (candidate beginning)
+    "Return the semantic insertion action for CANDIDATE at BEGINNING."
     (let* ((entry (my/type-completion-entry candidate))
            (collection (and entry (plist-get entry :collection)))
            (yas-template
@@ -2406,37 +2570,89 @@ completion replaces a bare `_', whose text must not filter the candidates."
                           (my/ocaml-application
                            (plist-get entry :name) holes))))))
       (cond
-       ((and (eq status 'finished) collection)
-        (my/type-completion-expand-collection collection beginning))
-       ((and (eq status 'finished) yas-template)
-        (my/type-completion-expand-yas yas-template beginning))
-       ((and (eq status 'finished) structured)
-        (my/type-completion-expand-structured structured beginning))
-       ((and (eq status 'finished) snippet)
-        (my/type-completion-expand-yas snippet beginning))
-       ((and (eq status 'finished)
-             (stringp constructible)
+       (collection (list :kind 'collection :value collection))
+       (yas-template (list :kind 'yas :value yas-template))
+       (structured (list :kind 'structured :value structured))
+       (snippet (list :kind 'yas :value snippet))
+       ((and (stringp constructible)
              (not (string-empty-p constructible))
              (my/type-expression-hole-ranges constructible))
-        (my/type-completion-expand constructible beginning))
-       (t
+        (list :kind 'constructible :value constructible)))))
+
+  (defun my/type-completion-action-preview (action)
+    "Return the visible expansion text for semantic ACTION."
+    (pcase (plist-get action :kind)
+      ('collection
+       (my/type-completion-yas-display
+        (plist-get (my/ocaml-render-root
+                    (my/ocaml-collection (plist-get action :value)))
+                   :template)))
+      ('structured
+       (my/type-completion-yas-display
+        (plist-get (my/ocaml-render-root (plist-get action :value))
+                   :template)))
+      ('yas
+       (my/type-completion-yas-display (plist-get action :value)))
+      ('constructible
+       (plist-get action :value))))
+
+  (defun my/type-completion-preview-text (candidate beginning)
+    "Return the full expansion preview for sole CANDIDATE at BEGINNING."
+    (when-let* ((action (my/type-completion-action candidate beginning)))
+      (my/type-completion-action-preview action)))
+
+  (defun my/type-completion-apply-action (action beginning)
+    "Apply semantic ACTION, replacing text from BEGINNING through point."
+    (pcase (plist-get action :kind)
+      ('collection
+       (my/type-completion-expand-collection
+        (plist-get action :value) beginning))
+      ('structured
+       (my/type-completion-expand-structured
+        (plist-get action :value) beginning))
+      ('yas
+       (my/type-completion-expand-yas
+        (plist-get action :value) beginning))
+      ('constructible
+       (my/type-completion-expand
+        (plist-get action :value) beginning))))
+
+  (defun my/type-completion-exit (original beginning candidate status)
+    "Apply semantic CANDIDATE or run ORIGINAL exit function for STATUS."
+    (when my/completion-preview-accepting
+      (setq candidate
+            (or (and my/completion-preview-candidates
+                     (gethash (substring-no-properties candidate)
+                              my/completion-preview-candidates))
+                candidate)))
+    (let ((entry (my/type-completion-entry candidate))
+          (action (my/type-completion-action candidate beginning)))
+      (if (and (eq status 'finished) action)
+          (my/type-completion-apply-action action beginning)
         (when (and original
                    (or (not entry)
                        (my/completion-lsp-item candidate)))
-          (funcall original candidate status))))))
-
-  (defun my/completion-preview-source-p (candidate)
-    "Return non-nil when CANDIDATE may appear in the inline preview."
-    (or (my/completion-lsp-item candidate)
-        (my/type-completion-entry candidate)
-        (nth 3 (syntax-ppss))))
+          (funcall original candidate status)))))
 
   (defun my/completion-preview-table (table)
-    "Restrict TABLE to sources the inline preview is allowed to show."
+    "Restrict TABLE to prefix candidates in its highest inhabited tier."
     (lambda (string predicate action)
       (if (eq action t)
-          (seq-filter #'my/completion-preview-source-p
-                      (all-completions string table predicate))
+          (let* ((my/type-completion-input (my/type-hole-pattern string))
+                 (hole (equal string "_"))
+                 (candidates
+                  (my/type-completion-top-tier
+                   (seq-filter #'my/type-completion-prefix-match-p
+                               (all-completions string table predicate))))
+                 preview-candidates)
+            (setq my/completion-preview-candidates
+                  (make-hash-table :test #'equal))
+            (dolist (candidate candidates)
+              (let ((name (concat (and hole "_")
+                                  (substring-no-properties candidate))))
+                (puthash name candidate my/completion-preview-candidates)
+                (push name preview-candidates)))
+            (nreverse preview-candidates))
         (complete-with-action action table string predicate))))
 
   (defun my/completion-ranked-capf ()
@@ -2449,8 +2665,10 @@ completion replaces a bare `_', whose text must not filter the candidates."
               (nth 1 result) (cdr operator)))
       (let ((beginning (nth 0 result))
             (end (nth 1 result)))
-        (when (and (my/type-completion-ensure beginning end)
-                   my/type-completion-expected)
+        (setcdr (nthcdr 2 result)
+                (plist-put (nthcdr 3 result)
+                           :my/completion-beginning beginning))
+        (when (my/type-completion-ensure beginning end)
           (setf (nth 2 result)
                 (my/type-completion-table
                  (nth 2 result)
@@ -2530,12 +2748,12 @@ Completion behaviour shared by every language server, built on standard LSP only
   =textDocument/hover=, both asynchronous, cached per position. See [[Corfu]].
 - *Return-type matching* — a paren-aware split of the type on top-level =->= or
   =>=, so a candidate ranks by what it returns once applied.
-- *Inline preview restraint* — the grey preview appears only where its candidate
-  is known type correct, collapses to the prefix all candidates share, and is
-  dismissed with =S-SPC=.
+- *Inline preview restraint* — the grey preview considers prefix matches only,
+  chooses the best inhabited tier, and is dismissed with =S-SPC=.
 - *Deprecated last* — LSP =deprecated= and tag =1= sink within their group.
-- *Ordering* — type-correct first, then prefix matches, then other server
-  candidates, with dabbrev and file completion last.
+- *Ordering* — type-correct candidates first, snippets next, then dabbrev,
+  files, and ill-typed candidates; without an expected type, snippets come
+  first.
 - *Module-qualified toggle* — =my/completion-toggle-qualified= hides dotted
   names until a module prefix is typed.
 
@@ -3342,9 +3560,10 @@ A negative ARGUMENT moves to the previous field instead."
      ((and argument (< (prefix-numeric-value argument) 0))
       (yas-prev-field))
      ((bound-and-true-p completion-preview-active-mode)
-      (completion-preview-insert))
-     ((and (bound-and-true-p my/ocaml-snippet)
-           (my/ocaml-restructure #'my/ocaml-advance)))
+      (my/completion-preview-accept))
+     ((and (fboundp 'my/ocaml-active-session)
+           (my/ocaml-active-session))
+      (my/ocaml-structured-tab))
      ((and (my/yas-current-ocaml-trigger-p) (yas-expand)))
      (t
       (yas-next-field-or-maybe-expand))))
@@ -3352,13 +3571,28 @@ A negative ARGUMENT moves to the previous field instead."
   (defun my/yas-finish-innermost ()
     "Finish the innermost active Yasnippet."
     (interactive)
-    (when-let* ((snippet (car (yas-active-snippets))))
-      (yas-exit-snippet snippet)))
+    (if (and (fboundp 'my/ocaml-active-session)
+             (my/ocaml-active-session))
+        (my/ocaml-finish)
+      (when-let* ((snippet (car (yas-active-snippets))))
+        (yas-exit-snippet snippet))))
+
+  (defun my/yas-next-existing-field ()
+    "Move to an existing field, or finish the current snippet."
+    (interactive)
+    (if (and (fboundp 'my/ocaml-active-session)
+             (my/ocaml-active-session))
+        (my/ocaml-structured-return)
+      (if (yas-next-field-will-exit-p)
+          (my/yas-finish-innermost)
+        (yas-next-field))))
 
   (define-key yas-keymap (kbd "TAB") #'my/yas-forward-field)
   (define-key yas-keymap (kbd "<tab>") #'my/yas-forward-field)
   (define-key yas-keymap (kbd "S-TAB") #'my/ocaml-structured-cycle)
   (define-key yas-keymap (kbd "<backtab>") #'my/ocaml-structured-cycle)
+  (define-key yas-keymap (kbd "RET") #'my/yas-next-existing-field)
+  (define-key yas-keymap (kbd "<return>") #'my/yas-next-existing-field)
   (define-key yas-keymap (kbd "S-<return>") #'my/yas-finish-innermost)
   (define-key yas-keymap (kbd "S-RET") #'my/yas-finish-innermost)
   (define-key yas-keymap (kbd "C-<return>") #'yas-exit-all-snippets)
@@ -3466,10 +3700,17 @@ A negative ARGUMENT moves to the previous field instead."
 
 *** Structured snippets
 OCaml constructs expand into a model that TAB extends, S-TAB cycles between valid alternative forms, RET walks fields and S-RET ends. A negative prefix (C-- TAB) steps back. Each structural edit re-renders the construct and reindents it.
+Yasnippet revival keeps edits individually undoable after the construct ends.
 
 #+begin_src emacs-lisp
 
-(defvar-local my/ocaml-snippet nil)
+(defvar-local my/ocaml-snippet-sessions nil)
+
+(defun my/ocaml-session-table ()
+  "Return the structured snippet session table for the current buffer."
+  (or my/ocaml-snippet-sessions
+      (setq my/ocaml-snippet-sessions
+            (make-hash-table :test #'eq :weakness 'key))))
 
 (defun my/ocaml-path-get (root path)
   (let ((node root))
@@ -3543,11 +3784,21 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
 (my/ocaml-define-renderer constructor (node path)
   (concat "| "
           (my/ocaml-field (append path '(:name)) (plist-get node :name))
-          (if (plist-get node :payload)
-              (concat " of "
-                      (my/ocaml-field (append path '(:payload))
-                                      (plist-get node :payload)))
-            "")))
+          (cond
+           ((plist-get node :result)
+            (concat " : "
+                    (if (plist-get node :payload)
+                        (concat (my/ocaml-field (append path '(:payload))
+                                                (plist-get node :payload))
+                                " -> ")
+                      "")
+                    (my/ocaml-field (append path '(:result))
+                                    (plist-get node :result))))
+           ((plist-get node :payload)
+            (concat " of "
+                    (my/ocaml-field (append path '(:payload))
+                                    (plist-get node :payload))))
+           (t ""))))
 
 (my/ocaml-define-renderer record (node path)
   (concat "{ "
@@ -3566,6 +3817,7 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
 
 (my/ocaml-define-renderer let-group (node path)
   (concat "let "
+          (if (plist-get node :recursive) "rec " "")
           (string-join
            (cl-loop for b in (plist-get node :bindings)
                     for i from 0
@@ -3575,7 +3827,9 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
           (my/ocaml-hole-field node path :body)))
 
 (my/ocaml-define-renderer let-binding (node path)
-  (concat (if (plist-get node :standalone) "let " "")
+  (concat (if (plist-get node :standalone)
+              (concat "let " (if (plist-get node :recursive) "rec " ""))
+            "")
           (my/ocaml-field (append path '(:name)) (plist-get node :name))
           (mapconcat
            (lambda (i)
@@ -3750,9 +4004,10 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
           (string-join
            (cl-loop for f in (plist-get node :fields)
                     for i from 0
-                    collect (concat (car f) " = "
+                    collect (concat (plist-get f :name) " = "
                                     (my/ocaml-field
-                                     (append path (list :fields i)) (cdr f))))
+                                     (append path (list :fields i :value))
+                                     (plist-get f :value))))
            "; ")
           " }"))
 
@@ -3767,7 +4022,9 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
 
 (defun my/ocaml-record-literal (names)
   (list :kind 'record-literal
-        :fields (mapcar (lambda (n) (cons n "_")) names)))
+        :fields (mapcar (lambda (name)
+                          (list :name name :value "_"))
+                        names)))
 
 (defun my/ocaml-application (name holes)
   (list :kind 'application :head name
@@ -3813,7 +4070,7 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
 (defun my/ocaml-node-focus (node)
   "Return the path of NODE's first editable slot."
   (pcase (plist-get node :kind)
-    ('record-literal '(:fields 0))
+    ('record-literal '(:fields 0 :value))
     ('collection '(:elements 0))
     ('constructor-app (if (plist-get node :arguments) '(:arguments 0) '(:name)))
     ('application (if (plist-get node :arguments)
@@ -3954,21 +4211,24 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
   (list :kind 'param :name name :label nil :annotation nil :default nil))
 
 (defun my/ocaml-let-binding (name)
-  (list :kind 'let-binding :name name :params nil :annotation nil :value nil))
+  (list :kind 'let-binding :name name :params nil :annotation nil
+        :recursive nil :value nil))
 
 (defun my/ocaml-default-let ()
   (list :kind 'let-group
+        :recursive nil
         :bindings (list (my/ocaml-let-binding "x"))
         :body nil))
 
 (defun my/ocaml-param-name (index)
-  (nth (min index 3) '("y" "z" "w" "v")))
+  (or (nth index '("y" "z" "w" "v"))
+      (format "arg%d" (1+ index))))
 
 (defun my/ocaml-binding-name (index)
   (nth (min index 3) '("x" "y" "z" "w")))
 
 (defun my/ocaml-constructor (name)
-  (list :kind 'constructor :name name :payload nil))
+  (list :kind 'constructor :name name :payload nil :result nil))
 
 (defun my/ocaml-record-field (name)
   (list :kind 'record-field :name name :type "t" :mutable nil))
@@ -3992,12 +4252,37 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
      ((< (1+ index) (length paths)) (nth (1+ index) paths))
      (t nil))))
 
+(defun my/ocaml-enclosing-let-binding-path (root path)
+  "Return the path of the let binding enclosing PATH, if any."
+  (let ((candidate (butlast path))
+        found)
+    (while (and candidate (not found))
+      (let ((node (my/ocaml-path-get root candidate)))
+        (if (and (listp node) (eq (plist-get node :kind) 'let-binding))
+            (setq found candidate)
+          (setq candidate (butlast candidate)))))
+    found))
+
+(defun my/ocaml-return-advance (root path)
+  "Move to the next field, creating a let return annotation after its arguments."
+  (let* ((binding-path (my/ocaml-enclosing-let-binding-path root path))
+         (binding (and binding-path (my/ocaml-path-get root binding-path)))
+         (next (my/ocaml-next-field root path))
+         (value-path (and binding-path (append binding-path '(:value))))
+         (relative (and binding-path (nthcdr (length binding-path) path))))
+    (if (and (equal next value-path)
+             (eq (car relative) :params)
+             (not (plist-get binding :annotation)))
+        (progn
+          (plist-put binding :annotation "t")
+          (append binding-path '(:annotation)))
+      next)))
+
 (defun my/ocaml-advance (root path)
   "Create a slot at PATH, else move on, else append a sibling."
   (or (my/ocaml-expand root path)
       (my/ocaml-next-field root path)
-      (my/ocaml-append-sibling root path)
-      path))
+      (my/ocaml-append-sibling root path)))
 
 (defun my/ocaml-owner (root path)
   "Return the node owning PATH and the slot within it."
@@ -4035,6 +4320,11 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
                                   (my/ocaml-param-name (length params))))))
         (append owner-path (list :params (length params) :name))))
 
+     ((and (eq kind 'let-binding) (eq slot :annotation)
+           (equal (plist-get owner :annotation) "t"))
+      (plist-put owner :annotation nil)
+      (append owner-path '(:value)))
+
      ((and (eq kind 'let-binding) (eq slot :value))
       (my/ocaml-append-binding root owner-path))
 
@@ -4043,6 +4333,21 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
            (not (plist-get owner :default)))
       (plist-put owner :default "0")
       (append owner-path '(:default)))
+
+     ((and (eq kind 'param) (eq slot :name)
+           (null (plist-get owner :label)))
+      (let* ((binding-path (butlast owner-path 2))
+             (binding (my/ocaml-path-get root binding-path)))
+        (when (and (listp binding)
+                   (eq (plist-get binding :kind) 'let-binding))
+          (let ((params (plist-get binding :params)))
+            (plist-put binding :params
+                       (append params
+                               (list (my/ocaml-param
+                                      (my/ocaml-param-name
+                                       (length params))))))
+            (append binding-path
+                    (list :params (length params) :name))))))
 
      ((and (eq kind 'param) (memq slot '(:name :default))
            (not (plist-get owner :annotation)))
@@ -4242,6 +4547,15 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
       (plist-put owner :mutable (not (plist-get owner :mutable)))
       (append owner-path '(:name)))
 
+     ((and (eq kind 'constructor) (memq slot '(:name :payload :result)))
+      (if (plist-get owner :result)
+          (progn
+            (plist-put owner :result nil)
+            (append owner-path
+                    (if (plist-get owner :payload) '(:payload) '(:name))))
+        (plist-put owner :result "t")
+        (append owner-path '(:result))))
+
      ((eq kind 'param)
       (let* ((options '(nil labelled optional))
              (index (or (cl-position (plist-get owner :label) options) 0))
@@ -4251,13 +4565,29 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
         (append owner-path '(:name))))
 
      ((and (eq kind 'let-binding) (memq slot '(:name :annotation)))
-      (plist-put owner :annotation
-                 (and (not (plist-get owner :annotation)) "t"))
-      (append owner-path
-              (if (plist-get owner :annotation) '(:annotation) '(:name))))
+      (let* ((group-path (butlast owner-path 2))
+             (group (my/ocaml-path-get root group-path))
+             (recursive-owner
+              (cond
+               ((and (listp group) (eq (plist-get group :kind) 'let-group))
+                group)
+               ((plist-get owner :standalone) owner))))
+        (if recursive-owner
+            (let* ((annotated (and (plist-get owner :annotation) t))
+                   (current (list (and (plist-get recursive-owner :recursive) t)
+                                  annotated))
+                   (options '((nil nil) (t nil) (nil t) (t t)))
+                   (index (or (cl-position current options :test #'equal) 0))
+                   (next (nth (mod (1+ index) (length options)) options)))
+              (plist-put recursive-owner :recursive (car next))
+              (plist-put owner :annotation (and (cadr next) "t")))
+          (plist-put owner :annotation
+                     (and (not (plist-get owner :annotation)) "t")))
+        (append owner-path
+                (if (plist-get owner :annotation) '(:annotation) '(:name)))))
 
      ((and (eq kind 'module-decl) (eq slot :name))
-      (let* ((options '(plain functor recursive))
+      (let* ((options '(plain functor alias application recursive))
              (index (or (cl-position (plist-get owner :form) options) 0))
              (next (nth (mod (1+ index) (length options)) options)))
         (plist-put owner :form next)
@@ -4265,6 +4595,18 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
                    (when (eq next 'functor)
                      (list (list :kind 'module-param
                                  :name "X" :signature "S"))))
+        (pcase next
+          ('alias
+           (plist-put owner :body (list :kind 'module-alias :target "M")))
+          ('application
+           (plist-put owner :body
+                      (list :kind 'functor-app :functor "F" :argument "M")))
+          (_
+           (let ((body (plist-get owner :body)))
+             (when (and (listp body)
+                        (memq (plist-get body :kind)
+                              '(module-alias functor-app)))
+               (plist-put owner :body nil)))))
         (when (plist-get owner :auto-signature)
           (plist-put owner :signature nil)
           (plist-put owner :auto-signature nil))
@@ -4318,14 +4660,13 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
         (append owner-path '(:pattern))))
 
      ((and (eq kind 'argument) (memq slot '(:value)))
-      (let* ((available (plist-get owner :alternatives))
-             (current (plist-get owner :label))
-             (index (or (cl-position current available :test #'equal) -1))
-             (next (nth (mod (1+ index) (length available)) available)))
-        (when available
+      (when-let* ((available (plist-get owner :alternatives)))
+        (let* ((current (plist-get owner :label))
+               (index (or (cl-position current available :test #'equal) -1))
+               (next (nth (mod (1+ index) (length available)) available)))
           (plist-put owner :label next)
-          (plist-put owner :label-kind (and next 'labelled)))
-        (append owner-path '(:value))))
+          (plist-put owner :label-kind (and next 'labelled))
+          (append owner-path '(:value)))))
 
      ((and (eq kind 'struct-body) (eq slot :items))
       nil))))
@@ -4353,35 +4694,50 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
       (butlast (butlast path))
     (butlast path)))
 
-(defun my/ocaml-snippet-region ()
-  "Return the active snippet's bounds."
-  (when-let* ((snippet (car (yas-active-snippets)))
-              (overlay (yas--snippet-control-overlay snippet)))
+(defun my/ocaml-active-session ()
+  "Return the active structured snippet and its session state."
+  (when my/ocaml-snippet-sessions
+    (let* ((overlay (bound-and-true-p yas--active-field-overlay))
+           (field (and (overlayp overlay) (overlay-get overlay 'yas--field)))
+           (snippets (yas-active-snippets 'all))
+           (snippet
+            (or (and field
+                     (seq-find
+                      (lambda (candidate)
+                        (and (gethash candidate my/ocaml-snippet-sessions)
+                             (memq field (yas--snippet-fields candidate))))
+                      snippets))
+                (and (not field)
+                     (seq-find
+                      (lambda (candidate)
+                        (gethash candidate my/ocaml-snippet-sessions))
+                      (yas-active-snippets))))))
+      (when snippet
+        (cons snippet (gethash snippet my/ocaml-snippet-sessions))))))
+
+(defun my/ocaml-snippet-region (snippet)
+  "Return SNIPPET's bounds."
+  (when-let* ((overlay (yas--snippet-control-overlay snippet)))
     (cons (overlay-start overlay) (overlay-end overlay))))
 
-(defun my/ocaml-sync ()
-  "Copy the active snippet's field text back into the model."
-  (when-let* ((state my/ocaml-snippet)
-              (snippet (car (yas-active-snippets))))
-    (let ((root (plist-get state :root))
-          (fields (plist-get state :fields)))
-      (dolist (field (yas--snippet-fields snippet))
-        (when-let* ((path (cdr (assq (yas--field-number field) fields)))
-                    (text (buffer-substring-no-properties
-                           (yas--field-start field) (yas--field-end field))))
-          (unless (string-empty-p text)
-            (my/ocaml-path-set root path text)))))))
+(defun my/ocaml-sync (snippet state)
+  "Copy SNIPPET's field text into STATE."
+  (let ((root (plist-get state :root))
+        (fields (plist-get state :fields)))
+    (dolist (field (yas--snippet-fields snippet))
+      (when-let* ((path (cdr (assq (yas--field-number field) fields))))
+        (my/ocaml-path-set
+         root path
+         (buffer-substring-no-properties
+          (yas--field-start field) (yas--field-end field)))))))
 
-(defun my/ocaml-focus-field (focus)
-  "Move point to the field whose path is FOCUS."
-  (when-let* ((state my/ocaml-snippet)
-              (snippet (car (yas-active-snippets)))
-              (number (car (rassoc focus (plist-get state :fields))))
+(defun my/ocaml-focus-field (snippet state focus)
+  "Move to FOCUS in SNIPPET using STATE's field map."
+  (when-let* ((number (car (rassoc focus (plist-get state :fields))))
               (field (seq-find (lambda (f) (= (yas--field-number f) number))
                                (yas--snippet-fields snippet))))
     (goto-char (yas--field-start field))
-    (when (memq field (yas--snippet-fields snippet))
-      (yas--move-to-field snippet field))
+    (yas--move-to-field snippet field)
     t))
 
 (defun my/ocaml-format-region (start end)
@@ -4392,54 +4748,95 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
 (defun my/ocaml-place (root focus)
   "Render ROOT at point as a snippet and focus FOCUS."
   (let* ((rendered (my/ocaml-render-root root))
-         (start (point)))
-    (setq my/ocaml-snippet
-          (list :root root :fields (plist-get rendered :fields)))
+         (state (list :root root :fields (plist-get rendered :fields)))
+         (start (point))
+         snippet)
     (yas-expand-snippet (plist-get rendered :template) start start)
-    (when-let* ((region (my/ocaml-snippet-region)))
+    (setq snippet (car (yas-active-snippets)))
+    (puthash snippet state (my/ocaml-session-table))
+    (when-let* ((region (my/ocaml-snippet-region snippet)))
       (my/ocaml-format-region (car region) (cdr region)))
-    (my/ocaml-focus-field focus)))
+    (my/ocaml-focus-field snippet state focus)))
 
-(defun my/ocaml-current-path ()
-  "Return the model path of the active snippet field."
-  (when-let* ((state my/ocaml-snippet)
-              (overlay (bound-and-true-p yas--active-field-overlay))
+(defun my/ocaml-current-path (state)
+  "Return the active field's model path in STATE."
+  (when-let* ((overlay (bound-and-true-p yas--active-field-overlay))
               (field (overlay-get overlay 'yas--field)))
     (cdr (assq (yas--field-number field) (plist-get state :fields)))))
 
+(defun my/ocaml-commit-snippet (snippet)
+  "Commit SNIPPET synchronously through Yasnippet's revival lifecycle."
+  (yas-exit-snippet snippet)
+  (yas--check-commit-snippet))
+
+(defun my/ocaml-join-revival-to-previous-change ()
+  "Make snippet revival part of the preceding undo step."
+  (when (and (consp buffer-undo-list)
+             (let ((entry (car buffer-undo-list)))
+               (and (consp entry)
+                    (eq (car entry) 'apply)
+                    (eq (cadr entry) 'yas--snippet-revive)))
+             (null (cadr buffer-undo-list)))
+    (setq buffer-undo-list
+          (cons nil (cons (car buffer-undo-list)
+                          (cddr buffer-undo-list))))))
+
 (defun my/ocaml-restructure (mutate)
-  "Sync, apply MUTATE to the model, then re-render and refocus."
-  (unless (yas-active-snippets)
-    (setq my/ocaml-snippet nil))
-  (when-let* ((state my/ocaml-snippet)
-              (path (my/ocaml-current-path)))
-    (my/ocaml-sync)
-    (let* ((root (plist-get state :root))
+  "Apply MUTATE to the active model and make one progress step."
+  (when-let* ((session (my/ocaml-active-session))
+              (snippet (car session))
+              (state (cdr session))
+              (path (my/ocaml-current-path state)))
+    (my/ocaml-sync snippet state)
+    (let* ((old-root (plist-get state :root))
+           (root (copy-tree old-root))
            (focus (funcall mutate root path)))
-      (when focus
-        (undo-boundary)
-        (atomic-change-group
-          (let ((region (my/ocaml-snippet-region)))
-            (when-let* ((snippet (car (yas-active-snippets))))
-              (yas-exit-snippet snippet))
+      (cond
+       ((null focus) nil)
+       ((equal root old-root)
+        (and (not (equal focus path))
+             (my/ocaml-focus-field snippet state focus)))
+       (t
+        (let ((region (my/ocaml-snippet-region snippet)))
+          (undo-boundary)
+          (atomic-change-group
+            (my/ocaml-commit-snippet snippet)
             (delete-region (car region) (cdr region))
             (goto-char (car region))
-            (my/ocaml-place root focus)))
-        (undo-boundary)
-        t))))
+            (my/ocaml-place root focus))
+          (undo-boundary)
+          t))))))
+
+(defun my/ocaml-finish ()
+  "Finish the active structured snippet without collapsing its undo history."
+  (when-let* ((session (my/ocaml-active-session)))
+    (my/ocaml-commit-snippet (car session))
+    (my/ocaml-join-revival-to-previous-change)
+    t))
 
 (defun my/ocaml-structured-tab ()
   "Expand, move on, or append a sibling in the active construct."
   (declare (modes tuareg-mode))
   (interactive)
   (or (my/ocaml-restructure #'my/ocaml-advance)
-      (yas-next-field-or-maybe-expand)))
+      (my/ocaml-finish)))
+
+(defun my/ocaml-structured-return ()
+  "Move to the next field, offering a let return annotation after arguments."
+  (declare (modes tuareg-mode))
+  (interactive)
+  (or (my/ocaml-restructure #'my/ocaml-return-advance)
+      (my/ocaml-finish)))
 
 (defun my/ocaml-structured-cycle ()
   "Cycle the alternative under point in the active construct."
   (declare (modes tuareg-mode))
   (interactive)
-  (my/ocaml-restructure #'my/ocaml-cycle))
+  (if (my/ocaml-active-session)
+      (or (my/ocaml-restructure #'my/ocaml-cycle)
+          (my/ocaml-structured-return))
+    (when (yas-active-snippets)
+      (yas-prev-field))))
 
 (defun my/ocaml-start-type ()
   "Insert a structured OCaml type declaration."
@@ -4502,7 +4899,8 @@ OCaml constructs expand into a model that TAB extends, S-TAB cycles between vali
   (declare (modes tuareg-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
-  (my/ocaml-place (my/ocaml-record-literal '("field")) '(:fields 0)))
+  (my/ocaml-place
+   (my/ocaml-record-literal '("field")) '(:fields 0 :value)))
 
 (defun my/ocaml-start-record ()
   "Insert a structured OCaml record type."
