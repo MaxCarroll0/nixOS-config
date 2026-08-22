@@ -1622,6 +1622,8 @@ Cursor motion triggers the preview from an idle timer without blocking on a lang
 
 At a bare hole, completion considers every candidate in the best tier and previews the result as a replacement for the underscore.
 
+Positions without an expected type require three typed characters before previewing.
+
 #+begin_src emacs-lisp
 
 (defvar-local my/completion-preview-dismissed nil)
@@ -1885,19 +1887,23 @@ At a bare hole, completion considers every candidate in the best tier and previe
 (defun my/completion-preview-without-probe (original &rest arguments)
   "Run ORIGINAL preview update without a synchronous type probe."
   (let ((my/type-completion-inhibit-probe t))
-    (if (or (equal my/completion-preview-dismissed
-                   (my/completion-preview-state))
-            (my/ocaml-pattern-or-binding-context-p)
-            (my/type-completion-settled-p)
-            (not (my/completion-preview-allowed-p)))
-        (completion-preview-active-mode -1)
+    (cond
+     ((or (equal my/completion-preview-dismissed
+                 (my/completion-preview-state))
+          (my/ocaml-pattern-or-binding-context-p)
+          (my/type-completion-settled-p))
+      (completion-preview-active-mode -1))
+     ((not (my/completion-preview-allowed-p))
+      (apply original arguments)
+      (completion-preview-active-mode -1))
+     (t
       (apply original arguments)
       (when completion-preview-active-mode
         (my/completion-preview-reset-rendering)
         (or (my/completion-preview-render-hole)
             (my/completion-preview-render-snippet)
             (when (my/completion-preview-ambiguous-p)
-              (my/completion-preview-trim-to-common)))))))
+              (my/completion-preview-trim-to-common))))))))
 
 (use-package completion-preview
   :ensure nil
@@ -3149,9 +3155,12 @@ completion replaces a bare `_', whose text must not filter the candidates."
           (let* ((my/type-completion-input (my/type-hole-pattern string))
                  (hole (equal string "_"))
                  (candidates
-                  (my/type-completion-top-tier
-                   (seq-filter #'my/type-completion-prefix-match-p
-                               (all-completions string table predicate))))
+                  (unless (and (eq my/type-completion-probed 'untyped)
+                               (not hole)
+                               (< (length my/type-completion-input) 3))
+                    (my/type-completion-top-tier
+                     (seq-filter #'my/type-completion-prefix-match-p
+                                 (all-completions string table predicate)))))
                  preview-candidates)
             (setq my/completion-preview-candidates
                   (make-hash-table :test #'equal))
