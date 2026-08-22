@@ -661,6 +661,7 @@ Explicit completion popup with documentation and Meow navigation.
 (defvar-local my/type-completion-results nil)
 (defvar-local my/type-completion-construct-results nil)
 (defvar-local my/type-completion-index nil)
+(defvar-local my/type-completion-trigger-index nil)
 (defvar-local my/type-completion-candidates nil)
 (defvar-local my/type-completion-key nil)
 (defvar-local my/type-completion-generation 0)
@@ -858,7 +859,7 @@ Explicit completion popup with documentation and Meow navigation.
   (cond
    ((my/ocaml-let-operator-p name) nil)
    ((my/ocaml-operator-p name) (my/type-operator-template name holes))
-   (holes (concat name " " (string-join holes " ")))))
+   (holes (concat "(" name " " (string-join holes " ") ")"))))
 
 (defun my/type-entry-annotate (entry wanted rank)
   "Record ENTRY's server RANK and its application producing canonical WANTED."
@@ -2094,6 +2095,7 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
   (defun my/type-completion-reindex ()
     "Index the semantic results and precompute their applications."
     (let ((index (make-hash-table :test #'equal))
+          (trigger-index (make-hash-table :test #'equal))
           (wanted my/type-completion-wanted)
           (rank 0)
           candidates)
@@ -2105,9 +2107,12 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
                               my/type-completion-expected)))
         (setq entry (my/type-entry-annotate entry wanted rank))
         (puthash (plist-get entry :name) entry index)
+        (when-let* ((trigger (plist-get entry :trigger)))
+          (puthash trigger entry trigger-index))
         (push (my/type-semantic-candidate entry) candidates)
         (setq rank (1+ rank)))
       (setq my/type-completion-index index
+            my/type-completion-trigger-index trigger-index
             my/type-completion-candidates (nreverse candidates))))
 
   (defun my/type-completion-receive (buffer generation key install)
@@ -2461,6 +2466,7 @@ Semantic and mode-specific completion precedes Hippie Expand and file fallback c
           my/type-completion-results nil
           my/type-completion-construct-results nil
           my/type-completion-index nil
+          my/type-completion-trigger-index nil
           my/type-completion-candidates nil
           my/type-completion-arities (make-hash-table :test #'equal)
           my/type-completion-state nil
@@ -2554,7 +2560,8 @@ completion replaces a bare `_', whose text must not filter the candidates."
                 (unless hole completion-regexp-list))
                (merged
                 (my/type-merge-candidates
-                 (all-completions effective table predicate)
+                 (unless (eq my/type-completion-probed 'pending)
+                   (all-completions effective table predicate))
                  (all-completions effective my/type-completion-candidates
                                   predicate))))
           (when (and my/completion-hide-qualified (not qualified))
@@ -2688,7 +2695,11 @@ completion replaces a bare `_', whose text must not filter the candidates."
 
   (defun my/type-completion-action (candidate beginning)
     "Return the semantic insertion action for CANDIDATE at BEGINNING."
-    (let* ((entry (my/type-completion-entry candidate))
+    (let* ((entry
+            (or (my/type-completion-entry candidate)
+                (and my/type-completion-trigger-index
+                     (gethash (substring-no-properties candidate)
+                              my/type-completion-trigger-index))))
            (collection (and entry (plist-get entry :collection)))
            (yas-template
             (my/type-completion-yas-template candidate beginning))
@@ -4107,13 +4118,15 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
           (my/ocaml-hole-field node path :body)))
 
 (my/ocaml-define-renderer application (node path)
-  (concat (my/ocaml-field (append path '(:head)) (plist-get node :head))
+  (concat "("
+          (my/ocaml-field (append path '(:head)) (plist-get node :head))
           (mapconcat
            (lambda (i)
              (concat " " (my/ocaml-render (nth i (plist-get node :arguments))
                                           (append path (list :arguments i)))))
            (number-sequence 0 (1- (length (plist-get node :arguments))))
-           "")))
+           "")
+          ")"))
 
 (my/ocaml-define-renderer argument (node path)
   (pcase (plist-get node :label-kind)
