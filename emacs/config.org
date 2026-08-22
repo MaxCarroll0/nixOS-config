@@ -4839,6 +4839,17 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
   (or (nth index '("y" "z" "w" "v"))
       (format "arg%d" (1+ index))))
 
+(defun my/ocaml-append-let-param (root binding-path)
+  "Append a parameter to the let binding at BINDING-PATH."
+  (when-let* ((binding (my/ocaml-path-get root binding-path))
+              ((eq (plist-get binding :kind) 'let-binding)))
+    (let ((params (plist-get binding :params)))
+      (plist-put binding :params
+                 (append params
+                         (list (my/ocaml-param
+                                (my/ocaml-param-name (length params))))))
+      (append binding-path (list :params (length params) :name)))))
+
 (defun my/ocaml-binding-name (index)
   (nth (min index 3) '("x" "y" "z" "w")))
 
@@ -4975,12 +4986,7 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
       (append owner-path '(:payload)))
 
      ((and (eq kind 'let-binding) (eq slot :name))
-      (let ((params (plist-get owner :params)))
-        (plist-put owner :params
-                   (append params
-                           (list (my/ocaml-param
-                                  (my/ocaml-param-name (length params))))))
-        (append owner-path (list :params (length params) :name))))
+      (my/ocaml-append-let-param root owner-path))
 
      ((and (eq kind 'let-binding) (eq slot :annotation)
            (equal (plist-get owner :annotation) "t"))
@@ -4996,25 +5002,13 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
       (plist-put owner :default "0")
       (append owner-path '(:default)))
 
-     ((and (eq kind 'param) (eq slot :name)
-           (null (plist-get owner :label)))
-      (let* ((binding-path (butlast owner-path 2))
-             (binding (my/ocaml-path-get root binding-path)))
-        (when (and (listp binding)
-                   (eq (plist-get binding :kind) 'let-binding))
-          (let ((params (plist-get binding :params)))
-            (plist-put binding :params
-                       (append params
-                               (list (my/ocaml-param
-                                      (my/ocaml-param-name
-                                       (length params))))))
-            (append binding-path
-                    (list :params (length params) :name))))))
-
      ((and (eq kind 'param) (memq slot '(:name :default))
            (not (plist-get owner :annotation)))
       (plist-put owner :annotation "t")
       (append owner-path '(:annotation)))
+
+     ((and (eq kind 'param) (eq slot :annotation))
+      (my/ocaml-append-let-param root (butlast owner-path 2)))
 
      ((and (eq kind 'argument) (eq slot :value))
       (let* ((application-path (butlast owner-path 2))
