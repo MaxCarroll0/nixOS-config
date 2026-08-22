@@ -855,7 +855,7 @@ Explicit completion popup with documentation and Meow navigation.
 (defun my/type-entry-annotate (entry wanted rank)
   "Record ENTRY's server RANK and its application producing canonical WANTED."
   (setq entry (plist-put entry :rank rank))
-  (if (memq (plist-get entry :kind) '(construct collection snippet))
+  (if (memq (plist-get entry :kind) '(construct collection))
       (progn
         (setq entry (plist-put entry :tier 0))
         (plist-put entry :arity 0))
@@ -895,9 +895,11 @@ Explicit completion popup with documentation and Meow navigation.
 (defun my/type-completion-prefix-match-p (candidate)
   "Return non-nil when CANDIDATE begins with the text typed so far."
   (or (string-empty-p my/type-completion-input)
-      (let ((name (substring-no-properties candidate))
-            (case-fold-search completion-ignore-case))
+      (let* ((name (substring-no-properties candidate))
+             (trigger (plist-get (my/type-completion-entry candidate) :trigger))
+             (case-fold-search completion-ignore-case))
         (or (string-prefix-p my/type-completion-input name t)
+            (and trigger (string-prefix-p my/type-completion-input trigger t))
             (when-let* ((tail (and (string-match "\\.\\([^.]*\\)\\'" name)
                                    (match-string 1 name))))
               (string-prefix-p my/type-completion-input tail t))))))
@@ -1605,6 +1607,43 @@ Cursor motion triggers the preview, so it runs off the command loop on an idle t
           (completion-preview-active-mode -1)))
     (error (completion-preview-active-mode -1))))
 
+(defun my/completion-preview-snippet-text (candidate)
+  "Return the full rendered form CANDIDATE would expand to, if any."
+  (when-let* ((entry (my/type-completion-entry candidate))
+              ((eq (plist-get entry :kind) 'snippet)))
+    (or (when-let* ((builder (plist-get entry :builder))
+                    (node (funcall builder))
+                    (rendered (my/ocaml-render-root node)))
+          (string-trim
+           (replace-regexp-in-string
+            "\\${[0-9]+:\\([^}]*\\)}" "\\1"
+            (replace-regexp-in-string
+             "\\$0\\'" "" (plist-get rendered :template)))))
+        (plist-get entry :constructible)
+        (plist-get entry :name))))
+
+(defun my/completion-preview-render-snippet ()
+  "Show the whole snippet in the preview when a snippet is being previewed."
+  (condition-case nil
+      (when-let* ((overlay completion-preview--overlay)
+                  (beg (completion-preview--get 'completion-preview-beg))
+                  (typed (- (overlay-start overlay) beg))
+                  (common (substring-no-properties
+                           (or (completion-preview--get
+                                'completion-preview-common)
+                               "")))
+                  (suffix (car (completion-preview--get
+                                'completion-preview-suffixes)))
+                  (candidate (concat common suffix))
+                  (full (my/completion-preview-snippet-text candidate))
+                  ((> (length full) typed)))
+        (overlay-put overlay 'after-string
+                     (propertize (substring full typed)
+                                 'face 'completion-preview
+                                 'mouse-face 'completion-preview-highlight
+                                 'keymap completion-preview--mouse-map)))
+    (error nil)))
+
 (defun my/completion-preview-without-probe (original &rest arguments)
   "Run ORIGINAL preview update only where candidates are known type correct."
   (let ((my/type-completion-inhibit-probe t))
@@ -1614,9 +1653,10 @@ Cursor motion triggers the preview, so it runs off the command loop on an idle t
             (not (my/completion-preview-allowed-p)))
         (completion-preview-active-mode -1)
       (apply original arguments)
-      (when (and completion-preview-active-mode
-                 (my/completion-preview-ambiguous-p))
-        (my/completion-preview-trim-to-common)))))
+      (when completion-preview-active-mode
+        (or (my/completion-preview-render-snippet)
+            (when (my/completion-preview-ambiguous-p)
+              (my/completion-preview-trim-to-common)))))))
 
 (use-package completion-preview
   :ensure nil
@@ -1764,12 +1804,12 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
           (wanted my/type-completion-wanted)
           (rank 0)
           candidates)
-      (dolist (entry (append (my/type-completion-snippet-entries
+      (dolist (entry (append my/type-completion-construct-results
+                             my/type-completion-results
+                             (my/type-completion-snippet-entries
                               my/type-completion-expected)
                              (my/type-completion-operator-entries
-                              my/type-completion-expected)
-                             my/type-completion-construct-results
-                             my/type-completion-results))
+                              my/type-completion-expected)))
         (setq entry (my/type-entry-annotate entry wanted rank))
         (puthash (plist-get entry :name) entry index)
         (push (my/type-semantic-candidate entry) candidates)
@@ -1844,17 +1884,39 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
                     :kind 'collection :collection 'array))))))
 
   (defconst my/ocaml-snippet-catalogue
-    '(("[ _ ]"    list-literal  "'a list"  my/ocaml-snippet-list)
-      ("[| _ |]"  array-literal "'a array" my/ocaml-snippet-array)
-      ("{ _ }"    record-value  "record"   my/ocaml-snippet-record-value)
-      ("let"      binding       "'a"       my/ocaml-default-let)
-      ("match"    match         "'a"       my/ocaml-default-match)
-      ("type"     type          "unit"     my/ocaml-default-type)
-      ("module"   module        "unit"     my/ocaml-default-module)))
+    '(("[ _ ]"   "["     list-literal  my/ocaml-snippet-list)
+      ("[| _ |]" "[|"    array-literal my/ocaml-snippet-array)
+      ("{ _ }"   "{"     record-value  my/ocaml-snippet-record-value)
+      ("let"     "let"   binding       my/ocaml-default-let)
+      ("match"   "match" match         my/ocaml-default-match)
+      ("type"    "type"  type          my/ocaml-default-type)
+      ("module"  "module" module       my/ocaml-default-module)))
 
   (defun my/ocaml-snippet-list () (my/ocaml-collection 'list))
   (defun my/ocaml-snippet-array () (my/ocaml-collection 'array))
-  (defun my/ocaml-snippet-record-value () (my/ocaml-record-literal '("field")))
+  (defun my/ocaml-snippet-record-value ()
+    (my/ocaml-record-literal
+     (or (my/ocaml-record-fields my/type-completion-expected) '("field"))))
+
+  (defun my/ocaml-record-fields (expected)
+    "Return EXPECTED's record field names, when it names a record type."
+    (when-let* ((text (car (last (my/type-arrow-parts (or expected "")))))
+                ((string-match-p "\\`[A-Za-z_][A-Za-z0-9_'.]*\\'" text))
+                (hover (my/ocaml-signature-lookup text))
+                (names (my/ocaml-record-field-names hover)))
+      names))
+
+  (defun my/ocaml-record-field-names (text)
+    "Return the field names declared by record definition TEXT."
+    (when (and (stringp text) (string-match "{\\([^}]*\\)}" text))
+      (delq nil
+            (mapcar (lambda (part)
+                      (let ((field (string-trim part)))
+                        (when (string-match
+                               "\\`\\(?:mutable[[:space:]]+\\)?\\([a-z_][A-Za-z0-9_']*\\)[[:space:]]*:"
+                               field)
+                          (match-string 1 field))))
+                    (split-string (match-string 1 text) ";" t)))))
 
   (defun my/ocaml-snippet-applicable-p (sort expected)
     "Return non-nil when snippet SORT can produce EXPECTED."
@@ -1862,24 +1924,23 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
       (pcase sort
         ('list-literal (and text (string-suffix-p " list" text)))
         ('array-literal (and text (string-suffix-p " array" text)))
-        ('record-value (and text (not (string-match-p "\\`'" text))))
-        ('type (null expected))
-        ('module (null expected))
+        ('record-value (and expected (my/ocaml-record-fields expected) t))
         (_ t))))
 
   (defun my/type-completion-snippet-entries (expected)
-    "Return snippet candidates that can produce EXPECTED."
+    "Return snippet candidates available here, typed only where meaningful."
     (delq nil
           (mapcar
            (lambda (spec)
-             (pcase-let ((`(,name ,sort ,typ ,builder) spec))
+             (pcase-let ((`(,name ,trigger ,sort ,builder) spec))
                (when (my/ocaml-snippet-applicable-p sort expected)
                  (list :name name
-                       :typ (if (member sort '(list-literal array-literal
+                       :trigger trigger
+                       :typ (when (memq sort '(list-literal array-literal
                                                record-value))
-                                (or expected typ)
-                              typ)
+                              expected)
                        :kind 'snippet
+                       :sort sort
                        :builder builder))))
            my/ocaml-snippet-catalogue)))
 
@@ -1891,8 +1952,10 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
              (lambda (operator)
                (when (member text '("int" "float"))
                  (list :name (format "(_ %s _)" operator)
+                       :trigger operator
                        :typ expected
                        :kind 'snippet
+                       :sort 'operator
                        :builder nil
                        :constructible (format "(_ %s _)" operator))))
              (if (equal text "float")
@@ -2130,6 +2193,7 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
                      (my/type-completion-expected-at-point beginning end)))
           (setq my/type-completion-expected expected
                 my/type-completion-wanted (my/type-canonical expected))
+          (my/type-completion-reindex)
           (when (my/type-completion-ocaml-p)
             (my/type-completion-request expected key)
             (my/type-completion-construct-request key))
@@ -2152,9 +2216,10 @@ Semantic and mode-specific completion precedes dabbrev and file fallback candida
         (concat " " (my/type-completion-underline-match type))
       (and original (funcall original candidate))))
 
-  (defun my/type-completion-table (table qualified)
+  (defun my/type-completion-table (table qualified &optional hole)
     "Augment completion TABLE with semantic candidates and type ranking.
-QUALIFIED non-nil keeps module-qualified candidates."
+QUALIFIED non-nil keeps module-qualified candidates.  HOLE non-nil means the
+completion replaces a bare `_', whose text must not filter the candidates."
     (lambda (string predicate action)
       (cond
        ((eq action 'metadata)
@@ -2173,7 +2238,7 @@ QUALIFIED non-nil keeps module-qualified candidates."
         (setq my/type-completion-input (my/type-hole-pattern string))
         (let* ((effective (my/type-hole-pattern string))
                (completion-regexp-list
-                (unless (string-empty-p effective) completion-regexp-list))
+                (unless hole completion-regexp-list))
                (merged
                 (my/type-merge-candidates
                  (all-completions effective table predicate)
@@ -2375,7 +2440,8 @@ QUALIFIED non-nil keeps module-qualified candidates."
           (setf (nth 2 result)
                 (my/type-completion-table
                  (nth 2 result)
-                 (my/completion-qualified-context-p beginning)))
+                 (my/completion-qualified-context-p beginning)
+                 (my/type-completion-hole-p beginning end)))
           (let ((original
                  (plist-get (nthcdr 3 result) :exit-function)))
             (setf (plist-get (nthcdr 3 result) :exit-function)
@@ -2950,8 +3016,9 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
                (progn
                  (document item)
                  (restore)
-                 (when-let* ((buffer (ignore-errors (eldoc-doc-buffer t)))
-                             (window (get-buffer-window buffer)))
+                 (when-let* ((buffer (ignore-errors (eldoc-doc-buffer)))
+                             ((buffer-live-p buffer))
+                             (window (display-buffer buffer)))
                    (select-window window)))
              (restore)
              (set-window-configuration saved-window-configuration)
