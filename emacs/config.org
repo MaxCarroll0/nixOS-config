@@ -3996,6 +3996,7 @@ A negative ARGUMENT moves to the previous field instead."
   (define-key yas-keymap (kbd "<tab>") #'my/yas-forward-field)
   (define-key yas-keymap (kbd "S-TAB") #'my/ocaml-structured-cycle)
   (define-key yas-keymap (kbd "<backtab>") #'my/ocaml-structured-cycle)
+  (define-key yas-keymap (kbd "<iso-lefttab>") #'my/ocaml-structured-cycle)
   (define-key yas-keymap (kbd "RET") #'my/yas-next-existing-field)
   (define-key yas-keymap (kbd "<return>") #'my/yas-next-existing-field)
   (define-key yas-keymap (kbd "S-<return>") #'my/yas-finish-innermost)
@@ -5456,6 +5457,12 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
   (define-key yas-keymap (kbd "M-TAB") #'my/ocaml-structured-cycle)
   (define-key yas-keymap (kbd "M-<tab>") #'my/ocaml-structured-cycle)
   (define-key yas-keymap (kbd "C-M-i") #'my/ocaml-structured-cycle))
+
+(with-eval-after-load 'tuareg
+  (define-key tuareg-mode-map (kbd "S-TAB") #'my/ocaml-structured-cycle)
+  (define-key tuareg-mode-map (kbd "<backtab>") #'my/ocaml-structured-cycle)
+  (define-key tuareg-mode-map (kbd "<iso-lefttab>")
+              #'my/ocaml-structured-cycle))
 
 #+end_src
 
