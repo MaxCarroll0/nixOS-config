@@ -905,12 +905,12 @@ Explicit completion popup with documentation and Meow navigation.
   (or (string-empty-p my/type-completion-input)
       (let* ((name (substring-no-properties candidate))
              (trigger (plist-get (my/type-completion-entry candidate) :trigger))
-             (case-fold-search completion-ignore-case))
-        (or (string-prefix-p my/type-completion-input name t)
-            (and trigger (string-prefix-p my/type-completion-input trigger t))
+             (fold completion-ignore-case))
+        (or (string-prefix-p my/type-completion-input name fold)
+            (and trigger (string-prefix-p my/type-completion-input trigger fold))
             (when-let* ((tail (and (string-match "\\.\\([^.]*\\)\\'" name)
                                    (match-string 1 name))))
-              (string-prefix-p my/type-completion-input tail t))))))
+              (string-prefix-p my/type-completion-input tail fold))))))
 
 (defvar my/type-completion-rank-limit 200)
 (defvar my/type-completion-inhibit-probe nil)
@@ -1023,30 +1023,27 @@ Explicit completion popup with documentation and Meow navigation.
 
 (defun my/type-completion-sort-key (candidate index)
   "Return CANDIDATE's packed rank, falling back to its server order INDEX."
-  (let ((deprecated (if (my/type-completion-deprecated-p candidate) 1 0))
-        (prefix (if (my/type-completion-prefix-match-p candidate) 0 1)))
-    (if-let* ((entry (my/type-completion-entry candidate)))
-        (logior (ash (plist-get entry :tier) 22)
-                (ash deprecated 21)
-                (ash prefix 20)
-                (ash (min (plist-get entry :arity) 15) 16)
-                (min (plist-get entry :rank) 65535))
-      (if-let* (((< index my/type-completion-rank-limit))
-                (arity (my/type-completion-arity candidate)))
-          (logior (ash deprecated 21)
-                  (ash prefix 20)
-                  (ash (min arity 15) 16)
-                  (min index 65535))
-        (logior (ash (my/type-completion-untyped-tier candidate) 22)
-                (ash deprecated 21)
-                (ash prefix 20)
-                (min index 65535))))))
+  (let* ((entry (my/type-completion-entry candidate))
+         (typed-arity (unless entry
+                        (and (< index my/type-completion-rank-limit)
+                             (my/type-completion-arity candidate)))))
+    (logior (ash (cond (entry (plist-get entry :tier))
+                       (typed-arity 0)
+                       (t (my/type-completion-untyped-tier candidate)))
+                 22)
+            (ash (if (my/type-completion-deprecated-p candidate) 1 0) 21)
+            (ash (min (or (and entry (plist-get entry :arity))
+                          typed-arity 0)
+                      15)
+                 17)
+            (ash (if (my/type-completion-prefix-match-p candidate) 0 1) 16)
+            (min (if entry (plist-get entry :rank) index) 65535))))
 
 (defun my/type-completion-untyped-tier (candidate)
   "Return the tier for CANDIDATE when no type entry was found for it."
   (cond
    ((not (my/completion-lsp-item candidate)) 2)
-   ((and my/type-completion-probed my/type-completion-wanted) 3)
+   ((and my/type-completion-results my/type-completion-wanted) 3)
    (t 0)))
 
 (defun my/completion-sort-candidates (candidates)
@@ -1767,6 +1764,8 @@ Orderless with Corfu
 
 (use-package orderless
   :custom
+  (orderless-smart-case nil)
+  (completion-ignore-case nil)
   (orderless-style-dispatchers '(orderless-affix-dispatch))
   (orderless-component-separator #'orderless-escapable-split-on-space)
   (completion-styles '(orderless basic))
