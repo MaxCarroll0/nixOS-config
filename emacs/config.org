@@ -1921,14 +1921,152 @@ Orderless with Corfu
 #+end_src
 
 ** Cape
-Semantic and mode-specific completion precedes dabbrev and file fallback candidates in one ranked list.
+Semantic and mode-specific completion precedes Hippie Expand and file fallback candidates in one ranked list.
 #+begin_src emacs-lisp
+
+(use-package hippie-exp
+  :ensure nil
+  :bind ([remap dabbrev-expand] . hippie-expand))
 
 (use-package cape
   :after corfu
   :config
   (defvar-local my/completion-base-capfs nil)
   (defvar-local my/completion-super-capf nil)
+  (defvar-local my/hippie-expand-capf-cache nil)
+  (defvar my/hippie-expand-candidate-limit 256)
+
+  (defun my/hippie-expand-buffer-eligible-p (buffer)
+    "Return non-nil when Hippie Expand may search BUFFER."
+    (with-current-buffer buffer
+      (if hippie-expand-only-buffers
+          (he-buffer-member hippie-expand-only-buffers)
+        (not (he-buffer-member hippie-expand-ignore-buffers)))))
+
+  (defun my/hippie-expand-candidates (beginning end pattern)
+    "Return Hippie Expand candidates matching PATTERN between BEGINNING and END."
+    (let* ((regexp (concat "\\_<" (regexp-quote pattern)
+                           "\\(?:\\sw\\|\\s_\\)"
+                           (if (string-empty-p pattern) "+" "*")))
+           (origin (current-buffer))
+           (seen (make-hash-table :test #'equal))
+           (count 0)
+           result)
+      (cl-labels
+          ((add (candidate)
+             (when (and (stringp candidate)
+                        (not (string-empty-p candidate))
+                        (not (equal candidate pattern))
+                        (< count my/hippie-expand-candidate-limit)
+                        (not (gethash candidate seen)))
+               (puthash candidate t seen)
+               (setq count (1+ count))
+               (push candidate result)))
+           (valid-start-p (position)
+             (or (= position (point-min))
+                 (not (memq (char-syntax (char-before position)) '(?w ?_)))))
+           (scan-region (buffer start stop reverse)
+             (when (< count my/hippie-expand-candidate-limit)
+               (with-current-buffer buffer
+                 (save-excursion
+                   (save-restriction
+                     (widen)
+                     (goto-char start)
+                     (while (and (< count my/hippie-expand-candidate-limit)
+                                 (if reverse
+                                     (re-search-backward regexp stop t)
+                                   (re-search-forward regexp stop t)))
+                       (when (valid-start-p (match-beginning 0))
+                         (add (match-string-no-properties 0)))))))))
+           (scan-buffer (buffer &optional around)
+             (if around
+                 (progn
+                   (scan-region buffer beginning nil t)
+                   (scan-region buffer end nil nil))
+               (with-current-buffer buffer
+                 (scan-region buffer (point-min) nil nil))))
+           (scan-kill-ring ()
+             (dolist (text kill-ring)
+               (let ((position 0))
+                 (while (and (< count my/hippie-expand-candidate-limit)
+                             (string-match regexp text position))
+                   (let ((start (match-beginning 0)))
+                     (when (or (zerop start)
+                               (not (memq (char-syntax (aref text (1- start)))
+                                          '(?w ?_))))
+                       (add (match-string-no-properties 0 text))))
+                   (setq position (max (1+ (match-beginning 0))
+                                       (match-end 0)))))))
+           (scan-abbrevs ()
+             (dolist (table-symbol
+                      (append '(local-abbrev-table global-abbrev-table)
+                              abbrev-table-name-list))
+               (when (and (boundp table-symbol)
+                          (abbrev-table-p (symbol-value table-symbol)))
+                 (mapatoms
+                  (lambda (symbol)
+                    (let ((name (symbol-name symbol)))
+                      (when (or (string-empty-p pattern)
+                                (string-prefix-p pattern name
+                                                 completion-ignore-case))
+                        (add (abbrev-expansion
+                              name (symbol-value table-symbol))))))
+                  (symbol-value table-symbol))))))
+        (dolist (try hippie-expand-try-functions-list)
+          (when (< count my/hippie-expand-candidate-limit)
+            (pcase try
+              ('try-expand-all-abbrevs (scan-abbrevs))
+              ('try-expand-dabbrev (scan-buffer origin t))
+              ('try-expand-dabbrev-visible
+               (dolist (window (window-list nil 'nomini 'all-frames))
+                 (scan-region (window-buffer window)
+                              (window-start window) (window-end window) nil)))
+              ('try-expand-dabbrev-all-buffers
+               (let ((searched 0))
+                 (dolist (buffer (buffer-list))
+                   (when (and (not (eq buffer origin))
+                              (or (not hippie-expand-max-buffers)
+                                  (< searched hippie-expand-max-buffers))
+                              (my/hippie-expand-buffer-eligible-p buffer))
+                     (scan-buffer buffer)
+                     (setq searched (1+ searched))))))
+              ('try-expand-dabbrev-from-kill (scan-kill-ring)))))
+        (nreverse result))))
+
+  (defun my/hippie-expand-capf-key (beginning end pattern)
+    "Return the cache key for Hippie completion at BEGINNING and END."
+    (list beginning end pattern (buffer-chars-modified-tick)
+          hippie-expand-try-functions-list (car-safe kill-ring)
+          (when (memq 'try-expand-dabbrev-all-buffers
+                      hippie-expand-try-functions-list)
+            (mapcar (lambda (buffer)
+                      (cons buffer
+                            (with-current-buffer buffer
+                              (buffer-chars-modified-tick))))
+                    (buffer-list)))))
+
+  (defun my/hippie-expand-capf ()
+    "Offer bounded Hippie Expand results through completion-at-point."
+    (require 'hippie-exp)
+    (let* ((end (point))
+           (beginning (he-dabbrev-beg))
+           (input (buffer-substring-no-properties beginning end))
+           (hole (and (derived-mode-p 'tuareg-mode)
+                      (equal input "_")))
+           (pattern (if hole "" input)))
+      (when (or hole (not (string-empty-p pattern)))
+        (let ((key (my/hippie-expand-capf-key beginning end pattern)))
+          (if (equal key (car-safe my/hippie-expand-capf-cache))
+              (cdr my/hippie-expand-capf-cache)
+            (let ((candidates
+                   (my/hippie-expand-candidates beginning end pattern)))
+              (setq my/hippie-expand-capf-cache
+                    (cons key
+                          (and candidates
+                               (list beginning end candidates
+                                     :category 'hippie-expand
+                                     :exclusive 'no))))
+              (cdr my/hippie-expand-capf-cache)))))))
 
   (defun my/type-semantic-candidate (entry)
     "Return a completion candidate backed by type-search ENTRY."
@@ -2412,12 +2550,11 @@ completion replaces a bare `_', whose text must not filter the candidates."
        ((eq action t)
         (setq my/type-completion-input (my/type-hole-pattern string))
         (let* ((effective (my/type-hole-pattern string))
-               (base-pattern (if hole string effective))
                (completion-regexp-list
                 (unless hole completion-regexp-list))
                (merged
                 (my/type-merge-candidates
-                 (all-completions base-pattern table predicate)
+                 (all-completions effective table predicate)
                  (all-completions effective my/type-completion-candidates
                                   predicate))))
           (when (and my/completion-hide-qualified (not qualified))
@@ -2690,7 +2827,7 @@ completion replaces a bare `_', whose text must not filter the candidates."
                              (eglot-managed-p))
                     (list #'eglot-completion-at-point))
                   my/completion-base-capfs
-                  (list #'cape-dabbrev #'cape-file))))
+                  (list #'my/hippie-expand-capf #'cape-file))))
       (setq capfs (delete-dups capfs))
       (setq my/completion-super-capf (apply #'cape-capf-super capfs))
       (setq-local completion-at-point-functions
@@ -2704,7 +2841,7 @@ completion replaces a bare `_', whose text must not filter the candidates."
                  (not (eq capf my/completion-super-capf))
                  (not (memq capf '(my/completion-ranked-capf
                                     eglot-completion-at-point
-                                    cape-dabbrev
+                                    my/hippie-expand-capf
                                     cape-file))))
         (push capf my/completion-base-capfs)))
     (setq my/completion-base-capfs
@@ -2751,7 +2888,7 @@ Completion behaviour shared by every language server, built on standard LSP only
 - *Inline preview restraint* — the grey preview considers prefix matches only,
   chooses the best inhabited tier, and is dismissed with =S-SPC=.
 - *Deprecated last* — LSP =deprecated= and tag =1= sink within their group.
-- *Ordering* — type-correct candidates first, snippets next, then dabbrev,
+- *Ordering* — type-correct candidates first, snippets next, then Hippie Expand,
   files, and ill-typed candidates; without an expected type, snippets come
   first.
 - *Module-qualified toggle* — =my/completion-toggle-qualified= hides dotted
@@ -3472,7 +3609,7 @@ Org fragments render automatically, while the fragment at point remains editable
                    (cape-company-to-capf #'company-auctex-environments)
                    ;; Generic fallbacks
                    #'cape-file
-                   #'cape-dabbrev)))
+                   #'my/hippie-expand-capf)))
 
     (add-hook 'LaTeX-mode-hook #'my/latex-capf-setup)
 
