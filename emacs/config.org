@@ -4060,52 +4060,53 @@ A negative ARGUMENT moves to the previous field instead."
       (seq-filter (lambda (spec) (eq (plist-get spec :group) group))
                   my/ocaml-snippet-registry))))
 
-  (defmacro my/define-ocaml-transients ()
+  (defun my/define-ocaml-transients ()
     "Define OCaml transients from the shared snippet registry."
     (let ((expressions (my/ocaml-transient-group 'expression "Expressions"))
           (declarations
            (my/ocaml-transient-group 'declaration "Declarations"))
           (modules (my/ocaml-transient-group 'module "Modules")))
-      `(progn
-         (transient-define-prefix my/ocaml-expression-menu ()
-           "Insert OCaml expressions."
-           ,expressions)
-         (transient-define-prefix my/ocaml-declaration-menu ()
-           "Insert OCaml declarations."
-           ,declarations)
-         (transient-define-prefix my/ocaml-module-menu ()
-           "Insert OCaml module forms."
-           ,modules)
-         (transient-define-prefix my/ocaml-menu ()
-           "OCaml snippets and language-server actions."
-           [["Insert"
-             ("e" "expressions…" my/ocaml-expression-menu)
-             ("l" "declarations…" my/ocaml-declaration-menu)
-             ("m" "modules…" my/ocaml-module-menu)]
-     ["Types and docs"
-      ("T" "type enclosing" ocaml-eglot-type-enclosing)
-      ("E" "type expression" ocaml-eglot-type-expression)
-      ("A" "type annotate" ocaml-eglot-type-annotate)
-      ("s" "type search" ocaml-eglot-search)
-      ("d" "document at point" ocaml-eglot-document)
-      ("D" "search documentation" my/eglot-symbol-documentation)]
-     ["Navigate and edit"
-      ("g" "definition" ocaml-eglot-find-definition)
-      ("G" "declaration" ocaml-eglot-find-declaration)
-      ("y" "type definition" ocaml-eglot-find-type-definition)
-      ("q" "alternate file" ocaml-eglot-alternate-file)
-      ("c" "construct" ocaml-eglot-construct)
-      ("x" "destruct" my/ocaml-destruct)
-      ("[" "previous hole" ocaml-eglot-hole-prev :transient t)
-      ("]" "next hole" ocaml-eglot-hole-next :transient t)
-      ("p" "previous phrase" ocaml-eglot-phrase-prev :transient t)
-      ("n" "next phrase" ocaml-eglot-phrase-next :transient t)]
-     ["Refactor"
-      ("!" "next error" ocaml-eglot-error-next :transient t)
-      ("u" "occurrences" ocaml-eglot-occurrences)
-      ("R" "rename" ocaml-eglot-rename)
-      ("X" "extract to toplevel" ocaml-eglot-refactor-extract-at-toplevel)
-      ("I" "infer interface" ocaml-eglot-infer-interface)]]))))
+      (eval
+       `(progn
+          (transient-define-prefix my/ocaml-expression-menu ()
+            "Insert OCaml expressions."
+            ,expressions)
+          (transient-define-prefix my/ocaml-declaration-menu ()
+            "Insert OCaml declarations."
+            ,declarations)
+          (transient-define-prefix my/ocaml-module-menu ()
+            "Insert OCaml module forms."
+            ,modules)
+          (transient-define-prefix my/ocaml-menu ()
+            "OCaml snippets and language-server actions."
+            [["Insert"
+              ("e" "expressions…" my/ocaml-expression-menu)
+              ("l" "declarations…" my/ocaml-declaration-menu)
+              ("m" "modules…" my/ocaml-module-menu)]
+             ["Types and docs"
+              ("T" "type enclosing" ocaml-eglot-type-enclosing)
+              ("E" "type expression" ocaml-eglot-type-expression)
+              ("A" "type annotate" ocaml-eglot-type-annotate)
+              ("s" "type search" ocaml-eglot-search)
+              ("d" "document at point" ocaml-eglot-document)
+              ("D" "search documentation" my/eglot-symbol-documentation)]
+             ["Navigate and edit"
+              ("g" "definition" ocaml-eglot-find-definition)
+              ("G" "declaration" ocaml-eglot-find-declaration)
+              ("y" "type definition" ocaml-eglot-find-type-definition)
+              ("q" "alternate file" ocaml-eglot-alternate-file)
+              ("c" "construct" ocaml-eglot-construct)
+              ("x" "destruct" my/ocaml-destruct)
+              ("[" "previous hole" ocaml-eglot-hole-prev :transient t)
+              ("]" "next hole" ocaml-eglot-hole-next :transient t)
+              ("p" "previous phrase" ocaml-eglot-phrase-prev :transient t)
+              ("n" "next phrase" ocaml-eglot-phrase-next :transient t)]
+             ["Refactor"
+              ("!" "next error" ocaml-eglot-error-next :transient t)
+              ("u" "occurrences" ocaml-eglot-occurrences)
+              ("R" "rename" ocaml-eglot-rename)
+              ("X" "extract to toplevel" ocaml-eglot-refactor-extract-at-toplevel)
+              ("I" "infer interface" ocaml-eglot-infer-interface)]])))))
 
   (my/define-ocaml-transients)
 
