@@ -4495,6 +4495,47 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
           (my/ocaml-field (append path '(:signature))
                           (plist-get node :signature))))
 
+(my/ocaml-define-renderer module-body (node path)
+  (pcase (plist-get node :form)
+    ('structure
+     (concat "struct "
+             (my/ocaml-field (append path '(:value)) "_")
+             " end"))
+    ('functor
+     (concat "functor ("
+             (my/ocaml-field (append path '(:parameter))
+                             (plist-get node :parameter))
+             " : "
+             (my/ocaml-field (append path '(:parameter-type))
+                             (plist-get node :parameter-type))
+             ") -> "
+             (my/ocaml-render-slot node path :result)))
+    ('generative
+     (concat "functor () -> " (my/ocaml-render-slot node path :result)))
+    ('alias
+     (my/ocaml-field (append path '(:value)) (plist-get node :value)))
+    ('application
+     (concat (my/ocaml-field (append path '(:value)) (plist-get node :value))
+             "("
+             (my/ocaml-field (append path '(:argument))
+                             (plist-get node :argument))
+             ")"))
+    ('constrained
+     (concat "("
+             (my/ocaml-field (append path '(:value)) (plist-get node :value))
+             " : "
+             (my/ocaml-field (append path '(:signature))
+                             (plist-get node :signature))
+             ")"))
+    ('unpack
+     (concat "(val "
+             (my/ocaml-field (append path '(:value)) (plist-get node :value))
+             " : "
+             (my/ocaml-field (append path '(:signature))
+                             (plist-get node :signature))
+             ")"))
+    (_ (my/ocaml-field (append path '(:value)) "_"))))
+
 (my/ocaml-define-renderer signature-ref (node path)
   (concat (my/ocaml-field (append path '(:name)) (plist-get node :name))
           (mapconcat
@@ -4543,6 +4584,60 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
           (my/ocaml-field (append path '(:name)) (plist-get node :name))
           " : "
           (my/ocaml-field (append path '(:type)) (plist-get node :type))))
+
+(my/ocaml-define-renderer private-type-decl (node path)
+  (concat "type "
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          " = private "
+          (my/ocaml-field (append path '(:body)) (plist-get node :body))))
+
+(my/ocaml-define-renderer open-item (node path)
+  (concat "open "
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))))
+
+(my/ocaml-define-renderer open-override-item (node path)
+  (concat "open! "
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))))
+
+(my/ocaml-define-renderer include-item (node path)
+  (concat "include "
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))))
+
+(my/ocaml-define-renderer external-item (node path)
+  (concat "external "
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          " : "
+          (my/ocaml-field (append path '(:type)) (plist-get node :type))
+          " = \""
+          (my/ocaml-field (append path '(:primitive))
+                          (plist-get node :primitive))
+          "\""))
+
+(my/ocaml-define-renderer exception-item (node path)
+  (concat "exception "
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          " of "
+          (my/ocaml-field (append path '(:type)) (plist-get node :type))))
+
+(my/ocaml-define-renderer module-type-item (node path)
+  (concat "module type "
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          " = "
+          (my/ocaml-render-slot node path :body)))
+
+(my/ocaml-define-renderer class-item (node path)
+  (concat "class "
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          " = object "
+          (my/ocaml-field (append path '(:body)) (plist-get node :body))
+          " end"))
+
+(my/ocaml-define-renderer class-type-item (node path)
+  (concat "class type "
+          (my/ocaml-field (append path '(:name)) (plist-get node :name))
+          " = object "
+          (my/ocaml-field (append path '(:body)) (plist-get node :body))
+          " end"))
 
 (my/ocaml-define-renderer match-expr (node path)
   (concat "match "
@@ -4724,9 +4819,13 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 (defun my/ocaml-constraint (name)
   (list :kind 'constraint :what 'type :name name :value "_" :destructive nil))
 
+(defun my/ocaml-module-body ()
+  (list :kind 'module-body :form 'hole :value "M" :argument "M"
+        :parameter "X" :parameter-type "S" :signature "S" :result nil))
+
 (defun my/ocaml-default-module ()
   (list :kind 'module-decl :form 'plain :name "M"
-        :params nil :signature nil :body nil))
+        :params nil :signature nil :body (my/ocaml-module-body)))
 
 (defun my/ocaml-struct-body ()
   (list :kind 'struct-body :items (list (my/ocaml-default-type))))
@@ -4803,7 +4902,19 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
                 item))
             (append (delq nil (mapcar #'my/ocaml-item-from-declaration declared))
                     (list (my/ocaml-default-type)
-                          (my/ocaml-let-binding "x"))))))
+                          (my/ocaml-let-binding "x")
+                          (my/ocaml-default-module)
+                          (list :kind 'module-type-item :name "S" :body nil)
+                          (list :kind 'open-item :name "M")
+                          (list :kind 'open-override-item :name "M")
+                          (list :kind 'include-item :name "M")
+                          (list :kind 'private-type-decl
+                                :name "t" :body "representation")
+                          (list :kind 'exception-item :name "E" :type "t")
+                          (list :kind 'external-item :name "x" :type "t"
+                                :primitive "primitive")
+                          (list :kind 'class-item :name "c" :body "_")
+                          (list :kind 'class-type-item :name "c" :body "_"))))))
 
 (defun my/ocaml-enclosing-module (root path)
   "Return the module declaration enclosing PATH in ROOT."
@@ -5042,16 +5153,19 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
       (plist-put owner :signature (my/ocaml-signature-ref "S"))
       (append owner-path '(:signature :name)))
 
-     ((and (eq kind 'module-decl) (eq slot :name)
-           (eq (plist-get owner :form) 'functor))
-      (let ((params (plist-get owner :params)))
-        (plist-put owner :params
-                   (append params
-                           (list (list :kind 'module-param
-                                       :name (my/ocaml-module-param-name
-                                              (length params))
-                                       :signature "S"))))
-        (append owner-path (list :params (length params) :name))))
+     ((and (eq kind 'module-body)
+           (memq (plist-get owner :form) '(hole structure))
+           (eq slot :value))
+      (let ((decl (my/ocaml-path-get root (butlast owner-path))))
+        (plist-put decl :body (my/ocaml-struct-body))
+        (append (butlast owner-path) '(:body :items 0 :name))))
+
+     ((and (eq kind 'module-body)
+           (memq (plist-get owner :form) '(functor generative))
+           (eq slot :result)
+           (not (plist-get owner :result)))
+      (plist-put owner :result (my/ocaml-struct-body))
+      (append owner-path '(:result :items 0 :name)))
 
      ((and (eq kind 'module-param) (eq slot :signature))
       (let* ((decl-path (butlast (butlast owner-path)))
@@ -5311,26 +5425,10 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
                 (if (plist-get owner :annotation) '(:annotation) '(:name)))))
 
      ((and (eq kind 'module-decl) (eq slot :name))
-      (let* ((options '(plain functor alias application recursive))
-             (index (or (cl-position (plist-get owner :form) options) 0))
-             (next (nth (mod (1+ index) (length options)) options)))
+      (let ((next (if (eq (plist-get owner :form) 'recursive)
+                      'plain
+                    'recursive)))
         (plist-put owner :form next)
-        (plist-put owner :params
-                   (when (eq next 'functor)
-                     (list (list :kind 'module-param
-                                 :name "X" :signature "S"))))
-        (pcase next
-          ('alias
-           (plist-put owner :body (list :kind 'module-alias :target "M")))
-          ('application
-           (plist-put owner :body
-                      (list :kind 'functor-app :functor "F" :argument "M")))
-          (_
-           (let ((body (plist-get owner :body)))
-             (when (and (listp body)
-                        (memq (plist-get body :kind)
-                              '(module-alias functor-app)))
-               (plist-put owner :body nil)))))
         (when (plist-get owner :auto-signature)
           (plist-put owner :signature nil)
           (plist-put owner :auto-signature nil))
@@ -5338,6 +5436,32 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
           (plist-put owner :signature (my/ocaml-signature-ref "S"))
           (plist-put owner :auto-signature t))
         (append owner-path '(:name))))
+
+     ((eq kind 'module-body)
+      (let* ((forms '(hole structure functor alias application constrained
+                           generative unpack))
+             (index (or (cl-position (plist-get owner :form) forms) 0))
+             (next (nth (mod (1+ index) (length forms)) forms)))
+        (plist-put owner :form next)
+        (plist-put owner :result nil)
+        (pcase next
+          ('alias (plist-put owner :value "M"))
+          ('application
+           (plist-put owner :value "F")
+           (plist-put owner :argument "M"))
+          ('constrained
+           (plist-put owner :value "M")
+           (plist-put owner :signature "S"))
+          ('unpack
+           (plist-put owner :value "x")
+           (plist-put owner :signature "S")))
+        (append owner-path
+                (list (pcase next
+                        ((or 'hole 'structure 'alias 'application
+                             'constrained 'unpack)
+                         :value)
+                        ('functor :parameter)
+                        ('generative :result))))))
 
      ((and (eq kind 'signature-ref) (eq slot :name))
       (let* ((decl-path (butlast owner-path))
@@ -5401,7 +5525,19 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
     (when body-path
       (seq-take path (+ (length body-path) 2)))))
 
-(defconst my/ocaml-default-item-names '((type-decl . "t") (let-binding . "x")))
+(defconst my/ocaml-default-item-names
+  '((type-decl . "t")
+    (let-binding . "x")
+    (module-decl . "M")
+    (module-type-item . "S")
+    (open-item . "M")
+    (open-override-item . "M")
+    (include-item . "M")
+    (private-type-decl . "t")
+    (exception-item . "E")
+    (external-item . "x")
+    (class-item . "c")
+    (class-type-item . "c")))
 
 (defun my/ocaml-struct-item-default-p (root path)
   "Return non-nil when PATH selects a struct item still holding its default."
