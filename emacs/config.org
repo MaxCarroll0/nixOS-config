@@ -1632,6 +1632,53 @@ At a bare hole, completion considers every candidate in the best tier and previe
 (defvar my/completion-preview-accepting nil)
 (defvar my/completion-preview-mouse-map nil)
 
+(defun my/ocaml-incomplete-pattern-context-p ()
+  "Return non-nil when nearby incomplete syntax starts a pattern."
+  (save-excursion
+    (let ((limit (max (point-min) (- (point) 2000))))
+      (catch 'context
+        (while (re-search-backward
+                "\\_<\\(?:let\\|and\\|fun\\|function\\|with\\|type\\|module\\|class\\|exception\\|val\\|external\\)\\_>\\||\\|->\\|="
+                limit t)
+          (let ((token (match-string-no-properties 0)))
+            (unless (and (equal token "|")
+                         (or (memq (char-before (match-beginning 0))
+                                   '(?\[ ?< ?|))
+                             (memq (char-after (match-end 0))
+                                   '(?\] ?> ?|))))
+              (throw 'context (not (member token '("->" "=")))))))
+        nil))))
+
+(defun my/ocaml-pattern-or-binding-context-p ()
+  "Return non-nil when point is in an OCaml pattern or declaration name."
+  (when (derived-mode-p 'tuareg-mode)
+    (or
+     (condition-case nil
+         (when (treesit-language-available-p 'ocaml)
+           (unless (seq-find
+                    (lambda (parser)
+                      (eq (treesit-parser-language parser) 'ocaml))
+                    (treesit-parser-list))
+             (treesit-parser-create 'ocaml))
+           (let ((node (treesit-node-at
+                        (if (> (point) (point-min)) (1- (point)) (point))
+                        'ocaml))
+                 found)
+             (while (and node (not found))
+               (let* ((field (treesit-node-field-name node))
+                      (parent (treesit-node-parent node))
+                      (parent-type (and parent (treesit-node-type parent))))
+                 (setq found
+                       (or (equal field "pattern")
+                           (and (equal field "name")
+                                (string-match-p
+                                 "\\(?:_binding\\|_definition\\|_declaration\\)\\'"
+                                 parent-type))))
+                 (setq node parent)))
+             found))
+       (error nil))
+     (my/ocaml-incomplete-pattern-context-p))))
+
 (defun my/completion-preview-state ()
   "Return a token identifying the current point and buffer contents."
   (cons (point) (buffer-chars-modified-tick)))
@@ -1842,6 +1889,7 @@ At a bare hole, completion considers every candidate in the best tier and previe
   (let ((my/type-completion-inhibit-probe t))
     (if (or (equal my/completion-preview-dismissed
                    (my/completion-preview-state))
+            (my/ocaml-pattern-or-binding-context-p)
             (my/type-completion-settled-p)
             (not (my/completion-preview-allowed-p)))
         (completion-preview-active-mode -1)
@@ -4113,7 +4161,8 @@ A negative ARGUMENT moves to the previous field instead."
 
   (with-eval-after-load 'ocaml-eglot
     (setcdr ocaml-eglot-mode-map nil)
-    (define-key ocaml-eglot-mode-map (kbd "C-c .") #'my/ocaml-menu)))
+    (define-key ocaml-eglot-mode-map (kbd "C-c .") #'my/ocaml-menu)
+    (define-key ocaml-eglot-mode-map (kbd "C-c |") #'my/ocaml-destruct)))
 
 #+end_src
 
@@ -5450,19 +5499,55 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
                         t)))
       (cons (treesit-node-start match) (treesit-node-end match)))))
 
+(defun my/ocaml-split-destructured-case ()
+  "Split the destruct action's top-level or-pattern into separate cases."
+  (when (treesit-language-available-p 'ocaml)
+    (when-let* ((node (treesit-node-at (point) 'ocaml))
+                (case (treesit-parent-until
+                       node (lambda (candidate)
+                              (string= (treesit-node-type candidate)
+                                       "match_case"))
+                       t))
+                (pattern (treesit-node-child-by-field-name case "pattern"))
+                ((string= (treesit-node-type pattern) "or_pattern"))
+                (patterns (treesit-node-children pattern t))
+                ((cdr patterns)))
+      (let* ((start (treesit-node-start case))
+             (end (treesit-node-end case))
+             (tail (buffer-substring-no-properties
+                    (treesit-node-end pattern) end))
+             (replacement
+              (mapconcat
+               (lambda (alternative)
+                 (concat (treesit-node-text alternative t) tail))
+               patterns "\n| ")))
+        (delete-region start end)
+        (goto-char start)
+        (insert replacement)
+        (goto-char start)
+        t))))
+
 (defun my/ocaml-destruct ()
-  "Destructure at point and expose every pattern and body as a Yas field."
+  "Destructure at point into separate cases with editable leaves."
   (declare (modes tuareg-mode))
   (interactive)
-  (call-interactively #'ocaml-eglot-destruct)
-  (when-let* ((bounds (my/ocaml-enclosing-match-bounds))
-              (text (buffer-substring-no-properties (car bounds) (cdr bounds)))
-              (snippet (my/ocaml-leaf-snippet text))
-              ((not (equal snippet text))))
-    (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
-    (delete-region (car bounds) (cdr bounds))
-    (goto-char (car bounds))
-    (yas-expand-snippet snippet (car bounds) (car bounds))))
+  (let ((origin (copy-marker
+                 (if (region-active-p) (region-beginning) (point)) t)))
+    (unwind-protect
+        (progn
+          (call-interactively #'ocaml-eglot-destruct)
+          (goto-char origin)
+          (my/ocaml-split-destructured-case)
+          (when-let* ((bounds (my/ocaml-enclosing-match-bounds))
+                      (text (buffer-substring-no-properties
+                             (car bounds) (cdr bounds)))
+                      (snippet (my/ocaml-leaf-snippet text))
+                      ((not (equal snippet text))))
+            (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+            (delete-region (car bounds) (cdr bounds))
+            (goto-char (car bounds))
+            (yas-expand-snippet snippet (car bounds) (car bounds))))
+      (set-marker origin nil))))
 
 (defun my/ocaml-insert-record-value ()
   "Insert a structured OCaml record value."
