@@ -5558,11 +5558,8 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
   "Cycle the alternative under point in the active construct."
   (declare (modes tuareg-mode))
   (interactive)
-  (if (my/ocaml-active-session)
-      (or (my/ocaml-restructure #'my/ocaml-cycle)
-          (my/ocaml-structured-return))
-    (when (yas-active-snippets)
-      (yas-prev-field))))
+  (when (my/ocaml-active-session)
+    (my/ocaml-restructure #'my/ocaml-cycle)))
 
 (defun my/ocaml-start-type ()
   "Insert a structured OCaml type declaration."
