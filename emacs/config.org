@@ -3772,11 +3772,7 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
            (if-let* ((item (my/eglot-documentation--symbol candidate)))
                (progn
                  (document item)
-                 (restore)
-                 (when-let* ((buffer (ignore-errors (eldoc-doc-buffer)))
-                             ((buffer-live-p buffer))
-                             (window (display-buffer buffer)))
-                   (select-window window)))
+                 (restore))
              (restore)
              (set-window-configuration saved-window-configuration)
              (when (buffer-live-p eldoc-buffer)
@@ -3800,18 +3796,21 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
               (user-error "The language server returned no documented completions")))
          (candidates
           (mapcar #'my/eglot-documentation--completion-candidate items)))
-    (consult--read
-     candidates
-     :prompt "LSP documentation: "
-     :initial initial
-     :require-match t
-     :sort nil
-     :history '(:input my/eglot-documentation-history)
-     :category 'consult-eglot-symbols
-     :lookup #'consult--lookup-candidate
-     :group (consult--type-group consult-eglot-narrow)
-     :narrow (consult--type-narrow consult-eglot-narrow)
-     :state (my/eglot-documentation--completion-state source-buffer))))
+    (when (consult--read
+           candidates
+           :prompt "LSP documentation: "
+           :initial initial
+           :require-match t
+           :sort nil
+           :history '(:input my/eglot-documentation-history)
+           :category 'consult-eglot-symbols
+           :lookup #'consult--lookup-candidate
+           :group (consult--type-group consult-eglot-narrow)
+           :narrow (consult--type-narrow consult-eglot-narrow)
+           :state (my/eglot-documentation--completion-state source-buffer))
+      (when-let* ((buffer (ignore-errors (eldoc-doc-buffer)))
+                  ((buffer-live-p buffer)))
+        (pop-to-buffer buffer)))))
 
 (use-package consult-eglot :after (consult eglot))
 
