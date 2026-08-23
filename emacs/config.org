@@ -5133,8 +5133,10 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
                     for i from 0
                     collect (my/ocaml-render b (append path (list :bindings i))))
            " and ")
-          " in "
-          (my/ocaml-hole-field node path :body)))
+          (pcase (plist-get node :stage)
+            ('nil "")
+            ('in " in")
+            (_ (concat " in " (my/ocaml-hole-field node path :body))))))
 
 (my/ocaml-define-renderer let-binding (node path)
   (concat (if (plist-get node :standalone)
@@ -5792,6 +5794,7 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 (defun my/ocaml-default-let ()
   (list :kind 'let-group
         :recursive nil
+        :stage nil
         :bindings (list (my/ocaml-let-binding "x"))
         :body nil))
 
@@ -5956,7 +5959,15 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
       (append owner-path '(:value)))
 
      ((and (eq kind 'let-binding) (eq slot :value))
-      (my/ocaml-append-binding root owner-path))
+      (let* ((group-path (butlast (butlast owner-path)))
+             (group (my/ocaml-path-get root group-path)))
+        (if (eq (plist-get group :kind) 'let-group)
+            (pcase (plist-get group :stage)
+              ('nil (plist-put group :stage 'in) path)
+              ('in (plist-put group :stage 'body)
+                   (append group-path '(:body)))
+              (_ nil))
+          (my/ocaml-append-binding root owner-path))))
 
      ((and (eq kind 'param) (eq slot :name)
            (eq (plist-get owner :label) 'optional)
@@ -6169,6 +6180,10 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
                       (my/ocaml-operator-switchable-p operator))
               (my/ocaml-operator-swap-form operator)
               (append operator-path (my/ocaml-node-focus operator)))))))
+
+     ((and (eq kind 'let-binding) (eq slot :value))
+      (my/ocaml-append-binding root owner-path)
+      path)
 
      ((and (eq kind 'type-decl) (eq slot :body)
            (let ((body (plist-get owner :body)))
