@@ -725,21 +725,6 @@ Explicit completion popup with documentation and Meow navigation.
   "Return non-nil after a successful typed or untyped probe."
   (memq my/type-completion-probed '(typed untyped shallow)))
 
-(defun my/type-completion-mode-line ()
-  "Return the current asynchronous completion state for the mode line."
-  (when (and (fboundp 'eglot-managed-p) (eglot-managed-p))
-    (format " Cmp[%s]"
-            (cond
-             ((or (eq my/type-completion-state 'pending)
-                  (eq my/type-completion-lsp-state 'pending)) "LSP…")
-             ((eq my/type-completion-state 'ready) "typed")
-             ((eq my/type-completion-lsp-state 'ready) "LSP")
-             ((or (eq my/type-completion-state 'error)
-                  (eq my/type-completion-lsp-state 'error)) "error")
-             ((or (eq my/type-completion-state 'timeout)
-                  (eq my/type-completion-lsp-state 'timeout)) "timeout")
-             (t "local")))))
-
 (defun my/type-completion-entry (candidate)
   "Return CANDIDATE's OCaml semantic completion entry."
   (when (and (stringp candidate) (> (length candidate) 0))
@@ -962,7 +947,7 @@ Explicit completion popup with documentation and Meow navigation.
 
 (defun my/ocaml-bracket-hole (hole)
   "Return HOLE with its value parenthesised, keeping any argument label."
-  (if (string-match "\\`\\(~[^:]*:\\)\\(.*\\)\\'" hole)
+  (if (string-match "\\`\\([~?][^:]*:\\)\\(.*\\)\\'" hole)
       (concat (match-string 1 hole) "(" (match-string 2 hole) ")")
     (concat "(" hole ")")))
 
@@ -1028,6 +1013,12 @@ Explicit completion popup with documentation and Meow navigation.
                  (and arity
                       (my/type-application
                        name (my/type-number-holes holes)))))))
+
+(defun my/type-informative-p (type)
+  "Return non-nil when TYPE is a type rather than a server placeholder."
+  (and (stringp type)
+       (not (string-empty-p type))
+       (not (string-prefix-p "<" type))))
 
 (defun my/type-plausible-p (type)
   "Return non-nil when TYPE looks like type text rather than source code."
@@ -2493,7 +2484,6 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
           (setq my/type-completion-lsp-state state)
           (when (eq state 'ready)
             (setq my/type-completion-lsp-candidates value))
-          (force-mode-line-update)
           (my/type-completion-refresh-display buffer generation)))))
 
   (defun my/type-completion-run-lsp-request
@@ -2513,7 +2503,6 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
                               (goto-char position)
                               (eglot--CompletionParams))))
                 (setq my/type-completion-lsp-state 'pending)
-                (force-mode-line-update)
                 (eglot--signal-textDocument/didChange)
                 (jsonrpc-async-request
                  server :textDocument/completion params
@@ -2683,7 +2672,6 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
             (funcall install)
             (my/type-completion-reindex)
             (when (= revision my/type-completion-revision)
-              (force-mode-line-update)
               (my/type-completion-refresh-display buffer generation)))))))
 
   (defun my/type-completion-ocaml-p ()
@@ -2714,7 +2702,8 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
                   (ocaml-eglot-req--send
                    :ocamllsp/typeEnclosing params
                    :immediate t :timeout 0.35)))
-            (my/type-normalize (plist-get result :type)))
+            (let ((text (my/type-normalize (plist-get result :type))))
+              (and (my/type-informative-p text) text)))
         (error nil))))
 
   (defun my/type-completion-construct-at-point (expected)
@@ -3013,7 +3002,6 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
     "Request a concrete enclosing type at POSITION and install it under KEY."
     (setq my/type-completion-probed 'pending
           my/type-completion-state 'pending)
-    (force-mode-line-update)
     (condition-case nil
         (let ((buffer (current-buffer))
               (generation my/type-completion-generation)
@@ -3025,7 +3013,8 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
            (ocaml-eglot-req--TypeEnclosingParams position index 0)
            :success-fn
            (lambda (result)
-             (let* ((expected (my/type-normalize (plist-get result :type)))
+             (let* ((expected (let ((text (my/type-normalize (plist-get result :type))))
+                               (and (my/type-informative-p text) text)))
                     (next (1+ index))
                     (more (< next (length (plist-get result :enclosings)))))
                (if (and more (my/type-unconstrained-p expected))
@@ -3400,14 +3389,19 @@ completion replaces a bare `_', whose text must not filter the candidates."
                                node)))))))
         found)))
 
-  (defun my/type-completion-yas-template (candidate beginning)
-    "Return a syntax-specific Yas template for CANDIDATE at BEGINNING."
-    (let ((name (substring-no-properties candidate)))
+  (defun my/type-completion-operator-node (candidate beginning)
+    "Return the operator node for CANDIDATE, in the form its arity calls for."
+    (when-let* ((name (my/type-completion-match-name candidate))
+                (class (my/ocaml-operator-class name))
+                (full (my/ocaml-operator-arity class))
+                (arity (my/type-completion-arity candidate)))
       (cond
-       ((my/ocaml-let-operator-p name)
-        (format "%s ${1:x} = ${2:_} in ${3:_}" name))
-       ((my/ocaml-and-binding-context-p name beginning)
-        (format "%s ${1:x} = ${2:_}" name)))))
+       ((< arity full) (my/ocaml-operator-node name arity 'applied))
+       ((eq class 'binding) (my/ocaml-binding-let-group name))
+       ((and (eq class 'parallel)
+             (not (my/ocaml-and-binding-context-p name beginning)))
+        (my/ocaml-operator-node name arity 'applied))
+       (t (my/ocaml-operator-node name arity 'natural)))))
 
   (defun my/type-completion-expand-yas (template beginning)
     "Replace the completion at BEGINNING with Yas TEMPLATE."
@@ -3471,8 +3465,8 @@ completion replaces a bare `_', whose text must not filter the candidates."
                   ("[]" 'list)
                   ("[||]" 'array))))
            (record-fields (and entry (plist-get entry :record-fields)))
-           (yas-template
-            (my/type-completion-yas-template candidate beginning))
+           (operator
+            (my/type-completion-operator-node candidate beginning))
            (snippet (or (my/type-completion-module-snippet candidate)
                         (and entry (plist-get entry :snippet))
                         (my/type-completion-local-snippet candidate)))
@@ -3491,7 +3485,7 @@ completion replaces a bare `_', whose text must not filter the candidates."
                            (plist-get entry :name) holes))))))
       (cond
        (collection (list :kind 'collection :value collection))
-       (yas-template (list :kind 'yas :value yas-template))
+       (operator (list :kind 'structured :value operator))
        (structured (list :kind 'structured :value structured))
        (snippet (list :kind 'yas :value snippet))
        ((and (stringp constructible)
@@ -3721,11 +3715,10 @@ completion replaces a bare `_', whose text must not filter the candidates."
   (add-hook 'eglot-managed-mode-hook #'my/completion-refresh-capfs)
   (add-hook 'eglot-managed-mode-hook #'my/completion-warm-buffer)
   (add-hook 'after-change-functions #'my/hippie-expand-schedule-snapshot)
-  (advice-add 'eglot-completion-at-point :around #'cape-wrap-buster)
-  (add-to-list 'global-mode-string
-               '(:eval (my/type-completion-mode-line)) t))
+  (advice-add 'eglot-completion-at-point :around #'cape-wrap-buster))
 
 #+end_src
+
 * Citations
 Citar etc. TODO
 * Tree Sitters
@@ -4529,8 +4522,45 @@ OCaml snippet names and operators expand directly with =TAB= when no completion 
              (list (car snippet) (cdr snippet) (car snippet)))
            my/ocaml-yas-snippets))
 
-  (defconst my/ocaml-direct-operator-triggers
-    '("+." "-." "*." "/." "+" "-" "*" "/" "mod"))
+  (defun my/ocaml-operator-token-bounds ()
+    "Return the bounds of the operator token ending at point."
+    (or (save-excursion
+          (let ((end (point)))
+            (skip-chars-backward my/ocaml-operator-characters)
+            (let ((start (point)))
+              (when (< start end)
+                (skip-chars-backward "a-z")
+                (when (and (< (point) start)
+                           (member (buffer-substring-no-properties
+                                    (point) start)
+                                   '("let" "and"))
+                           (or (bobp)
+                               (not (memq (char-syntax (char-before))
+                                          '(?w ?_)))))
+                  (cons (point) end))))))
+        (my/ocaml-operator-bounds)))
+
+  (defun my/ocaml-operator-trigger-node (name beginning)
+    "Return the node an operator NAME at BEGINNING expands to."
+    (when-let* ((class (my/ocaml-operator-class name)))
+      (cond
+       ((eq class 'binding) (my/ocaml-binding-let-group name))
+       ((and (eq class 'parallel)
+             (not (my/ocaml-and-binding-context-p name beginning)))
+        (my/ocaml-operator-node name 2 'applied))
+       (t (my/ocaml-operator-node
+           name (my/ocaml-operator-arity class) 'natural)))))
+
+  (defun my/ocaml-expand-operator-trigger ()
+    "Expand the operator token before point into its natural form."
+    (when-let* ((bounds (my/ocaml-operator-token-bounds))
+                (name (buffer-substring-no-properties
+                       (car bounds) (cdr bounds)))
+                (node (my/ocaml-operator-trigger-node name (car bounds))))
+      (delete-region (car bounds) (cdr bounds))
+      (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+      (my/ocaml-place node (my/ocaml-node-focus node))
+      t))
 
   (defun my/ocaml-direct-trigger-bounds (trigger)
     "Return bounds when TRIGGER is the complete token before point."
@@ -4559,32 +4589,27 @@ OCaml snippet names and operators expand directly with =TAB= when no completion 
          (when-let* ((bounds (my/ocaml-direct-trigger-bounds trigger)))
            (list :bounds bounds :action (cdr entry)))))
      (sort
-      (append
-       (delq nil
-             (mapcar
-              (lambda (spec)
-                (when (and (plist-get spec :command)
-                           (not (plist-get spec :template)))
-                  (cons (or (plist-get spec :trigger)
-                            (plist-get spec :name)
-                            (plist-get spec :id))
-                        (plist-get spec :command))))
-              my/ocaml-snippet-registry))
-       (mapcar (lambda (operator) (cons operator operator))
-               my/ocaml-direct-operator-triggers))
+      (delq nil
+            (mapcar
+             (lambda (spec)
+               (when (and (plist-get spec :command)
+                          (not (plist-get spec :template)))
+                 (cons (or (plist-get spec :trigger)
+                           (plist-get spec :name)
+                           (plist-get spec :id))
+                       (plist-get spec :command))))
+             my/ocaml-snippet-registry))
       (lambda (left right) (> (length (car left)) (length (car right)))))))
 
   (defun my/ocaml-expand-direct-trigger ()
     "Expand the structured OCaml snippet trigger before point."
-    (when-let* ((trigger (my/ocaml-direct-trigger))
-                (bounds (plist-get trigger :bounds))
-                (action (plist-get trigger :action)))
-      (delete-region (car bounds) (cdr bounds))
-      (if (stringp action)
-          (yas-expand-snippet
-           (format "(${1:_} %s ${2:_})" action) (point) (point))
-        (funcall action))
-      t))
+    (or (my/ocaml-expand-operator-trigger)
+        (when-let* ((trigger (my/ocaml-direct-trigger))
+                    (bounds (plist-get trigger :bounds))
+                    (action (plist-get trigger :action)))
+          (delete-region (car bounds) (cdr bounds))
+          (funcall action)
+          t)))
 
   (defun my/yas-expand-or-indent ()
     "Accept a preview, expand a snippet trigger, or indent."
@@ -4754,6 +4779,7 @@ A negative ARGUMENT moves to the previous field instead."
               ("l" "declarations…" my/ocaml-declaration-menu)
               ("m" "modules…" my/ocaml-module-menu)]
              ["Types and docs"
+              ("h" "expected type at hole" my/ocaml-expected-type)
               ("T" "type enclosing" ocaml-eglot-type-enclosing)
               ("E" "type expression" ocaml-eglot-type-expression)
               ("A" "type annotate" ocaml-eglot-type-annotate)
@@ -4783,7 +4809,8 @@ A negative ARGUMENT moves to the previous field instead."
   (with-eval-after-load 'ocaml-eglot
     (setcdr ocaml-eglot-mode-map nil)
     (define-key ocaml-eglot-mode-map (kbd "C-c .") #'my/ocaml-menu)
-    (define-key ocaml-eglot-mode-map (kbd "C-c |") #'my/ocaml-destruct)))
+    (define-key ocaml-eglot-mode-map (kbd "C-c |") #'my/ocaml-destruct)
+    (define-key ocaml-eglot-mode-map (kbd "C-c _") #'my/ocaml-expected-type)))
 
 #+end_src
 
@@ -5166,13 +5193,64 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (my/ocaml-define-renderer argument (node path)
   (pcase (plist-get node :label-kind)
-    ('labelled (concat "~" (plist-get node :label) ":"
+    ('labelled (concat "~" (plist-get node :label) ":("
                        (my/ocaml-field (append path '(:value))
-                                       (plist-get node :value))))
-    ('optional (concat "?" (plist-get node :label) ":"
+                                       (plist-get node :value))
+                       ")"))
+    ('optional (concat "?" (plist-get node :label) ":("
                        (my/ocaml-field (append path '(:value))
-                                       (plist-get node :value))))
-    (_ (my/ocaml-field (append path '(:value)) (plist-get node :value)))))
+                                       (plist-get node :value))
+                       ")"))
+    (_ (concat "("
+               (my/ocaml-field (append path '(:value)) (plist-get node :value))
+               ")"))))
+
+(my/ocaml-define-renderer binding-let-group (node path)
+  (concat "(" (plist-get node :operator) " "
+          (cl-loop for binding in (plist-get node :bindings)
+                   for index from 0
+                   concat (if (zerop index)
+                              ""
+                            (concat " "
+                                    (my/ocaml-field
+                                     (append path
+                                             (list :bindings index :operator))
+                                     (plist-get binding :operator))
+                                    " "))
+                   concat (my/ocaml-render
+                           binding (append path (list :bindings index))))
+          " in "
+          (my/ocaml-hole-field node path :body)
+          ")"))
+
+(defun my/ocaml-render-argument (node path index)
+  (my/ocaml-render (nth index (plist-get node :arguments))
+                   (append path (list :arguments index))))
+
+(my/ocaml-define-renderer operator-app (node path)
+  (let* ((operator (plist-get node :operator))
+         (text (my/ocaml-operator-name operator))
+         (class (plist-get node :class))
+         (natural (eq (plist-get node :form) 'natural))
+         (count (length (plist-get node :arguments))))
+    (cond
+     ((zerop count) (my/ocaml-operator-quoted operator))
+     ((and natural (eq class 'infix) (= count 2))
+      (format "(%s %s %s)"
+              (my/ocaml-render-argument node path 0) text
+              (my/ocaml-render-argument node path 1)))
+     ((and natural (eq class 'prefix) (= count 1))
+      (format "(%s%s)" text (my/ocaml-render-argument node path 0)))
+     ((and natural (eq class 'parallel) (= count 1))
+      (format "%s %s = %s" text
+              (my/ocaml-field (append path '(:binder)) (plist-get node :binder))
+              (my/ocaml-render-argument node path 0)))
+     (t
+      (concat "(" (my/ocaml-operator-quoted operator) " "
+              (mapconcat (lambda (index)
+                           (my/ocaml-render-argument node path index))
+                         (number-sequence 0 (1- count)) " ")
+              ")")))))
 
 (my/ocaml-define-renderer collection (node path)
   (let* ((values (plist-get node :elements))
@@ -5241,6 +5319,78 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
                    :value "_" :alternatives nil)))
          holes)))
 
+(defun my/ocaml-operator-node (name arity &optional form)
+  "Return an application node for operator NAME taking ARITY arguments."
+  (list :kind 'operator-app
+        :operator (my/ocaml-operator-name name)
+        :class (my/ocaml-operator-class name)
+        :form (or form 'natural)
+        :binder "x"
+        :arguments
+        (mapcar (lambda (_)
+                  (list :kind 'argument :label nil :label-kind nil
+                        :value "_" :alternatives nil))
+                (number-sequence 1 arity))))
+
+(defun my/ocaml-binding-let-group (operator)
+  "Return a let group bound by binding OPERATOR."
+  (list :kind 'binding-let-group
+        :operator (my/ocaml-operator-name operator)
+        :bindings (list (my/ocaml-let-binding "x"))
+        :body nil))
+
+(defun my/ocaml-operator-switchable-p (node)
+  "Return non-nil when NODE has a notation besides plain application."
+  (and (listp node)
+       (eq (plist-get node :kind) 'operator-app)
+       (let ((class (plist-get node :class))
+             (count (length (plist-get node :arguments))))
+         (or (and (eq class 'infix) (= count 2))
+             (and (memq class '(prefix parallel)) (= count 1))))))
+
+(defun my/ocaml-enclosing-operator-path (root path)
+  "Return the operator form enclosing PATH wrapped in a list, or nil."
+  (let ((candidate path)
+        (found nil)
+        (done nil))
+    (while (not (or found done))
+      (let ((node (my/ocaml-path-get root candidate)))
+        (cond
+         ((and (listp node)
+               (memq (plist-get node :kind)
+                     '(operator-app binding-let-group)))
+          (setq found (list candidate)))
+         ((null candidate) (setq done t))
+         (t (setq candidate (butlast candidate))))))
+    found))
+
+(defun my/ocaml-operator-swap-form (node)
+  "Swap NODE between its natural notation and plain application."
+  (pcase (plist-get node :kind)
+    ('binding-let-group
+     (let ((operator (plist-get node :operator)))
+       (plist-put node :kind 'operator-app)
+       (plist-put node :class 'binding)
+       (plist-put node :form 'applied)
+       (plist-put node :binder "x")
+       (plist-put node :arguments (plist-get (my/ocaml-operator-node operator 2)
+                                             :arguments))))
+    ('operator-app
+     (if (and (eq (plist-get node :class) 'binding)
+              (eq (plist-get node :form) 'applied))
+         (let ((operator (plist-get node :operator)))
+           (plist-put node :kind 'binding-let-group)
+           (plist-put node :bindings
+                      (list (my/ocaml-let-binding "x")))
+           (plist-put node :body nil)
+           (plist-put node :operator operator))
+       (when (my/ocaml-operator-switchable-p node)
+         (plist-put node :form
+                    (if (eq (plist-get node :form) 'natural)
+                        'applied
+                      'natural))))))
+  node)
+
 (defun my/ocaml-node-from-constructible (text)
   "Return a structured node for merlin construction TEXT, when recognised."
   (when (stringp text)
@@ -5282,7 +5432,15 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
     ('constructor-app (if (plist-get node :arguments) '(:arguments 0) '(:name)))
     ('application (if (plist-get node :arguments)
                       '(:arguments 0 :value)
-                    '(:head)))))
+                    '(:head)))
+    ('binding-let-group '(:bindings 0 :name))
+    ('operator-app
+     (cond
+      ((null (plist-get node :arguments)) nil)
+      ((and (eq (plist-get node :form) 'natural)
+            (eq (plist-get node :class) 'parallel))
+       '(:binder))
+      (t '(:arguments 0 :value))))))
 
 (defun my/ocaml-match-arm (pattern)
   (list :kind 'match-arm :pattern pattern :pattern-form nil
@@ -5744,16 +5902,19 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-append-binding (root owner-path)
   "Append an `and' binding after the binding at OWNER-PATH."
-  (let* ((index (car (last owner-path)))
-         (group-path (butlast (butlast owner-path)))
+  (let* ((group-path (butlast (butlast owner-path)))
          (group (my/ocaml-path-get root group-path))
-         (bindings (plist-get group :bindings)))
-    (plist-put group :bindings
-               (append bindings
-                       (list (my/ocaml-let-binding
-                              (my/ocaml-binding-name (length bindings))))))
-    (ignore index)
-    (append group-path (list :bindings (length bindings) :name))))
+         (bindings (plist-get group :bindings))
+         (operator (plist-get group :operator))
+         (binding (my/ocaml-let-binding
+                   (my/ocaml-binding-name (length bindings)))))
+    (when operator
+      (setq binding (plist-put binding :operator
+                               (my/ocaml-and-operator-for operator))))
+    (plist-put group :bindings (append bindings (list binding)))
+    (append group-path
+            (list :bindings (length bindings)
+                  (if operator :operator :name)))))
 
 (defconst my/ocaml-repetitions
   '((:constructors . my/ocaml-constructor-name)
@@ -5806,6 +5967,15 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
                (kind (and (listp owner) (plist-get owner :kind)))
                (owner-path (my/ocaml-owner-path root path)))
     (cond
+     ((let ((found (my/ocaml-enclosing-operator-path root path)))
+        (when found
+          (let* ((operator-path (car found))
+                 (operator (my/ocaml-path-get root operator-path)))
+            (when (or (eq (plist-get operator :kind) 'binding-let-group)
+                      (my/ocaml-operator-switchable-p operator))
+              (my/ocaml-operator-swap-form operator)
+              (append operator-path (my/ocaml-node-focus operator)))))))
+
      ((and (eq kind 'type-decl) (eq slot :body)
            (let ((body (plist-get owner :body)))
              (or (null body) (equal body "_"))))
@@ -6312,6 +6482,32 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
         (insert replacement)
         (goto-char start)
         t))))
+
+(defun my/ocaml-term-bounds ()
+  "Return the bounds of the smallest complete term at point."
+  (or (when-let* (((treesit-language-available-p 'ocaml))
+                  (node (treesit-node-at (point) 'ocaml))
+                  (term (if (treesit-node-check node 'named)
+                            node
+                          (treesit-node-parent node))))
+        (when (string-suffix-p "_content" (treesit-node-type term))
+          (setq term (treesit-node-parent term)))
+        (cons (treesit-node-start term) (treesit-node-end term)))
+      (bounds-of-thing-at-point 'symbol)))
+
+(defun my/ocaml-expected-type ()
+  "Report the type expected where the term at point stands."
+  (declare (modes tuareg-mode))
+  (interactive)
+  (let* ((origin (point))
+         (bounds (or (my/ocaml-term-bounds) (cons origin origin)))
+         (text (buffer-substring-no-properties (car bounds) (cdr bounds)))
+         (type (unwind-protect
+                   (my/type-completion-expected-ocaml (car bounds) (cdr bounds))
+                 (goto-char origin))))
+    (if type
+        (message "%s : %s" text (my/type-normalize type))
+      (message "No expected type at point"))))
 
 (defun my/ocaml-destruct ()
   "Destructure at point into separate cases with editable leaves."
