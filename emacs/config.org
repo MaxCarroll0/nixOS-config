@@ -2751,8 +2751,12 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
                                                      (plist-get spec :trigger)))))
                       my/ocaml-snippet-registry))))
            (trigger (or (plist-get entry :trigger) ""))
-           (literal (member trigger '("[" "[|" "{"))))
-      (or (not snippet) hole literal (>= (length input) 3))))
+           (literal (member trigger '("[" "[|" "{")))
+           (fallback (memq (plist-get entry :source) '(hippie file))))
+      (cond
+       (fallback (>= (length input) 3))
+       (snippet (or hole literal (>= (length input) 3)))
+       (t t))))
 
   (defun my/type-completion-literal-prefix-candidates (string)
     "Return fallback structured candidates for literal prefix STRING."
