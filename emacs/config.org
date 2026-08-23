@@ -662,6 +662,41 @@ Small task workflows use Ellama's command map.
 #+end_src
 
 * Autocompletion etc.
+** Overview
+Completion at point contributes three things beyond the candidates a language server offers: *syntax snippet macros*, which are editable skeletons for language constructs expanded with YASnippet and may themselves be typed; *typed holes*, placeholders carrying the type their position demands, which can be completed against; and a ranking that puts candidates fitting the position first.
+
+The expected type at a position is obtained by substituting a hole for the term at point and asking the server for the type there. A candidate is *well-typed* when its own type fits that expectation after dropping some number =k ≥ 0= of leading arguments; =k= is also how many argument holes its application expands with.
+
+Candidates are classified into four tiers, offered in this order:
+
+| tier | contents            |
+|------+---------------------|
+|    1 | well-typed          |
+|    2 | syntax snippet macros |
+|    3 | ill-typed           |
+|    4 | hippie expansions   |
+
+Only the topmost inhabited tier is offered by the completion preview; everything below it remains reachable in the Corfu popup. Tier 1 exists only where an expected type can be obtained, so the scheme weakens in untyped languages, where tier 1 is empty and tier 3 absorbs the ordinary candidates. Within tier 1 candidates are ordered by a *type distance* from the expectation — how far a type must be bent to fit the position — defined per language.
+
+Snippet and hippie candidates are withheld until three characters have been typed, so short prefixes are not swamped. That gate applies to those two tiers only: well-typed and ill-typed candidates are offered from the first character. The exception is *listy* snippets — lists, records and arrays — whose triggers are one or two characters and are offered immediately.
+
+Candidates match with Orderless, so the typed text need not be a prefix and space-separated components match in any order. The completion preview is the exception, since it renders inline and so deals in a literal shared prefix.
+
+| key     | completion                                |
+|---------+-------------------------------------------|
+| =C-M-i= | open or dismiss the Corfu popup           |
+| =C-M-s= | narrow the candidates by a name regexp    |
+| =C-M-p= | narrow the candidates by a type search    |
+
+Snippet keys are the same in every language:
+
+| key     | snippet                                       |
+|---------+-----------------------------------------------|
+| =TAB=   | expand, or move on                            |
+| =RET=   | always move on                                |
+| =S-TAB= | cycle syntax alternatives, e.g. =let= / =let rec= |
+| =S-RET= | finish the snippet as it stands               |
+
 ** Corfu
 Explicit completion popup with documentation and Meow navigation.
 #+begin_src emacs-lisp
@@ -835,6 +870,111 @@ Explicit completion popup with documentation and Meow navigation.
            when (equal (string-join (nthcdr index parts) " -> ") wanted)
            return index))
 
+(defconst my/type-token-regexp
+  "'[A-Za-z_][A-Za-z0-9_']*\\|[A-Za-z_][A-Za-z0-9_'.]*\\|->\\|[()*,]")
+
+(defun my/type-tokenize (text)
+  "Return TEXT split into type tokens."
+  (let ((position 0)
+        tokens)
+    (while (string-match my/type-token-regexp text position)
+      (push (match-string 0 text) tokens)
+      (setq position (match-end 0)))
+    (nreverse tokens)))
+
+(defvar my/type-tokens nil)
+
+(defun my/type-parse-atom ()
+  (let ((token (pop my/type-tokens)))
+    (cond
+     ((null token) nil)
+     ((equal token "(")
+      (let ((items (list (my/type-parse-arrow))))
+        (while (equal (car my/type-tokens) ",")
+          (pop my/type-tokens)
+          (push (my/type-parse-arrow) items))
+        (when (equal (car my/type-tokens) ")") (pop my/type-tokens))
+        (cons 'group (nreverse items))))
+     ((string-prefix-p "'" token) (list 'var token))
+     (t (list 'app token)))))
+
+(defun my/type-parse-app ()
+  (let ((head (my/type-parse-atom)))
+    (while (and (car my/type-tokens)
+                (string-match-p "\\`[A-Za-z_]" (car my/type-tokens)))
+      (let ((name (pop my/type-tokens)))
+        (setq head (append (list 'app name)
+                           (if (eq (car-safe head) 'group)
+                               (cdr head)
+                             (list head))))))
+    (if (eq (car-safe head) 'group)
+        (if (cddr head) (cons 'tuple (cdr head)) (cadr head))
+      head)))
+
+(defun my/type-parse-tuple ()
+  (let ((items (list (my/type-parse-app))))
+    (while (equal (car my/type-tokens) "*")
+      (pop my/type-tokens)
+      (push (my/type-parse-app) items))
+    (if (cdr items) (cons 'tuple (nreverse items)) (car items))))
+
+(defun my/type-parse-arrow ()
+  (let ((items (list (my/type-parse-tuple))))
+    (while (equal (car my/type-tokens) "->")
+      (pop my/type-tokens)
+      (push (my/type-parse-tuple) items))
+    (if (cdr items) (cons 'arrow (nreverse items)) (car items))))
+
+(defun my/type-parse (text)
+  "Return TEXT parsed into a type tree."
+  (when-let* ((normalized (my/type-normalize text))
+              ((not (string-empty-p normalized))))
+    (let ((my/type-tokens (my/type-tokenize normalized)))
+      (my/type-parse-arrow))))
+
+(defun my/type-match-into (pattern ground table)
+  (cond
+   ((eq (car-safe pattern) 'var)
+    (let ((bound (gethash (cadr pattern) table 'absent)))
+      (if (eq bound 'absent)
+          (progn (puthash (cadr pattern) ground table) t)
+        (equal bound ground))))
+   ((and (eq (car-safe pattern) 'app) (eq (car-safe ground) 'app))
+    (and (equal (cadr pattern) (cadr ground))
+         (= (length pattern) (length ground))
+         (cl-every (lambda (left right) (my/type-match-into left right table))
+                   (cddr pattern) (cddr ground))))
+   ((and (memq (car-safe pattern) '(tuple arrow))
+         (eq (car-safe pattern) (car-safe ground))
+         (= (length pattern) (length ground)))
+    (cl-every (lambda (left right) (my/type-match-into left right table))
+              (cdr pattern) (cdr ground)))
+   (t nil)))
+
+(defun my/type-match (pattern ground)
+  "Return non-nil when PATTERN's variables can be instantiated to GROUND."
+  (and pattern ground
+       (my/type-match-into pattern ground (make-hash-table :test #'equal))
+       t))
+
+(defun my/type-ground-weight (tree)
+  "Return TREE's count of non-variable atoms."
+  (pcase (car-safe tree)
+    ('var 0)
+    ('app (apply #'+ 1 (mapcar #'my/type-ground-weight (cddr tree))))
+    ((or 'tuple 'arrow)
+     (apply #'+ 1 (mapcar #'my/type-ground-weight (cdr tree))))
+    (_ 0)))
+
+(defun my/type-reach (parts wanted)
+  "Return (K . WEIGHT) for the fewest leading PARTS dropped to reach WANTED."
+  (when-let* ((ground (my/type-parse wanted)))
+    (cl-loop for index below (length parts)
+             for remainder = (my/type-parse
+                              (string-join (nthcdr index parts) " -> "))
+             when (my/type-match remainder ground)
+             return (cons index (my/type-ground-weight remainder)))))
+
 (defun my/type-return-arity (type expected)
   "Return how many arguments of TYPE must be applied to obtain EXPECTED."
   (when-let* ((parts (my/type-arrow-parts type))
@@ -982,10 +1122,15 @@ Explicit completion popup with documentation and Meow navigation.
   (if (memq (plist-get entry :kind) '(construct collection record))
       (progn
         (setq entry (plist-put entry :tier 0))
-        (plist-put entry :arity 0))
+        (setq entry (plist-put entry :arity 0))
+        (plist-put entry :reach
+                   (and wanted
+                        (cons 0 (my/type-ground-weight
+                                 (my/type-parse wanted))))))
     (let* ((name (plist-get entry :name))
            (parts (my/type-arrow-parts (plist-get entry :typ)))
-           (exact (and parts wanted (my/type-suffix-arity parts wanted)))
+           (reach (and parts wanted (my/type-reach parts wanted)))
+           (exact (car reach))
            (server (cdr (my/type-template-holes
                          (plist-get entry :constructible))))
            (arity (or exact (and server (length server))))
@@ -997,16 +1142,12 @@ Explicit completion popup with documentation and Meow navigation.
                         (t (my/type-holes-from-parts parts arity)))))
       (setq entry (plist-put entry :arity (or arity 0)))
       (setq entry (plist-put entry :holes holes))
+      (setq entry (plist-put entry :reach reach))
       (setq entry (plist-put entry :tier
                              (cond
-                              ((and wanted
-                                    (eq (plist-get entry :source)
-                                        'type-search))
-                               0)
-                              ((and exact (equal exact arity)) 0)
-                              ((null (plist-get entry :typ)) 1)
-                              (wanted 3)
-                              (t 0))))
+                              ((eq (plist-get entry :kind) 'snippet) 1)
+                              (reach 0)
+                              (t 2))))
       (setq entry (plist-put entry :template
                              (and arity (my/type-application name holes))))
       (plist-put entry :snippet
@@ -1079,19 +1220,29 @@ Explicit completion popup with documentation and Meow navigation.
        (or my/type-completion-inhibit-probe
            (not (eq my/type-completion-probed 'shallow)))))
 
-(defun my/type-completion-arity (candidate)
-  "Return how many of CANDIDATE's arguments yield the expected type."
+(defun my/type-completion-reach (candidate)
+  "Return CANDIDATE's (K . WEIGHT) distance from the expected type."
   (when-let* ((wanted my/type-completion-wanted)
               (detail (my/completion-candidate-detail candidate))
               (key (my/type-remove-candidate-prefix detail candidate)))
     (unless my/type-completion-arities
       (setq my/type-completion-arities (make-hash-table :test #'equal)))
-    (let ((cached (gethash key my/type-completion-arities 'absent)))
+    (let* ((cache-key (cons wanted key))
+           (cached (gethash cache-key my/type-completion-arities 'absent)))
       (if (eq cached 'absent)
-          (puthash key
-                   (my/type-suffix-arity (my/type-arrow-parts key) wanted)
+          (puthash cache-key
+                   (my/type-reach (my/type-arrow-parts key) wanted)
                    my/type-completion-arities)
         cached))))
+
+(defun my/type-completion-entry-reach (candidate)
+  "Return CANDIDATE's distance, preferring its semantic entry."
+  (or (plist-get (my/type-completion-entry candidate) :reach)
+      (my/type-completion-reach candidate)))
+
+(defun my/type-completion-arity (candidate)
+  "Return how many of CANDIDATE's arguments yield the expected type."
+  (car (my/type-completion-entry-reach candidate)))
 
 (defconst my/ocaml-operator-characters "!$%&*+./:<=>?@^|~-")
 
@@ -1117,8 +1268,8 @@ Explicit completion popup with documentation and Meow navigation.
       (cons (1- end) end)))))
 
 (defun my/type-hole-pattern (string)
-  "Return STRING with a bare OCaml hole reduced to an empty prefix."
-  (if (equal string "_") "" string))
+  "Return STRING with a leading OCaml hole dropped from the prefix."
+  (if (string-prefix-p "_" string) (substring string 1) string))
 
 (defmacro my/type-hole-delegate (string body)
   "Evaluate BODY on STRING reduced by `my/type-hole-pattern'."
@@ -1174,15 +1325,14 @@ Explicit completion popup with documentation and Meow navigation.
           text)))))
 
 (defun my/type-completion-tier (candidate &optional index)
-  "Return the ranking class CANDIDATE belongs to at server order INDEX."
+  "Return the tier CANDIDATE belongs to at server order INDEX."
   (ignore index)
-  (if-let* ((entry (my/type-completion-entry candidate)))
-      (cond
-       ((eq (plist-get entry :kind) 'snippet) 1)
-       ((memq (plist-get entry :source) '(hippie file)) 3)
-       ((not my/type-completion-wanted) 2)
-       (t (min (or (plist-get entry :tier) 2) 3)))
-    2))
+  (let ((entry (my/type-completion-entry candidate)))
+    (cond
+     ((and entry (memq (plist-get entry :source) '(hippie file))) 3)
+     ((and entry (eq (plist-get entry :kind) 'snippet)) 1)
+     ((my/type-completion-entry-reach candidate) 0)
+     (t 2))))
 
 (defun my/type-completion-top-tier (candidates)
   "Return CANDIDATES restricted to the best class any of them reaches."
@@ -1213,18 +1363,19 @@ Explicit completion popup with documentation and Meow navigation.
     (or (eq (plist-get item :deprecated) t)
         (and (seq-contains-p (plist-get item :tags) 1) t))))
 
+(defvar my/type-completion-weight-limit 31)
+
 (defun my/type-completion-sort-key (candidate index)
   "Return CANDIDATE's packed rank, falling back to its server order INDEX."
   (let* ((entry (my/type-completion-entry candidate))
-         (typed-arity (unless entry
-                        (and (< index my/type-completion-rank-limit)
-                             (my/type-completion-arity candidate)))))
-    (logior (ash (my/type-completion-tier candidate index) 22)
-            (ash (if (my/type-completion-deprecated-p candidate) 1 0) 21)
-            (ash (min (or (and entry (plist-get entry :arity))
-                          typed-arity 0)
-                      15)
-                 17)
+         (reach (and (or entry (< index my/type-completion-rank-limit))
+                     (my/type-completion-entry-reach candidate)))
+         (distance (- my/type-completion-weight-limit
+                      (min (or (cdr reach) 0) my/type-completion-weight-limit))))
+    (logior (ash (my/type-completion-tier candidate index) 27)
+            (ash (if (my/type-completion-deprecated-p candidate) 1 0) 26)
+            (ash distance 21)
+            (ash (min (or (car reach) 0) 15) 17)
             (ash (if (my/type-completion-prefix-match-p candidate) 0 1) 16)
             (min (if entry (plist-get entry :rank) index) 65535))))
 
@@ -1802,15 +1953,15 @@ Explicit completion popup with documentation and Meow navigation.
 #+end_src
 
 ** Inline preview
-The best prefix-only completion tier appears inline and is accepted with =TAB=; ambiguous candidates show only their shared prefix, while a sole candidate shows its complete snippet expansion.
+The preview fires only when one common prefix matches every inhabitant of the topmost inhabited tier (see [[Overview]]), and is accepted with =TAB=.
 
-Cursor motion triggers the preview from an idle timer without blocking on a language-server type probe. Already-correct terms suppress it, except for bare holes.
+Where that prefix resolves to a single candidate the preview shows that candidate's whole *expansion*, which is how snippet and application completions appear. Where it does not — =max_int= and =max_float= share =max_=, which is neither of them — it shows the plain shared prefix, with no expansion and no argument inference, there being no single type to work from.
 
-That shallow probe only asks for signature help, so an explicit completion at the same position still runs the full expected-type probe rather than inheriting its empty answer.
+Point stays at the end of the typed text rather than jumping to the end of the preview, so the preview may render on both sides of point.
 
-At a bare hole, completion considers every candidate in the best tier and previews the result as a replacement for the underscore.
+The term already at point counts as a candidate. A term that is already well-typed is therefore in tier 1 and is trivially the maximal common prefix, so the preview completes it to itself — type-directed, filling in argument holes. A term that is not well-typed is usually not in tier 1, so a more useful preview may fire instead.
 
-Positions without an expected type require three typed characters before previewing.
+Cursor motion triggers the preview from an idle timer, and it never blocks on a language-server request.
 
 #+begin_src emacs-lisp
 
@@ -2998,8 +3149,37 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
     (and (= (- end beginning) 1)
          (string= (buffer-substring-no-properties beginning end) "_")))
 
-  (defun my/type-completion-enclosing-request (key &optional position index)
-    "Request a concrete enclosing type at POSITION and install it under KEY."
+  (defun my/type-completion-notify-text (server text)
+    "Tell SERVER that this buffer's document now reads TEXT."
+    (cl-incf eglot--docver)
+    (jsonrpc-notify
+     server :textDocument/didChange
+     (list :textDocument (eglot--VersionedTextDocumentIdentifier)
+           :contentChanges (vector (list :text text)))))
+
+  (defun my/type-completion-hole-request (key beginning end)
+    "Request the type of a hole standing in for BEGINNING to END under KEY.
+The substitution is sent to the server only, so the buffer is never edited."
+    (condition-case nil
+        (let* ((server (eglot--current-server-or-lose))
+               (whole (buffer-substring-no-properties (point-min) (point-max)))
+               (from (- beginning (point-min)))
+               (to (- end (point-min)))
+               (substituted (concat (substring whole 0 from)
+                                    "_"
+                                    (substring whole to))))
+          (eglot--signal-textDocument/didChange)
+          (my/type-completion-notify-text server substituted)
+          (my/type-completion-enclosing-request
+           key (eglot--pos-to-lsp-position beginning) 0 t)
+          (my/type-completion-notify-text server whole))
+      (error (setq my/type-completion-probed nil))))
+
+  (defun my/type-completion-enclosing-request
+      (key &optional position index immediate)
+    "Request a concrete enclosing type at POSITION and install it under KEY.
+IMMEDIATE sends the request at once and does not widen to outer enclosings,
+which the caller needs when the document only momentarily holds a hole."
     (setq my/type-completion-probed 'pending
           my/type-completion-state 'pending)
     (condition-case nil
@@ -3008,7 +3188,8 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
               (server (eglot--current-server-or-lose))
               (position (or position (eglot--pos-to-lsp-position)))
               (index (or index 0)))
-          (jsonrpc-async-request
+          (apply
+           #'jsonrpc-async-request
            server :ocamllsp/typeEnclosing
            (ocaml-eglot-req--TypeEnclosingParams position index 0)
            :success-fn
@@ -3016,7 +3197,8 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
              (let* ((expected (let ((text (my/type-normalize (plist-get result :type))))
                                (and (my/type-informative-p text) text)))
                     (next (1+ index))
-                    (more (< next (length (plist-get result :enclosings)))))
+                    (more (and (not immediate)
+                               (< next (length (plist-get result :enclosings))))))
                (if (and more (my/type-unconstrained-p expected))
                    (when (buffer-live-p buffer)
                      (with-current-buffer buffer
@@ -3057,7 +3239,7 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
                 (setq my/type-completion-probed nil
                       my/type-completion-state 'timeout))))
            :timeout 2.0
-           :deferred 'my/type-completion-enclosing))
+           (unless immediate (list :deferred 'my/type-completion-enclosing))))
       (error (setq my/type-completion-probed nil))))
 
   (defun my/type-completion-signature-request (key)
@@ -3249,11 +3431,14 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
       (unless (equal key my/type-completion-key)
         (my/type-completion-reset key)
         (my/type-completion-reindex)
-        (if (my/type-completion-ocaml-p)
-            (save-excursion
-              (goto-char (if hole beginning (point)))
-              (my/type-completion-enclosing-request key))
-          (setq my/type-completion-probed 'untyped)))
+        (cond
+         ((not (my/type-completion-ocaml-p))
+          (setq my/type-completion-probed 'untyped))
+         (hole
+          (save-excursion
+            (goto-char beginning)
+            (my/type-completion-enclosing-request key)))
+         (t (my/type-completion-hole-request key beginning end))))
       t))
 
   (defun my/type-completion-underline-match (type)
@@ -3590,7 +3775,7 @@ completion replaces a bare `_', whose text must not filter the candidates."
                 (my/type-completion-replacement-beginning
                  beginning expansion)
               beginning)))
-      (if (and (eq status 'finished) action)
+      (if (and (memq status '(finished exact)) action)
           (my/type-completion-apply-action action action-beginning)
         (when (and original
                    (or (not entry)
@@ -6602,26 +6787,60 @@ Sly drives SBCL directly; no LSP.
 #+end_src
 
 ** OCaml
-Installed dependency sources retain Eglot navigation without standalone Flymake diagnostics.
+What OCaml adds to the completion described under [[Overview]].
 
-OCaml-specific behaviour on top of the shared completion described under [[Languages]]:
+*** Snippet catalogue
+Function application, =let=, =match=, =if=, =try=, =fun=, =function=, =while=, =for=, =type=, =module=, =open=, =val=, =exception=, =external=, plus the listy ones =[=, =[|= and ={=. =let rec= is not a separate snippet but a syntax alternative of =let=, reached with =S-TAB=.
 
-- *Type-directed candidates* — =ocamllsp/typeSearch= supplies values whose return
-  type matches the hole, already ranked by merlin's cost; =ocamllsp/construct=
-  supplies type-correct constructions. See [[Cape]].
-- *Typed holes* — a bare =_= completes as an empty prefix and is replaced by the
-  chosen candidate, via a dedicated completion style. See [[Corfu]].
-- *Structured snippets* — constructs are a model that =TAB= extends, =S-TAB=
-  cycles between valid alternative forms, =RET= walks fields and =S-RET= ends;
-  a negative prefix (=C-- TAB=) steps back. See [[Structured snippets]].
-- *Snippets as candidates* — literals, operators and constructs appear in the
-  completion list gated by the expected type, so =[= offers a list and =*= offers
-  =(_ * _)= only where those typecheck.
-- *Signature-driven bodies* — a module annotated =: S= offers the items declared
-  by =S= with their names fixed and arity taken from the declared type.
-- *Applications* — arity comes from the expected type, labelled arguments render
-  with their labels, and optional arguments stay omitted until =TAB= adds them.
-- *Menu* — =C-c .= collects snippets, type queries, navigation and refactors.
+Application snippets are generated rather than written by hand, for any value or operator in scope including user-defined operators. Every argument is parenthesised so that filling a hole with a compound expression cannot reassociate; the formatter removes the parentheses that turn out to be redundant. There are three variants, chosen by classifying the name against OCaml's grammar:
+
+| variant | applies to                          | =k= full            | =k= partial   | =k= zero    |
+|---------+-------------------------------------+---------------------+---------------+-------------|
+| normal  | values =f=, prefix operators =!=    | =(f (_) (_))=, =(!(_))= | =(f (_))=  | =f=, =( ! )= |
+| binary  | infix operators =*=, =>>== | =((_) * (_))=       | =(( * ) (_))= | =( * )=     |
+| binding | binding operators =let*=, =and*=    | =(let* x = _ in _)= | =(( let* ) (_))= | =( let* )= |
+
+Any variant can also be written as plain prefix application, which is what =S-TAB= cycles to.
+
+*** Well-typed ranking
+A candidate is well-typed when dropping =k ≥ 0= of its leading arguments leaves a remainder =R= consistent with the expected type =T=, where =R= may be more polymorphic — a one-way match, so ='a -> 'a= reaches =int= at =k = 1=.
+
+The type distance ordering tier 1 is the pair (specificity of =R=, =k=), compared in that order. Specificity is a partial order by instantiation, refined by counting non-variable atoms, more first: a candidate fitting exactly is nearer than one fitting only because it is polymorphic enough to instantiate. Then fewer applied arguments is nearer than more.
+
+| =T=         | candidate                   | =R=         | atoms | =k= |
+|-------------+-----------------------------+-------------+-------+-----|
+| =int=       | =0 : int=                   | =int=       |     1 |   0 |
+| =int=       | =abs : int -> int=          | =int=       |     1 |   1 |
+| =int=       | =failwith : string -> 'a=   | ='a=        |     0 |   1 |
+| =int * int= | =p : int * int=             | =int * int= |     3 |   0 |
+| =int * int= | =q : 'a * int=              | ='a * int=  |     2 |   0 |
+
+Counting distinct type variables would not do: ='b * 'c= has two to ='a='s one, yet is the more specific shape.
+
+*** Preview examples
+Bold marks text already typed, which renders as ordinary buffer text; the rest is the grey preview, and =‸= marks point.
+
+| context              | typed | topmost tier                          | preview                  |
+|----------------------+-------+---------------------------------------+--------------------------|
+| expecting =int=      | =+=   | 1, =+= itself                         | ((\_) *+*‸ (\_))         |
+| any                  | =let= | 2                                     | *let*‸ x = \_            |
+| expecting =string=   | =str= | 1: =string_of_int=, =string_of_float= | *str*‸ing\_of\_          |
+| any                  | =max= | 3: =max_int=, =max_float=             | *max*‸\_                 |
+| expecting =int list= | =l=   | 1: =list_map= alone                   | (*l*‸ist\_map (\_) (\_)) |
+| no expected type     | =l=   | 3, many candidates                    | nothing                  |
+
+The two =string= and =max= rows show the plain shared prefix, since neither =string_of_= nor =max_= is a candidate in its own right. The last row is empty because snippet and hippie candidates wait for three characters, while the row above shows a sole well-typed candidate previewing on one.
+
+*** Language server
+=ocamllsp/typeSearch= takes a type as its query and returns values inhabiting it, which is what populates tier 1 and what =C-M-p= exposes directly; =C-M-s= filters the candidates already in hand and needs no round trip. =ocamllsp/construct= supplies type-correct constructions at a hole, =ocamllsp/typeEnclosing= the expected type, and =completionItem/resolve= the documentation for the selected candidate.
+
+Every request is asynchronous and debounced, so completion at point never waits on the server. Replies are installed against a generation counter and stale ones dropped, and installing results repaints a live Corfu popup in place — so the popup may open with only hippie candidates and fill in when the server answers. The expected type is obtained by sending the document with a hole substituted for the term at point, querying the enclosing type and sending the document back; the buffer itself is never edited. Ranking reads =:detail= for server candidates and =:typ= for type-search entries.
+
+*** Holes
+A bare =_= is a typed hole. Its underscore is not treated as part of the completion prefix, so every candidate stays available, while the type derived from the hole is retained for ranking.
+
+*** Other
+Installed dependency sources retain Eglot navigation without standalone Flymake diagnostics. A module annotated =: S= offers the items declared by =S= with their names fixed and arity from the declared type. Labelled arguments render with their labels and optional arguments stay omitted until =TAB= adds them. =C-c .= collects snippets, type queries, navigation and refactors.
 
 #+begin_src emacs-lisp
 (use-package tuareg :mode ("\\.ml[ily]?\\'" . tuareg-mode))
