@@ -1974,17 +1974,19 @@ Cursor motion triggers the preview from an idle timer, and it never blocks on a 
 (defun my/ocaml-incomplete-pattern-context-p ()
   "Return non-nil when nearby incomplete syntax starts a pattern."
   (save-excursion
-    (let ((limit (max (point-min) (- (point) 2000))))
+    (let ((origin (point))
+          (limit (max (point-min) (- (point) 2000))))
       (catch 'context
         (while (re-search-backward
                 "\\_<\\(?:let\\|and\\|fun\\|function\\|with\\|type\\|module\\|class\\|exception\\|val\\|external\\)\\_>\\||\\|->\\|="
                 limit t)
           (let ((token (match-string-no-properties 0)))
-            (unless (and (equal token "|")
-                         (or (memq (char-before (match-beginning 0))
-                                   '(?\[ ?< ?|))
-                             (memq (char-after (match-end 0))
-                                   '(?\] ?> ?|))))
+            (unless (or (= (match-end 0) origin)
+                        (and (equal token "|")
+                             (or (memq (char-before (match-beginning 0))
+                                       '(?\[ ?< ?|))
+                                 (memq (char-after (match-end 0))
+                                       '(?\] ?> ?|)))))
               (throw 'context (not (member token '("->" "=")))))))
         nil))))
 
