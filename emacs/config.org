@@ -1170,6 +1170,7 @@ Explicit completion popup with documentation and Meow navigation.
                "\\_<\\(?:let\\|fun\\|function\\|match\\)\\_>" type)))))
 
 (defvar-local my/type-completion-input "")
+(defvar-local my/type-completion-typed "")
 (defvar-local my/type-completion-qualifier "")
 (defvar my/type-completion-delegate-styles '(orderless basic))
 
@@ -2754,10 +2755,11 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
                       my/ocaml-snippet-registry))))
            (trigger (or (plist-get entry :trigger) ""))
            (literal (member trigger '("[" "[|" "{")))
-           (fallback (memq (plist-get entry :source) '(hippie file))))
+           (fallback (memq (plist-get entry :source) '(hippie file)))
+           (typed (max (length input) (length my/type-completion-typed))))
       (cond
-       (fallback (>= (length input) 3))
-       (snippet (or hole literal (>= (length input) 3)))
+       (fallback (>= typed 3))
+       (snippet (or hole literal (>= typed 3)))
        (t t))))
 
   (defun my/type-completion-literal-prefix-candidates (string)
@@ -3839,6 +3841,7 @@ completion replaces a bare `_', whose text must not filter the candidates."
                           (my/type-completion-hole-p beginning end)))
                (original (buffer-substring-no-properties beginning end))
                (prefix (if hole "" original))
+               (_ (setq my/type-completion-typed prefix))
                (key (my/type-completion-position-key beginning end))
                (request-position (if hole beginning (point))))
           (my/type-completion-ensure beginning end)
