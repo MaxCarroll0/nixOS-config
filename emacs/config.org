@@ -676,26 +676,31 @@ Candidates are classified into four tiers, offered in this order:
 |    3 | ill-typed           |
 |    4 | hippie expansions   |
 
-Only the topmost inhabited tier is offered by the completion preview; everything below it remains reachable in the Corfu popup. Tier 1 exists only where an expected type can be obtained, so the scheme weakens in untyped languages, where tier 1 is empty and tier 3 absorbs the ordinary candidates. Within tier 1 candidates are ordered by a *type distance* from the expectation — how far a type must be bent to fit the position — defined per language.
+Only the topmost inhabited tier is offered by the completion preview; everything below it remains reachable in the Corfu popup. Tier 1 exists only where an expected type can be obtained, so the scheme weakens in untyped languages, where tier 1 is empty and tier 3 absorbs the ordinary candidates. Within tier 1 candidates are ordered by a *type distance* from the expectation (how far a type must be bent to fit the position), defined per language.
 
-Snippet and hippie candidates are withheld until three characters have been typed, so short prefixes are not swamped. That gate applies to those two tiers only: well-typed and ill-typed candidates are offered from the first character. The exception is *listy* snippets — lists, records and arrays — whose triggers are one or two characters and are offered immediately.
+Text buffers weaken it once further: with neither an expected type nor a language server, tiers 1 and 3 are both empty and only the snippet and hippie tiers remain, under the same rules as everywhere else.
+
+Snippet and hippie candidates are withheld until three characters have been typed, so short prefixes are not swamped. That gate applies to those two tiers only: well-typed and ill-typed candidates are offered from the first character. The exception is *listy* snippets (lists, records and arrays), whose triggers are one or two characters and are offered immediately.
 
 Candidates match with Orderless, so the typed text need not be a prefix and space-separated components match in any order. The completion preview is the exception, since it renders inline and so deals in a literal shared prefix.
 
-| key     | completion                                |
-|---------+-------------------------------------------|
-| =C-M-i= | open or dismiss the Corfu popup           |
-| =C-M-s= | narrow the candidates by a name regexp    |
-| =C-M-p= | narrow the candidates by a type search    |
+| key     | completion                                          |
+|---------+-----------------------------------------------------|
+| =C-M-i= | open or dismiss the Corfu popup                     |
+| =C-M-s= | narrow the candidates by a name regexp              |
+| =C-M-p= | narrow the candidates by a type search              |
+| =S-TAB= | step to the next alternative                        |
+
+=S-TAB= is one flat cycle rather than several keys. It walks the alternatives of the thing at point first, then each remaining inhabited tier in order, then the syntax variants of whatever snippet is live. Stepping applies only to the completion in progress and is forgotten once the preview closes, so a well-typed suggestion can be traded for a snippet, a snippet for a Hippie expansion, and a =let= for a =let rec=, all on the same key. Conflicts between the stages are rare in practice.
 
 Snippet keys are the same in every language:
 
-| key     | snippet                                       |
-|---------+-----------------------------------------------|
-| =TAB=   | expand, or move on                            |
-| =RET=   | always move on                                |
-| =S-TAB= | cycle syntax alternatives, e.g. =let= / =let rec= |
-| =S-RET= | finish the snippet as it stands               |
+| key     | snippet                                  |
+|---------+------------------------------------------|
+| =TAB=   | expand, or move on                       |
+| =RET=   | always move on                           |
+| =S-TAB= | continue the flat cycle above            |
+| =S-RET= | finish the snippet as it stands          |
 
 ** Corfu
 Explicit completion popup with documentation and Meow navigation.
@@ -1335,6 +1340,30 @@ Explicit completion popup with documentation and Meow navigation.
      ((my/type-completion-entry-reach candidate) 0)
      (t 2))))
 
+(defvar-local my/completion-preview-tier-offset 0)
+
+(defun my/completion-preview-reset-tier ()
+  "Forget any tier chosen for the completion that has just ended."
+  (setq my/completion-preview-tier-offset 0))
+
+(defun my/completion-preview-next-tier ()
+  "Preview the next inhabited tier, for this completion only."
+  (interactive)
+  (setq my/completion-preview-tier-offset
+        (1+ my/completion-preview-tier-offset))
+  (completion-preview--update))
+
+(defun my/type-completion-offset-tier (candidates offset)
+  "Return CANDIDATES in the inhabited tier OFFSET places below the best."
+  (when candidates
+    (let* ((tiers (sort (delete-dups
+                         (mapcar #'my/type-completion-tier candidates))
+                        #'<))
+           (tier (nth (mod offset (length tiers)) tiers)))
+      (seq-filter (lambda (candidate)
+                    (eql (my/type-completion-tier candidate) tier))
+                  candidates))))
+
 (defun my/type-completion-top-tier (candidates)
   "Return CANDIDATES restricted to the best class any of them reaches."
   (when candidates
@@ -1956,11 +1985,11 @@ Explicit completion popup with documentation and Meow navigation.
 ** Inline preview
 The preview fires only when one common prefix matches every inhabitant of the topmost inhabited tier (see [[Overview]]), and is accepted with =TAB=.
 
-Where that prefix resolves to a single candidate the preview shows that candidate's whole *expansion*, which is how snippet and application completions appear. Where it does not — =max_int= and =max_float= share =max_=, which is neither of them — it shows the plain shared prefix, with no expansion and no argument inference, there being no single type to work from.
+Where that prefix resolves to a single candidate the preview shows that candidate's whole *expansion*, which is how snippet and application completions appear. Where it does not (=max_int= and =max_float= share =max_=, which is neither of them) it shows the plain shared prefix, with no expansion and no argument inference, there being no single type to work from.
 
 Point stays at the end of the typed text rather than jumping to the end of the preview, so the preview may render on both sides of point.
 
-The term already at point counts as a candidate. A term that is already well-typed is therefore in tier 1 and is trivially the maximal common prefix, so the preview completes it to itself — type-directed, filling in argument holes. A term that is not well-typed is usually not in tier 1, so a more useful preview may fire instead.
+The term already at point counts as a candidate. A term that is already well-typed is therefore in tier 1 and is trivially the maximal common prefix, so the preview completes it to itself, type-directed, filling in argument holes. A term that is not well-typed is usually not in tier 1, so a more useful preview may fire instead.
 
 Cursor motion triggers the preview from an idle timer, and it never blocks on a language-server request.
 
@@ -2075,23 +2104,81 @@ Cursor motion triggers the preview from an idle timer, and it never blocks on a 
          (current (overlay-get overlay 'after-string)))
     (overlay-put overlay 'my/completion-preview-canonical current)
     (setq text (copy-sequence text))
-    (unless (get-text-property 0 'face text)
-      (add-text-properties 0 (length text) '(face completion-preview) text))
-    (add-text-properties 0 (length text)
-                         (list 'mouse-face 'completion-preview-highlight
-                               'keymap my/completion-preview-mouse-map)
-                         text)
+    (when (> (length text) 0)
+      (unless (get-text-property 0 'face text)
+        (add-text-properties 0 (length text) '(face completion-preview) text))
+      (add-text-properties 0 (length text)
+                           (list 'mouse-face 'completion-preview-highlight
+                                 'keymap my/completion-preview-mouse-map)
+                           text))
     (overlay-put overlay 'my/completion-preview-rendered text)
     (overlay-put overlay 'after-string text)))
+
+(defun my/completion-preview-try-table (table beg end props)
+  "Return preview data for TABLE, keeping a candidate equal to the typed text.
+Emacs drops that candidate, which lets a longer one supply the shared prefix
+and preview over a term that is already correct."
+  (let* ((pred (plist-get props :predicate))
+         (string (buffer-substring beg end))
+         (completion-extra-properties props)
+         (md (completion-metadata string table pred))
+         (sort-fn (or (completion-metadata-get md 'cycle-sort-function)
+                      (completion-metadata-get md 'display-sort-function)
+                      completion-preview-sort-function))
+         (all (let ((completion-lazy-hilit t)
+                    (completion-styles completion-preview-completion-styles))
+                (completion-all-completions string table pred
+                                            (- (point) beg) md)))
+         (last (last all))
+         (base (or (cdr last) 0))
+         (prefix (substring string base)))
+    (when last
+      (setcdr last nil)
+      (when-let* ((sorted (funcall sort-fn (all-completions prefix all)))
+                  (raw (try-completion prefix sorted))
+                  (common (if (eq raw t) prefix raw))
+                  (lencom (length common)))
+        (unless (and (cdr sorted) completion-preview-exact-match-only)
+          (list (substring string 0 base) common
+                (mapcar (lambda (candidate) (substring candidate lencom))
+                        sorted)))))))
 
 (defun my/completion-preview-reset-rendering ()
   "Forget rendering state installed by the previous preview update."
   (my/completion-preview-hide-hole)
+  (my/completion-preview-hide-lead)
   (when completion-preview--overlay
     (overlay-put completion-preview--overlay
                  'my/completion-preview-canonical nil)
     (overlay-put completion-preview--overlay
                  'my/completion-preview-rendered nil)))
+
+(defvar-local my/completion-preview-lead-overlay nil)
+
+(defun my/completion-preview-put-split-rendered (text bounds)
+  "Show TEXT around the typed span at BOUNDS, leaving point where it is."
+  (let* ((typed (buffer-substring-no-properties (car bounds) (cdr bounds)))
+         (index (and (not (string-empty-p typed))
+                     (string-search typed text))))
+    (if (null index)
+        (my/completion-preview-put-hole-rendered text bounds)
+      (let ((lead (substring text 0 index))
+            (rest (substring text (+ index (length typed)))))
+        (my/completion-preview-put-rendered rest)
+        (unless (string-empty-p lead)
+          (setq my/completion-preview-lead-overlay
+                (make-overlay (car bounds) (car bounds)))
+          (overlay-put my/completion-preview-lead-overlay 'before-string
+                       (propertize lead
+                                   'face 'completion-preview
+                                   'mouse-face 'completion-preview-highlight
+                                   'keymap my/completion-preview-mouse-map)))))))
+
+(defun my/completion-preview-hide-lead ()
+  "Remove the overlay carrying preview text before point."
+  (when (overlayp my/completion-preview-lead-overlay)
+    (delete-overlay my/completion-preview-lead-overlay))
+  (setq my/completion-preview-lead-overlay nil))
 
 (defun my/completion-preview-put-hole-rendered (text bounds)
   "Show TEXT in place of the bare hole at BOUNDS."
@@ -2184,7 +2271,7 @@ Cursor motion triggers the preview from an idle timer, and it never blocks on a 
         (if (string-prefix-p typed full)
             (my/completion-preview-put-rendered
              (substring full (length typed)))
-          (my/completion-preview-put-hole-rendered
+          (my/completion-preview-put-split-rendered
            full (cons replacement-beginning (overlay-start overlay)))))
     (error nil)))
 
@@ -2256,6 +2343,8 @@ Cursor motion triggers the preview from an idle timer, and it never blocks on a 
         ("C-i" . nil)
         ("TAB" . my/completion-preview-accept)
         ("<tab>" . my/completion-preview-accept)
+        ("S-TAB" . my/completion-preview-next-tier)
+        ("<backtab>" . my/completion-preview-next-tier)
         ("S-SPC" . my/completion-preview-dismiss)
         ("C-<return>" . nil))
   :custom
@@ -2273,8 +2362,14 @@ Cursor motion triggers the preview from an idle timer, and it never blocks on a 
     (add-to-list 'completion-preview-commands command))
   (advice-add #'completion-preview--update
               :around #'my/completion-preview-without-probe)
+  (advice-add #'completion-preview--try-table
+              :override #'my/completion-preview-try-table)
   (advice-add #'completion-preview-hide
-              :after #'my/completion-preview-hide-hole))
+              :after #'my/completion-preview-hide-hole)
+  (advice-add #'completion-preview-hide
+              :after #'my/completion-preview-hide-lead)
+  (advice-add #'completion-preview-hide
+              :after #'my/completion-preview-reset-tier))
 
 #+end_src
 
@@ -2368,11 +2463,16 @@ Orderless with Corfu
 Completion tiers are: verified well-typed terms and constructors, applicable Yasnippets, unverified LSP terms, then Hippie Expand and cached local fallbacks.
 
 Every Eglot buffer publishes immutable asynchronous snapshots and never waits for its language server while typing.
+
+Yasnippet joins Hippie Expand's own cycling on =M-/=. Hippie's try functions are a cycling protocol rather than an enumerable source, so completion at point re-expresses each of them as a scan over the same buffers: words and symbols, whole lines, bracketed argument lists, abbrevs and the kill ring. Case folding follows =dabbrev-case-fold-search=, so matching ignores case wherever Dabbrev would.
 #+begin_src emacs-lisp
 
 (use-package hippie-exp
   :ensure nil
-  :bind ([remap dabbrev-expand] . hippie-expand))
+  :bind ([remap dabbrev-expand] . hippie-expand)
+  :config
+  (with-eval-after-load 'yasnippet
+    (add-to-list 'hippie-expand-try-functions-list #'yas-hippie-try-expand)))
 
 (use-package cape
   :after corfu
@@ -2449,6 +2549,32 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
                        (add (match-string-no-properties 0 text))))
                    (setq position (max (1+ (match-beginning 0))
                                        (match-end 0)))))))
+           (scan-matches (buffer regexp collect)
+             (unless (string-empty-p pattern)
+               (with-current-buffer buffer
+                 (save-excursion
+                   (save-restriction
+                     (widen)
+                     (goto-char (point-min))
+                     (while (and (< count my/hippie-expand-candidate-limit)
+                                 (re-search-forward regexp nil t))
+                       (add (funcall collect))))))))
+           (scan-lines (buffer)
+             (scan-matches
+              buffer
+              (concat "^[ \t]*\\(" (regexp-quote pattern) "[^\n]*[^ \t\n]\\)")
+              (lambda () (match-string-no-properties 1))))
+           (scan-lists (buffer)
+             (scan-matches
+              buffer
+              (concat "\\_<" (regexp-quote pattern) "[^\n([{]*")
+              (lambda ()
+                (when-let* (((memq (char-after) '(?\( ?\[ ?{)))
+                            (stop (ignore-errors (scan-sexps (point) 1)))
+                            (text (buffer-substring-no-properties
+                                   (match-beginning 0) stop))
+                            ((not (string-search "\n" text))))
+                  text))))
            (scan-abbrevs ()
              (dolist (table-symbol
                       (append '(local-abbrev-table global-abbrev-table)
@@ -2482,7 +2608,9 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
                               (my/hippie-expand-buffer-eligible-p buffer))
                      (scan-buffer buffer)
                      (setq searched (1+ searched))))))
-              ('try-expand-dabbrev-from-kill (scan-kill-ring)))))
+              ('try-expand-dabbrev-from-kill (scan-kill-ring))
+              ('try-expand-line (scan-lines origin))
+              ('try-expand-list (scan-lists origin)))))
         (nreverse result))))
 
   (defun my/hippie-expand-build-snapshot (buffer)
@@ -2514,14 +2642,17 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
 
   (defun my/hippie-expand-cached-candidates (pattern)
     "Return cached Hippie candidates matching PATTERN."
-    (seq-take
-     (seq-filter
-      (lambda (candidate)
-        (and (not (equal candidate pattern))
-             (or (string-empty-p pattern)
-                 (string-prefix-p pattern candidate completion-ignore-case))))
-      my/hippie-expand-snapshot)
-     my/hippie-expand-candidate-limit))
+    (let ((fold (if (eq dabbrev-case-fold-search 'case-fold-search)
+                    case-fold-search
+                  dabbrev-case-fold-search)))
+      (seq-take
+       (seq-filter
+        (lambda (candidate)
+          (and (not (equal candidate pattern))
+               (or (string-empty-p pattern)
+                   (string-prefix-p pattern candidate fold))))
+        my/hippie-expand-snapshot)
+       my/hippie-expand-candidate-limit)))
 
   (defun my/file-completion-bounds ()
     "Return bounds of a path-like token ending at point."
@@ -2589,7 +2720,7 @@ Every Eglot buffer publishes immutable asynchronous snapshots and never waits fo
                       (equal input "_")))
            (pattern (if hole "" input)))
       (my/hippie-expand-schedule-snapshot)
-      (when-let* ((candidates (and (or hole (not (string-empty-p pattern)))
+      (when-let* ((candidates (and (or hole (>= (length pattern) 3))
                                     (my/hippie-expand-cached-candidates pattern))))
         (list beginning end candidates
               :category 'hippie-expand
@@ -3797,13 +3928,14 @@ completion replaces a bare `_', whose text must not filter the candidates."
           (let* ((my/type-completion-input (my/type-hole-pattern string))
                  (hole (equal string "_"))
                  (candidates
-                  (my/type-completion-top-tier
+                  (my/type-completion-offset-tier
                    (seq-filter
                     (lambda (candidate)
                       (and (my/type-completion-visible-p
                             candidate my/type-completion-input hole)
                            (my/type-completion-prefix-match-p candidate)))
-                    (all-completions string table predicate))))
+                    (all-completions string table predicate))
+                   my/completion-preview-tier-offset))
                  preview-candidates)
             (setq my/completion-preview-candidates
                   (make-hash-table :test #'equal))
@@ -3939,19 +4071,19 @@ Prefer tree-sitter modes when their grammar and mode are available.
 
 Completion behaviour shared by every language server, built on standard LSP only:
 
-- *Server-side ranking* — candidates keep the server's own order
+- *Server-side ranking*: candidates keep the server's own order
   (=sortText=), and are never re-scored locally. See [[Cape]].
-- *Expected type at point* — =textDocument/signatureHelp= then
+- *Expected type at point*: =textDocument/signatureHelp= then
   =textDocument/hover=, both asynchronous, cached per position. See [[Corfu]].
-- *Return-type matching* — a paren-aware split of the type on top-level =->= or
+- *Return-type matching*: a paren-aware split of the type on top-level =->= or
   =>=, so a candidate ranks by what it returns once applied.
-- *Inline preview restraint* — the grey preview considers prefix matches only,
+- *Inline preview restraint*: the grey preview considers prefix matches only,
   chooses the best inhabited tier, and is dismissed with =S-SPC=.
-- *Deprecated last* — LSP =deprecated= and tag =1= sink within their group.
-- *Ordering* — type-correct candidates first, snippets next, then Hippie Expand,
+- *Deprecated last*: LSP =deprecated= and tag =1= sink within their group.
+- *Ordering*: type-correct candidates first, snippets next, then Hippie Expand,
   files, and ill-typed candidates; without an expected type, snippets come
   first.
-- *Module-qualified toggle* — =my/completion-toggle-qualified= hides dotted
+- *Module-qualified toggle*: =my/completion-toggle-qualified= hides dotted
   names until a module prefix is typed.
 
 ** Embedded languages
@@ -4300,7 +4432,7 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
            (lines (seq-filter
                    (lambda (line) (not (string-empty-p line)))
                    (mapcar #'string-trim (split-string plain "\n"))))
-           (summary (string-join (seq-take lines 2) " — ")))
+           (summary (string-join (seq-take lines 2) " / ")))
       (unless (string-empty-p summary)
         (truncate-string-to-width summary 120 nil nil "…")))))
 
@@ -6827,7 +6959,7 @@ Application snippets are generated rather than written by hand, for any value or
 Any variant can also be written as plain prefix application, which is what =S-TAB= cycles to.
 
 *** Well-typed ranking
-A candidate is well-typed when dropping =k ≥ 0= of its leading arguments leaves a remainder =R= consistent with the expected type =T=, where =R= may be more polymorphic — a one-way match, so ='a -> 'a= reaches =int= at =k = 1=.
+A candidate is well-typed when dropping =k ≥ 0= of its leading arguments leaves a remainder =R= consistent with the expected type =T=, where =R= may be more polymorphic, a one-way match, so ='a -> 'a= reaches =int= at =k = 1=.
 
 The type distance ordering tier 1 is the pair (specificity of =R=, =k=), compared in that order. Specificity is a partial order by instantiation, refined by counting non-variable atoms, more first: a candidate fitting exactly is nearer than one fitting only because it is polymorphic enough to instantiate. Then fewer applied arguments is nearer than more.
 
@@ -6840,6 +6972,72 @@ The type distance ordering tier 1 is the pair (specificity of =R=, =k=), compare
 | =int * int= | =q : 'a * int=              | ='a * int=  |     2 |   0 |
 
 Counting distinct type variables would not do: ='b * 'c= has two to ='a='s one, yet is the more specific shape.
+
+*** Application
+The application snippet reads two types: the type of the head being applied, and the expected type =T= at the insertion point. Between them they fix how many arguments appear at once and how many =TAB= can add afterwards. Inserting from completion fixes the head, so only the arguments are fields; there is no stage in which the function name itself is editable.
+
+Arguments come in three kinds: positional =int=, labelled =n:int= written =~n:v= at the call site, and optional =?opt:int= written =?opt:v=. Labelled and optional arguments commute, positional ones do not, which is what makes the =S-TAB= swap sound.
+
+Two separate quantities follow from the types.
+
+- *Auto-placed* is =k=, the fewest leading arguments whose removal leaves a remainder equal to =T=. These appear the moment the candidate is accepted. Only required arguments count; an optional is auto-placed only when a trailing optional would otherwise put =T= out of reach.
+- *Addable* is whether =TAB= can go on adding arguments after that. It can exactly when the remainder is an arrow or may still become one: a bare type variable, or an unknown =T= with declared arguments left over.
+
+Whether an added argument may carry a label is decided per argument, not per function. An argument consuming an arrow that is written explicitly and without a label is positional. An argument arising from instantiating a bare type variable may be labelled, since that variable is still free to become a labelled arrow.
+
+| # | head                              | =T=            | auto-placed        | remainder                          | addable by =TAB=                 |
+|---+-----------------------------------+----------------+--------------------+------------------------------------+----------------------------------|
+| a | =n:int -> m:int -> int=           | =int=          | 2, =~n:_ ~m:_=     | =int=                              | no, =int= takes no argument      |
+| b | =n:int -> m:int -> int=           | =m:int -> int= | 1, =~n:_=          | =m:int -> int=                     | no, more would overshoot =T=     |
+| c | =n:int -> ?opt:int -> int -> int= | =int=          | 2, =~n:_ _=        | =int=                              | =?opt= only, past the last required |
+| d | =n:int -> ?opt:int -> int -> int= | =int -> int=   | 1, =~n:_=          | =?opt:int -> int -> int= ≡ =int -> int= | no                          |
+| e | =n:int -> ?opt:int -> int=        | =int=          | 2, =~n:_ ?opt:_=   | =int=                              | no, the optional had to be given |
+| f | =m:int -> 'a=                     | =int=          | 1, =~m:_=          | ='a := int=                        | unbounded, and may be labelled   |
+| g | =m:int -> 'a -> 'b=               | =int=          | 2, =~m:_ _=        | ='b := int=                        | unbounded, but the next is positional |
+| h | =n:int -> m:int -> int=           | unknown        | 0                  |                                    | yes, =~n:_= then =~m:_=, stopping at two |
+| i | unknown                           | any            | 0                  |                                    | unbounded positional holes       |
+
+Rows f and g are worth reading twice. Both results are polymorphic, yet ='a= is uncommitted and admits a labelled argument, while ='a -> 'b= is already written as an unlabelled arrow and does not.
+
+An optional argument erases only when a positional argument follows it in the type, which is why row d reaches =int -> int= and row e does not: nothing follows =?opt= there, so application can never discharge it and it has to be supplied. Labels may be dropped, for the whole application or not at all, only when the application is total.
+
+Punning writes =~n:n= as =~n= and =?opt:opt= as =?opt=, and is offered only when the value is a variable spelled like its label.
+
+=TAB= depends on what is known:
+
+| head type | =T=                          | =TAB=                                            |
+|-----------+------------------------------+--------------------------------------------------|
+| known     | known, =R= ground            | places all =k= required arguments, optionals omitted |
+| known     | known, =R= a variable or arrow | places =k=, then may add further arguments     |
+| known     | unknown                      | adds the next declared argument, in order        |
+| unknown   | either                       | adds a positional hole, arity unbounded          |
+
+A =TAB= past the final required argument inserts the first optional.
+
+=S-TAB= at an argument offers the following in order, skipping whichever the types forbid: choosing which of the not-yet-placed arguments occupies this slot, in declaration order; swapping with another placed argument, labelled only; punning =~n:_= to =~n= or =?opt:_= to =?opt=; dropping labels to give positional form, only when the application is total; switching optional form between =~opt= and =?opt= and on to =~opt2=, =?opt2=; omitting an optional entirely; and naming a positional hole, =_= to =~name:_= to =?name:_= with the label editable, only where =R= is a bare variable or the head type is unknown.
+
+**** Worked examples
+Each gives the head type, the expected type =T=, the remainder after dropping =k= arguments, why that remainder is or is not =T=, and the result with its own type.
+
+*1, total application, ground result.* =f : n:int -> m:int -> int= at =T = int=. Here =k = 2= and the remainder is =int=, giving =(f ~n:_ ~m:_) : int=. The application is total, so labels may be dropped: =(f _ _) : int= is equally valid and =S-TAB= reaches it.
+
+*2, partial application.* The same =f= at =T = m:int -> int=. Now =k = 1= and the remainder is =m:int -> int=, giving =(f ~n:_) : m:int -> int=. Labels may not be dropped, because a labelled parameter cannot be filled positionally in a partial application, so =(f _)= is rejected.
+
+*3, optional erased under a following positional.* =f : n:int -> ?opt:int -> int -> int= at =T = int -> int=. With =k = 1= the remainder is =?opt:int -> int -> int=; =?opt= is followed by a positional =int= and so erases, leaving =int -> int=. The result =(f ~n:_)= keeps its declared type =?opt:int -> int -> int= and is usable where =int -> int= is expected.
+
+*4, the same head saturated.* =f : n:int -> ?opt:int -> int -> int= at =T = int=. Counting =n:int= and the trailing positional =int= and skipping the optional gives =k = 2= and a remainder of =int=, so =(f ~n:_ _) : int=. Supplying that positional is exactly what discharges =?opt=.
+
+*5, a trailing optional cannot erase.* =f : n:int -> ?opt:int -> int= at =T = int=. Dropping =n:int= leaves =?opt:int -> int=, which is not =int=, since nothing follows =?opt=. Reaching =int= needs the optional written out: =(f ~n:_ ?opt:_) : int=, or =(f ~n:_ ?opt:None) : int=. This is the case that makes the erasure rule conditional rather than blanket.
+
+*6, a bare type variable as result.* =f : m:int -> 'a= at =T = int=. With =k = 1= the remainder is ='a=, and ='a := int=, so =(f ~m:_) : int=. Since ='a= is uncommitted it may instead become an arrow, including a labelled one, so further arguments are admissible and may be named: =(f ~m:_ ~k:_)= forces ='a := k:τ -> int=.
+
+*7, a polymorphic arrow as result.* =f : m:int -> 'a -> 'b= at =T = int=. Taking =k = 1= leaves ='a -> 'b=, which cannot be =int=, as an arrow never unifies with a ground type. Taking =k = 2= leaves ='b=, and ='b := int=, so =(f ~m:_ _) : int=. That second argument is positional: the arrow ='a -> 'b= is already written unlabelled, so =S-TAB= offers no label for it. This is the distinction the bare word "polymorphic" hid.
+
+*8, punning.* =f : n:int -> int= at =T = int=, with =n : int= in scope. =(f ~n:n) : int= may be written =(f ~n) : int=.
+
+*9, commuting labelled arguments.* =f : n:int -> m:int -> int= fully applied. =(f ~n:a ~m:b) : int= and =(f ~m:b ~n:a) : int= are the same application, which is what makes the =S-TAB= swap sound. Positional arguments do not commute and are never swapped.
+
+*10, unknown head type.* With no type information and any =T=, the snippet is =(f _)= with unbounded arity, and =S-TAB= may name or make optional any hole, since nothing constrains the arrow.
 
 *** Preview examples
 Bold marks text already typed, which renders as ordinary buffer text; the rest is the grey preview, and =‸= marks point.
@@ -6858,7 +7056,7 @@ The two =string= and =max= rows show the plain shared prefix, since neither =str
 *** Language server
 =ocamllsp/typeSearch= takes a type as its query and returns values inhabiting it, which is what populates tier 1 and what =C-M-p= exposes directly; =C-M-s= filters the candidates already in hand and needs no round trip. =ocamllsp/construct= supplies type-correct constructions at a hole, =ocamllsp/typeEnclosing= the expected type, and =completionItem/resolve= the documentation for the selected candidate.
 
-Every request is asynchronous and debounced, so completion at point never waits on the server. Replies are installed against a generation counter and stale ones dropped, and installing results repaints a live Corfu popup in place — so the popup may open with only hippie candidates and fill in when the server answers. The expected type is obtained by sending the document with a hole substituted for the term at point, querying the enclosing type and sending the document back; the buffer itself is never edited. Ranking reads =:detail= for server candidates and =:typ= for type-search entries.
+Every request is asynchronous and debounced, so completion at point never waits on the server. Replies are installed against a generation counter and stale ones dropped, and installing results repaints a live Corfu popup in place, so the popup may open with only hippie candidates and fill in when the server answers. The expected type is obtained by sending the document with a hole substituted for the term at point, querying the enclosing type and sending the document back; the buffer itself is never edited. Ranking reads =:detail= for server candidates and =:typ= for type-search entries.
 
 *** Holes
 A bare =_= is a typed hole. Its underscore is not treated as part of the completion prefix, so every candidate stays available, while the type derived from the hole is retained for ranking.
