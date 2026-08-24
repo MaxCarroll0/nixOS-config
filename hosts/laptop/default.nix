@@ -8,6 +8,7 @@
     ../../modules/nixos/common.nix
     ../../modules/nixos/desktop-env.nix
     ../../modules/nixos/vpn.nix
+    ../../modules/nixos/wifi.nix
     ../../modules/nixos/wake.nix
     ../../modules/nixos/monitoring
     ../../modules/nixos/build-client.nix
@@ -35,6 +36,17 @@
     "grafana"
     "pi.grafana"
   ];
+
+  local.wifi = {
+    ssid = "Gigaclear_FA8E";
+    pskSecret = "wifi-psk";
+    fallbacks = [
+      {
+        ssid = "VM5077073";
+        pskSecret = "wifi-psk-vm5077073";
+      }
+    ];
+  };
 
   services.thermald.enable = true;
 
