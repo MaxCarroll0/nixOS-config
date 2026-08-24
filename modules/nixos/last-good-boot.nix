@@ -1,4 +1,4 @@
-# Pins the generation that last booted successfully into its own bootloader profile.
+# Keeps the last generation that booted successfully bootable and never collectable.
 
 {
   config,
@@ -9,32 +9,52 @@
 
 let
   cfg = config.local.lastGoodBoot;
-  profileDir = "/nix/var/nix/profiles/system-profiles";
-  profile = "${profileDir}/${cfg.profileName}";
+
+  bootMount = config.boot.loader.efi.efiSysMountPoint;
+  bootDevice = config.fileSystems.${bootMount}.device;
+  bootUuid = lib.removePrefix "/dev/disk/by-uuid/" bootDevice;
+
+  payloadDir = "${bootMount}/${cfg.directory}";
+  menuFile = "${bootMount}/grub/${cfg.directory}.cfg";
+  gcRoot = "/nix/var/nix/gcroots/${cfg.directory}";
 
   pin = pkgs.writeShellApplication {
     name = "pin-last-good-boot";
     runtimeInputs = [
-      config.nix.package
       pkgs.coreutils
+      pkgs.util-linux
     ];
     text = ''
       booted=$(readlink -f /run/booted-system)
-      if [ ! -e "$booted/nixos-version" ]; then
-        echo "no booted system to pin" >&2
+      if [ ! -e "$booted/kernel" ] || [ ! -e "$booted/initrd" ]; then
+        echo "booted system has no kernel to pin" >&2
         exit 0
       fi
-      if [ "$(readlink -f ${profile} 2>/dev/null || true)" = "$booted" ]; then
+      if [ "$(readlink -f ${gcRoot} 2>/dev/null || true)" = "$booted" ]; then
         exit 0
       fi
+      if ! mountpoint -q ${bootMount}; then
+        echo "${bootMount} is not mounted" >&2
+        exit 1
+      fi
 
-      mkdir -p ${profileDir}
-      nix-env --profile ${profile} --set "$booted"
-      nix-env --profile ${profile} --delete-generations +${toString cfg.keep}
+      ln -sfn "$booted" ${gcRoot}
 
-      ${lib.optionalString cfg.refreshBootloader ''
-        /run/current-system/bin/switch-to-configuration boot || true
-      ''}
+      mkdir -p ${payloadDir}
+      cp -f "$(readlink -f "$booted/kernel")" ${payloadDir}/kernel.tmp
+      cp -f "$(readlink -f "$booted/initrd")" ${payloadDir}/initrd.tmp
+      mv -f ${payloadDir}/kernel.tmp ${payloadDir}/kernel
+      mv -f ${payloadDir}/initrd.tmp ${payloadDir}/initrd
+
+      params=$(cat "$booted/kernel-params")
+      {
+        echo 'menuentry "${cfg.title}" --class nixos --unrestricted {'
+        echo '  search --set=drive1 --fs-uuid ${bootUuid}'
+        echo "  linux (\$drive1)/${cfg.directory}/kernel init=$booted/init $params"
+        echo "  initrd (\$drive1)/${cfg.directory}/initrd"
+        echo '}'
+      } > ${menuFile}.tmp
+      mv -f ${menuFile}.tmp ${menuFile}
     '';
   };
 in
@@ -43,20 +63,20 @@ in
   options.local.lastGoodBoot = {
     enable = lib.mkOption {
       type = lib.types.bool;
-      default = config.boot.loader.grub.enable;
-      description = "Keep the last successfully booted generation in its own boot profile.";
+      default = config.boot.loader.grub.enable && config.boot.loader.grub.efiSupport;
+      description = "Keep the last successfully booted generation as its own GRUB entry.";
     };
 
-    profileName = lib.mkOption {
-      type = lib.types.strMatching "[A-Za-z0-9_]+";
-      default = "last_good";
-      description = "System profile name; GRUB titles its submenu after it.";
+    title = lib.mkOption {
+      type = lib.types.str;
+      default = "Previous successful boot";
+      description = "Menu entry label.";
     };
 
-    keep = lib.mkOption {
-      type = lib.types.ints.positive;
-      default = 2;
-      description = "Generations of the profile to retain.";
+    directory = lib.mkOption {
+      type = lib.types.strMatching "[a-z0-9-]+";
+      default = "previous-successful-boot";
+      description = "Name of the payload directory and menu fragment on the ESP.";
     };
 
     settleMinutes = lib.mkOption {
@@ -64,15 +84,23 @@ in
       default = 10;
       description = "Uptime after which the current boot counts as successful.";
     };
-
-    refreshBootloader = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = "Reinstall the bootloader when the pin moves, so the entry is never stale.";
-    };
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = lib.hasPrefix "/dev/disk/by-uuid/" bootDevice;
+        message = "local.lastGoodBoot needs ${bootMount} declared by UUID, got ${bootDevice}.";
+      }
+    ];
+
+    boot.loader.grub.extraEntries = ''
+      search --set=lastgood --fs-uuid ${bootUuid}
+      if [ -f ($lastgood)/grub/${cfg.directory}.cfg ]; then
+        source ($lastgood)/grub/${cfg.directory}.cfg
+      fi
+    '';
+
     systemd.services.pin-last-good-boot = {
       description = "Pin the last successfully booted generation";
       serviceConfig = {
