@@ -979,10 +979,11 @@ own name into the buffer that Hippie scans."
 
 (defun my/type-reach (parts wanted)
   "Return (K . WEIGHT) for the fewest leading PARTS dropped to reach WANTED."
-  (when-let* ((ground (my/type-parse wanted)))
-    (cl-loop for index below (length parts)
+  (when-let* ((ground (my/type-parse wanted))
+              (usable (my/type-applicable-parts parts)))
+    (cl-loop for index below (length usable)
              for remainder = (my/type-parse
-                              (string-join (nthcdr index parts) " -> "))
+                              (string-join (nthcdr index usable) " -> "))
              when (my/type-match remainder ground)
              return (cons index (my/type-ground-weight remainder)))))
 
@@ -997,11 +998,33 @@ own name into the buffer that Hippie scans."
   (and (string-match "\\`[?~]?\\([a-z_][A-Za-z0-9_']*\\):[^:]" domain)
        (match-string 1 domain)))
 
+(defun my/type-part-optional-p (part)
+  "Return non-nil when PART is an optional argument domain."
+  (string-prefix-p "?" (string-trim (or part ""))))
+
+(defun my/type-applicable-parts (parts)
+  "Return PARTS without the optionals that a later positional discharges."
+  (let ((arguments (butlast parts)))
+    (append
+     (cl-loop for tail on arguments
+              for part = (car tail)
+              unless (and (my/type-part-optional-p part)
+                          (seq-some (lambda (other)
+                                      (not (my/type-argument-label other)))
+                                    (cdr tail)))
+              collect part)
+     (last parts))))
+
 (defun my/type-holes-from-parts (parts count)
   "Return COUNT hole texts for the leading argument domains in PARTS."
-  (cl-loop for index below count
-           for label = (my/type-argument-label (or (nth index parts) ""))
-           collect (if label (format "~%s:_" label) "_")))
+  (let ((usable (my/type-applicable-parts parts)))
+    (cl-loop for index below count
+             for part = (or (nth index usable) "")
+             for label = (my/type-argument-label part)
+             collect (cond ((null label) "_")
+                           ((my/type-part-optional-p part)
+                            (format "?%s:_" label))
+                           (t (format "~%s:_" label))))))
 
 (defun my/type-template-holes (template)
   "Return TEMPLATE's head token and its hole tokens."
@@ -1023,7 +1046,7 @@ own name into the buffer that Hippie scans."
   '("asr" "land" "lor" "lsl" "lsr" "lxor" "mod"))
 
 (defconst my/ocaml-keyword-infix-operators
-  '("!=" "!==" ":=" "or"))
+  '("!=" "!==" ":=" "or" "::"))
 
 (defconst my/ocaml-core-operator-chars "$&*+/=>@^|")
 (defconst my/ocaml-symbol-operator-chars "!$%&*+/:<=>?@^|~.")
@@ -1054,10 +1077,13 @@ own name into the buffer that Hippie scans."
           (string-trim (match-string 1 text))
         text))))
 
+(defconst my/ocaml-reserved-symbols '("|" "->" "<-"))
+
 (defun my/ocaml-operator-class (name)
   "Return NAME's operator class, or nil when NAME is an ordinary value."
   (when-let* ((text (my/ocaml-operator-name name))
-              ((not (string-empty-p text))))
+              ((not (string-empty-p text)))
+              ((not (member text my/ocaml-reserved-symbols))))
     (cond
      ((string-match-p my/ocaml-let-operator-regexp text) 'binding)
      ((string-match-p my/ocaml-and-operator-regexp text) 'parallel)
@@ -1948,10 +1974,36 @@ own name into the buffer that Hippie scans."
   (when-let* (((not my/corfu-filter-kind))
               (selection (my/corfu-selected-documentation)))
     (eldoc-display-in-echo-area
-     (list (list (cdr selection)
+     (list (list (concat (my/type-completion-expected-echo) (cdr selection))
                  :thing (substring-no-properties (car selection))
                  :face 'font-lock-function-name-face))
      t)))
+
+(defun my/type-completion-expected-echo ()
+  "Return the expected type at point, ready to prefix an echo area message."
+  (when-let* ((wanted my/type-completion-wanted))
+    (concat (propertize "expects " 'face 'shadow)
+            (propertize wanted 'face 'font-lock-type-face)
+            (propertize " | " 'face 'shadow))))
+
+(defun my/completion-next-alternative ()
+  "Step one flat ring: candidates, then remaining tiers, then snippet syntax."
+  (interactive)
+  (cond
+   ((and (bound-and-true-p yas--active-snippets)
+         (fboundp 'my/ocaml-structured-cycle)
+         (derived-mode-p 'tuareg-mode))
+    (my/ocaml-structured-cycle))
+   ((bound-and-true-p completion-preview-active-mode)
+    (my/completion-preview-next-tier))
+   ((and (fboundp 'my/ocaml-structured-cycle) (derived-mode-p 'tuareg-mode))
+    (my/ocaml-structured-cycle))))
+
+(defun my/corfu-quit-to-normal ()
+  "Dismiss the popup and leave insert state."
+  (interactive)
+  (corfu-quit)
+  (when (fboundp 'meow-insert-exit) (meow-insert-exit)))
 
 (use-package corfu
   :bind
@@ -1970,6 +2022,7 @@ own name into the buffer that Hippie scans."
    ("<return>" . corfu-insert)
    ("TAB" . corfu-insert)
    ("<tab>" . corfu-insert)
+   ("<escape>" . my/corfu-quit-to-normal)
    ("SPC" . corfu-insert-separator)
    ([remap meow-left] . corfu-quit)
    ([remap meow-next] . corfu-next)
@@ -1977,7 +2030,7 @@ own name into the buffer that Hippie scans."
    ([remap meow-right] . corfu-insert))
   :custom
   (corfu-auto nil)
-  (corfu-max-width 200)
+  (corfu-max-width 100)
   (corfu-preselect 'first)
   (corfu-preview-current nil)
   (corfu-quit-at-boundary 'separator)
@@ -2428,13 +2481,13 @@ and preview over a term that is already correct."
         ("C-i" . nil)
         ("TAB" . my/completion-preview-accept)
         ("<tab>" . my/completion-preview-accept)
-        ("S-TAB" . my/completion-preview-next-tier)
-        ("<backtab>" . my/completion-preview-next-tier)
+        ("S-TAB" . my/completion-next-alternative)
+        ("<backtab>" . my/completion-next-alternative)
         ("S-SPC" . my/completion-preview-dismiss)
         ("C-<return>" . nil))
   :custom
   (completion-preview-minimum-symbol-length nil)
-  (completion-preview-idle-delay 0.05)
+  (completion-preview-idle-delay 0.5)
   :init
   (global-completion-preview-mode)
   :config
@@ -3142,6 +3195,8 @@ Yasnippet joins Hippie Expand's own cycling on =M-/=. Hippie's try functions are
     '((:id "list" :label "list" :group expression :key "["
        :command my/ocaml-start-list :name "[]" :trigger "["
        :sort list-literal :builder my/ocaml-snippet-list)
+      (:id "unit" :label "unit" :group expression :key "u"
+       :command my/ocaml-start-unit :trigger "(")
       (:id "array" :label "array" :group expression :key "|"
        :command my/ocaml-start-array :name "[||]" :trigger "[|"
        :sort array-literal :builder my/ocaml-snippet-array)
@@ -3150,6 +3205,9 @@ Yasnippet joins Hippie Expand's own cycling on =M-/=. Hippie's try functions are
       (:id "record" :label "record value" :group expression :key "r"
        :command my/ocaml-snippet-record :name "{}" :trigger "{"
        :sort record-value :builder my/ocaml-snippet-record-value)
+      (:id "format" :label "format string" :group expression :key "S"
+       :command my/ocaml-snippet-format
+       :template "\"${1:%s}\"")
       (:id "if" :label "if" :group expression :key "i"
        :command my/ocaml-snippet-if
        :template "(if ${1:condition} then\n  ${2:_}\nelse\n  ${3:_})")
@@ -3666,15 +3724,25 @@ which the caller needs when the document only momentarily holds a hole."
          (t (my/type-completion-hole-request key beginning end))))
       t))
 
+  (defun my/type-rightmost-match (needle text)
+    "Return the position of the last NEEDLE in TEXT."
+    (when (and (> (length needle) 0) (<= (length needle) (length text)))
+      (cl-loop for index from (- (length text) (length needle)) downto 0
+               when (eq t (compare-strings needle nil nil text index
+                                           (+ index (length needle))))
+               return index)))
+
   (defun my/type-completion-underline-match (type)
     "Underline the span of TYPE that satisfies the expected type."
     (let* ((text (propertize (copy-sequence type)
                              'face 'font-lock-function-name-face))
            (wanted my/type-completion-wanted)
-           (start (and wanted (string-match (regexp-quote wanted) text))))
+           (parts (and wanted (my/type-arrow-parts type)))
+           (reach (and parts (my/type-reach parts wanted)))
+           (suffix (and reach (string-join (nthcdr (car reach) parts) " -> ")))
+           (start (and suffix (my/type-rightmost-match suffix text))))
       (when start
-        (add-face-text-property start (+ start (length wanted))
-                                'underline t text))
+        (add-face-text-property start (length text) 'underline t text))
       text))
 
   (defun my/type-completion-annotation (original candidate)
@@ -5014,6 +5082,10 @@ OCaml snippet names and operators expand directly with =TAB= when no completion 
   :config
   (setq yas-triggers-in-field t)
 
+  (setf (alist-get 'yas-minor-mode minor-mode-alist)
+        '((:eval (and (bound-and-true-p yas--active-snippets)
+                      (propertize " SNIP" 'face 'font-lock-warning-face)))))
+
   (defvar my/ocaml-yas-snippets nil
     "OCaml snippets shared by Yasnippet and the OCaml transient.")
 
@@ -5112,13 +5184,13 @@ OCaml snippet names and operators expand directly with =TAB= when no completion 
 
   (defun my/ocaml-expand-direct-trigger ()
     "Expand the structured OCaml snippet trigger before point."
-    (or (my/ocaml-expand-operator-trigger)
-        (when-let* ((trigger (my/ocaml-direct-trigger))
+    (or (when-let* ((trigger (my/ocaml-direct-trigger))
                     (bounds (plist-get trigger :bounds))
                     (action (plist-get trigger :action)))
           (delete-region (car bounds) (cdr bounds))
           (funcall action)
-          t)))
+          t)
+        (my/ocaml-expand-operator-trigger)))
 
   (defun my/yas-expand-or-indent ()
     "Accept a preview, expand a snippet trigger, or indent."
@@ -5189,8 +5261,9 @@ A negative ARGUMENT moves to the previous field instead."
   (define-key yas-keymap (kbd "TAB") #'my/yas-forward-field)
   (define-key yas-keymap (kbd "<tab>") #'my/yas-forward-field)
   (define-key yas-keymap (kbd "S-TAB") #'my/ocaml-structured-cycle)
-  (define-key yas-keymap (kbd "<backtab>") #'my/ocaml-structured-cycle)
-  (define-key yas-keymap (kbd "<iso-lefttab>") #'my/ocaml-structured-cycle)
+  (define-key yas-keymap (kbd "<backtab>") #'my/completion-next-alternative)
+  (define-key yas-keymap (kbd "<iso-lefttab>")
+              #'my/completion-next-alternative)
   (define-key yas-keymap (kbd "RET") #'my/yas-next-existing-field)
   (define-key yas-keymap (kbd "<return>") #'my/yas-next-existing-field)
   (define-key yas-keymap (kbd "S-<return>") #'my/yas-finish-innermost)
@@ -5213,6 +5286,7 @@ A negative ARGUMENT moves to the previous field instead."
      (interactive)
      (my/ocaml-insert-yas-snippet ,key)))
 
+(my/define-ocaml-snippet-command my/ocaml-snippet-format "format")
 (my/define-ocaml-snippet-command my/ocaml-snippet-if "if")
 (defalias (quote my/ocaml-snippet-match) (function my/ocaml-start-match))
 (my/define-ocaml-snippet-command my/ocaml-snippet-try "try")
@@ -5781,7 +5855,7 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
      (t (concat "[" (my/ocaml-field (append path '(:elements)) "") "]")))))
 
 (defun my/ocaml-collection (style)
-  (list :kind 'collection :style style :elements nil))
+  (list :kind 'collection :style style :elements (list "_")))
 
 (my/ocaml-define-renderer record-literal (node path)
   (let* ((fields (plist-get node :fields))
@@ -6951,6 +7025,12 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-application "_" '("_")) '(:head)))
 
+(defun my/ocaml-start-unit ()
+  "Insert the unit value."
+  (declare (modes tuareg-mode))
+  (interactive)
+  (insert "()"))
+
 (defun my/ocaml-start-list ()
   "Insert a structured OCaml list."
   (declare (modes tuareg-mode))
@@ -7082,10 +7162,11 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (with-eval-after-load 'tuareg
   (define-key tuareg-mode-map (kbd "C-c .") #'my/ocaml-menu)
-  (define-key tuareg-mode-map (kbd "S-TAB") #'my/ocaml-structured-cycle)
-  (define-key tuareg-mode-map (kbd "<backtab>") #'my/ocaml-structured-cycle)
+  (define-key tuareg-mode-map (kbd "S-TAB") #'my/completion-next-alternative)
+  (define-key tuareg-mode-map (kbd "<backtab>")
+              #'my/completion-next-alternative)
   (define-key tuareg-mode-map (kbd "<iso-lefttab>")
-              #'my/ocaml-structured-cycle))
+              #'my/completion-next-alternative))
 
 #+end_src
 
@@ -7124,7 +7205,9 @@ Sly drives SBCL directly; no LSP.
 What OCaml adds to the completion described under [[Overview]].
 
 *** Snippet catalogue
-Function application, =let=, =match=, =if=, =try=, =fun=, =function=, =while=, =for=, =type=, =module=, =open=, =val=, =exception=, =external=, plus the listy ones =[=, =[|= and ={=. =let rec= is not a separate snippet but a syntax alternative of =let=, reached with =S-TAB=.
+Function application, =let=, =match=, =if=, =try=, =fun=, =function=, =while=, =for=, =type=, =module=, =open=, =val=, =exception=, =external=, a format string, plus the listy ones =(=, =[=, =[|= and ={=. =let rec= is not a separate snippet but a syntax alternative of =let=, reached with =S-TAB=.
+
+Listy snippets expand with one hole already in place, so =[= gives =[ _ ]= and =[|= gives =[| _ |]=; =S-TAB= on that hole gives the empty collection instead. The smallest of them is =(=, which gives the unit value =()=. =::= is a constructor rather than an operator, but takes the infix form all the same.
 
 Application snippets are generated rather than written by hand, for any value or operator in scope including user-defined operators. Every argument is parenthesised so that filling a hole with a compound expression cannot reassociate; the formatter removes the parentheses that turn out to be redundant. There are three variants, chosen by classifying the name against OCaml's grammar:
 
