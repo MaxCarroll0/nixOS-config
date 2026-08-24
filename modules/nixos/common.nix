@@ -171,6 +171,7 @@ in
   imports = [
     ./nix-observer.nix
     ./unclean-boot.nix
+    ./last-good-boot.nix
   ];
 
   options.local.users.sopsPasswords = lib.mkOption {
