@@ -766,12 +766,18 @@ Explicit completion popup with documentation and Meow navigation.
   (memq my/type-completion-probed '(typed untyped shallow)))
 
 (defun my/type-completion-entry (candidate)
-  "Return CANDIDATE's OCaml semantic completion entry."
+  "Return CANDIDATE's OCaml semantic completion entry.
+A Hippie entry never shadows a semantic one, since typing a term puts its
+own name into the buffer that Hippie scans."
   (when (and (stringp candidate) (> (length candidate) 0))
-    (or (get-text-property 0 'my/type-search-entry candidate)
-        (and my/type-completion-index
-             (gethash (substring-no-properties candidate)
-                      my/type-completion-index)))))
+    (let ((attached (get-text-property 0 'my/type-search-entry candidate))
+          (indexed (and my/type-completion-index
+                        (gethash (substring-no-properties candidate)
+                                 my/type-completion-index))))
+      (if (and indexed attached
+               (memq (plist-get attached :source) '(hippie file)))
+          indexed
+        (or attached indexed)))))
 
 (defun my/type-normalize (type)
   "Normalize whitespace and Markdown fences in TYPE."
@@ -1193,6 +1199,12 @@ Explicit completion popup with documentation and Meow navigation.
       (concat my/type-completion-qualifier name))
      (t name))))
 
+(defun my/type-completion-exact-match-p (candidate)
+  "Return non-nil when CANDIDATE is exactly the text typed so far."
+  (and (not (string-empty-p my/type-completion-typed))
+       (equal (my/type-completion-match-name candidate)
+              my/type-completion-typed)))
+
 (defun my/type-completion-prefix-match-p (candidate)
   "Return non-nil when CANDIDATE begins with the text typed so far."
   (or (string-empty-p my/type-completion-input)
@@ -1330,11 +1342,19 @@ Explicit completion popup with documentation and Meow navigation.
                "\\`\\(?:[A-Z][A-Za-z0-9_']*\\.\\)+\\'" text)
           text)))))
 
+(defconst my/type-completion-type-kinds '(7 8 22 25))
+
+(defun my/type-completion-type-name-p (candidate)
+  "Return non-nil when the server marks CANDIDATE as a type, not a value."
+  (when-let* ((item (my/completion-lsp-item candidate)))
+    (and (memq (plist-get item :kind) my/type-completion-type-kinds) t)))
+
 (defun my/type-completion-tier (candidate &optional index)
   "Return the tier CANDIDATE belongs to at server order INDEX."
   (ignore index)
   (let ((entry (my/type-completion-entry candidate)))
     (cond
+     ((my/type-completion-type-name-p candidate) 2)
      ((and entry (memq (plist-get entry :source) '(hippie file))) 3)
      ((and entry (eq (plist-get entry :kind) 'snippet)) 1)
      ((my/type-completion-entry-reach candidate) 0)
@@ -1402,12 +1422,14 @@ Explicit completion popup with documentation and Meow navigation.
                      (my/type-completion-entry-reach candidate)))
          (distance (- my/type-completion-weight-limit
                       (min (or (cdr reach) 0) my/type-completion-weight-limit))))
-    (logior (ash (my/type-completion-tier candidate index) 27)
-            (ash (if (my/type-completion-deprecated-p candidate) 1 0) 26)
+    (logior (ash (my/type-completion-tier candidate index) 28)
+            (ash (if (my/type-completion-deprecated-p candidate) 1 0) 27)
+            (ash (if (my/type-completion-exact-match-p candidate) 0 1) 26)
             (ash distance 21)
             (ash (min (or (car reach) 0) 15) 17)
             (ash (if (my/type-completion-prefix-match-p candidate) 0 1) 16)
-            (min (if entry (plist-get entry :rank) index) 65535))))
+            (ash (if entry 0 1) 15)
+            (min (if entry (plist-get entry :rank) index) 32767))))
 
 (defun my/completion-sort-candidates (candidates)
   "Rank CANDIDATES by the language server's own type ordering."
@@ -1972,6 +1994,15 @@ Explicit completion popup with documentation and Meow navigation.
     (when my/corfu-filter-kind
       (my/corfu-filter-clear-state)))
 
+  (defun my/corfu-keep-ranked-order (original element candidates)
+    "Leave type-directed CANDIDATES in the order the ranking produced."
+    (if (eq (corfu--metadata-get 'category) 'my/type-completion)
+        candidates
+      (funcall original element candidates)))
+
+  (advice-add #'corfu--move-prefix-candidates-to-front
+              :around #'my/corfu-keep-ranked-order)
+  (advice-add #'corfu--move-to-front :around #'my/corfu-keep-ranked-order)
   (advice-add #'corfu-quit :before #'my/corfu-filter-on-quit)
   (advice-add #'corfu--affixate :around #'my/corfu-filter-affixate)
   (advice-add #'corfu--exhibit :around #'my/corfu-filter-exhibit)
@@ -2075,15 +2106,32 @@ Cursor motion triggers the preview from an idle timer, and it never blocks on a 
   "Return non-nil when several candidates remain behind the preview."
   (and (cdr (completion-preview--get 'completion-preview-suffixes)) t))
 
+(defun my/completion-preview-exact-p ()
+  "Return non-nil when the typed text is itself one of the candidates."
+  (when-let* ((overlay completion-preview--overlay)
+              (beg (completion-preview--get 'completion-preview-beg))
+              (base (or (completion-preview--get 'completion-preview-base) ""))
+              (common (substring-no-properties
+                       (or (completion-preview--get
+                            'completion-preview-common)
+                           ""))))
+    (and (equal (buffer-substring-no-properties beg (overlay-start overlay))
+                (concat base common))
+         (member "" (append (completion-preview--get
+                             'completion-preview-suffixes)
+                            nil))
+         t)))
+
 (defun my/completion-preview-hole-bounds ()
-  "Return the bounds of the bare hole replaced by the current preview."
+  "Return the bounds of the hole replaced by the current preview."
   (when completion-preview--overlay
     (let* ((props (completion-preview--get 'completion-preview-props))
            (beginning (or (plist-get props :my/completion-beginning)
                           (completion-preview--get 'completion-preview-beg)))
            (end (completion-preview--get 'completion-preview-end)))
       (when (and beginning end
-                 (equal (buffer-substring-no-properties beginning end) "_"))
+                 (string-prefix-p
+                  "_" (buffer-substring-no-properties beginning end)))
         (cons beginning end)))))
 
 (defun my/completion-preview-candidate (name)
@@ -2114,27 +2162,51 @@ Cursor motion triggers the preview from an idle timer, and it never blocks on a 
     (overlay-put overlay 'my/completion-preview-rendered text)
     (overlay-put overlay 'after-string text)))
 
+(defun my/completion-preview-top-tier (candidates)
+  "Return CANDIDATES restricted to the most preferred tier they inhabit."
+  (let ((best nil))
+    (dolist (candidate candidates)
+      (let ((tier (my/type-completion-tier candidate)))
+        (when (and tier (or (null best) (< tier best)))
+          (setq best tier))))
+    (if (null best)
+        candidates
+      (seq-filter (lambda (candidate)
+                    (eql (my/type-completion-tier candidate) best))
+                  candidates))))
+
 (defun my/completion-preview-try-table (table beg end props)
   "Return preview data for TABLE, keeping a candidate equal to the typed text.
 Emacs drops that candidate, which lets a longer one supply the shared prefix
 and preview over a term that is already correct."
   (let* ((pred (plist-get props :predicate))
-         (string (buffer-substring beg end))
+         (typed (buffer-substring beg end))
          (completion-extra-properties props)
-         (md (completion-metadata string table pred))
+         (md (completion-metadata typed table pred))
+         (string (if (eq (completion-metadata-get md 'category)
+                         'my/type-completion)
+                     (my/type-hole-pattern typed)
+                   typed))
+         (dropped (- (length typed) (length string)))
          (sort-fn (or (completion-metadata-get md 'cycle-sort-function)
                       (completion-metadata-get md 'display-sort-function)
                       completion-preview-sort-function))
          (all (let ((completion-lazy-hilit t)
                     (completion-styles completion-preview-completion-styles))
                 (completion-all-completions string table pred
-                                            (- (point) beg) md)))
+                                            (max 0 (- (point) beg dropped))
+                                            md)))
          (last (last all))
          (base (or (cdr last) 0))
          (prefix (substring string base)))
     (when last
       (setcdr last nil)
-      (when-let* ((sorted (funcall sort-fn (all-completions prefix all)))
+      (when-let* ((matches (let ((found (all-completions prefix all)))
+                             (if (eq (completion-metadata-get md 'category)
+                                     'my/type-completion)
+                                 (my/completion-preview-top-tier found)
+                               found)))
+                  (sorted (funcall sort-fn matches))
                   (raw (try-completion prefix sorted))
                   (common (if (eq raw t) prefix raw))
                   (lencom (length common)))
@@ -2205,7 +2277,8 @@ and preview over a term that is already correct."
                            (or (completion-preview--get
                                 'completion-preview-common)
                                ""))))
-        (if (my/completion-preview-ambiguous-p)
+        (if (and (my/completion-preview-ambiguous-p)
+                 (not (my/completion-preview-exact-p)))
             (let ((replacement (string-remove-prefix "_" common)))
               (if (string-empty-p replacement)
                   (completion-preview-active-mode -1)
@@ -2242,7 +2315,8 @@ and preview over a term that is already correct."
 (defun my/completion-preview-render-snippet ()
   "Show the whole expansion when exactly one candidate is being previewed."
   (condition-case nil
-      (when-let* (((not (my/completion-preview-ambiguous-p)))
+      (when-let* (((or (not (my/completion-preview-ambiguous-p))
+                       (my/completion-preview-exact-p)))
                   (overlay completion-preview--overlay)
                   (beg (completion-preview--get 'completion-preview-beg))
                   (beginning
@@ -2257,8 +2331,10 @@ and preview over a term that is already correct."
                            (or (completion-preview--get
                                 'completion-preview-common)
                                "")))
-                  (suffix (car (completion-preview--get
-                                'completion-preview-suffixes)))
+                  (suffix (if (my/completion-preview-exact-p)
+                              ""
+                            (car (completion-preview--get
+                                  'completion-preview-suffixes))))
                   (name (concat base common suffix))
                   (candidate (my/completion-preview-candidate name))
                   (full (my/type-completion-preview-text candidate beginning))
@@ -2277,11 +2353,15 @@ and preview over a term that is already correct."
 
 (defun my/completion-preview-accept-hole (bounds)
   "Replace the bare hole at BOUNDS with the current preview."
-  (let* ((ambiguous (my/completion-preview-ambiguous-p))
+  (let* ((exact (my/completion-preview-exact-p))
+         (ambiguous (and (my/completion-preview-ambiguous-p) (not exact)))
          (base (or (completion-preview--get 'completion-preview-base) ""))
          (common (substring-no-properties
                   (or (completion-preview--get 'completion-preview-common) "")))
-         (suffix (car (completion-preview--get 'completion-preview-suffixes)))
+         (suffix (if exact
+                     ""
+                   (car (completion-preview--get
+                         'completion-preview-suffixes))))
          (name (and (not ambiguous) (concat base common suffix)))
          (candidate (and name (my/completion-preview-candidate name)))
          (replacement
@@ -2306,7 +2386,8 @@ and preview over a term that is already correct."
     (cond
      (hole
       (my/completion-preview-accept-hole hole))
-     ((my/completion-preview-ambiguous-p)
+     ((and (my/completion-preview-ambiguous-p)
+           (not (my/completion-preview-exact-p)))
       (completion-preview-complete))
      (t
       (when-let* ((canonical
@@ -2329,6 +2410,10 @@ and preview over a term that is already correct."
       (completion-preview-active-mode -1))
      (t
       (apply original arguments)
+      (when (and completion-preview-active-mode
+                 (not (eql (completion-preview--get 'completion-preview-end)
+                           (point))))
+        (completion-preview-active-mode -1))
       (when completion-preview-active-mode
         (my/completion-preview-reset-rendering)
         (or (my/completion-preview-render-hole)
@@ -2477,6 +2562,7 @@ Yasnippet joins Hippie Expand's own cycling on =M-/=. Hippie's try functions are
 (use-package cape
   :after corfu
   :config
+  (require 'dabbrev)
   (defvar-local my/completion-base-capfs nil)
   (defvar-local my/completion-super-capf nil)
   (defvar-local my/hippie-expand-capf-cache nil)
@@ -3494,8 +3580,8 @@ which the caller needs when the document only momentarily holds a hole."
                         (min (or scroll 0) (max 0 index)))))
               (when (fboundp 'corfu--update)
                 (corfu--update)))
-             ((fboundp 'completion-preview--try-update)
-              (completion-preview--try-update))))))))
+             ((fboundp 'completion-preview--update)
+              (completion-preview--update))))))))
 
   (defun my/type-completion-refresh-display (buffer generation)
     "Coalesce a live completion refresh for BUFFER and GENERATION."
@@ -3597,6 +3683,19 @@ which the caller needs when the document only momentarily holds a hole."
         (concat " " (my/type-completion-underline-match type))
       (and original (funcall original candidate))))
 
+  (defun my/type-completion-affixation (original candidates)
+    "Annotate CANDIDATES, striking through the ones the server deprecates."
+    (mapcar
+     (lambda (candidate)
+       (let ((name (copy-sequence candidate))
+             (suffix (or (my/type-completion-annotation original candidate) "")))
+         (when (and (my/type-completion-deprecated-p candidate)
+                    (> (length name) 0))
+           (add-face-text-property 0 (length name) '(:strike-through t)
+                                   nil name))
+         (list name "" suffix)))
+     candidates))
+
   (defun my/type-completion-table (table qualifier &optional hole)
     "Augment completion TABLE with semantic candidates and type ranking.
 QUALIFIER is the module path before the CAPF bounds.  HOLE non-nil means the
@@ -3614,6 +3713,9 @@ completion replaces a bare `_', whose text must not filter the candidates."
           (setf (alist-get 'annotation-function properties)
                 (apply-partially
                  #'my/type-completion-annotation annotation))
+          (setf (alist-get 'affixation-function properties)
+                (apply-partially
+                 #'my/type-completion-affixation annotation))
           (cons 'metadata properties)))
        ((eq action t)
         (setq my/type-completion-qualifier (or qualifier "")
@@ -3947,6 +4049,23 @@ completion replaces a bare `_', whose text must not filter the candidates."
             (nreverse preview-candidates))
         (complete-with-action action table string predicate))))
 
+  (defun my/ocaml-dotted-bounds ()
+    "Return the symbol bounds at point extended over a trailing dotted path."
+    (when-let* ((bounds (bounds-of-thing-at-point 'symbol)))
+      (let ((end (cdr bounds)))
+        (save-excursion
+          (goto-char end)
+          (while (and (eq (char-after) ?.)
+                      (save-excursion
+                        (forward-char)
+                        (and (char-after)
+                             (string-match-p
+                              "[A-Za-z_]" (char-to-string (char-after))))))
+            (forward-char)
+            (skip-chars-forward "A-Za-z0-9_'")
+            (setq end (point))))
+        (cons (car bounds) end))))
+
   (defun my/completion-ranked-bounds ()
     "Return non-blocking completion bounds for the current context."
     (unless (or (nth 3 (syntax-ppss))
@@ -3959,13 +4078,57 @@ completion replaces a bare `_', whose text must not filter the candidates."
           (and (derived-mode-p 'tuareg-mode)
                (my/ocaml-operator-bounds))
           (my/file-completion-bounds)
+          (and (derived-mode-p 'tuareg-mode)
+               (my/ocaml-dotted-bounds))
           (bounds-of-thing-at-point 'symbol)
           (cons (point) (point)))))
+
+  (defun my/completion-snippet-entries (pattern)
+    "Return snippet triggers matching PATTERN, tagged for the snippet tier."
+    (when (and (fboundp 'yas-active-keys) (>= (length pattern) 3))
+      (let ((rank 0))
+        (delq nil
+              (mapcar
+               (lambda (key)
+                 (setq rank (1+ rank))
+                 (when (string-prefix-p pattern key t)
+                   (propertize (copy-sequence key)
+                               'my/type-search-entry
+                               (list :name key :kind 'snippet
+                                     :source 'snippet :rank rank))))
+               (yas-active-keys))))))
+
+  (defun my/completion-plain-table (table)
+    "Return TABLE extended with snippet candidates and tier ordering."
+    (lambda (string predicate action)
+      (cond
+       ((eq action 'metadata)
+        (let ((properties
+               (copy-tree (cdr (completion-metadata string table predicate)))))
+          (setf (alist-get 'display-sort-function properties)
+                #'my/completion-sort-candidates)
+          (cons 'metadata properties)))
+       ((eq action t)
+        (append (my/completion-snippet-entries string)
+                (all-completions string table predicate)))
+       (t (complete-with-action action table string predicate)))))
+
+  (defun my/completion-plain-capf ()
+    "Return snippet and Hippie tiers for a buffer with no language server."
+    (when-let* ((result (and my/completion-super-capf
+                             (funcall my/completion-super-capf)))
+                ((consp result))
+                ((not (functionp result))))
+      (setq my/type-completion-typed
+            (buffer-substring-no-properties (nth 0 result) (nth 1 result)))
+      (append (list (nth 0 result) (nth 1 result)
+                    (my/completion-plain-table (nth 2 result)))
+              (nthcdr 3 result))))
 
   (defun my/completion-ranked-capf ()
     "Return a live cached CAPF with asynchronous Eglot enrichment."
     (if (not (and (fboundp 'eglot-managed-p) (eglot-managed-p)))
-        (and my/completion-super-capf (funcall my/completion-super-capf))
+        (my/completion-plain-capf)
       (when-let* ((bounds (my/completion-ranked-bounds)))
         (let* ((beginning (car bounds))
                (end (cdr bounds))
@@ -4001,10 +4164,18 @@ completion replaces a bare `_', whose text must not filter the candidates."
                   (apply-partially #'my/type-completion-exit
                                    lsp-exit beginning)))))))
 
+  (defun my/completion-tags-capf ()
+    "Return project symbols from the tags table, when one has been built."
+    (and (bound-and-true-p tags-table-list)
+         (fboundp 'tags-completion-at-point-function)
+         (ignore-errors (tags-completion-at-point-function))))
+
   (defun my/completion-refresh-capfs ()
     "Install cached Eglot completion or compose local CAPFs."
     (let ((capfs (append my/completion-base-capfs
-                  (list #'my/hippie-expand-capf #'cape-file))))
+                         (list #'my/completion-tags-capf
+                               #'my/hippie-expand-capf
+                               #'cape-file))))
       (setq capfs (delete-dups capfs))
       (setq my/completion-super-capf (apply #'cape-capf-super capfs))
       (setq-local completion-at-point-functions
@@ -4042,6 +4213,18 @@ completion replaces a bare `_', whose text must not filter the candidates."
   (add-hook 'eglot-managed-mode-hook #'my/completion-warm-buffer)
   (add-hook 'after-change-functions #'my/hippie-expand-schedule-snapshot)
   (advice-add 'eglot-completion-at-point :around #'cape-wrap-buster))
+
+#+end_src
+
+** Project symbols
+Without a language server there is nothing to populate the ill-typed tier, so a tags table stands in for it. =etags-regen-mode= builds and incrementally updates one from the =project.el= project, and its completion at point contributes the project's own symbols. Buffers with a server ignore it, since the server already knows more.
+
+#+begin_src emacs-lisp
+
+(use-package etags-regen
+  :ensure nil
+  :init
+  (etags-regen-mode 1))
 
 #+end_src
 
@@ -6896,11 +7079,6 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
          :body (list :kind 'record
                      :fields (list (my/ocaml-record-field "field"))))
    '(:body :fields 0 :name)))
-
-(with-eval-after-load 'yasnippet
-  (define-key yas-keymap (kbd "M-TAB") #'my/ocaml-structured-cycle)
-  (define-key yas-keymap (kbd "M-<tab>") #'my/ocaml-structured-cycle)
-  (define-key yas-keymap (kbd "C-M-i") #'my/ocaml-structured-cycle))
 
 (with-eval-after-load 'tuareg
   (define-key tuareg-mode-map (kbd "C-c .") #'my/ocaml-menu)
