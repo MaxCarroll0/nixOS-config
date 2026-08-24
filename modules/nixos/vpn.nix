@@ -445,6 +445,7 @@ in
           serviceConfig = {
             Type = "oneshot";
             RemainAfterExit = true;
+            Group = "novpn";
             ExecStart = "${vpnSwitchPkg}/bin/vpn-switch --bootstrap ${bootstrapConf}";
           };
         };

@@ -30,7 +30,10 @@ let
         echo "booted system has no kernel to pin" >&2
         exit 0
       fi
-      if [ "$(readlink -f ${gcRoot} 2>/dev/null || true)" = "$booted" ]; then
+      if [ "$(readlink -f ${gcRoot} 2>/dev/null || true)" = "$booted" ] \
+        && [ -e ${payloadDir}/kernel ] \
+        && [ -e ${payloadDir}/initrd ] \
+        && [ -e ${menuFile} ]; then
         exit 0
       fi
       if ! mountpoint -q ${bootMount}; then
