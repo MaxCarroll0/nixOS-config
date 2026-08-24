@@ -3001,14 +3001,27 @@ Yasnippet joins Hippie Expand's own cycling on =M-/=. Hippie's try functions are
              candidate)))
        my/type-completion-candidates)))
 
+  (defun my/type-completion-known-names ()
+    "Return the names the server already accounts for."
+    (let ((known (make-hash-table :test #'equal)))
+      (dolist (candidate my/type-completion-lsp-candidates)
+        (puthash (substring-no-properties candidate) t known))
+      (when my/type-completion-index
+        (maphash (lambda (name _) (puthash name t known))
+                 my/type-completion-index))
+      known))
+
   (defun my/type-completion-hippie-candidates (pattern)
-    "Return cached Hippie candidates as last-tier entries for PATTERN."
-    (cl-loop for name in (my/hippie-expand-cached-candidates pattern)
-             for rank from 0
-             collect
-             (my/type-semantic-candidate
-              (list :name name :kind 'fallback :source 'hippie
-                    :tier 3 :rank rank))))
+    "Return cached Hippie candidates as last-tier entries for PATTERN.
+A name the server already knows is left out, so its typed candidate is not
+shadowed by an untyped duplicate scraped from the buffer."
+    (let ((known (my/type-completion-known-names))
+          (rank 0))
+      (cl-loop for name in (my/hippie-expand-cached-candidates pattern)
+               unless (gethash name known)
+               collect (my/type-semantic-candidate
+                        (list :name name :kind 'fallback :source 'hippie
+                              :tier 3 :rank (cl-incf rank))))))
 
   (defun my/type-completion-visible-p (candidate input &optional hole)
     "Return non-nil when CANDIDATE may be shown for INPUT."
@@ -5225,6 +5238,24 @@ OCaml snippet names and operators expand directly with =TAB= when no completion 
           t)
         (my/ocaml-expand-operator-trigger)))
 
+  (defun my/ocaml-expand-typed-term ()
+    "Expand the well-typed term just typed into its application."
+    (when-let* ((bounds (bounds-of-thing-at-point 'symbol))
+                ((eq (point) (cdr bounds)))
+                (name (buffer-substring-no-properties (car bounds) (cdr bounds)))
+                (candidate (or (seq-find
+                                (lambda (other)
+                                  (equal (substring-no-properties other) name))
+                                my/type-completion-lsp-candidates)
+                               name))
+                (reach (my/type-completion-entry-reach candidate))
+                ((> (car reach) 0))
+                (action (my/type-completion-action candidate (car bounds)))
+                ((eq (plist-get action :kind) 'yas)))
+      (delete-region (car bounds) (cdr bounds))
+      (yas-expand-snippet (plist-get action :value))
+      t))
+
   (defun my/yas-expand-or-indent ()
     "Accept a preview, expand a snippet trigger, or indent."
     (interactive)
@@ -5233,6 +5264,9 @@ OCaml snippet names and operators expand directly with =TAB= when no completion 
       (my/completion-preview-accept))
      ((and (derived-mode-p 'tuareg-mode)
            (my/ocaml-expand-direct-trigger)))
+     ((and (derived-mode-p 'tuareg-mode)
+           (not (bound-and-true-p yas--active-snippets))
+           (my/ocaml-expand-typed-term)))
      ((yas-expand))
      (t (indent-for-tab-command))))
 
