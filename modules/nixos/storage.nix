@@ -119,6 +119,11 @@ in
                 type = lib.types.listOf lib.types.str;
                 default = [ "max" ];
               };
+              units = lib.mkOption {
+                type = lib.types.listOf lib.types.str;
+                default = [ ];
+                description = "Units started once mounted and stopped before locking again.";
+              };
             };
           }
         )
@@ -191,7 +196,17 @@ in
             command = "${pkgs.util-linux}/bin/umount ${v.mountPoint}";
             options = [ "NOPASSWD" ];
           }
-        ];
+        ]
+        ++ lib.concatMap (unit: [
+          {
+            command = "${config.systemd.package}/bin/systemctl start ${unit}";
+            options = [ "NOPASSWD" ];
+          }
+          {
+            command = "${config.systemd.package}/bin/systemctl stop ${unit}";
+            options = [ "NOPASSWD" ];
+          }
+        ]) v.units;
       }) cfg.luksVaults;
 
       programs.bash.interactiveShellInit =
@@ -199,9 +214,16 @@ in
           lib.mapAttrsToList (name: v: ''
             __vault_${name}_open() {
               sudo -n ${pkgs.cryptsetup}/bin/cryptsetup luksOpen ${v.device} ${v.mapperName} \
-                && sudo -n ${pkgs.util-linux}/bin/mount /dev/mapper/${v.mapperName} ${v.mountPoint}
+                && sudo -n ${pkgs.util-linux}/bin/mount /dev/mapper/${v.mapperName} ${v.mountPoint} \
+                || return 1
+              ${lib.concatMapStrings (
+                unit: "sudo -n ${config.systemd.package}/bin/systemctl start ${unit} || true\n              "
+              ) v.units}
             }
             __vault_${name}_close() {
+              ${lib.concatMapStrings (
+                unit: "sudo -n ${config.systemd.package}/bin/systemctl stop ${unit} >/dev/null 2>&1\n              "
+              ) v.units}
               sudo -n ${pkgs.util-linux}/bin/umount ${v.mountPoint} >/dev/null 2>&1
               sudo -n ${pkgs.cryptsetup}/bin/cryptsetup luksClose ${v.mapperName} >/dev/null 2>&1
             }

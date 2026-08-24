@@ -1,6 +1,6 @@
 # ThinkPad: workstation only, offloads builds to the desktop.
 
-{ ... }:
+{ lib, ... }:
 
 {
   imports = [
@@ -12,6 +12,7 @@
     ../../modules/nixos/monitoring
     ../../modules/nixos/build-client.nix
     ../../modules/nixos/torrent.nix
+    ../../modules/nixos/storage.nix
     ../../modules/nixos/server/ssh.nix
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/server/build-host.nix
@@ -71,17 +72,25 @@
     rotateEvery = "6h";
   };
 
-  boot.initrd.luks.devices.vault.device = "/dev/disk/by-uuid/13a8f54b-94ee-46d2-a139-d44eeac71cdc";
-  fileSystems."/vault" = {
-    device = "/dev/mapper/vault";
-    fsType = "ext4";
+  local.storage.luksVaults.vault = {
+    device = "/dev/disk/by-uuid/13a8f54b-94ee-46d2-a139-d44eeac71cdc";
+    mountPoint = "/vault";
+    units = [ "transmission.service" ];
   };
 
   local.torrent = {
     enable = true;
     downloadDir = "/vault/torrents";
   };
-  systemd.services.transmission.bindsTo = [ "vault.mount" ];
+  systemd.services.transmission = {
+    wantedBy = lib.mkForce [ ];
+    unitConfig.ConditionPathIsMountPoint = "/vault";
+  };
+  systemd.services.transmission-setup = {
+    wantedBy = lib.mkForce [ ];
+    unitConfig.ConditionPathIsMountPoint = "/vault";
+    unitConfig.RequiresMountsFor = lib.mkForce [ ];
+  };
 
   services.earlyoom = {
     freeMemThreshold = 15;
