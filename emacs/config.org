@@ -3440,11 +3440,35 @@ Yasnippet joins Hippie Expand's own cycling on =M-/=. Hippie's try functions are
      (list :textDocument (eglot--VersionedTextDocumentIdentifier)
            :contentChanges (vector (list :text text)))))
 
+  (defvar-local my/type-completion-substituted nil)
+
+  (defun my/type-completion-restore-document ()
+    "Give the server back the real document it was lent a hole for."
+    (when my/type-completion-substituted
+      (let ((server my/type-completion-substituted))
+        (setq my/type-completion-substituted nil)
+        (my/type-completion-notify-text
+         server (buffer-substring-no-properties (point-min) (point-max)))
+        (setq eglot--recent-changes nil))))
+
+  (defun my/type-completion-hold-change (original &rest arguments)
+    "Give the document back before letting an edit through to the server."
+    (when my/type-completion-substituted
+      (my/type-completion-restore-document))
+    (apply original arguments))
+
+  (advice-add 'eglot--signal-textDocument/didChange
+              :around #'my/type-completion-hold-change)
+
   (defun my/type-completion-hole-request (key beginning end)
     "Request the type of a hole standing in for BEGINNING to END under KEY.
-The substitution is sent to the server only, so the buffer is never edited."
+The substitution is sent to the server only, so the buffer is never edited.
+The document goes back once the reply is in, since ocamllsp answers against
+whichever version it has reached rather than the one the request followed.
+An edit arriving first restores it early and abandons the reply."
     (condition-case nil
         (let* ((server (eglot--current-server-or-lose))
+               (buffer (current-buffer))
                (whole (buffer-substring-no-properties (point-min) (point-max)))
                (from (- beginning (point-min)))
                (to (- end (point-min)))
@@ -3452,17 +3476,23 @@ The substitution is sent to the server only, so the buffer is never edited."
                                     "_"
                                     (substring whole to))))
           (eglot--signal-textDocument/didChange)
+          (setq my/type-completion-substituted server)
           (my/type-completion-notify-text server substituted)
           (my/type-completion-enclosing-request
-           key (eglot--pos-to-lsp-position beginning) 0 t)
-          (my/type-completion-notify-text server whole))
-      (error (setq my/type-completion-probed nil))))
+           key (eglot--pos-to-lsp-position beginning) 0 t
+           (lambda ()
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (my/type-completion-restore-document))))))
+      (error (setq my/type-completion-probed nil
+                   my/type-completion-substituted nil))))
 
   (defun my/type-completion-enclosing-request
-      (key &optional position index immediate)
+      (key &optional position index immediate restore)
     "Request a concrete enclosing type at POSITION and install it under KEY.
 IMMEDIATE sends the request at once and does not widen to outer enclosings,
-which the caller needs when the document only momentarily holds a hole."
+which the caller needs when the document only momentarily holds a hole.
+RESTORE runs once the reply is in."
     (setq my/type-completion-probed 'pending
           my/type-completion-state 'pending)
     (condition-case nil
@@ -3477,6 +3507,7 @@ which the caller needs when the document only momentarily holds a hole."
            (ocaml-eglot-req--TypeEnclosingParams position index 0)
            :success-fn
            (lambda (result)
+             (when restore (funcall restore))
              (let* ((expected (let ((text (my/type-normalize (plist-get result :type))))
                                (and (my/type-informative-p text) text)))
                     (next (1+ index))
@@ -3509,6 +3540,7 @@ which the caller needs when the document only momentarily holds a hole."
                          key position concrete))))))))
            :error-fn
            (lambda (&rest _)
+             (when restore (funcall restore))
              (my/type-completion-receive
               buffer generation key
               (lambda ()
@@ -3516,6 +3548,7 @@ which the caller needs when the document only momentarily holds a hole."
                       my/type-completion-state 'error))))
            :timeout-fn
            (lambda ()
+             (when restore (funcall restore))
              (my/type-completion-receive
               buffer generation key
               (lambda ()
