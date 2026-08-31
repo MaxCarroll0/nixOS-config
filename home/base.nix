@@ -133,6 +133,7 @@
 
   home.sessionVariables = {
     EDITOR = lib.mkDefault "nano";
+    NIXOS_OZONE_WL = "1";
   };
 
   services.home-manager.autoUpgrade = {

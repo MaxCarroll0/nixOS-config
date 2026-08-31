@@ -1,4 +1,4 @@
-# Graphical session: Plasma, Hyprland, audio, printing, Firefox.
+# Graphical session: Plasma, Hyprland, audio, printing, Chromium.
 
 {
   lib,
@@ -145,6 +145,7 @@ in
     sudoRequest
   ]
   ++ (with pkgs; [
+    chromium
     vscode
     wayland-utils
     wl-clipboard
@@ -173,23 +174,6 @@ in
   services.xserver.xkb.layout = "gb";
   services.xserver.xkb.options = "caps:escape";
   hardware.keyboard.qmk.enable = true;
-
-  programs.firefox = {
-    enable = true;
-    package = pkgs-unstable.firefox;
-    preferencesStatus = "user";
-    preferences = {
-      "media.navigator.enabled" = true;
-      "media.peerconnection.enabled" = true;
-      "media.getusermedia.screensharing.enabled" = true;
-      "media.webrtc.capture.allow-pipewire" = true;
-      "privacy.resistFingerprinting" = false;
-      "privacy.resistFingerprinting.pbmode" = false;
-      "privacy.resistFingerprinting.randomization.canvas.use_siphash" = false;
-      "privacy.resistFingerprinting.randomization.daily_reset.enabled" = false;
-      "privacy.resistFingerprinting.randomization.daily_reset.private.enabled" = false;
-    };
-  };
 
   programs.hyprland.enable = true;
   programs.hyprland.withUWSM = true;

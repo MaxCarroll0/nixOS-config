@@ -97,7 +97,7 @@
     freeSwapThreshold = 25;
     extraArgs = [
       "--prefer"
-      "^firefox$"
+      "^chromium$"
       "--avoid"
       "^(sshd?|systemd|kwin_wayland|Hyprland|plasmashell)$"
     ];
