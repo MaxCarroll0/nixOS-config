@@ -311,6 +311,17 @@ let
   allowedInterfaces = lib.concatStringsSep ", " (
     map (i: ''"${i}"'') ([ cfg.interface ] ++ cfg.allowInterfaces)
   );
+
+  # NetworkManager fires "up" only once an interface reaches full L3 activation,
+  # so this catches SSID switches, WiFi drops, cable plugs and suspend/resume
+  # alike, not just the boot race.
+  protonReconnect = pkgs.writeShellScript "proton-reconnect" ''
+    action="$2"
+    [ "$action" = "up" ] || exit 0
+    systemctl is-active --quiet wg-quick-${cfg.interface}.service && exit 0
+    systemctl restart proton-bootstrap.service
+    systemctl restart wg-quick-${cfg.interface}.service
+  '';
 in
 
 {
@@ -413,6 +424,11 @@ in
     ]
     ++ lib.optional config.services.tailscale.enable "interface-name:tailscale0";
 
+    networking.networkmanager.dispatcherScripts = lib.optional selectionEnabled {
+      source = protonReconnect;
+      type = "basic";
+    };
+
     sops.secrets = lib.optionalAttrs selectionEnabled {
       ${cfg.usernameSecret}.mode = "0400";
       ${cfg.passwordSecret}.mode = "0400";
@@ -447,7 +463,18 @@ in
             RemainAfterExit = true;
             Group = "novpn";
             ExecStart = "${vpnSwitchPkg}/bin/vpn-switch --bootstrap ${bootstrapConf}";
+            Restart = "on-failure";
+            RestartSec = 5;
+            StartLimitIntervalSec = 60;
+            StartLimitBurst = 8;
           };
+        };
+
+        "wg-quick-${cfg.interface}".serviceConfig = {
+          Restart = "on-failure";
+          RestartSec = 5;
+          StartLimitIntervalSec = 60;
+          StartLimitBurst = 8;
         };
 
         vpn-autoselect = {
