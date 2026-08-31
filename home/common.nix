@@ -282,6 +282,11 @@ in
     defaultApplications = {
       "application/epub+zip" = "emacs.desktop";
       "x-scheme-handler/claude-cli" = "claude-code-url-handler.desktop";
+      "text/html" = "chromium-browser.desktop";
+      "x-scheme-handler/http" = "chromium-browser.desktop";
+      "x-scheme-handler/https" = "chromium-browser.desktop";
+      "x-scheme-handler/about" = "chromium-browser.desktop";
+      "x-scheme-handler/unknown" = "chromium-browser.desktop";
     };
     associations.added."x-scheme-handler/claude-cli" = "claude-code-url-handler.desktop";
   };
