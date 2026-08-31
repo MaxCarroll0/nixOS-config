@@ -436,8 +436,14 @@ in
         mode = "0755";
         source = pkgs.writeShellScript "report-power-state-sleep" ''
           case "$1" in
-            pre) ${powerStateReporter}/bin/report-power-state S3 ;;
-            post) ${powerStateReporter}/bin/report-power-state running ;;
+            pre)
+              ${pkgs.coreutils}/bin/timeout 2 \
+                ${powerStateReporter}/bin/report-power-state S3 || true
+              ;;
+            post)
+              ${config.systemd.package}/bin/systemctl restart --no-block \
+                report-power-state-running.service
+              ;;
           esac
         '';
       };
@@ -459,7 +465,8 @@ in
       };
 
       powerManagement.powerDownCommands = lib.mkAfter ''
-        ${powerStateReporter}/bin/report-power-state S5 || true
+        ${pkgs.coreutils}/bin/timeout 2 \
+          ${powerStateReporter}/bin/report-power-state S5 || true
       '';
     })
 
