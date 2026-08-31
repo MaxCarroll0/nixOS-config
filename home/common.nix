@@ -190,6 +190,7 @@ in
   imports = [
     ./base.nix
     ./emacs.nix
+    ./theme.nix
     ./hyprland.nix
   ];
 
