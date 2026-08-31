@@ -801,397 +801,6 @@ own name into the buffer that Hippie scans."
         (substring type (match-end 0))
       type)))
 
-(defun my/type-treesit-error-p (node)
-  "Return non-nil when NODE contains a parser error."
-  (or (treesit-node-check node 'has-error)
-      (treesit-node-check node 'missing)
-      (string= (treesit-node-type node) "ERROR")))
-
-(defun my/type-enclosed-p (text)
-  "Return non-nil when TEXT is wrapped in one balanced pair of parentheses."
-  (and (> (length text) 1)
-       (eq (aref text 0) ?\()
-       (eq (aref text (1- (length text))) ?\))
-       (let ((depth 0)
-             (inner t))
-         (dotimes (index (length text))
-           (pcase (aref text index)
-             (?\( (setq depth (1+ depth)))
-             (?\) (setq depth (1- depth))))
-           (when (and (zerop depth) (< index (1- (length text))))
-             (setq inner nil)))
-         inner)))
-
-(defun my/type-strip-parens (text)
-  "Return TEXT with any fully enclosing parentheses removed."
-  (if (my/type-enclosed-p text)
-      (my/type-strip-parens (string-trim (substring text 1 -1)))
-    text))
-
-(defun my/type-arrow-split (text)
-  "Split TEXT on its top-level function arrows."
-  (let ((depth 0)
-        (start 0)
-        (position 0)
-        (length (length text))
-        parts)
-    (while (< position length)
-      (pcase (aref text position)
-        ((or ?\( ?\[ ?{) (setq depth (1+ depth)))
-        ((or ?\) ?\] ?}) (setq depth (max 0 (1- depth))))
-        ((or ?- ?=)
-         (when (and (zerop depth)
-                    (< (1+ position) length)
-                    (eq (aref text (1+ position)) ?>))
-           (push (string-trim (substring text start position)) parts)
-           (setq position (1+ position)
-                 start (1+ position)))))
-      (setq position (1+ position)))
-    (push (string-trim (substring text start)) parts)
-    (nreverse parts)))
-
-(defun my/type-arrow-parts (type)
-  "Split TYPE on its top-level function arrows, flattening its codomain."
-  (when-let* ((text (my/type-normalize type)))
-    (let* ((parts (my/type-arrow-split (my/type-strip-parens text)))
-           (codomain (car (last parts)))
-           (inner (and (my/type-enclosed-p codomain)
-                       (my/type-arrow-split
-                        (my/type-strip-parens codomain)))))
-      (if (cdr inner)
-          (append (butlast parts) inner)
-        parts))))
-
-(defun my/type-arrow-count (type)
-  "Return TYPE's number of top-level function arrows."
-  (max 0 (1- (length (my/type-arrow-parts type)))))
-
-(defun my/type-canonical (type)
-  "Return TYPE with its top-level arrows written uniformly."
-  (when-let* ((parts (my/type-arrow-parts type)))
-    (string-join parts " -> ")))
-
-(defun my/type-unconstrained-p (type)
-  "Return non-nil when TYPE is a bare type variable."
-  (and type (string-match-p "\\`'[A-Za-z_][A-Za-z0-9_']*\\'" (string-trim type))))
-
-(defun my/type-suffix-arity (parts wanted)
-  "Return how many leading PARTS to drop so the remainder spells WANTED."
-  (cl-loop for index below (length parts)
-           when (equal (string-join (nthcdr index parts) " -> ") wanted)
-           return index))
-
-(defconst my/type-token-regexp
-  "'[A-Za-z_][A-Za-z0-9_']*\\|[A-Za-z_][A-Za-z0-9_'.]*\\|->\\|[()*,]")
-
-(defun my/type-tokenize (text)
-  "Return TEXT split into type tokens."
-  (let ((position 0)
-        tokens)
-    (while (string-match my/type-token-regexp text position)
-      (push (match-string 0 text) tokens)
-      (setq position (match-end 0)))
-    (nreverse tokens)))
-
-(defvar my/type-tokens nil)
-
-(defun my/type-parse-atom ()
-  (let ((token (pop my/type-tokens)))
-    (cond
-     ((null token) nil)
-     ((equal token "(")
-      (let ((items (list (my/type-parse-arrow))))
-        (while (equal (car my/type-tokens) ",")
-          (pop my/type-tokens)
-          (push (my/type-parse-arrow) items))
-        (when (equal (car my/type-tokens) ")") (pop my/type-tokens))
-        (cons 'group (nreverse items))))
-     ((string-prefix-p "'" token) (list 'var token))
-     (t (list 'app token)))))
-
-(defun my/type-parse-app ()
-  (let ((head (my/type-parse-atom)))
-    (while (and (car my/type-tokens)
-                (string-match-p "\\`[A-Za-z_]" (car my/type-tokens)))
-      (let ((name (pop my/type-tokens)))
-        (setq head (append (list 'app name)
-                           (if (eq (car-safe head) 'group)
-                               (cdr head)
-                             (list head))))))
-    (if (eq (car-safe head) 'group)
-        (if (cddr head) (cons 'tuple (cdr head)) (cadr head))
-      head)))
-
-(defun my/type-parse-tuple ()
-  (let ((items (list (my/type-parse-app))))
-    (while (equal (car my/type-tokens) "*")
-      (pop my/type-tokens)
-      (push (my/type-parse-app) items))
-    (if (cdr items) (cons 'tuple (nreverse items)) (car items))))
-
-(defun my/type-parse-arrow ()
-  (let ((items (list (my/type-parse-tuple))))
-    (while (equal (car my/type-tokens) "->")
-      (pop my/type-tokens)
-      (push (my/type-parse-tuple) items))
-    (if (cdr items) (cons 'arrow (nreverse items)) (car items))))
-
-(defun my/type-parse (text)
-  "Return TEXT parsed into a type tree."
-  (when-let* ((normalized (my/type-normalize text))
-              ((not (string-empty-p normalized))))
-    (let ((my/type-tokens (my/type-tokenize normalized)))
-      (my/type-parse-arrow))))
-
-(defun my/type-match-into (pattern ground table)
-  (cond
-   ((eq (car-safe pattern) 'var)
-    (let ((bound (gethash (cadr pattern) table 'absent)))
-      (if (eq bound 'absent)
-          (progn (puthash (cadr pattern) ground table) t)
-        (equal bound ground))))
-   ((and (eq (car-safe pattern) 'app) (eq (car-safe ground) 'app))
-    (and (equal (cadr pattern) (cadr ground))
-         (= (length pattern) (length ground))
-         (cl-every (lambda (left right) (my/type-match-into left right table))
-                   (cddr pattern) (cddr ground))))
-   ((and (memq (car-safe pattern) '(tuple arrow))
-         (eq (car-safe pattern) (car-safe ground))
-         (= (length pattern) (length ground)))
-    (cl-every (lambda (left right) (my/type-match-into left right table))
-              (cdr pattern) (cdr ground)))
-   (t nil)))
-
-(defun my/type-match (pattern ground)
-  "Return non-nil when PATTERN's variables can be instantiated to GROUND."
-  (and pattern ground
-       (my/type-match-into pattern ground (make-hash-table :test #'equal))
-       t))
-
-(defun my/type-ground-weight (tree)
-  "Return TREE's count of non-variable atoms."
-  (pcase (car-safe tree)
-    ('var 0)
-    ('app (apply #'+ 1 (mapcar #'my/type-ground-weight (cddr tree))))
-    ((or 'tuple 'arrow)
-     (apply #'+ 1 (mapcar #'my/type-ground-weight (cdr tree))))
-    (_ 0)))
-
-(defun my/type-reach (parts wanted)
-  "Return (K . WEIGHT) for the fewest leading PARTS dropped to reach WANTED."
-  (when-let* ((ground (my/type-parse wanted))
-              (usable (my/type-applicable-parts parts)))
-    (cl-loop for index below (length usable)
-             for remainder = (my/type-parse
-                              (string-join (nthcdr index usable) " -> "))
-             when (my/type-match remainder ground)
-             return (cons index (my/type-ground-weight remainder)))))
-
-(defun my/type-return-arity (type expected)
-  "Return how many arguments of TYPE must be applied to obtain EXPECTED."
-  (when-let* ((parts (my/type-arrow-parts type))
-              (wanted (my/type-canonical expected)))
-    (my/type-suffix-arity parts wanted)))
-
-(defun my/type-argument-label (domain)
-  "Return DOMAIN's OCaml argument label, if it carries one."
-  (and (string-match "\\`[?~]?\\([a-z_][A-Za-z0-9_']*\\):[^:]" domain)
-       (match-string 1 domain)))
-
-(defun my/type-part-optional-p (part)
-  "Return non-nil when PART is an optional argument domain."
-  (string-prefix-p "?" (string-trim (or part ""))))
-
-(defun my/type-applicable-parts (parts)
-  "Return PARTS without the optionals that a later positional discharges."
-  (let ((arguments (butlast parts)))
-    (append
-     (cl-loop for tail on arguments
-              for part = (car tail)
-              unless (and (my/type-part-optional-p part)
-                          (seq-some (lambda (other)
-                                      (not (my/type-argument-label other)))
-                                    (cdr tail)))
-              collect part)
-     (last parts))))
-
-(defun my/type-holes-from-parts (parts count)
-  "Return COUNT hole texts for the leading argument domains in PARTS."
-  (let ((usable (my/type-applicable-parts parts)))
-    (cl-loop for index below count
-             for part = (or (nth index usable) "")
-             for label = (my/type-argument-label part)
-             collect (cond ((null label) "_")
-                           ((my/type-part-optional-p part)
-                            (format "?%s:_" label))
-                           (t (format "~%s:_" label))))))
-
-(defun my/type-template-holes (template)
-  "Return TEMPLATE's head token and its hole tokens."
-  (when-let* ((tokens (split-string (string-trim (or template ""))
-                                    "[[:space:]]+" t)))
-    (cons (car tokens) (cdr tokens))))
-
-(defun my/type-number-hole (hole index)
-  "Return HOLE rewritten as Yasnippet field INDEX."
-  (format "%s${%d:_}" (substring hole 0 (1- (length hole))) index))
-
-(defun my/type-number-holes (holes)
-  "Return HOLES rewritten as consecutive Yasnippet fields."
-  (cl-loop for hole in holes
-           for index from 1
-           collect (my/type-number-hole hole index)))
-
-(defconst my/ocaml-word-infix-operators
-  '("asr" "land" "lor" "lsl" "lsr" "lxor" "mod"))
-
-(defconst my/ocaml-keyword-infix-operators
-  '("!=" "!==" ":=" "or" "::"))
-
-(defconst my/ocaml-core-operator-chars "$&*+/=>@^|")
-(defconst my/ocaml-symbol-operator-chars "!$%&*+/:<=>?@^|~.")
-(defconst my/ocaml-dot-operator-chars "!$%&*+/:=>?@^|")
-
-(defconst my/ocaml-infix-symbol-regexp
-  (concat "\\`\\(?:[" my/ocaml-core-operator-chars "%<-]"
-          "[" my/ocaml-symbol-operator-chars "-]*"
-          "\\|#[" my/ocaml-symbol-operator-chars "-]+\\)\\'"))
-
-(defconst my/ocaml-prefix-symbol-regexp
-  (concat "\\`\\(?:![" my/ocaml-symbol-operator-chars "-]*"
-          "\\|[?~][" my/ocaml-symbol-operator-chars "-]+\\)\\'"))
-
-(defconst my/ocaml-let-operator-regexp
-  (concat "\\`let[" my/ocaml-core-operator-chars "<-]"
-          "[" my/ocaml-dot-operator-chars "-]*\\'"))
-
-(defconst my/ocaml-and-operator-regexp
-  (concat "\\`and[" my/ocaml-core-operator-chars "<-]"
-          "[" my/ocaml-dot-operator-chars "-]*\\'"))
-
-(defun my/ocaml-operator-name (name)
-  "Return NAME with the parentheses that quote an operator removed."
-  (when (stringp name)
-    (let ((text (string-trim name)))
-      (if (string-match "\\`(\\(.*\\))\\'" text)
-          (string-trim (match-string 1 text))
-        text))))
-
-(defconst my/ocaml-reserved-symbols '("|" "->" "<-"))
-
-(defun my/ocaml-operator-class (name)
-  "Return NAME's operator class, or nil when NAME is an ordinary value."
-  (when-let* ((text (my/ocaml-operator-name name))
-              ((not (string-empty-p text)))
-              ((not (member text my/ocaml-reserved-symbols))))
-    (cond
-     ((string-match-p my/ocaml-let-operator-regexp text) 'binding)
-     ((string-match-p my/ocaml-and-operator-regexp text) 'parallel)
-     ((member text my/ocaml-word-infix-operators) 'infix)
-     ((member text my/ocaml-keyword-infix-operators) 'infix)
-     ((string-match-p my/ocaml-infix-symbol-regexp text) 'infix)
-     ((string-match-p my/ocaml-prefix-symbol-regexp text) 'prefix))))
-
-(defun my/ocaml-operator-arity (class)
-  "Return how many arguments an operator of CLASS applies to."
-  (if (eq class 'prefix) 1 2))
-
-(defun my/ocaml-operator-quoted (name)
-  "Return NAME as a first-class value, spaced so `*' cannot open a comment."
-  (format "( %s )" (my/ocaml-operator-name name)))
-
-(defun my/ocaml-and-operator-for (name)
-  "Return the and-operator matching let binding operator NAME."
-  (when-let* ((text (my/ocaml-operator-name name))
-              ((string-match-p my/ocaml-let-operator-regexp text)))
-    (concat "and" (substring text 3))))
-
-(defun my/ocaml-let-operator-p (name)
-  "Return non-nil when NAME is an OCaml let binding operator."
-  (eq (my/ocaml-operator-class name) 'binding))
-
-(defun my/ocaml-and-operator-p (name)
-  "Return non-nil when NAME is an OCaml and binding operator."
-  (eq (my/ocaml-operator-class name) 'parallel))
-
-(defun my/ocaml-operator-p (name)
-  "Return non-nil when NAME is an OCaml value operator."
-  (and (memq (my/ocaml-operator-class name) '(infix prefix)) t))
-
-(defun my/ocaml-prefix-operator-p (name)
-  "Return non-nil when NAME has OCaml prefix application syntax."
-  (eq (my/ocaml-operator-class name) 'prefix))
-
-(defun my/ocaml-bracket-hole (hole)
-  "Return HOLE with its value parenthesised, keeping any argument label."
-  (if (string-match "\\`\\([~?][^:]*:\\)\\(.*\\)\\'" hole)
-      (concat (match-string 1 hole) "(" (match-string 2 hole) ")")
-    (concat "(" hole ")")))
-
-(defun my/type-operator-template (name holes)
-  "Return natural OCaml application of operator NAME to HOLES."
-  (let* ((class (my/ocaml-operator-class name))
-         (text (my/ocaml-operator-name name))
-         (arguments (mapcar #'my/ocaml-bracket-hole holes))
-         (count (length arguments)))
-    (cond
-     ((zerop count) (my/ocaml-operator-quoted name))
-     ((and (eq class 'prefix) (= count 1))
-      (format "(%s%s)" text (car arguments)))
-     ((and (eq class 'infix) (= count 2))
-      (format "(%s %s %s)" (nth 0 arguments) text (nth 1 arguments)))
-     (t
-      (format "(%s %s)" (my/ocaml-operator-quoted name)
-              (string-join arguments " "))))))
-
-(defun my/type-application (name holes)
-  "Return NAME applied to HOLES in its natural OCaml syntax."
-  (pcase (my/ocaml-operator-class name)
-    ((or 'binding 'parallel) nil)
-    ((or 'infix 'prefix) (my/type-operator-template name holes))
-    (_ (when holes
-         (format "(%s %s)" name
-                 (string-join (mapcar #'my/ocaml-bracket-hole holes) " "))))))
-
-(defun my/type-entry-annotate (entry wanted rank)
-  "Record ENTRY's server RANK and its application producing canonical WANTED."
-  (setq entry (plist-put entry :rank rank))
-  (if (memq (plist-get entry :kind) '(construct collection record))
-      (progn
-        (setq entry (plist-put entry :tier 0))
-        (setq entry (plist-put entry :arity 0))
-        (plist-put entry :reach
-                   (and wanted
-                        (cons 0 (my/type-ground-weight
-                                 (my/type-parse wanted))))))
-    (let* ((name (plist-get entry :name))
-           (parts (my/type-arrow-parts (plist-get entry :typ)))
-           (reach (and parts wanted (my/type-reach parts wanted)))
-           (exact (car reach))
-           (server (cdr (my/type-template-holes
-                         (plist-get entry :constructible))))
-           (arity (or exact (and server (length server))))
-           (arity (and arity
-                       (max 0 (- arity
-                                 (if (my/ocaml-let-operator-p name) 2 0)))))
-           (holes (cond ((null arity) nil)
-                        ((>= (length server) arity) (seq-take server arity))
-                        (t (my/type-holes-from-parts parts arity)))))
-      (setq entry (plist-put entry :arity (or arity 0)))
-      (setq entry (plist-put entry :holes holes))
-      (setq entry (plist-put entry :reach reach))
-      (setq entry (plist-put entry :tier
-                             (cond
-                              ((eq (plist-get entry :kind) 'snippet) 1)
-                              (reach 0)
-                              (t 2))))
-      (setq entry (plist-put entry :template
-                             (and arity (my/type-application name holes))))
-      (plist-put entry :snippet
-                 (and arity
-                      (my/type-application
-                       name (my/type-number-holes holes)))))))
-
 (defun my/type-informative-p (type)
   "Return non-nil when TYPE is a type rather than a server placeholder."
   (and (stringp type)
@@ -1287,29 +896,6 @@ own name into the buffer that Hippie scans."
 (defun my/type-completion-arity (candidate)
   "Return how many of CANDIDATE's arguments yield the expected type."
   (car (my/type-completion-entry-reach candidate)))
-
-(defconst my/ocaml-operator-characters "!$%&*+./:<=>?@^|~-")
-
-(defun my/ocaml-operator-bounds ()
-  "Return the bounds of the OCaml operator token ending at point."
-  (save-excursion
-    (let ((end (point)))
-      (skip-chars-backward my/ocaml-operator-characters)
-      (let ((start (point)))
-        (when (and (< start end)
-                   (or (bobp)
-                       (not (memq (char-syntax (char-before)) '(?w ?_)))))
-          (cons start end))))))
-
-(defun my/ocaml-literal-prefix-bounds ()
-  "Return bounds for an incomplete OCaml collection or record literal."
-  (let ((end (point)))
-    (cond
-     ((and (>= (- end (point-min)) 2)
-           (equal (buffer-substring-no-properties (- end 2) end) "[|"))
-      (cons (- end 2) end))
-     ((memq (char-before) '(?\[ ?{))
-      (cons (1- end) end)))))
 
 (defun my/type-hole-pattern (string)
   "Return STRING with a leading OCaml hole dropped from the prefix."
@@ -1469,115 +1055,6 @@ own name into the buffer that Hippie scans."
                       candidate))
               candidates)
       #'< :key #'car))))
-
-(defvar my/ocaml-parse-buffer nil)
-(defvar my/ocaml-value-name-query nil)
-
-(defun my/ocaml-parse-buffer ()
-  "Return the shared buffer holding the reusable OCaml parser."
-  (unless (buffer-live-p my/ocaml-parse-buffer)
-    (setq my/ocaml-parse-buffer (get-buffer-create " *ocaml-parse*" t))
-    (with-current-buffer my/ocaml-parse-buffer
-      (treesit-parser-create 'ocaml)))
-  my/ocaml-parse-buffer)
-
-(defun my/ocaml-value-name-query ()
-  "Return the compiled Tree-sitter query matching OCaml value names."
-  (or my/ocaml-value-name-query
-      (setq my/ocaml-value-name-query
-            (treesit-query-compile 'ocaml '((value_name) @name)))))
-
-(defvar my/ocaml-leaf-query nil)
-
-(defun my/ocaml-leaf-query ()
-  "Return the compiled query matching pattern variables and value names."
-  (or my/ocaml-leaf-query
-      (setq my/ocaml-leaf-query
-            (treesit-query-compile
-             'ocaml '([(value_pattern) (value_name)] @leaf)))))
-
-(defun my/ocaml-leaf-ranges (expression)
-  "Return ranges of EXPRESSION's pattern variables and typed holes."
-  (when (and (stringp expression) (treesit-language-available-p 'ocaml))
-    (condition-case nil
-        (with-current-buffer (my/ocaml-parse-buffer)
-          (erase-buffer)
-          (insert "let __destruct = " expression)
-          (let ((offset (1+ (length "let __destruct = ")))
-                (root (treesit-buffer-root-node 'ocaml)))
-            (unless (my/type-treesit-error-p root)
-              (sort
-               (cl-loop for capture in
-                        (treesit-query-capture root (my/ocaml-leaf-query))
-                        for node = (cdr capture)
-                        for text = (treesit-node-text node t)
-                        for start = (- (treesit-node-start node) offset)
-                        when (and (>= start 0)
-                                  (or (string= (treesit-node-type node)
-                                               "value_pattern")
-                                      (string= text "_")))
-                        collect (list start
-                                      (- (treesit-node-end node) offset)
-                                      text))
-               (lambda (left right) (< (car left) (car right)))))))
-      (error nil))))
-
-(defun my/ocaml-leaf-snippet (expression)
-  "Return EXPRESSION with each pattern variable and hole as a Yas field."
-  (let ((ranges (my/ocaml-leaf-ranges expression))
-        (position 0)
-        (field 0)
-        pieces)
-    (dolist (range ranges)
-      (push (substring expression position (nth 0 range)) pieces)
-      (setq field (1+ field))
-      (push (format "${%d:%s}" field (nth 2 range)) pieces)
-      (setq position (nth 1 range)))
-    (push (substring expression position) pieces)
-    (apply #'concat (nreverse pieces))))
-
-(defun my/type-expression-hole-ranges (expression)
-  "Return Tree-sitter ranges of typed holes in OCaml EXPRESSION."
-  (when (and (stringp expression) (treesit-language-available-p 'ocaml))
-    (condition-case nil
-        (with-current-buffer (my/ocaml-parse-buffer)
-          (erase-buffer)
-          (insert "let __completion = " expression)
-          (let ((offset (1+ (length "let __completion = ")))
-                (root (treesit-buffer-root-node 'ocaml)))
-            (unless (my/type-treesit-error-p root)
-              (cl-loop for capture in
-                       (treesit-query-capture root (my/ocaml-value-name-query))
-                       for node = (cdr capture)
-                       when (string= (treesit-node-text node t) "_")
-                       collect
-                       (cons (- (treesit-node-start node) offset)
-                             (- (treesit-node-end node) offset))))))
-      (error nil))))
-
-(defun my/type-yas-snippet (expression)
-  "Convert typed holes in server-produced EXPRESSION to Yasnippet fields."
-  (let ((ranges
-         (mapcar (lambda (range)
-                   (list (car range) (cdr range) "_"))
-                 (my/type-expression-hole-ranges expression)))
-        (position 0)
-        (field 1)
-        pieces)
-    (when (string-match
-           "\\(?:\\`\\|[([:space:]]\\)fun[[:space:]]+\\([a-z][A-Za-z0-9_']*\\)[[:space:]]+->"
-           expression)
-      (push (list (match-beginning 1) (match-end 1)
-                  (match-string 1 expression))
-            ranges))
-    (setq ranges (sort ranges (lambda (left right) (< (car left) (car right)))))
-    (dolist (range ranges)
-      (push (substring expression position (car range)) pieces)
-      (push (format "${%d:%s}" field (nth 2 range)) pieces)
-      (setq position (nth 1 range)
-            field (1+ field)))
-    (push (substring expression position) pieces)
-    (apply #'concat (nreverse pieces))))
 
 (defun my/eglot-markup-text (contents)
   "Return plain text from LSP hover CONTENTS."
@@ -7286,6 +6763,35 @@ Application snippets are generated rather than written by hand, for any value or
 
 Any variant can also be written as plain prefix application, which is what =S-TAB= cycles to.
 
+Bounds of the operator or listy literal token ending at point, which is what a trigger expands from.
+
+#+begin_src emacs-lisp
+
+(defconst my/ocaml-operator-characters "!$%&*+./:<=>?@^|~-")
+
+(defun my/ocaml-operator-bounds ()
+  "Return the bounds of the OCaml operator token ending at point."
+  (save-excursion
+    (let ((end (point)))
+      (skip-chars-backward my/ocaml-operator-characters)
+      (let ((start (point)))
+        (when (and (< start end)
+                   (or (bobp)
+                       (not (memq (char-syntax (char-before)) '(?w ?_)))))
+          (cons start end))))))
+
+(defun my/ocaml-literal-prefix-bounds ()
+  "Return bounds for an incomplete OCaml collection or record literal."
+  (let ((end (point)))
+    (cond
+     ((and (>= (- end (point-min)) 2)
+           (equal (buffer-substring-no-properties (- end 2) end) "[|"))
+      (cons (- end 2) end))
+     ((memq (char-before) '(?\[ ?{))
+      (cons (1- end) end)))))
+
+#+end_src
+
 *** Well-typed ranking
 A candidate is well-typed when dropping =k ≥ 0= of its leading arguments leaves a remainder =R= consistent with the expected type =T=, where =R= may be more polymorphic, a one-way match, so ='a -> 'a= reaches =int= at =k = 1=.
 
@@ -7300,6 +6806,198 @@ The type distance ordering tier 1 is the pair (specificity of =R=, =k=), compare
 | =int * int= | =q : 'a * int=              | ='a * int=  |     2 |   0 |
 
 Counting distinct type variables would not do: ='b * 'c= has two to ='a='s one, yet is the more specific shape.
+
+OCaml types are parsed into a tree, and the distance from a candidate to the expectation is the fewest leading arguments dropped paired with the ground weight of what remains.
+
+#+begin_src emacs-lisp
+
+(defun my/type-enclosed-p (text)
+  "Return non-nil when TEXT is wrapped in one balanced pair of parentheses."
+  (and (> (length text) 1)
+       (eq (aref text 0) ?\()
+       (eq (aref text (1- (length text))) ?\))
+       (let ((depth 0)
+             (inner t))
+         (dotimes (index (length text))
+           (pcase (aref text index)
+             (?\( (setq depth (1+ depth)))
+             (?\) (setq depth (1- depth))))
+           (when (and (zerop depth) (< index (1- (length text))))
+             (setq inner nil)))
+         inner)))
+
+(defun my/type-strip-parens (text)
+  "Return TEXT with any fully enclosing parentheses removed."
+  (if (my/type-enclosed-p text)
+      (my/type-strip-parens (string-trim (substring text 1 -1)))
+    text))
+
+(defun my/type-arrow-split (text)
+  "Split TEXT on its top-level function arrows."
+  (let ((depth 0)
+        (start 0)
+        (position 0)
+        (length (length text))
+        parts)
+    (while (< position length)
+      (pcase (aref text position)
+        ((or ?\( ?\[ ?{) (setq depth (1+ depth)))
+        ((or ?\) ?\] ?}) (setq depth (max 0 (1- depth))))
+        ((or ?- ?=)
+         (when (and (zerop depth)
+                    (< (1+ position) length)
+                    (eq (aref text (1+ position)) ?>))
+           (push (string-trim (substring text start position)) parts)
+           (setq position (1+ position)
+                 start (1+ position)))))
+      (setq position (1+ position)))
+    (push (string-trim (substring text start)) parts)
+    (nreverse parts)))
+
+(defun my/type-arrow-parts (type)
+  "Split TYPE on its top-level function arrows, flattening its codomain."
+  (when-let* ((text (my/type-normalize type)))
+    (let* ((parts (my/type-arrow-split (my/type-strip-parens text)))
+           (codomain (car (last parts)))
+           (inner (and (my/type-enclosed-p codomain)
+                       (my/type-arrow-split
+                        (my/type-strip-parens codomain)))))
+      (if (cdr inner)
+          (append (butlast parts) inner)
+        parts))))
+
+(defun my/type-arrow-count (type)
+  "Return TYPE's number of top-level function arrows."
+  (max 0 (1- (length (my/type-arrow-parts type)))))
+
+(defun my/type-canonical (type)
+  "Return TYPE with its top-level arrows written uniformly."
+  (when-let* ((parts (my/type-arrow-parts type)))
+    (string-join parts " -> ")))
+
+(defun my/type-unconstrained-p (type)
+  "Return non-nil when TYPE is a bare type variable."
+  (and type (string-match-p "\\`'[A-Za-z_][A-Za-z0-9_']*\\'" (string-trim type))))
+
+(defun my/type-suffix-arity (parts wanted)
+  "Return how many leading PARTS to drop so the remainder spells WANTED."
+  (cl-loop for index below (length parts)
+           when (equal (string-join (nthcdr index parts) " -> ") wanted)
+           return index))
+
+(defconst my/type-token-regexp
+  "'[A-Za-z_][A-Za-z0-9_']*\\|[A-Za-z_][A-Za-z0-9_'.]*\\|->\\|[()*,]")
+
+(defun my/type-tokenize (text)
+  "Return TEXT split into type tokens."
+  (let ((position 0)
+        tokens)
+    (while (string-match my/type-token-regexp text position)
+      (push (match-string 0 text) tokens)
+      (setq position (match-end 0)))
+    (nreverse tokens)))
+
+(defvar my/type-tokens nil)
+
+(defun my/type-parse-atom ()
+  (let ((token (pop my/type-tokens)))
+    (cond
+     ((null token) nil)
+     ((equal token "(")
+      (let ((items (list (my/type-parse-arrow))))
+        (while (equal (car my/type-tokens) ",")
+          (pop my/type-tokens)
+          (push (my/type-parse-arrow) items))
+        (when (equal (car my/type-tokens) ")") (pop my/type-tokens))
+        (cons 'group (nreverse items))))
+     ((string-prefix-p "'" token) (list 'var token))
+     (t (list 'app token)))))
+
+(defun my/type-parse-app ()
+  (let ((head (my/type-parse-atom)))
+    (while (and (car my/type-tokens)
+                (string-match-p "\\`[A-Za-z_]" (car my/type-tokens)))
+      (let ((name (pop my/type-tokens)))
+        (setq head (append (list 'app name)
+                           (if (eq (car-safe head) 'group)
+                               (cdr head)
+                             (list head))))))
+    (if (eq (car-safe head) 'group)
+        (if (cddr head) (cons 'tuple (cdr head)) (cadr head))
+      head)))
+
+(defun my/type-parse-tuple ()
+  (let ((items (list (my/type-parse-app))))
+    (while (equal (car my/type-tokens) "*")
+      (pop my/type-tokens)
+      (push (my/type-parse-app) items))
+    (if (cdr items) (cons 'tuple (nreverse items)) (car items))))
+
+(defun my/type-parse-arrow ()
+  (let ((items (list (my/type-parse-tuple))))
+    (while (equal (car my/type-tokens) "->")
+      (pop my/type-tokens)
+      (push (my/type-parse-tuple) items))
+    (if (cdr items) (cons 'arrow (nreverse items)) (car items))))
+
+(defun my/type-parse (text)
+  "Return TEXT parsed into a type tree."
+  (when-let* ((normalized (my/type-normalize text))
+              ((not (string-empty-p normalized))))
+    (let ((my/type-tokens (my/type-tokenize normalized)))
+      (my/type-parse-arrow))))
+
+(defun my/type-match-into (pattern ground table)
+  (cond
+   ((eq (car-safe pattern) 'var)
+    (let ((bound (gethash (cadr pattern) table 'absent)))
+      (if (eq bound 'absent)
+          (progn (puthash (cadr pattern) ground table) t)
+        (equal bound ground))))
+   ((and (eq (car-safe pattern) 'app) (eq (car-safe ground) 'app))
+    (and (equal (cadr pattern) (cadr ground))
+         (= (length pattern) (length ground))
+         (cl-every (lambda (left right) (my/type-match-into left right table))
+                   (cddr pattern) (cddr ground))))
+   ((and (memq (car-safe pattern) '(tuple arrow))
+         (eq (car-safe pattern) (car-safe ground))
+         (= (length pattern) (length ground)))
+    (cl-every (lambda (left right) (my/type-match-into left right table))
+              (cdr pattern) (cdr ground)))
+   (t nil)))
+
+(defun my/type-match (pattern ground)
+  "Return non-nil when PATTERN's variables can be instantiated to GROUND."
+  (and pattern ground
+       (my/type-match-into pattern ground (make-hash-table :test #'equal))
+       t))
+
+(defun my/type-ground-weight (tree)
+  "Return TREE's count of non-variable atoms."
+  (pcase (car-safe tree)
+    ('var 0)
+    ('app (apply #'+ 1 (mapcar #'my/type-ground-weight (cddr tree))))
+    ((or 'tuple 'arrow)
+     (apply #'+ 1 (mapcar #'my/type-ground-weight (cdr tree))))
+    (_ 0)))
+
+(defun my/type-reach (parts wanted)
+  "Return (K . WEIGHT) for the fewest leading PARTS dropped to reach WANTED."
+  (when-let* ((ground (my/type-parse wanted))
+              (usable (my/type-applicable-parts parts)))
+    (cl-loop for index below (length usable)
+             for remainder = (my/type-parse
+                              (string-join (nthcdr index usable) " -> "))
+             when (my/type-match remainder ground)
+             return (cons index (my/type-ground-weight remainder)))))
+
+(defun my/type-return-arity (type expected)
+  "Return how many arguments of TYPE must be applied to obtain EXPECTED."
+  (when-let* ((parts (my/type-arrow-parts type))
+              (wanted (my/type-canonical expected)))
+    (my/type-suffix-arity parts wanted)))
+
+#+end_src
 
 *** Application
 The application snippet reads two types: the type of the head being applied, and the expected type =T= at the insertion point. Between them they fix how many arguments appear at once and how many =TAB= can add afterwards. Inserting from completion fixes the head, so only the arguments are fields; there is no stage in which the function name itself is editable.
@@ -7367,6 +7065,211 @@ Each gives the head type, the expected type =T=, the remainder after dropping =k
 
 *10, unknown head type.* With no type information and any =T=, the snippet is =(f _)= with unbounded arity, and =S-TAB= may name or make optional any hole, since nothing constrains the arrow.
 
+Argument holes come from the head type, with optionals dropped where a later positional discharges them, and operators classified against OCaml's grammar to pick the infix, prefix or binding form.
+
+#+begin_src emacs-lisp
+
+(defun my/type-argument-label (domain)
+  "Return DOMAIN's OCaml argument label, if it carries one."
+  (and (string-match "\\`[?~]?\\([a-z_][A-Za-z0-9_']*\\):[^:]" domain)
+       (match-string 1 domain)))
+
+(defun my/type-part-optional-p (part)
+  "Return non-nil when PART is an optional argument domain."
+  (string-prefix-p "?" (string-trim (or part ""))))
+
+(defun my/type-applicable-parts (parts)
+  "Return PARTS without the optionals that a later positional discharges."
+  (let ((arguments (butlast parts)))
+    (append
+     (cl-loop for tail on arguments
+              for part = (car tail)
+              unless (and (my/type-part-optional-p part)
+                          (seq-some (lambda (other)
+                                      (not (my/type-argument-label other)))
+                                    (cdr tail)))
+              collect part)
+     (last parts))))
+
+(defun my/type-holes-from-parts (parts count)
+  "Return COUNT hole texts for the leading argument domains in PARTS."
+  (let ((usable (my/type-applicable-parts parts)))
+    (cl-loop for index below count
+             for part = (or (nth index usable) "")
+             for label = (my/type-argument-label part)
+             collect (cond ((null label) "_")
+                           ((my/type-part-optional-p part)
+                            (format "?%s:_" label))
+                           (t (format "~%s:_" label))))))
+
+(defun my/type-template-holes (template)
+  "Return TEMPLATE's head token and its hole tokens."
+  (when-let* ((tokens (split-string (string-trim (or template ""))
+                                    "[[:space:]]+" t)))
+    (cons (car tokens) (cdr tokens))))
+
+(defun my/type-number-hole (hole index)
+  "Return HOLE rewritten as Yasnippet field INDEX."
+  (format "%s${%d:_}" (substring hole 0 (1- (length hole))) index))
+
+(defun my/type-number-holes (holes)
+  "Return HOLES rewritten as consecutive Yasnippet fields."
+  (cl-loop for hole in holes
+           for index from 1
+           collect (my/type-number-hole hole index)))
+
+(defconst my/ocaml-word-infix-operators
+  '("asr" "land" "lor" "lsl" "lsr" "lxor" "mod"))
+
+(defconst my/ocaml-keyword-infix-operators
+  '("!=" "!==" ":=" "or" "::"))
+
+(defconst my/ocaml-core-operator-chars "$&*+/=>@^|")
+(defconst my/ocaml-symbol-operator-chars "!$%&*+/:<=>?@^|~.")
+(defconst my/ocaml-dot-operator-chars "!$%&*+/:=>?@^|")
+
+(defconst my/ocaml-infix-symbol-regexp
+  (concat "\\`\\(?:[" my/ocaml-core-operator-chars "%<-]"
+          "[" my/ocaml-symbol-operator-chars "-]*"
+          "\\|#[" my/ocaml-symbol-operator-chars "-]+\\)\\'"))
+
+(defconst my/ocaml-prefix-symbol-regexp
+  (concat "\\`\\(?:![" my/ocaml-symbol-operator-chars "-]*"
+          "\\|[?~][" my/ocaml-symbol-operator-chars "-]+\\)\\'"))
+
+(defconst my/ocaml-let-operator-regexp
+  (concat "\\`let[" my/ocaml-core-operator-chars "<-]"
+          "[" my/ocaml-dot-operator-chars "-]*\\'"))
+
+(defconst my/ocaml-and-operator-regexp
+  (concat "\\`and[" my/ocaml-core-operator-chars "<-]"
+          "[" my/ocaml-dot-operator-chars "-]*\\'"))
+
+(defun my/ocaml-operator-name (name)
+  "Return NAME with the parentheses that quote an operator removed."
+  (when (stringp name)
+    (let ((text (string-trim name)))
+      (if (string-match "\\`(\\(.*\\))\\'" text)
+          (string-trim (match-string 1 text))
+        text))))
+
+(defconst my/ocaml-reserved-symbols '("|" "->" "<-"))
+
+(defun my/ocaml-operator-class (name)
+  "Return NAME's operator class, or nil when NAME is an ordinary value."
+  (when-let* ((text (my/ocaml-operator-name name))
+              ((not (string-empty-p text)))
+              ((not (member text my/ocaml-reserved-symbols))))
+    (cond
+     ((string-match-p my/ocaml-let-operator-regexp text) 'binding)
+     ((string-match-p my/ocaml-and-operator-regexp text) 'parallel)
+     ((member text my/ocaml-word-infix-operators) 'infix)
+     ((member text my/ocaml-keyword-infix-operators) 'infix)
+     ((string-match-p my/ocaml-infix-symbol-regexp text) 'infix)
+     ((string-match-p my/ocaml-prefix-symbol-regexp text) 'prefix))))
+
+(defun my/ocaml-operator-arity (class)
+  "Return how many arguments an operator of CLASS applies to."
+  (if (eq class 'prefix) 1 2))
+
+(defun my/ocaml-operator-quoted (name)
+  "Return NAME as a first-class value, spaced so `*' cannot open a comment."
+  (format "( %s )" (my/ocaml-operator-name name)))
+
+(defun my/ocaml-and-operator-for (name)
+  "Return the and-operator matching let binding operator NAME."
+  (when-let* ((text (my/ocaml-operator-name name))
+              ((string-match-p my/ocaml-let-operator-regexp text)))
+    (concat "and" (substring text 3))))
+
+(defun my/ocaml-let-operator-p (name)
+  "Return non-nil when NAME is an OCaml let binding operator."
+  (eq (my/ocaml-operator-class name) 'binding))
+
+(defun my/ocaml-and-operator-p (name)
+  "Return non-nil when NAME is an OCaml and binding operator."
+  (eq (my/ocaml-operator-class name) 'parallel))
+
+(defun my/ocaml-operator-p (name)
+  "Return non-nil when NAME is an OCaml value operator."
+  (and (memq (my/ocaml-operator-class name) '(infix prefix)) t))
+
+(defun my/ocaml-prefix-operator-p (name)
+  "Return non-nil when NAME has OCaml prefix application syntax."
+  (eq (my/ocaml-operator-class name) 'prefix))
+
+(defun my/ocaml-bracket-hole (hole)
+  "Return HOLE with its value parenthesised, keeping any argument label."
+  (if (string-match "\\`\\([~?][^:]*:\\)\\(.*\\)\\'" hole)
+      (concat (match-string 1 hole) "(" (match-string 2 hole) ")")
+    (concat "(" hole ")")))
+
+(defun my/type-operator-template (name holes)
+  "Return natural OCaml application of operator NAME to HOLES."
+  (let* ((class (my/ocaml-operator-class name))
+         (text (my/ocaml-operator-name name))
+         (arguments (mapcar #'my/ocaml-bracket-hole holes))
+         (count (length arguments)))
+    (cond
+     ((zerop count) (my/ocaml-operator-quoted name))
+     ((and (eq class 'prefix) (= count 1))
+      (format "(%s%s)" text (car arguments)))
+     ((and (eq class 'infix) (= count 2))
+      (format "(%s %s %s)" (nth 0 arguments) text (nth 1 arguments)))
+     (t
+      (format "(%s %s)" (my/ocaml-operator-quoted name)
+              (string-join arguments " "))))))
+
+(defun my/type-application (name holes)
+  "Return NAME applied to HOLES in its natural OCaml syntax."
+  (pcase (my/ocaml-operator-class name)
+    ((or 'binding 'parallel) nil)
+    ((or 'infix 'prefix) (my/type-operator-template name holes))
+    (_ (when holes
+         (format "(%s %s)" name
+                 (string-join (mapcar #'my/ocaml-bracket-hole holes) " "))))))
+
+(defun my/type-entry-annotate (entry wanted rank)
+  "Record ENTRY's server RANK and its application producing canonical WANTED."
+  (setq entry (plist-put entry :rank rank))
+  (if (memq (plist-get entry :kind) '(construct collection record))
+      (progn
+        (setq entry (plist-put entry :tier 0))
+        (setq entry (plist-put entry :arity 0))
+        (plist-put entry :reach
+                   (and wanted
+                        (cons 0 (my/type-ground-weight
+                                 (my/type-parse wanted))))))
+    (let* ((name (plist-get entry :name))
+           (parts (my/type-arrow-parts (plist-get entry :typ)))
+           (reach (and parts wanted (my/type-reach parts wanted)))
+           (exact (car reach))
+           (server (cdr (my/type-template-holes
+                         (plist-get entry :constructible))))
+           (arity (or exact (and server (length server))))
+           (arity (and arity
+                       (max 0 (- arity
+                                 (if (my/ocaml-let-operator-p name) 2 0)))))
+           (holes (cond ((null arity) nil)
+                        ((>= (length server) arity) (seq-take server arity))
+                        (t (my/type-holes-from-parts parts arity)))))
+      (setq entry (plist-put entry :arity (or arity 0)))
+      (setq entry (plist-put entry :holes holes))
+      (setq entry (plist-put entry :reach reach))
+      (setq entry (plist-put entry :tier
+                             (cond
+                              ((eq (plist-get entry :kind) 'snippet) 1)
+                              (reach 0)
+                              (t 2))))
+      (setq entry (plist-put entry :template
+                             (and arity (my/type-application name holes))))
+      (plist-put entry :snippet
+                 (and arity
+                      (my/type-application
+                       name (my/type-number-holes holes)))))))
+
+#+end_src
+
 *** Preview examples
 Bold marks text already typed, which renders as ordinary buffer text; the rest is the grey preview, and =‸= marks point.
 
@@ -7388,6 +7291,127 @@ Every request is asynchronous and debounced, so completion at point never waits 
 
 *** Holes
 A bare =_= is a typed hole. Its underscore is not treated as part of the completion prefix, so every candidate stays available, while the type derived from the hole is retained for ranking.
+
+A shared Tree-sitter parser buffer finds the leaf patterns and typed holes inside a candidate expression, and rewrites them as Yasnippet fields.
+
+#+begin_src emacs-lisp
+
+(defun my/type-treesit-error-p (node)
+  "Return non-nil when NODE contains a parser error."
+  (or (treesit-node-check node 'has-error)
+      (treesit-node-check node 'missing)
+      (string= (treesit-node-type node) "ERROR")))
+
+(defvar my/ocaml-parse-buffer nil)
+(defvar my/ocaml-value-name-query nil)
+
+(defun my/ocaml-parse-buffer ()
+  "Return the shared buffer holding the reusable OCaml parser."
+  (unless (buffer-live-p my/ocaml-parse-buffer)
+    (setq my/ocaml-parse-buffer (get-buffer-create " *ocaml-parse*" t))
+    (with-current-buffer my/ocaml-parse-buffer
+      (treesit-parser-create 'ocaml)))
+  my/ocaml-parse-buffer)
+
+(defun my/ocaml-value-name-query ()
+  "Return the compiled Tree-sitter query matching OCaml value names."
+  (or my/ocaml-value-name-query
+      (setq my/ocaml-value-name-query
+            (treesit-query-compile 'ocaml '((value_name) @name)))))
+
+(defvar my/ocaml-leaf-query nil)
+
+(defun my/ocaml-leaf-query ()
+  "Return the compiled query matching pattern variables and value names."
+  (or my/ocaml-leaf-query
+      (setq my/ocaml-leaf-query
+            (treesit-query-compile
+             'ocaml '([(value_pattern) (value_name)] @leaf)))))
+
+(defun my/ocaml-leaf-ranges (expression)
+  "Return ranges of EXPRESSION's pattern variables and typed holes."
+  (when (and (stringp expression) (treesit-language-available-p 'ocaml))
+    (condition-case nil
+        (with-current-buffer (my/ocaml-parse-buffer)
+          (erase-buffer)
+          (insert "let __destruct = " expression)
+          (let ((offset (1+ (length "let __destruct = ")))
+                (root (treesit-buffer-root-node 'ocaml)))
+            (unless (my/type-treesit-error-p root)
+              (sort
+               (cl-loop for capture in
+                        (treesit-query-capture root (my/ocaml-leaf-query))
+                        for node = (cdr capture)
+                        for text = (treesit-node-text node t)
+                        for start = (- (treesit-node-start node) offset)
+                        when (and (>= start 0)
+                                  (or (string= (treesit-node-type node)
+                                               "value_pattern")
+                                      (string= text "_")))
+                        collect (list start
+                                      (- (treesit-node-end node) offset)
+                                      text))
+               (lambda (left right) (< (car left) (car right)))))))
+      (error nil))))
+
+(defun my/ocaml-leaf-snippet (expression)
+  "Return EXPRESSION with each pattern variable and hole as a Yas field."
+  (let ((ranges (my/ocaml-leaf-ranges expression))
+        (position 0)
+        (field 0)
+        pieces)
+    (dolist (range ranges)
+      (push (substring expression position (nth 0 range)) pieces)
+      (setq field (1+ field))
+      (push (format "${%d:%s}" field (nth 2 range)) pieces)
+      (setq position (nth 1 range)))
+    (push (substring expression position) pieces)
+    (apply #'concat (nreverse pieces))))
+
+(defun my/type-expression-hole-ranges (expression)
+  "Return Tree-sitter ranges of typed holes in OCaml EXPRESSION."
+  (when (and (stringp expression) (treesit-language-available-p 'ocaml))
+    (condition-case nil
+        (with-current-buffer (my/ocaml-parse-buffer)
+          (erase-buffer)
+          (insert "let __completion = " expression)
+          (let ((offset (1+ (length "let __completion = ")))
+                (root (treesit-buffer-root-node 'ocaml)))
+            (unless (my/type-treesit-error-p root)
+              (cl-loop for capture in
+                       (treesit-query-capture root (my/ocaml-value-name-query))
+                       for node = (cdr capture)
+                       when (string= (treesit-node-text node t) "_")
+                       collect
+                       (cons (- (treesit-node-start node) offset)
+                             (- (treesit-node-end node) offset))))))
+      (error nil))))
+
+(defun my/type-yas-snippet (expression)
+  "Convert typed holes in server-produced EXPRESSION to Yasnippet fields."
+  (let ((ranges
+         (mapcar (lambda (range)
+                   (list (car range) (cdr range) "_"))
+                 (my/type-expression-hole-ranges expression)))
+        (position 0)
+        (field 1)
+        pieces)
+    (when (string-match
+           "\\(?:\\`\\|[([:space:]]\\)fun[[:space:]]+\\([a-z][A-Za-z0-9_']*\\)[[:space:]]+->"
+           expression)
+      (push (list (match-beginning 1) (match-end 1)
+                  (match-string 1 expression))
+            ranges))
+    (setq ranges (sort ranges (lambda (left right) (< (car left) (car right)))))
+    (dolist (range ranges)
+      (push (substring expression position (car range)) pieces)
+      (push (format "${%d:%s}" field (nth 2 range)) pieces)
+      (setq position (nth 1 range)
+            field (1+ field)))
+    (push (substring expression position) pieces)
+    (apply #'concat (nreverse pieces))))
+
+#+end_src
 
 *** Other
 Installed dependency sources retain Eglot navigation without standalone Flymake diagnostics. A module annotated =: S= offers the items declared by =S= with their names fixed and arity from the declared type. Labelled arguments render with their labels and optional arguments stay omitted until =TAB= adds them. =C-c .= collects snippets, type queries, navigation and refactors.
