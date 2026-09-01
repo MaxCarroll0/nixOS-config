@@ -32,7 +32,7 @@ let
       dispatch = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Hyprland dispatcher, and the required fallback for bridge bindings.";
+        description = "Lua dispatcher expression, and the required fallback for bridge bindings.";
       };
       elisp = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -74,12 +74,7 @@ let
     };
   };
 
-  # bind = takes "movefocus, l"; hyprctl dispatch takes "movefocus l".
-  cliForm =
-    d:
-    lib.concatStringsSep " " (
-      lib.filter (s: s != "") (lib.splitString " " (lib.replaceStrings [ "," ] [ " " ] d))
-    );
+  panicFlag = "\${XDG_RUNTIME_DIR:-/run/user/$(${pkgs.coreutils}/bin/id -u)}/wm-bridge/panic";
 
   emacsCall = pkgs.writeShellScriptBin "wm-emacs" ''
     set -u
@@ -98,7 +93,7 @@ let
       lib.mapAttrsToList (name: b: ''
         ${name})
           elisp=${lib.escapeShellArg b.elisp}
-          fallback=${lib.escapeShellArg (cliForm b.dispatch)}
+          fallback=${lib.escapeShellArg b.dispatch}
           ;;
       '') bridgeEntries
     )}
@@ -108,25 +103,35 @@ let
         ;;
     esac
 
-    handled=$(${pkgs.coreutils}/bin/timeout ${cfg.emacsTimeout} emacsclient \
-      --eval "(if (and (fboundp '$elisp) ($elisp)) \"t\" \"nil\")" 2> /dev/null || true)
-
-    if [ "$handled" = '"t"' ]; then
-      exit 0
+    if [ ! -e "${panicFlag}" ]; then
+      handled=$(${pkgs.coreutils}/bin/timeout ${cfg.emacsTimeout} emacsclient \
+        --eval "(if (and (fboundp '$elisp) ($elisp)) \"t\" \"nil\")" 2> /dev/null || true)
+      if [ "$handled" = '"t"' ]; then
+        exit 0
+      fi
     fi
-    exec hyprctl dispatch $fallback
+    exec hyprctl dispatch "$fallback"
   '';
 
   wmPanic = pkgs.writeShellScriptBin "wm-panic" ''
     set -u
-    ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (_: b: ''
-        hyprctl keyword unbind "${b.mods},${b.key}" > /dev/null
-        hyprctl keyword bind "${b.mods},${b.key},${b.dispatch}" > /dev/null
-      '') bridgeEntries
-    )}
-    echo "wm-panic: ${toString (lib.length (lib.attrNames bridgeEntries))} bridge bindings now dispatch directly"
+    flag="${panicFlag}"
+    if [ "''${1:-on}" = off ]; then
+      ${pkgs.coreutils}/bin/rm -f "$flag"
+      echo "wm-panic: off, bridge bindings consult Emacs again"
+    else
+      ${pkgs.coreutils}/bin/mkdir -p "$(${pkgs.coreutils}/bin/dirname "$flag")"
+      ${pkgs.coreutils}/bin/touch "$flag"
+      echo "wm-panic: on, ${toString (lib.length (lib.attrNames bridgeEntries))} bridge bindings now dispatch directly"
+    fi
   '';
+
+  luaStr = s: "\"" + lib.escape [ "\\" "\"" ] s + "\"";
+
+  luaExec = cmd: "hl.dsp.exec_cmd(${luaStr cmd})";
+
+  keySpec =
+    b: lib.concatStringsSep "+" (lib.filter (s: s != "") (lib.splitString " " b.mods) ++ [ b.key ]);
 
   bindLine =
     b:
@@ -135,27 +140,30 @@ let
         if b.owner == "hyprland" then
           b.dispatch
         else if b.owner == "emacs" then
-          "exec, ${emacsCall}/bin/wm-emacs ${b.elisp}"
+          luaExec "${emacsCall}/bin/wm-emacs ${b.elisp}"
         else
-          "exec, ${wmDispatch}/bin/wm-dispatch ${b.name}";
+          luaExec "${wmDispatch}/bin/wm-dispatch ${b.name}";
     in
-    "bind = ${b.mods}, ${b.key}, ${target}";
+    "hl.bind(${luaStr (keySpec b)}, ${target}, { description = ${luaStr b.desc} })";
 
   named = attrs: lib.mapAttrsToList (name: b: b // { inherit name; }) attrs;
 
   submapBlock = name: s: ''
-    submap = ${name}
-    ${lib.concatStringsSep "\n" (map bindLine (named s.keys))}
-    bind = , escape, submap, reset
-    bind = , catchall, submap, reset
-    submap = reset
+    hl.define_submap(${luaStr name}, function()
+    ${lib.concatStringsSep "\n" (map (b: "  " + bindLine b) (named s.keys))}
+      hl.bind("escape", hl.dsp.submap("reset"))
+      hl.bind("catchall", hl.dsp.submap("reset"))
+    end)
   '';
 
-  bindsConf = pkgs.writeText "binds.conf" ''
+  bindsLua = pkgs.writeText "binds.lua" ''
     ${lib.concatStringsSep "\n" (map bindLine (named cfg.keys))}
 
     ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (name: s: "bind = ${s.mods}, ${s.key}, submap, ${name}") cfg.submaps
+      lib.mapAttrsToList (
+        name: s:
+        "hl.bind(${luaStr (keySpec s)}, hl.dsp.submap(${luaStr name}), { description = ${luaStr s.desc} })"
+      ) cfg.submaps
     )}
 
     ${lib.concatStringsSep "\n" (lib.mapAttrsToList submapBlock cfg.submaps)}
@@ -251,10 +259,10 @@ in
       description = "Prefix submaps and their bindings.";
     };
 
-    bindsConf = lib.mkOption {
+    bindsFile = lib.mkOption {
       type = lib.types.path;
       readOnly = true;
-      description = "Generated Hyprland bind fragment, for source =.";
+      description = "Generated Lua bind fragment, loaded with dofile.";
     };
   };
 
@@ -293,7 +301,7 @@ in
       }
     ];
 
-    local.wm.bindsConf = bindsConf;
+    local.wm.bindsFile = bindsLua;
 
     home.packages = lib.mkIf cfg.enable [
       emacsCall

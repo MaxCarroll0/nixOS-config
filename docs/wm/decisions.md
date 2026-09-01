@@ -158,3 +158,28 @@ build-time application, not of the ecosystem.
 
 **Would change the verdict:** giving up on continuous theming. If discrete switching at rebuild
 time were acceptable, stylix would be the better trade.
+
+## 11. Home Manager's `settings` for Hyprland configuration
+
+The natural approach: declare everything in `wayland.windowManager.hyprland.settings` and let
+Home Manager render it.
+
+**Rejected** because of version skew that fails silently. Home Manager's Lua generator targets
+the Hyprland it ships stubs for (0.55.4) and emits `hl.animations({…})` / `hl.general({…})`,
+neither of which exists in the pinned 0.56.0. The result is not a build error: the compositor
+starts, reports one `configerrors` line, and runs on stock defaults. Its hyprlang generator is
+worse — 0.56 parses configs as Lua, so a hyprlang file produces a Lua syntax error and applies
+nothing at all.
+
+Chosen instead: `settings = { }`, and this repo generates the Lua itself into `extraConfig`
+using `hl.config` with dotted flat keys, plus `hl.curve`, `hl.animation` and `hl.window_rule`.
+See [README.md](README.md) §3a for the full API. This removes the skew dependency permanently —
+the config is now coupled to Hyprland's Lua API, which we test against directly, rather than to
+Home Manager's idea of it.
+
+**Cost:** `settings` no longer type-checks the option names. Mitigated by the fact that
+`hl.config` *does* reject unknown keys at load (`misc.vfr` was caught this way), which
+`hl.window_rule` notably does not.
+
+**Would change the verdict:** Home Manager's hyprland module gaining 0.56 support, at which
+point `settings` becomes the better home for the plain key/value part.

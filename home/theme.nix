@@ -12,6 +12,7 @@ let
 
   paletteDir = "${config.xdg.stateHome}/theme";
   palettePath = "${paletteDir}/palette.json";
+  hyprLuaPath = "${paletteDir}/hypr-theme.lua";
   schemeDir = "${config.xdg.configHome}/theme/schemes";
 
   themeApply = pkgs.writeShellScriptBin "theme-apply" ''
@@ -25,12 +26,18 @@ let
     get() { ${pkgs.jq}/bin/jq -r --arg k "$1" '.[$k]' "$palette"; }
     bare() { get "$1" | ${pkgs.gnused}/bin/sed 's/^#//'; }
 
+    if [ "$(get polarity)" = light ]; then shadow=true; else shadow=false; fi
+    ${pkgs.coreutils}/bin/mkdir -p ${paletteDir}
+    ${pkgs.coreutils}/bin/printf '%s\n' \
+      'hl.config({' \
+      "  [\"general.col.active_border\"] = \"rgb($(bare border-active))\"," \
+      "  [\"general.col.inactive_border\"] = \"rgb($(bare border-inactive))\"," \
+      "  [\"decoration.shadow.enabled\"] = $shadow," \
+      "  [\"decoration.shadow.color\"] = \"rgba($(bare fg-faint)aa)\"," \
+      '})' > ${hyprLuaPath}
+
     if command -v hyprctl > /dev/null 2>&1 && hyprctl version > /dev/null 2>&1; then
-      if [ "$(get polarity)" = light ]; then shadow=true; else shadow=false; fi
-      hyprctl keyword general:col.active_border "rgb($(bare border-active))" > /dev/null
-      hyprctl keyword general:col.inactive_border "rgb($(bare border-inactive))" > /dev/null
-      hyprctl keyword decoration:shadow:enabled "$shadow" > /dev/null
-      hyprctl keyword decoration:shadow:color "rgba($(bare fg-faint)55)" > /dev/null
+      hyprctl reload > /dev/null
     fi
 
     if command -v emacsclient > /dev/null 2>&1; then
@@ -159,6 +166,12 @@ in
       description = "Roles of the scheme named by local.theme.scheme.";
     };
 
+    hyprLua = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      description = "Lua colour override that the Hyprland config dofiles.";
+    };
+
     palettePath = lib.mkOption {
       type = lib.types.str;
       readOnly = true;
@@ -184,6 +197,7 @@ in
 
     local.theme.active = cfg.schemes.${cfg.scheme} or gruvboxLightHard;
     local.theme.palettePath = palettePath;
+    local.theme.hyprLua = hyprLuaPath;
 
     home.packages = [
       themeApply

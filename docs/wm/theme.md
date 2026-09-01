@@ -38,6 +38,14 @@ code — only a role.**
 - **`theme-apply`** pushes the active palette into every consumer *without a rebuild*, using
   each app's live-reconfiguration path.
 
+For Hyprland that path is **not** `hyprctl keyword`, which the 0.56 server rejects outright
+("unknown request" — there is no keyword system behind a Lua config). Instead `theme-apply`
+writes the colour roles as Lua to `$XDG_STATE_HOME/theme/hypr-theme.lua`, which the generated
+config loads with `pcall(dofile, …)` *after* its own `hl.config`, then issues `hyprctl reload`.
+Both primitives are proven, and the override wins because it is applied last. Verified live:
+switching scheme changed the border `ffaf3a03` → `fffe8019` and flipped `shadow.enabled`
+true → false, with no rebuild.
+
 Consequence for the nix side: nix generates the *scheme data* and the *generators*, but the
 active palette is a runtime file. This is the seam that makes continuous theming an increment
 later rather than a redesign. A build-time-only design (which is what stylix gives you) would
@@ -120,7 +128,7 @@ because §5 removes borders from Emacs frames entirely and the remaining borders
 | `inactive_opacity` | 0.99 | 0.99 | keep; subtle |
 | `layout` | dwindle | `scrolling` | dwindle is unusable at 10+ windows; README §4. Core in 0.56, no plugin |
 | `borders-plus-plus` | double borders | deferred | in the `hyprland-plugins` input; not Phase 1 |
-| `vfr` | `false` | `true` | `vfr = false` renders continuously and burns laptop battery, fighting `modules/nixos/power.nix` |
+| `vfr` | `false` | not set | `misc.vfr` no longer exists in 0.56 (only `misc.vrr`) and setting it is an `unknown config key` error; the battery concern is now moot |
 | `allow_tearing` | `true` | `false` | tearing is for games; this is a text-first desktop |
 | `kb_layout` | us, ara | gb | per `modules/nixos/desktop-env.nix` |
 | `follow_mouse` | 1 | 0 | focus must not follow the mouse; [decisions.md](decisions.md) §4 |
@@ -212,12 +220,13 @@ transient surfaces fade consistently.
 Transient surfaces must never leak into a capture. `noscreenshare` rules apply to the ace
 overlay, the kill-ring picker, notifications and password prompts.
 
-Rule syntax is settled for the pinned 0.56.0: `windowrule` occurs in the binary and
-`windowrulev2` does **not**, so v2 has been folded in and the unsuffixed form is correct.
+Rules are written in Lua as `hl.window_rule({ "<rule>", "<match>" })` — positional, two strings.
+The hyprlang `windowrule`/`windowrulev2` question is moot: the config is Lua (README §3a).
 
-Still unverified, and honestly not verifiable without running Hyprland: whether the specific
-rule *properties* `noshadow` and `noscreenshare` exist under those names. Grepping the binary
-for them returns nothing, but so does grepping for `layerrule`, which certainly exists — so the
-grep is not evidence either way for rule properties. Confirm with `hyprctl keyword` on first
-real session before depending on either. The screenshare rules are a Phase 2 step 15 task; the
-`noshadow` rule matters sooner, because §5 depends on it.
+**`hl.window_rule` does not validate rule names.** A deliberately bogus
+`{ "totalnonsenserule", "class:^(x)$" }` is accepted with no `configerrors` entry, so a
+misspelled or renamed rule fails *silently*. That makes `noshadow` and `noscreenshare` an open
+risk rather than a settled detail: both are accepted at parse time, and neither could be
+confirmed to take effect headlessly, because `hyprctl decorations` reports "none" for every
+window under the pixman renderer. Check both by eye on a real GPU session. If adjacent Emacs
+frames show a seam (§5), suspect the rule name first.
