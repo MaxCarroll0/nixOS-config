@@ -394,6 +394,190 @@ Setup
   (add-hook 'ediff-mode-hook #'meow-motion-mode))
 
 #+end_src
+* Window manager
+
+Hyprland tiles frames and Emacs splits them; these commands are the Emacs half of that split,
+called over =emacsclient= by generated Hyprland keybinds. Each returns non-nil only when Emacs
+actually handled the request, which is what lets the dispatcher fall back to a plain Hyprland
+dispatcher rather than block on a busy Emacs.
+
+** Focused frame
+
+The daemon serves several frames, so window commands act on whichever frame holds input focus
+rather than whichever was selected last.
+
+#+begin_src emacs-lisp
+
+(defun wm-focused-frame ()
+  "Frame currently holding input focus."
+  (or (seq-find #'frame-focus-state (frame-list)) (selected-frame)))
+
+#+end_src
+
+** Directional focus
+
+Move to the neighbouring Emacs window, returning nil at the frame edge so Hyprland moves to the
+next tiled window instead. The four named commands are what the keybinds call.
+
+#+begin_src emacs-lisp
+
+(defun wm-focus-move (direction)
+  "Select the window DIRECTION of the focused frame's; non-nil when one existed."
+  (let* ((origin (frame-selected-window (wm-focused-frame)))
+         (target (window-in-direction direction origin)))
+    (when target
+      (select-window target)
+      t)))
+
+(defun wm-focus-l ()
+  "Focus the window to the left."
+  (interactive)
+  (wm-focus-move 'left))
+
+(defun wm-focus-r ()
+  "Focus the window to the right."
+  (interactive)
+  (wm-focus-move 'right))
+
+(defun wm-focus-u ()
+  "Focus the window above."
+  (interactive)
+  (wm-focus-move 'above))
+
+(defun wm-focus-d ()
+  "Focus the window below."
+  (interactive)
+  (wm-focus-move 'below))
+
+#+end_src
+
+** Entry edge
+
+When Hyprland moves focus into a frame, the window selected should be the one against the edge
+that was crossed, not whichever was last used. The bridge names the edge entered.
+
+#+begin_src emacs-lisp
+
+(defun wm-enter-edge (edge)
+  "Select the window furthest EDGE within the focused frame."
+  (let ((win (frame-selected-window (wm-focused-frame)))
+        (next nil))
+    (while (setq next (window-in-direction edge win))
+      (setq win next))
+    (select-window win)
+    t))
+
+#+end_src
+
+** Palette
+
+Colours come from the runtime palette written by =theme-set=, so a scheme change needs no
+rebuild. Faces are set from semantic roles rather than named colours.
+
+#+begin_src emacs-lisp
+
+(defvar wm-theme-roles nil
+  "Alist of semantic colour roles from the active palette.")
+
+(defun wm-theme-palette-file ()
+  "Path of the active palette written by theme-set."
+  (expand-file-name "theme/palette.json"
+                    (or (getenv "XDG_STATE_HOME") "~/.local/state")))
+
+(defun wm-role (name)
+  "Colour bound to semantic role NAME."
+  (alist-get (intern name) wm-theme-roles))
+
+(defun wm-theme-reload (&optional path)
+  "Load the palette at PATH and restyle faces from its roles."
+  (interactive)
+  (let ((file (or path (wm-theme-palette-file))))
+    (when (file-readable-p file)
+      (setq wm-theme-roles
+            (with-temp-buffer
+              (insert-file-contents file)
+              (json-parse-buffer :object-type 'alist :false-object nil)))
+      (set-face-attribute 'default nil
+                          :background (wm-role "bg") :foreground (wm-role "fg"))
+      (set-face-attribute 'region nil
+                          :background (wm-role "sel-bg") :foreground (wm-role "sel-fg"))
+      (set-face-attribute 'mode-line nil
+                          :background (wm-role "surface") :foreground (wm-role "fg"))
+      (set-face-attribute 'mode-line-inactive nil
+                          :background (wm-role "bg-alt") :foreground (wm-role "fg-faint"))
+      (set-face-attribute 'fringe nil :background (wm-role "bg"))
+      (set-face-attribute 'cursor nil :background (wm-role "accent"))
+      (wm-refresh-frame-borders)
+      t)))
+
+#+end_src
+
+** Frame focus
+
+Emacs frames are drawn without a Hyprland border so adjacent frames fuse into one surface, which
+means Emacs itself has to show which frame is focused. The internal border carries it.
+
+#+begin_src emacs-lisp
+
+(defun wm-refresh-frame-borders ()
+  "Tint each frame's internal border by whether it holds focus."
+  (when wm-theme-roles
+    (dolist (frame (frame-list))
+      (set-face-attribute 'internal-border frame
+                          :background (wm-role (if (frame-focus-state frame)
+                                                   "border-active"
+                                                 "border-inactive"))))))
+
+(add-to-list 'default-frame-alist '(internal-border-width . 2))
+(add-function :after after-focus-change-function #'wm-refresh-frame-borders)
+
+#+end_src
+
+** Transient buffers
+
+Buffers anchored to a point in another buffer stay inside Emacs rather than becoming tiled
+windows, in reusable bottom slots.
+
+#+begin_src emacs-lisp
+
+(setq display-buffer-alist
+      '(("\\`\\*\\(Help\\|helpful\\|Apropos\\|eldoc\\)"
+         (display-buffer-in-side-window)
+         (side . bottom)
+         (slot . 0)
+         (window-height . 0.3))
+        ("\\`\\*\\(Warnings\\|Compile-Log\\|Backtrace\\|Messages\\)"
+         (display-buffer-in-side-window)
+         (side . bottom)
+         (slot . 1)
+         (window-height . 0.25))))
+
+#+end_src
+
+** Key feedback
+
+=which-key= ships with Emacs 30, so it needs enabling rather than installing.
+
+#+begin_src emacs-lisp
+
+(which-key-mode 1)
+
+#+end_src
+
+** Generated keymap
+
+=home/wm-keys.nix= writes the keymap description used by the which-key panel, so the help and the
+bindings cannot drift apart.
+
+#+begin_src emacs-lisp
+
+(let ((file (expand-file-name "emacs/wm-keys.el"
+                              (or (getenv "XDG_CONFIG_HOME") "~/.config"))))
+  (when (file-readable-p file)
+    (load file nil t)))
+
+#+end_src
+
 * Editing
 ** Embrace
 
