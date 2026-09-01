@@ -275,7 +275,10 @@ let
   };
 in
 {
-  imports = [ ./wm-keys.nix ];
+  imports = [
+    ./wm-keys.nix
+    ./wm-bridge.nix
+  ];
 
   config = {
     programs.kitty.enable = true;

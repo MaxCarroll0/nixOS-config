@@ -183,3 +183,18 @@ Home Manager's idea of it.
 
 **Would change the verdict:** Home Manager's hyprland module gaining 0.56 support, at which
 point `settings` becomes the better home for the plain key/value part.
+
+## 12. `lib.generators.toPretty` for generating elisp
+
+Used initially to serialise the keymap description into `wm-keys.el`, on the assumption that a
+generic pretty-printer would produce something Lisp-shaped.
+
+**Rejected because it emits Nix syntax.** The generated file began
+`'{ root = { ace = { desc = "…" …` and failed to load with "Too many arguments". It had been
+generated for some time and never loaded by anything, so nothing surfaced the breakage.
+
+Chosen instead: a small explicit `toElisp` in `home/wm-keys.nix` mapping bools to `t`/`nil`,
+attrsets to dotted alists and lists to Lisp lists.
+
+**The lesson, not the fix:** a generated artefact with no consumer is untested by construction.
+Anything generated should be loaded by its real consumer in a test, not merely built.
