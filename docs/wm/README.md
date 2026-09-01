@@ -270,7 +270,7 @@ Phase 2 does not begin until Phase 1 is boring.
 
 ### Status
 
-Steps 1, 2, 4 and the Emacs half of 7 are built. Everything is **inert**: `local.wm.enable`
+Steps 1, 2, 4, 5 and the Emacs half of 7 are built. Everything is **inert**: `local.wm.enable`
 defaults to
 false, so no package reaches PATH, and the generated `hyprland.conf` is only read if Hyprland
 is started. Plasma is untouched, and `xdg.portal.enable = lib.mkForce false` is preserved so
@@ -317,6 +317,24 @@ Live results:
   title format is `*scratch* - GNU Emacs at laptop`.
 - **The `layoutmsg` argument spellings are correct**: `fit active`, `fit visible`, `colresize
   +conf`, `colresize -conf`, `promote`, `expel` all accepted by `hl.dsp.layout`.
+- **The full stack, using the real nix-built Emacs** rather than an extracted copy: the tangled
+  `default.el` defines all ten `wm-*` functions, `which-key-mode` is on, `display-buffer-alist`
+  has its two entries, `internal-border-width` is 2, and the `after-focus-change-function` advice
+  is installed (verified behaviourally — `advice-member-p` is the wrong probe for a variable
+  place and reports a false negative). Driving it through `wm-dispatch` on live Hyprland: first
+  `focus-r` moved the Emacs split with Hyprland unchanged in 53 ms, second crossed to kitty.
+- **`wm-emacs`** (the `owner = "emacs"` path, previously untested): calls a real function,
+  no-ops safely on an unbound one, and times out at 162 ms against a hanging function.
+- **`wm-watchdog`**: silent while healthy, counts 1/2/3/4 consecutive failures against a stubbed
+  unresponsive `emacsclient`, notifies once at the threshold, and clears the counter on recovery.
+  `notify-send` confirmed working under the current session.
+- **`theme-set` end to end**: switches the active palette, updates `palette.json`, changes the
+  live border and shadow, lists schemes on misuse, exits non-zero on an unknown scheme.
+- **Restart recovery**: `systemctl --user restart emacs.service` returns 0 and the daemon is
+  responsive again in **6 s**, with file buffers restored by `desktop-save-mode`.
+- **The generated `wm-keys.el` loads**: 40 root bindings, 4 submaps, 12 keys in the window
+  submap, correct mark-pushing list. This cross-checks the bind count — 40 root + 4 submap
+  entries + 24 submap keys + 8 escape/catchall = 76, matching `hyprctl binds`.
 
 Offline, verified by test rather than assumed:
 
