@@ -86,8 +86,19 @@ non-negotiable.
 
 ## 4. Layout: a scrolling strip
 
-`hyprscrolling`, the official plugin from `hyprwm/hyprland-plugins`, which is already a flake
-input and is versioned in lockstep with Hyprland.
+**The scrolling layout is built into Hyprland core** as of the pinned 0.56.0 — no plugin at
+all. Verified against the binary: `scrolling` appears as a layout name and all twelve config
+keys live under the `scrolling:` namespace (`column_width`, `explicit_column_widths`,
+`focus_fit_method`, `follow_focus`, `follow_min_visible`, `fullscreen_on_one_column`,
+`direction`, `wrap_focus`, `wrap_swapcol`, `move_snap_cursor`, `move_snap_to_grid`,
+`focus_decoration`) with no `plugin:` prefix. `layoutmsg` supports `fit` (with `active`, `all`,
+`visible`, `tobeg`, `toend`), `colresize`, `promote` and `expel`.
+
+This is a material simplification over the original plan, which assumed a plugin from
+`hyprwm/hyprland-plugins`: there is no plugin to build, no ABI to track and no flake input that
+can break the layout on update. The `hyprland-plugins` input ships only
+`borders-plus-plus`, `csgo-vulkan-fix`, `hyprbars` and `hyprfocus` at the pinned revision, and
+is not needed for the layout.
 
 A workspace is an infinite horizontal strip of columns; the monitor is a viewport onto it.
 This is the only layout that survives the hybrid model, which routinely produces 8-15 windows
@@ -213,6 +224,30 @@ independently useful.
 15. Screenshare hygiene.
 
 Phase 2 does not begin until Phase 1 is boring.
+
+### Status
+
+Steps 1, 2 and part of 4 are built. Everything is **inert**: `local.wm.enable` defaults to
+false, so no package reaches PATH, and the generated `hyprland.conf` is only read if Hyprland
+is started. Plasma is untouched, and `xdg.portal.enable = lib.mkForce false` is preserved so
+xdg-desktop-portal-kde keeps working.
+
+Deliberately deferred, because the dependency is not installed and binding to a missing binary
+is worse than an absent binding:
+
+| Deferred | Why | Lands with |
+|---|---|---|
+| KDE replacement (step 3) | still the live session | when you switch |
+| Bar, launcher (`SUPER SPC`) | no bar chosen or installed | step 3 |
+| Grab submap (`SUPER g`) | grim/slurp not installed | step 3 |
+| Lock binding | no locker installed | step 3 |
+| ghostty | not installed; kitty used for the terminal and escape-hatch bindings | step 8 |
+
+Verified by test rather than assumed: the never-block invariant (a hung Emacs falls back in
+~165 ms, measured with a stubbed `emacsclient` that sleeps 30 s), all four assertion classes,
+the comma-versus-space dispatcher form, and that scheme polarity really drives shadow
+enablement. Not verifiable without a running Hyprland: whether `noshadow` is a valid rule
+property, and whether the `layoutmsg` arguments are spelled as assumed.
 
 ## 9. Open questions
 

@@ -118,8 +118,8 @@ because §5 removes borders from Emacs frames entirely and the remaining borders
 | blur | size 1, passes 2, vibrancy 0.1696 | same, re-tune on `polarity` | blur reads differently over light backgrounds |
 | shadows | **enabled** (range 7, power 9, offset 5 4) | enabled when `polarity = light` | see below |
 | `inactive_opacity` | 0.99 | 0.99 | keep; subtle |
-| `layout` | dwindle | hyprscrolling | dwindle is unusable at 10+ windows; README §4 |
-| `borders-plus-plus` | double borders | deferred | in nixpkgs `hyprlandPlugins`; not Phase 1 |
+| `layout` | dwindle | `scrolling` | dwindle is unusable at 10+ windows; README §4. Core in 0.56, no plugin |
+| `borders-plus-plus` | double borders | deferred | in the `hyprland-plugins` input; not Phase 1 |
 | `vfr` | `false` | `true` | `vfr = false` renders continuously and burns laptop battery, fighting `modules/nixos/power.nix` |
 | `allow_tearing` | `true` | `false` | tearing is for games; this is a text-first desktop |
 | `kb_layout` | us, ara | gb | per `modules/nixos/desktop-env.nix` |
@@ -212,7 +212,12 @@ transient surfaces fade consistently.
 Transient surfaces must never leak into a capture. `noscreenshare` rules apply to the ace
 overlay, the kill-ring picker, notifications and password prompts.
 
-**Verify the exact rule names against the installed Hyprland version** before relying on them:
-`windowrulev2` was folded back into `windowrule` in recent releases, and the layer-rule spelling
-has changed too. This is a Phase 2 step 15 task, checked with `hyprctl` rather than assumed from
-the wiki.
+Rule syntax is settled for the pinned 0.56.0: `windowrule` occurs in the binary and
+`windowrulev2` does **not**, so v2 has been folded in and the unsuffixed form is correct.
+
+Still unverified, and honestly not verifiable without running Hyprland: whether the specific
+rule *properties* `noshadow` and `noscreenshare` exist under those names. Grepping the binary
+for them returns nothing, but so does grepping for `layerrule`, which certainly exists — so the
+grep is not evidence either way for rule properties. Confirm with `hyprctl keyword` on first
+real session before depending on either. The screenshare rules are a Phase 2 step 15 task; the
+`noshadow` rule matters sooner, because §5 depends on it.
