@@ -294,7 +294,24 @@ one caveat: the Home Manager startup hook that runs
 because it would push the headless display into the real session's activation environment and
 break app launching under KDE.
 
+**Methodology warning, learned the hard way.** Hyprland's process `comm` is `.Hyprland-wrapp`,
+so a kill loop matching `comm == "Hyprland"` silently leaves instances running; `ls
+$XDG_RUNTIME_DIR/hypr | head -1` then reads an arbitrary one, and `wayland-N` socket files
+outlive their compositor. Two wrong conclusions were drawn and one wrong fix committed before
+this surfaced. Every result below was re-taken with exactly one instance asserted, killed by
+matching the store path in `args`, with the socket read from `hyprctl instances`.
+
 Live results:
+
+- **Monitor scale.** `hl.monitor({ output = "", scale = 1 })` gives `WAYLAND-1 1280x720
+  scale=1.00`; a newly created second output inherits it too, confirming the catch-all. Omitting
+  the rule leaves scale at 2.0, which halves the logical resolution and is what makes fonts and
+  gaps look enormous. `misc.background_color` is set from the `bg` role.
+- **The boundary crossing, cleanly**: from an Emacs right split, `focus-l` moved the Emacs
+  selection with Hyprland untouched; again at the Emacs edge it declined and Hyprland crossed to
+  kitty; a third wrapped back round the strip.
+- **`wm-emacs` drives the real commands**: `wm-emacs wm-mark-pop` against the configured daemon
+  returns 0 and leaves the forward ring at 1.
 
 - **The whole generated config loads with zero `configerrors`**, and every setting reads back
   correctly via `hyprctl getoption`: `layout=scrolling`, `gaps_in=0`, `gaps_out=40`,
@@ -362,6 +379,13 @@ Offline, verified by test rather than assumed:
   application, roles surviving a failed reload, and the policy defaults.
 - Four assertion classes in nix, the comma-versus-space dispatcher form, and scheme polarity
   genuinely driving shadow enablement.
+
+**Never exercised: an actual keypress reaching a bind.** See [decisions.md](decisions.md) §15.
+`wtype` connects to the right instance and exits 0 but delivers nothing, and Hyprland's own
+`send_key_state`/`send_shortcut` target a window rather than bind matching. What is verified is
+that all 76 binds register with the correct modmask, key, submap and description, and that every
+dispatcher runs; the untested link is Hyprland's internal key matching, which this configuration
+does not influence.
 
 **Still open, and a genuine silent-failure risk.** Whether `noshadow` actually suppresses the
 shadow is *not* established. `hl.window_rule` does **not validate rule names**: a deliberately
