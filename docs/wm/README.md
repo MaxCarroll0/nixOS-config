@@ -84,6 +84,49 @@ wedged Emacs simply stops reading and Hyprland neither knows nor cares. Hyprland
 dispatchers **read a cache file**, never query Emacs. Section 5 explains why this is
 non-negotiable.
 
+## 3a. Hyprland 0.56 is configured in Lua, not hyprlang
+
+Established by live testing, and it invalidates the obvious approach:
+
+- **hyprlang is gone.** A `general { … }` block produces `attempt to call a nil value (global
+  'general')` — a Lua error. This holds even when the file is named exactly `hyprland.conf`, so
+  it is not filename-driven. Setting `configType = "hyprlang"` (which silences a Home Manager
+  deprecation warning) makes the *entire config silently fail to apply*: the compositor comes up
+  on stock defaults with one parse error. The warning was correct; overriding it was the bug.
+- **Home Manager's Lua generator targets 0.55.4**, the Hyprland it ships stubs for. It emits
+  `hl.animations({…})` and `hl.general({…})`, neither of which exists in 0.56. So
+  `wayland.windowManager.hyprland.settings` is left empty and this repo generates the Lua itself
+  into `extraConfig`. That also removes a version-skew dependency permanently.
+- **`hyprctl keyword` is rejected by the 0.56 server** ("unknown request") even though the
+  client still advertises it — with a Lua config there is no keyword system. Runtime config
+  changes must go through Lua.
+- **`hyprctl dispatch` takes Lua too.** It wraps its arguments as `return hl.dispatch(<args>)`,
+  so `hyprctl dispatch movefocus l` is a syntax error. The correct form is
+  `hyprctl dispatch 'hl.dsp.focus({ direction = "l" })'`.
+- **`hl.dispatch` does not accept legacy dispatcher strings.** Its signature is
+  `hl.dispatch(dispatcher)` — one argument, a dispatcher object or function. A bind whose body
+  calls `hl.dispatch("movefocus", "l")` parses cleanly and then fails *at keypress*, because the
+  function body is not executed at config-load time. Parse success is not evidence a bind works.
+
+The API actually used, all confirmed against a live 0.56 instance:
+
+| Purpose | Call |
+|---|---|
+| settings | `hl.config({ ["general.gaps_in"] = 0, … })`, dotted flat keys |
+| binds | `hl.bind("SUPER+SHIFT+Return", <dispatcher>, { description = "…" })`, mods joined by `+` |
+| submaps | `hl.define_submap("window", function() … end)`, plus `hl.dsp.submap("reset")` and a `catchall` bind |
+| beziers | `hl.curve("easeOutQuint", { type = "bezier", points = { {0.23,1}, {0.32,1} } })` |
+| animations | `hl.animation({ leaf = "windowsIn", enabled = true, speed = 4, bezier = "…", style = "slide bottom" })` |
+| window rules | `hl.window_rule({ "noshadow", "class:^(emacs)$" })`, positional |
+| dispatchers | `hl.dsp.focus({direction=…\|workspace=…\|monitor=…})`, `hl.dsp.window.{move,close,float,fullscreen,swap,cycle_next}`, `hl.dsp.layout("fit active")`, `hl.dsp.exec_cmd(cmd)`, `hl.dsp.exit()` |
+
+Removed keys to watch for: `misc.vfr` no longer exists (only `misc.vrr`), and it silently
+produced `unknown config key`.
+
+Also available and relevant to Phase 2: `hl.on(event, cb)` for compositor events, and
+`hl.get_windows` / `hl.get_workspaces`, which may reduce how much the bridge needs the raw
+event socket.
+
 ## 4. Layout: a scrolling strip
 
 **The scrolling layout is built into Hyprland core** as of the pinned 0.56.0 — no plugin at
@@ -244,7 +287,38 @@ is worse than an absent binding:
 | Lock binding | no locker installed | step 3 |
 | ghostty | not installed; kitty used for the terminal and escape-hatch bindings | step 8 |
 
-Verified by test rather than assumed:
+Verified on a **live headless Hyprland 0.56** instance (`WLR_BACKENDS=headless`, no DRM, no
+window, driven by `hyprctl`), alongside the offline tests. The generated config is loaded with
+one caveat: the Home Manager startup hook that runs
+`dbus-update-activation-environment --systemd WAYLAND_DISPLAY …` is stripped for test runs,
+because it would push the headless display into the real session's activation environment and
+break app launching under KDE.
+
+Live results:
+
+- **The whole generated config loads with zero `configerrors`**, and every setting reads back
+  correctly via `hyprctl getoption`: `layout=scrolling`, `gaps_in=0`, `gaps_out=40`,
+  `border_size=3`, `col.active_border=ffaf3a03`, `rounding=7`, `follow_mouse=0`, `kb_layout=gb`.
+- **76 binds registered** across all four submaps, with descriptions readable from
+  `hyprctl binds -j` — so the which-key panel can read them from Hyprland itself.
+- **All 41 distinct generated dispatchers execute successfully.** The two `window.move({monitor})`
+  cases needed a second output, created live with `hyprctl output create headless`, after which
+  they returned ok.
+- **The boundary crossing works, both directions.** With a real Emacs frame as a Hyprland client
+  and two internal splits: `focus-r` moved the Emacs split and left Hyprland focus *unchanged*;
+  `focus-r` again at the Emacs edge declined and Hyprland moved focus to the neighbouring window.
+  32-64 ms per keypress including the Emacs round trip.
+- **Runtime theme switching works with no rebuild**: `theme-apply` on the dark palette changed
+  the live border `ffaf3a03` → `fffe8019` and flipped `shadow.enabled` true → false from
+  `polarity`, then back again.
+- **`wm-panic` works**: flag on, Emacs is skipped entirely (28 ms, Emacs's own window did not
+  move) and Hyprland dispatches directly; flag off, Emacs handles it again.
+- **The Emacs window class is `emacs`** (lowercase), confirmed from `hyprctl clients`, and its
+  title format is `*scratch* - GNU Emacs at laptop`.
+- **The `layoutmsg` argument spellings are correct**: `fit active`, `fit visible`, `colresize
+  +conf`, `colresize -conf`, `promote`, `expel` all accepted by `hl.dsp.layout`.
+
+Offline, verified by test rather than assumed:
 
 - **Never-block invariant.** With a stubbed `emacsclient` that sleeps 30 s, a keybind falls back
   in ~165 ms. Also covered: Emacs handling it (zero `hyprctl` calls), declining, and
@@ -261,9 +335,13 @@ Verified by test rather than assumed:
 - Four assertion classes in nix, the comma-versus-space dispatcher form, and scheme polarity
   genuinely driving shadow enablement.
 
-Not verifiable without a running Hyprland, and recorded as such: whether `noshadow` is a valid
-rule property, whether the `layoutmsg` arguments are spelled as assumed, and whether pgtk
-reports the Emacs `class` as `emacs` for the windowrule match.
+**Still open, and a genuine silent-failure risk.** Whether `noshadow` actually suppresses the
+shadow is *not* established. `hl.window_rule` does **not validate rule names**: a deliberately
+bogus `{ "totalnonsenserule", "class:^(x)$" }` is accepted with no error, so a misspelled rule
+fails silently. `hyprctl decorations` reports "none" for both Emacs and kitty under the
+pixman/headless renderer, so it cannot settle the question either. Confirm the fused-frame look
+in §5 of [theme.md](theme.md) by eye on a real GPU session; if adjacent Emacs frames show a seam,
+suspect the rule name before anything else.
 
 ## 9. Open questions
 

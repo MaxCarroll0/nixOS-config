@@ -131,10 +131,14 @@ fire by accident.
 |---|---|
 | `SUPER CTRL ALT r` | `systemctl --user restart emacs.service` |
 | `SUPER CTRL ALT e` | spawn ghostty (guaranteed terminal, no Emacs dependency) |
-| `SUPER CTRL ALT p` | panic: swap in a Hyprland-only keymap via `hyprctl keyword` |
+| `SUPER CTRL ALT p` | panic: make every bridge key dispatch directly, skipping Emacs |
 
-The panic keymap rebinds `SUPER h/j/k/l` and `SUPER o` to their plain `hyprctl` equivalents,
-so the desktop remains fully navigable with the bridge disabled.
+Panic is a **flag file**, not a rebind. `wm-panic` touches
+`$XDG_RUNTIME_DIR/wm-bridge/panic`; `wm-dispatch` checks for it first and, when present, goes
+straight to the declared Hyprland fallback without contacting Emacs at all. `wm-panic off`
+clears it. This is simpler than rebinding, needs no keyword system (which 0.56 does not have —
+README §3a), and is directly testable. Verified live: with the flag set, a bridge key dispatched
+in 28 ms and Emacs's own window did not move; cleared, Emacs handled it again.
 
 Note this is belt-and-braces: per README §5 rule 1, every bridge binding *already* degrades to
 its Hyprland fallback on timeout. The panic bind exists for the case where the bridge is
@@ -167,3 +171,8 @@ Every binding is dispatched by exactly one of three parties, and the attrset rec
 - **bridge** — consults `state.json`, acts via Emacs *or* `hyprctl`, and **must declare a
   pure-Hyprland fallback**. A bridge binding without a declared fallback is a spec violation and
   should fail nix evaluation.
+
+The `dispatch` field holds a **Lua dispatcher expression**, e.g.
+`hl.dsp.focus({ direction = "l" })`, used verbatim both as the bind target and as the argument
+to `hyprctl dispatch` in the fallback. It is not a legacy dispatcher string: 0.56 has no such
+thing (README §3a). Key specs join modifiers with `+`, as `SUPER+SHIFT+Return`.
