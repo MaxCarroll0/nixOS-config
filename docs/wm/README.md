@@ -227,7 +227,8 @@ Phase 2 does not begin until Phase 1 is boring.
 
 ### Status
 
-Steps 1, 2 and part of 4 are built. Everything is **inert**: `local.wm.enable` defaults to
+Steps 1, 2, 4 and the Emacs half of 7 are built. Everything is **inert**: `local.wm.enable`
+defaults to
 false, so no package reaches PATH, and the generated `hyprland.conf` is only read if Hyprland
 is started. Plasma is untouched, and `xdg.portal.enable = lib.mkForce false` is preserved so
 xdg-desktop-portal-kde keeps working.
@@ -243,11 +244,26 @@ is worse than an absent binding:
 | Lock binding | no locker installed | step 3 |
 | ghostty | not installed; kitty used for the terminal and escape-hatch bindings | step 8 |
 
-Verified by test rather than assumed: the never-block invariant (a hung Emacs falls back in
-~165 ms, measured with a stubbed `emacsclient` that sleeps 30 s), all four assertion classes,
-the comma-versus-space dispatcher form, and that scheme polarity really drives shadow
-enablement. Not verifiable without a running Hyprland: whether `noshadow` is a valid rule
-property, and whether the `layoutmsg` arguments are spelled as assumed.
+Verified by test rather than assumed:
+
+- **Never-block invariant.** With a stubbed `emacsclient` that sleeps 30 s, a keybind falls back
+  in ~165 ms. Also covered: Emacs handling it (zero `hyprctl` calls), declining, and
+  `emacsclient` absent entirely.
+- **Emacs round-trip latency: 7 ms mean** over 20 calls against a live daemon, against the
+  150 ms budget. This was an explicit prerequisite before depending on `emacsclient --eval`.
+- **The shell/elisp protocol.** `emacsclient --eval` prints `"t"` with quotes, which is what the
+  dispatcher compares; confirmed against a real daemon rather than assumed.
+- **End to end**, `wm-dispatch` → real `emacsclient` → real daemon: an internal move issues no
+  `hyprctl`, an edge move falls back, and a frame with no splits always falls back.
+- **Elisp behaviour**, 20 assertions in `emacs --batch`: directional focus returning nil at frame
+  edges, entry-edge landing on the furthest window across three columns, palette load and face
+  application, roles surviving a failed reload, and the policy defaults.
+- Four assertion classes in nix, the comma-versus-space dispatcher form, and scheme polarity
+  genuinely driving shadow enablement.
+
+Not verifiable without a running Hyprland, and recorded as such: whether `noshadow` is a valid
+rule property, whether the `layoutmsg` arguments are spelled as assumed, and whether pgtk
+reports the Emacs `class` as `emacs` for the windowrule match.
 
 ## 9. Open questions
 
