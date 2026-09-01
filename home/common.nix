@@ -231,18 +231,7 @@ in
     ghostscript
     mpv
     yt-dlp
-    (overrides.againstVersion "ani-cli" "4.15.0-unstable-2026-08-01" pkgs-unstable.ani-cli.version (
-      pkgs-unstable.ani-cli.overrideAttrs (old: {
-        version = "4.15.0-unstable-2026-08-01";
-        runtimeInputs = (old.runtimeInputs or [ ]) ++ [ pkgs.botan3 ];
-        src = pkgs.fetchFromGitHub {
-          owner = "pystardust";
-          repo = "ani-cli";
-          rev = "489087b541eb1457393b997fdd3589ffe7a8d6a2";
-          hash = "sha256-nl4c0ASIvoBylnk/F4AxVxQl68de9kWPwnNtiTOLzZc=";
-        };
-      })
-    ))
+    pkgs-unstable.ani-cli
     claude-code
     codex-cli
     pkgs-unstable.codecrafters-cli

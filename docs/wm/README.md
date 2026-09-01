@@ -335,6 +335,16 @@ Live results:
 - **The generated `wm-keys.el` loads**: 40 root bindings, 4 submaps, 12 keys in the window
   submap, correct mark-pushing list. This cross-checks the bind count — 40 root + 4 submap
   entries + 24 submap keys + 8 escape/catchall = 76, matching `hyprctl binds`.
+- **`wm/help.json`** is valid JSON and agrees with `wm-keys.el` on every count, so the two
+  generated consumers of the keymap cannot disagree.
+- **The activation path, without activating.** Building `home.activationPackage` and reading it:
+  the `seedPalette` snippet guards on the palette's absence before copying, the script passes
+  `bash -n`, all five WM files are staged under `home-files`, and **no watchdog units are
+  present** while `local.wm.enable` is false — inertness confirmed from the built artefact
+  rather than assumed.
+- **The Emacs-owned commands**: all eight defined, and the mark ring behaves —
+  `wm-B@2` → pop → `wm-A@3` (forward ring 1) → unpop → `wm-B@2` (forward ring 0) → unpop again
+  → nil.
 
 Offline, verified by test rather than assumed:
 

@@ -564,6 +564,79 @@ windows, in reusable bottom slots.
 
 #+end_src
 
+** Commands bound from the window manager
+
+The Emacs-owned half of the keymap. These act inside Emacs only; the window-manager-wide
+versions, which reach other applications, come later with the bridge.
+
+#+begin_src emacs-lisp
+
+(defun wm-switch-buffer ()
+  "Switch buffer, preferring consult when it is loaded."
+  (interactive)
+  (call-interactively (if (fboundp 'consult-buffer) #'consult-buffer #'switch-to-buffer)))
+
+(defun wm-kill-ring ()
+  "Yank from the kill ring, preferring consult when it is loaded."
+  (interactive)
+  (call-interactively (if (fboundp 'consult-yank-pop) #'consult-yank-pop #'yank-pop)))
+
+#+end_src
+
+Popping the global mark records where it jumped from, so the jump can be retraced. This is the
+Emacs-only half of the unified ring; window entries join it once the bridge exists.
+
+#+begin_src emacs-lisp
+
+(defvar wm-mark-forward nil
+  "Positions abandoned by `wm-mark-pop', newest first.")
+
+(defun wm-mark-pop ()
+  "Pop the global mark, remembering the position left behind."
+  (interactive)
+  (when (mark-marker)
+    (push (point-marker) wm-mark-forward))
+  (call-interactively #'pop-global-mark)
+  t)
+
+(defun wm-mark-unpop ()
+  "Return to the position most recently left by `wm-mark-pop'."
+  (interactive)
+  (let ((target (pop wm-mark-forward)))
+    (when (and target (marker-buffer target))
+      (switch-to-buffer (marker-buffer target))
+      (goto-char target)
+      t)))
+
+#+end_src
+
+Project commands reuse =project.el=, so they agree with whatever the workspace's environment
+already selected.
+
+#+begin_src emacs-lisp
+
+(defun wm-project-switch ()
+  "Switch to another known project."
+  (interactive)
+  (call-interactively #'project-switch-project))
+
+(defun wm-project-eshell ()
+  "Open eshell in the current project root."
+  (interactive)
+  (call-interactively #'project-eshell))
+
+(defun wm-project-dired ()
+  "Open dired in the current project root."
+  (interactive)
+  (call-interactively #'project-dired))
+
+(defun wm-project-magit ()
+  "Open magit status for the current project."
+  (interactive)
+  (magit-status (project-root (project-current t))))
+
+#+end_src
+
 ** Generated keymap
 
 =home/wm-keys.nix= writes the keymap description used by the which-key panel, so the help and the

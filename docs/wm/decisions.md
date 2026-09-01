@@ -198,3 +198,22 @@ attrsets to dotted alists and lists to Lisp lists.
 
 **The lesson, not the fix:** a generated artefact with no consumer is untested by construction.
 Anything generated should be loaded by its real consumer in a test, not merely built.
+
+## 13. Assuming `systemctl --user restart emacs.service` works
+
+`emacs/config.org` describes the daemon as "systemd-managed" in three places and offers
+`my/restart-emacs-from-profile`, which runs `systemctl --user restart emacs.service`. The
+Hyprland escape hatch `SUPER+CTRL+ALT+R` was built on the same assumption.
+
+**The unit did not exist.** `services.emacs` was enabled nowhere in this configuration, and no
+`emacs.service` appeared in the Home Manager generation. A unit was nonetheless *running*, left
+loaded in the user systemd manager from an older generation whose file had since been removed —
+so `systemctl restart` appeared to work while the unit remained in memory, and became
+unrecoverable the moment the daemon actually stopped.
+
+Fixed by enabling `services.emacs` in `home/emacs.nix`, which produces
+`ExecStart = bash -l -c "…/emacs --fg-daemon"` — identical to what was already running. The
+config now matches what it documents about itself.
+
+**The lesson:** a service that responds to `systemctl restart` is not proof that a unit file
+exists. `systemctl --user cat <unit>` is the check; `is-active` is not.
