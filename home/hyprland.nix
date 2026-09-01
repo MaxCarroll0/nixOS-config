@@ -59,6 +59,7 @@ let
 
     "misc.disable_hyprland_logo" = true;
     "misc.force_default_wallpaper" = 0;
+    "misc.background_color" = rgb c.bg;
   };
 
   curves = {
@@ -180,7 +181,12 @@ let
     + (if a ? style then ", style = ${luaStr a.style}" else "")
     + " })";
 
+  monitorLua = ''
+    hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 1 })
+  '';
+
   settingsLua = ''
+    ${monitorLua}
     hl.config({
     ${lib.concatStringsSep ",\n" (
       lib.mapAttrsToList (k: v: "  [${luaStr k}] = ${luaVal v}") hyprSettings

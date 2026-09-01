@@ -217,3 +217,25 @@ config now matches what it documents about itself.
 
 **The lesson:** a service that responds to `systemctl restart` is not proof that a unit file
 exists. `systemctl --user cat <unit>` is the check; `is-active` is not.
+
+## 14. Omitting the monitor rule, and the `output` wildcard
+
+The Lua rewrite dropped the old hyprlang `monitor = ,preferred,auto,1` line. Without it an
+output defaults to **scale 2.0**, halving the logical resolution: fonts render at twice their
+size and `gaps_out = 40` eats 12% of a 640-wide logical screen instead of 3% of 1280. Both of
+those read as "the theme is wrong" when the theme is fine.
+
+Restored as `hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 1 })`.
+
+Two things worth knowing about that call:
+
+- **`output = ""` is the catch-all.** `output = "*"` is not a wildcard — it produces *zero*
+  monitors, `hyprctl monitors all` included, which is a far worse failure than the bug it was
+  meant to fix.
+- **Monitor rules apply when an output is created, not on reload.** A `hyprctl reload` will not
+  re-scale an existing output, so testing a monitor rule by reloading gives a false negative,
+  and a previously applied scale sticks and gives a false positive. Only a cold start is
+  evidence either way. Both mistakes were made here before the cold-start test settled it.
+
+`misc.background_color` is set from the `bg` role for the same reason: with no wallpaper daemon
+in Phase 1, an unset background renders as nothing rather than as the theme.
