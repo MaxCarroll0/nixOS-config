@@ -21,7 +21,12 @@ genuinely paired buffers.
 transient buffer, the remaining pressure to split may be small enough that strict becomes
 viable.
 
-## 2. `dawsers/hyprscroller` instead of official `hyprscrolling`
+## 2. `dawsers/hyprscroller` instead of the core scrolling layout
+
+Superseded in part: the alternative was originally framed as the *official plugin*
+`hyprscrolling`. On checking the pinned Hyprland 0.56.0 binary, **the scrolling layout is core**
+(see [README.md](README.md) §4), so there is no plugin on either side of this comparison and the
+robustness argument below is stronger than when it was written.
 
 Genuinely richer: row and column modes, width *and* height presets, pinning, per-monitor
 options, and built-in `scroller:jump` overview labels plus marks and trailmarks — which look
@@ -40,9 +45,8 @@ unified ace. Its marks and trailmarks are a **second, parallel ring**, when the 
 that windows join *the* Emacs mark ring and `C-x C-SPC` pops either kind. Adopting it would mean
 building the Emacs halves anyway and then owning two overlapping systems.
 
-The official `hyprscrolling` is already a flake input and is versioned with Hyprland. The bridge
-talks to Hyprland's IPC socket rather than to the plugin, so this decision stays cheap to
-revisit.
+The core scrolling layout has no plugin to break. The bridge talks to Hyprland's IPC socket
+rather than to the layout, so this decision stays cheap to revisit.
 
 **Would change the verdict:** height presets or pinning proving essential and not scriptable.
 
