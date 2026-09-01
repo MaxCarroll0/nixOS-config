@@ -182,7 +182,7 @@ let
     + " })";
 
   monitorLua = ''
-    hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 1 })
+    hl.monitor({ output = "", scale = 1 })
   '';
 
   settingsLua = ''

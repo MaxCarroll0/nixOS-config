@@ -218,24 +218,50 @@ config now matches what it documents about itself.
 **The lesson:** a service that responds to `systemctl restart` is not proof that a unit file
 exists. `systemctl --user cat <unit>` is the check; `is-active` is not.
 
-## 14. Omitting the monitor rule, and the `output` wildcard
+## 14. Omitting the monitor rule
 
 The Lua rewrite dropped the old hyprlang `monitor = ,preferred,auto,1` line. Without it an
 output defaults to **scale 2.0**, halving the logical resolution: fonts render at twice their
-size and `gaps_out = 40` eats 12% of a 640-wide logical screen instead of 3% of 1280. Both of
-those read as "the theme is wrong" when the theme is fine.
+size and `gaps_out = 40` eats 12% of a 640-wide logical screen instead of 3% of 1280. Both read
+as "the theme is wrong" when the theme is fine.
 
-Restored as `hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 1 })`.
+Restored as `hl.monitor({ output = "", scale = 1 })`. Three traps, all silent:
 
-Two things worth knowing about that call:
+- **`output = ""` is the catch-all, but only without `mode`.** The natural translation,
+  `{ output = "", mode = "preferred", position = "auto", scale = 1 }`, is accepted with **no
+  config error** and simply does not apply — the output stays at scale 2. Dropping `mode` and
+  `position`, which are the defaults anyway, makes it work.
+- **`output = "*"` is not a wildcard.** It produces *zero* monitors, `hyprctl monitors all`
+  included — a far worse failure than the bug it was meant to fix.
+- **Stale instances and sockets invalidate the test.** Hyprland's process `comm` is
+  `.Hyprland-wrapp`, not `Hyprland`, so a kill loop matching on `comm == "Hyprland"` silently
+  matches nothing and leaves old compositors running. `ls $XDG_RUNTIME_DIR/hypr | head -1` then
+  reads an arbitrary instance, and `wayland-N` socket files persist after a kill. Two wrong
+  conclusions were drawn and one wrong fix committed before this was noticed. Kill by matching
+  the store path in `args`, assert exactly one instance, and read the socket from
+  `hyprctl instances` rather than guessing.
 
-- **`output = ""` is the catch-all.** `output = "*"` is not a wildcard — it produces *zero*
-  monitors, `hyprctl monitors all` included, which is a far worse failure than the bug it was
-  meant to fix.
-- **Monitor rules apply when an output is created, not on reload.** A `hyprctl reload` will not
-  re-scale an existing output, so testing a monitor rule by reloading gives a false negative,
-  and a previously applied scale sticks and gives a false positive. Only a cold start is
-  evidence either way. Both mistakes were made here before the cold-start test settled it.
+`misc.background_color` is set from the `bg` role for the same class of reason: with no
+wallpaper daemon in Phase 1, an unset background renders as nothing rather than as the theme.
 
-`misc.background_color` is set from the `bg` role for the same reason: with no wallpaper daemon
-in Phase 1, an unset background renders as nothing rather than as the theme.
+## 15. Synthetic keypresses as a test of keybinds
+
+Wanted: prove a real `SUPER+w` reaches its bind, rather than only that the bind is registered
+and its dispatcher runs.
+
+**Not achievable in the headless test environment.** `wtype` connects to the correct instance
+(confirmed via `hyprctl instances`), exits 0, and produces no effect: no virtual keyboard ever
+appears in `hyprctl devices` and typed text never reaches a focused client either. Hyprland does
+implement `zwp_virtual_keyboard_manager_v1`, and granting
+`hl.permission({ binary = …, type = "keeb", mode = "allow" })` changes nothing. `hl.dsp.send_key_state`
+and `hl.dsp.send_shortcut` both return ok but deliver to a *window*, bypassing bind matching by
+design.
+
+What is verified instead: all 76 binds are registered with the right modmask, key, submap and
+description as read back from `hyprctl binds -j`, and every one of the 41 distinct dispatchers
+executes. The unexercised link is Hyprland's own matching of a key event to a registered bind,
+which no configuration here influences.
+
+Valid permission types, since they are undocumented in the stubs: `keeb`, `keyboard`,
+`screencopy`, `plugin`. `virtual_keyboard` and `input` are rejected. Worth knowing because
+Phase 2's kill-ring picker types into the focused window and will need `keeb`.
