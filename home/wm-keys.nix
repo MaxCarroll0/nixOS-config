@@ -208,6 +208,21 @@ let
     else
       throw "toElisp: unsupported value";
 
+  helpJson = pkgs.writeText "wm-help.json" (builtins.toJSON helpData);
+
+  cheatsheet = pkgs.writeShellScriptBin "wm-cheatsheet" ''
+    set -u
+    ${pkgs.jq}/bin/jq -r '
+      (.root    | to_entries[] | "\(.value.mods)+\(.value.key)|\(.value.desc)"),
+      (.submaps | to_entries[] as $s | $s.value.keys | to_entries[]
+                | "\($s.value.mods)+\($s.value.key) then \(.value.mods // "")\(if (.value.mods // "") == "" then "" else "+" end)\(.value.key)|\(.value.desc)")
+    ' ${helpJson} \
+      | ${pkgs.gnused}/bin/sed 's/^+//' \
+      | ${pkgs.coreutils}/bin/sort \
+      | ${pkgs.util-linux}/bin/column -t -s'|' \
+      | rofi -dmenu -i -p "keybinds" -theme-str 'window {width: 60%;}' > /dev/null
+  '';
+
   keysEl = pkgs.writeText "wm-keys.el" ''
     ;;; wm-keys.el --- generated from local.wm.keys -*- lexical-binding: t; -*-
 
@@ -274,6 +289,18 @@ in
       description = "Prefix submaps and their bindings.";
     };
 
+    panicCommand = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      description = "Absolute path of wm-panic, for binds that cannot rely on PATH.";
+    };
+
+    cheatsheetCommand = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      description = "Absolute path of wm-cheatsheet.";
+    };
+
     bindsFile = lib.mkOption {
       type = lib.types.path;
       readOnly = true;
@@ -317,14 +344,17 @@ in
     ];
 
     local.wm.bindsFile = bindsLua;
+    local.wm.panicCommand = "${wmPanic}/bin/wm-panic";
+    local.wm.cheatsheetCommand = "${cheatsheet}/bin/wm-cheatsheet";
 
     home.packages = lib.mkIf cfg.enable [
       emacsCall
       wmDispatch
       wmPanic
+      cheatsheet
     ];
 
     xdg.configFile."emacs/wm-keys.el".source = keysEl;
-    xdg.configFile."wm/help.json".text = builtins.toJSON helpData;
+    xdg.configFile."wm/help.json".source = helpJson;
   };
 }

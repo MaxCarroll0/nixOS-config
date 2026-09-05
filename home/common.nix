@@ -60,6 +60,17 @@ let
     dontCheckRuntimeDeps = true;
   };
 
+  aniCliHianime = pkgs-unstable.ani-cli.overrideAttrs (old: {
+    version = "5.0-hianime";
+    src = pkgs-unstable.fetchFromGitHub {
+      owner = "Dhairya3391";
+      repo = "ani-cli";
+      rev = "685cb77d422f8e1d6ddd8263dd40e4224d3629c6";
+      hash = "sha256-pxOHyyqCfkJfCj7WXccbT08CQoW6M1ZCbig6X6c/nXs=";
+    };
+    patches = (old.patches or [ ]) ++ [ ./patches/ani-cli-subtitles.patch ];
+  });
+
   arxiv-to-prompt = pkgs.python3Packages.buildPythonPackage {
     pname = "arxiv-to-prompt";
     version = "0.10.0";
@@ -231,7 +242,7 @@ in
     ghostscript
     mpv
     yt-dlp
-    pkgs-unstable.ani-cli
+    aniCliHianime
     claude-code
     codex-cli
     pkgs-unstable.codecrafters-cli
