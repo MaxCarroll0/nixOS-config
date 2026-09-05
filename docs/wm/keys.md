@@ -103,10 +103,20 @@ than polish.
 - **Emacs:** `which-key-mode`, which is **built into Emacs 30+** — the config runs 30.2, so no
   new package is needed. Rendered as a child frame (tier 2) to match the WM panel visually.
   `meow-cheatsheet` already exists on `SPC ?`.
-- **Hyprland:** entering a submap raises a layer-shell which-key panel, drawn by the same
-  overlay engine as the ace and the kill-ring picker. Built once, used three times.
+- **Hyprland:** entering a submap raises a layer-shell which-key panel, drawn by **quickshell**,
+  which is the session's single shell layer — the same process will own the bar, launcher,
+  notifications, the ace overlay and the kill-ring picker, so everything shares one style and
+  one data source. Built once, used many times.
 - **Bar indicator:** the active submap is shown persistently, so it is impossible to be in a
   mode without knowing.
+
+Both are **built** (`quickshell/shell.qml`). The panel appears after a ~400 ms idle delay, so a
+fast chord never flashes it, matching `which-key-idle-delay`. quickshell learns the active
+submap by reading Hyprland's event socket (`submap>>NAME` on entry, `submap>>` on reset) rather
+than the bindings pushing to it, so the keymap generator stays ignorant of the UI and the two
+cannot desynchronise. Rows come from the generated `~/.config/wm/help.json` and colours from
+`~/.local/state/theme/palette.json`, both watched for changes: adding a binding or switching
+scheme needs no QML edit and no restart.
 - **Generated from the same attrset as the bindings**, so a panel can never describe a keymap
   that no longer exists.
 

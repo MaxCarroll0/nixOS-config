@@ -61,7 +61,7 @@ let
       exit 1
     fi
     ${pkgs.coreutils}/bin/mkdir -p ${paletteDir}
-    ${pkgs.coreutils}/bin/cp "$src" ${palettePath}
+    ${pkgs.coreutils}/bin/install -m 644 "$src" ${palettePath}
     exec ${themeApply}/bin/theme-apply
   '';
 
@@ -211,7 +211,7 @@ in
     home.activation.seedPalette = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
       if [ ! -e ${palettePath} ]; then
         run ${pkgs.coreutils}/bin/mkdir -p ${paletteDir}
-        run ${pkgs.coreutils}/bin/cp ${schemeDir}/${cfg.scheme}.json ${palettePath}
+        run ${pkgs.coreutils}/bin/install -m 644 ${schemeDir}/${cfg.scheme}.json ${palettePath}
       fi
     '';
   };

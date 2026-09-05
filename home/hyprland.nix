@@ -284,6 +284,7 @@ in
   imports = [
     ./wm-keys.nix
     ./wm-bridge.nix
+    ./quickshell.nix
   ];
 
   config = {
