@@ -334,13 +334,17 @@ in
           dispatch = "hl.dsp.exec_cmd(\"kitty\")";
           desc = "terminal at the focused window's cwd";
         };
+        launcher = top "space" "hl.dsp.exec_cmd(\"rofi -show drun\")" "application launcher";
+        cheatsheet = top "slash" "hl.dsp.exec_cmd(\"${cfg.cheatsheetCommand}\")" "show all keybinds";
         close-window = top "q" "hl.dsp.window.close()" "close window";
         full-width = top "f" "hl.dsp.window.fullscreen(1)" "toggle full width";
         escape-emacs-restart =
           escape "r" "hl.dsp.exec_cmd(\"systemctl --user restart emacs.service\")"
             "restart the Emacs daemon";
         escape-terminal = escape "e" "hl.dsp.exec_cmd(\"kitty\")" "terminal not depending on Emacs";
-        escape-panic = escape "p" "hl.dsp.exec_cmd(\"wm-panic\")" "make bridge keys dispatch directly";
+        escape-panic =
+          escape "p" "hl.dsp.exec_cmd(\"${cfg.panicCommand}\")"
+            "make bridge keys dispatch directly";
       };
 
     local.wm.submaps = {
