@@ -265,3 +265,39 @@ which no configuration here influences.
 Valid permission types, since they are undocumented in the stubs: `keeb`, `keyboard`,
 `screencopy`, `plugin`. `virtual_keyboard` and `input` are rejected. Worth knowing because
 Phase 2's kill-ring picker types into the focused window and will need `keeb`.
+
+## 16. A pile of separate tools for bar, launcher, notifications and hints
+
+The reflex is to pick a best-of-breed tool per job: waybar for the bar, rofi for the launcher,
+mako for notifications, something else again for OSDs and hints.
+
+**Rejected in favour of quickshell owning all of it.** The goal is a unified look, and separate
+tools mean separate styling systems, separate config languages and separate lifecycles, all
+drifting apart. One quickshell process reads one palette and one keymap and renders every
+surface from them, so a scheme change or a new binding propagates everywhere at once.
+
+There is also a hard technical reason in at least one case. A which-key panel shown *during* a
+modal submap must not take keyboard focus, or it swallows the keys the mode is waiting for.
+dmenu-style tools always grab focus, so rofi and friends **cannot** do that job at all;
+`WlrKeyboardFocus.None` on a layer-shell surface can.
+
+**Cost:** QML is a language to own, and quickshell is young. Mitigated by shipping static QML
+and generating only *data* — `help.json` and `palette.json` — so nix never generates QML and the
+shell has no build step.
+
+## 17. The palette file copied read-only
+
+`theme-set` and the `seedPalette` activation both used `cp` to place a scheme from the nix store
+at `~/.local/state/theme/palette.json`.
+
+**This broke on the first real activation.** Store files are mode 0444 and `cp` preserves the
+source mode, so the runtime palette landed read-only and every subsequent `theme-set` failed
+with `cp: cannot create regular file: Permission denied`. Runtime theme switching, the entire
+point of the palette contract, did not work on the activated system.
+
+Fixed with `install -m 644` in both places. The general rule: **anything copied out of the store
+into a mutable location must have its mode set explicitly.**
+
+Worth noting why it was missed: the offline tests created the scheme directory by hand with
+normal permissions, so `cp` succeeded there. Only a real `home-manager` activation reproduced
+it.
