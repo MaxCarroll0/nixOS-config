@@ -5,6 +5,8 @@
 (require 'combobulate)
 
 (defvar-local combobulate-extension-history nil)
+(defvar-local combobulate-extension-target-scope 'dwim)
+(defvar-local combobulate-extension-innermost nil)
 (defvar-local combobulate-extension-targets nil)
 (defvar-local combobulate-extension-overlays nil)
 (defvar combobulate-extension-selection-hook nil)
@@ -92,6 +94,11 @@
 (defun combobulate-extension-scope-dwim (&optional scope)
   "Return explicit SCOPE, the active region, or enclosing definition bounds."
   (or scope
+      (and (eq combobulate-extension-target-scope 'buffer) (cons (point-min) (point-max)))
+      (and (eq combobulate-extension-target-scope 'container)
+           (when-let* ((node (combobulate-extension-node))
+                       (parent (treesit-node-parent node)))
+             (combobulate-extension-bounds parent)))
       (and (use-region-p) (cons (region-beginning) (region-end)))
       (let ((node (combobulate-extension-node)) found)
         (while (and node (not found))
@@ -209,7 +216,7 @@
    (list (intern (completing-read "Syntax class: "
                                  (combobulate-extension-selectors) nil t))
          (when current-prefix-arg (cons (point-min) (point-max)))
-         (equal current-prefix-arg '(16))))
+         (or combobulate-extension-innermost (equal current-prefix-arg '(16)))))
   (combobulate-extension-set-targets
    (combobulate-extension-query selector scope innermost)))
 
@@ -224,7 +231,7 @@
   (interactive (list (read-string "Tree-sitter query: ")
                      (when current-prefix-arg (cons (point-min) (point-max)))))
   (combobulate-extension-set-targets
-   (combobulate-extension-query 'query scope nil query)))
+   (combobulate-extension-query 'query scope combobulate-extension-innermost query)))
 
 (defun combobulate-extension-valid-target-p (target)
   "Return whether frozen TARGET still identifies its original text."
@@ -294,6 +301,18 @@
       (combobulate-extension-apply-targets
        (lambda (beg end) (combobulate-extension-wrap-range beg end envelope))))))
 
+(defun combobulate-extension-set-scope (scope)
+  "Choose the scope used by syntax selectors."
+  (interactive (list (intern (completing-read "Selector scope: " '(dwim container buffer) nil t))))
+  (setq combobulate-extension-target-scope scope)
+  (message "Syntax selector scope: %s" scope))
+
+(defun combobulate-extension-toggle-depth ()
+  "Toggle between innermost and outermost disjoint syntax matches."
+  (interactive)
+  (setq combobulate-extension-innermost (not combobulate-extension-innermost))
+  (message "Syntax matches: %s" (if combobulate-extension-innermost "innermost" "outermost")))
+
 (defvar combobulate-extension-map
   (let ((map (make-sparse-keymap)))
     (dolist (entry '(("h" . combobulate-navigate-up) ("l" . combobulate-navigate-down)
@@ -308,6 +327,8 @@
                      ("a" . combobulate-extension-select-children)
                      ("b" . combobulate-extension-select-class-dwim)
                      ("/" . combobulate-extension-select-query-dwim)
+                     ("S" . combobulate-extension-set-scope)
+                     ("i" . combobulate-extension-toggle-depth)
                      ("W" . combobulate-extension-wrap-targets)
                      ("q" . combobulate-extension-clear-targets)))
       (define-key map (kbd (car entry)) (cdr entry)))

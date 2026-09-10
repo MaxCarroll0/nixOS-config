@@ -8782,5 +8782,5 @@ Combobulate extensions provide ordinary Emacs region commands and syntax target 
   :config (ocaml-syntax-context-integrate))
 #+end_src
 
-=a= previews direct children; =b= selects a syntax class and =/= accepts a tree-sitter query. A prefix searches the accessible buffer; two prefixes select innermost matches. The default scope is the region or enclosing definition, with outermost nonoverlapping matches. =W= wraps all targets and =q= clears them.
+=a= previews direct children; =b= selects a syntax class and =/= accepts a tree-sitter query. A prefix searches the accessible buffer; two prefixes select innermost matches. The default scope is the region or enclosing definition, with outermost nonoverlapping matches. =S= chooses region/definition, container, or buffer scope; =i= toggles nesting depth. =W= wraps all targets and =q= clears them.
 Meow uses grabbed regions as scope and supplies beacon selections for the same selectors. The extension itself works with Meow disabled. Type-based selectors can later supply the same range interface.

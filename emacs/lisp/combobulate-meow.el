@@ -12,7 +12,8 @@
 
 (defun combobulate-meow-scope-dwim ()
   "Return the current buffer's grabbed region or ordinary inferred scope."
-  (or (and (eq (meow--second-sel-buffer) (current-buffer))
+  (or (and (eq combobulate-extension-target-scope 'dwim)
+           (eq (meow--second-sel-buffer) (current-buffer))
            (meow--second-sel-bound))
       (combobulate-extension-scope-dwim)))
 
@@ -53,7 +54,7 @@
   "Create beacons for SELECTOR within the grabbed or inferred scope."
   (interactive (list (intern (completing-read "Beacon syntax class: "
                                              (combobulate-extension-selectors) nil t))
-                     current-prefix-arg (equal current-prefix-arg '(16))))
+                     current-prefix-arg (or combobulate-extension-innermost (equal current-prefix-arg '(16)))))
   (let ((scope (if whole-buffer (cons (point-min) (point-max))
                  (combobulate-meow-scope-dwim))))
     (combobulate-extension-select-class-dwim selector scope innermost)
@@ -118,11 +119,18 @@
     (define-key map (kbd "q") #'combobulate-meow-clear)
     map))
 
+(defun combobulate-meow-direct-edit (original &rest args)
+  "Run a native beacon edit through ORIGINAL and clean up syntax targets."
+  (if (not combobulate-meow-beacon-active) (apply original args)
+    (unwind-protect (apply original args) (combobulate-meow-clear))))
+
 (defun combobulate-meow-setup ()
   "Install the Meow-only selection, key, and beacon adapters."
   (add-hook 'combobulate-extension-selection-hook #'combobulate-meow-selection)
   (advice-add 'meow--beacon-update-overlays :around #'combobulate-meow-beacon-overlays)
   (advice-add 'meow--beacon-apply-command :around #'combobulate-meow-replay)
+  (advice-add 'meow-beacon-replace :around #'combobulate-meow-direct-edit)
+  (advice-add 'meow-beacon-kill-delete :around #'combobulate-meow-direct-edit)
   (meow-thing-register 'syntax #'combobulate-meow-inner #'combobulate-meow-bounds)
   (setf (alist-get ?T meow-char-thing-table) 'syntax)
   (meow-leader-define-key (cons "o" combobulate-meow-map))
