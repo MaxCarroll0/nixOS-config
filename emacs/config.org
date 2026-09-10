@@ -1483,11 +1483,11 @@ own name into the buffer that Hippie scans."
   (cond
    ((and (bound-and-true-p yas--active-snippets)
          (fboundp 'my/ocaml-structured-cycle)
-         (derived-mode-p 'tuareg-mode))
+         (derived-mode-p 'neocaml-base-mode))
     (my/ocaml-structured-cycle))
    ((bound-and-true-p completion-preview-active-mode)
     (my/completion-preview-next-tier))
-   ((and (fboundp 'my/ocaml-structured-cycle) (derived-mode-p 'tuareg-mode))
+   ((and (fboundp 'my/ocaml-structured-cycle) (derived-mode-p 'neocaml-base-mode))
     (my/ocaml-structured-cycle))))
 
 (defun my/corfu-quit-to-normal ()
@@ -1597,18 +1597,18 @@ Cursor motion triggers the preview from an idle timer, and it never blocks on a 
 
 (defun my/ocaml-pattern-or-binding-context-p ()
   "Return non-nil when point is in an OCaml pattern or declaration name."
-  (when (derived-mode-p 'tuareg-mode)
+  (when (derived-mode-p 'neocaml-base-mode)
     (or
      (condition-case nil
-         (when (treesit-language-available-p 'ocaml)
+         (when (treesit-language-available-p (ocaml-syntax-context-language))
            (unless (seq-find
                     (lambda (parser)
-                      (eq (treesit-parser-language parser) 'ocaml))
+                      (eq (treesit-parser-language parser) (ocaml-syntax-context-language)))
                     (treesit-parser-list))
-             (treesit-parser-create 'ocaml))
+             (treesit-parser-create (ocaml-syntax-context-language)))
            (let ((node (treesit-node-at
                         (if (> (point) (point-min)) (1- (point)) (point))
-                        'ocaml))
+                        (ocaml-syntax-context-language)))
                  found)
              (while (and node (not found))
                (let* ((field (treesit-node-field-name node))
@@ -1641,7 +1641,7 @@ Cursor motion triggers the preview from an idle timer, and it never blocks on a 
 
 (defun my/completion-preview-allowed-p ()
   "Return non-nil when completion tiers are available for previewing."
-  (or (and (derived-mode-p 'tuareg-mode)
+  (or (and (derived-mode-p 'neocaml-base-mode)
            (my/ocaml-literal-prefix-bounds))
       (not (my/completion-preview-typed-context-p))
       (my/type-completion-probe-ready-p)))
@@ -2346,7 +2346,7 @@ Yasnippet joins Hippie Expand's own cycling on =M-/=. Hippie's try functions are
     (let* ((end (point))
            (beginning (he-dabbrev-beg))
            (input (buffer-substring-no-properties beginning end))
-           (hole (and (derived-mode-p 'tuareg-mode)
+           (hole (and (derived-mode-p 'neocaml-base-mode)
                       (equal input "_")))
            (pattern (if hole "" input)))
       (my/hippie-expand-schedule-snapshot)
@@ -2566,7 +2566,7 @@ shadowed by an untyped duplicate scraped from the buffer."
                   (construct . ,(my/type-completion-literal-entries
                                   my/type-completion-expected))
                   (type-search . ,my/type-completion-results))
-                (when (or (derived-mode-p 'tuareg-mode)
+                (when (or (derived-mode-p 'neocaml-base-mode)
                           my/type-completion-results
                           my/type-completion-construct-results)
                   `((snippet . ,(my/type-completion-snippet-entries
@@ -2609,7 +2609,7 @@ shadowed by an untyped duplicate scraped from the buffer."
 
   (defun my/type-completion-ocaml-p ()
     "Return non-nil when this buffer supports OCaml-LSP type search."
-    (and (derived-mode-p 'tuareg-mode)
+    (and (derived-mode-p 'neocaml-base-mode)
          (bound-and-true-p ocaml-eglot-mode)
          (fboundp 'eglot-managed-p)
          (eglot-managed-p)
@@ -3400,13 +3400,13 @@ completion replaces a bare `_', whose text must not filter the candidates."
                  (max (point-min) (- beginning 2000)) t)
             (goto-char (match-beginning 0))
             (let ((node
-                   (when (treesit-language-available-p 'ocaml)
+                   (when (treesit-language-available-p (ocaml-syntax-context-language))
                      (unless (seq-find
                               (lambda (parser)
-                                (eq (treesit-parser-language parser) 'ocaml))
+                                (eq (treesit-parser-language parser) (ocaml-syntax-context-language)))
                               (treesit-parser-list))
-                       (treesit-parser-create 'ocaml))
-                     (treesit-node-at (point) 'ocaml))))
+                       (treesit-parser-create (ocaml-syntax-context-language)))
+                     (treesit-node-at (point) (ocaml-syntax-context-language)))))
               (setq found
                     (and node
                          (or (string= (treesit-node-type node)
@@ -3676,14 +3676,14 @@ completion replaces a bare `_', whose text must not filter the candidates."
     (unless (or (nth 3 (syntax-ppss))
                 (nth 4 (syntax-ppss))
                 (my/ocaml-pattern-or-binding-context-p))
-      (or (and (derived-mode-p 'tuareg-mode)
+      (or (and (derived-mode-p 'neocaml-base-mode)
                (my/ocaml-hole-bounds-at-point))
-          (and (derived-mode-p 'tuareg-mode)
+          (and (derived-mode-p 'neocaml-base-mode)
                (my/ocaml-literal-prefix-bounds))
-          (and (derived-mode-p 'tuareg-mode)
+          (and (derived-mode-p 'neocaml-base-mode)
                (my/ocaml-operator-bounds))
           (my/file-completion-bounds)
-          (and (derived-mode-p 'tuareg-mode)
+          (and (derived-mode-p 'neocaml-base-mode)
                (my/ocaml-dotted-bounds))
           (bounds-of-thing-at-point 'symbol)
           (cons (point) (point)))))
@@ -3737,7 +3737,7 @@ completion replaces a bare `_', whose text must not filter the candidates."
       (when-let* ((bounds (my/completion-ranked-bounds)))
         (let* ((beginning (car bounds))
                (end (cdr bounds))
-               (hole (and (derived-mode-p 'tuareg-mode)
+               (hole (and (derived-mode-p 'neocaml-base-mode)
                           (my/type-completion-hole-p beginning end)))
                (original (buffer-substring-no-properties beginning end))
                (prefix (if hole "" original))
@@ -4108,7 +4108,8 @@ Using Apheleia. OCaml goes through =ocamlformat= as a stdin filter rather than =
   :config
   (setf (alist-get 'dune-fmt apheleia-formatters)
         '("sh" "-c" "dune build @fmt --auto-promote >/dev/null; cat \"$1\"" "dune-fmt" file))
-  (setf (alist-get 'tuareg-mode apheleia-mode-alist) 'ocamlformat)
+  (dolist (mode '(neocaml-mode neocaml-interface-mode))
+    (setf (alist-get mode apheleia-mode-alist) 'ocamlformat))
   (setf (alist-get 'reason-mode apheleia-mode-alist) 'dune-fmt)
   (setf (alist-get 'caml-mode apheleia-mode-alist) 'ocamlformat)
   (setf (alist-get 'dune-mode apheleia-mode-alist) 'dune-fmt)
@@ -4130,7 +4131,7 @@ Using Apheleia. OCaml goes through =ocamlformat= as a stdin filter rather than =
   "Select the OCaml formatter for this buffer."
   (setq-local apheleia-formatter (max/ocaml-formatter)))
 
-(dolist (hook '(tuareg-mode-hook caml-mode-hook))
+(dolist (hook '(neocaml-base-mode-hook caml-mode-hook))
   (add-hook hook #'max/set-ocaml-formatter))
 
 #+end_src
@@ -4682,7 +4683,7 @@ OCaml snippet names and operators expand directly with =TAB= when no completion 
   :hook ((LaTeX-mode . yas-minor-mode)
          (latex-mode . yas-minor-mode)
          (tex-mode   . yas-minor-mode)
-         (tuareg-mode . yas-minor-mode))
+         (neocaml-base-mode . yas-minor-mode))
   :config
   (setq yas-triggers-in-field t)
 
@@ -4702,7 +4703,7 @@ OCaml snippet names and operators expand directly with =TAB= when no completion 
                my/ocaml-snippet-registry)))
 
   (yas-define-snippets
-   'tuareg-mode
+   'neocaml-base-mode
    (mapcar (lambda (snippet)
              (list (car snippet) (cdr snippet) (car snippet)))
            my/ocaml-yas-snippets))
@@ -4820,9 +4821,9 @@ OCaml snippet names and operators expand directly with =TAB= when no completion 
     (cond
      ((bound-and-true-p completion-preview-active-mode)
       (my/completion-preview-accept))
-     ((and (derived-mode-p 'tuareg-mode)
+     ((and (derived-mode-p 'neocaml-base-mode)
            (my/ocaml-expand-direct-trigger)))
-     ((and (derived-mode-p 'tuareg-mode)
+     ((and (derived-mode-p 'neocaml-base-mode)
            (not (bound-and-true-p yas--active-snippets))
            (my/ocaml-expand-typed-term)))
      ((yas-expand))
@@ -4941,7 +4942,7 @@ A negative ARGUMENT moves to the previous field instead."
 
 (defun my/ocaml-menu ()
   "Open the OCaml snippets and language-server menu."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (require 'transient)
   (unless (fboundp 'my/ocaml-menu-transient)
@@ -4959,7 +4960,9 @@ A negative ARGUMENT moves to the previous field instead."
       (lambda (spec)
         (list (plist-get spec :key)
               (plist-get spec :label)
-              (plist-get spec :command)))
+              (plist-get spec :command)
+              :if (lambda () (ocaml-syntax-context-snippet-allowed-p
+                              (plist-get spec :id)))))
       (seq-filter (lambda (spec) (eq (plist-get spec :group) group))
                   my/ocaml-snippet-registry))))
 
@@ -6487,7 +6490,7 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-format-region (start end)
   "Reindent the construct between START and END."
-  (when (derived-mode-p 'tuareg-mode)
+  (when (derived-mode-p 'neocaml-base-mode)
     (ignore-errors (indent-region start end))))
 
 (defun my/ocaml-place (root focus)
@@ -6581,7 +6584,7 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-structured-tab ()
   "Expand, move on, or append a sibling in the active construct."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (let* ((session (my/ocaml-active-session))
          (state (cdr-safe session))
@@ -6601,21 +6604,21 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-structured-return ()
   "Move to the next field, offering a let return annotation after arguments."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (or (my/ocaml-restructure #'my/ocaml-return-advance)
       (my/ocaml-finish)))
 
 (defun my/ocaml-structured-cycle ()
   "Cycle the alternative under point in the active construct."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (when (my/ocaml-active-session)
     (my/ocaml-restructure #'my/ocaml-cycle)))
 
 (defun my/ocaml-start-type ()
   "Insert a structured OCaml type declaration."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-default-type) '(:name)))
@@ -6624,41 +6627,41 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-start-let ()
   "Insert a structured OCaml let binding."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-default-let) '(:bindings 0 :name)))
 
 (defun my/ocaml-start-module ()
   "Insert a structured OCaml module declaration."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-default-module) '(:name)))
 
 (defun my/ocaml-start-match ()
   "Insert a structured OCaml match expression."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-default-match) '(:scrutinee)))
 
 (defun my/ocaml-start-application ()
   "Insert a structured OCaml function application."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place (my/ocaml-application "_" '("_")) '(:head)))
 
 (defun my/ocaml-start-unit ()
   "Insert the unit value."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (insert "()"))
 
 (defun my/ocaml-start-list ()
   "Insert a structured OCaml list."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (let ((node (my/ocaml-collection 'list)))
@@ -6666,7 +6669,7 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-start-array ()
   "Insert a structured OCaml array."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (let ((node (my/ocaml-collection 'array)))
@@ -6674,8 +6677,8 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-enclosing-match-bounds ()
   "Return the bounds of the match expression surrounding point."
-  (when (treesit-language-available-p 'ocaml)
-    (when-let* ((node (treesit-node-at (point) 'ocaml))
+  (when (treesit-language-available-p (ocaml-syntax-context-language))
+    (when-let* ((node (treesit-node-at (point) (ocaml-syntax-context-language)))
                 (match (treesit-parent-until
                         node (lambda (candidate)
                                (member (treesit-node-type candidate)
@@ -6686,8 +6689,8 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-split-destructured-case ()
   "Split the destruct action's top-level or-pattern into separate cases."
-  (when (treesit-language-available-p 'ocaml)
-    (when-let* ((node (treesit-node-at (point) 'ocaml))
+  (when (treesit-language-available-p (ocaml-syntax-context-language))
+    (when-let* ((node (treesit-node-at (point) (ocaml-syntax-context-language)))
                 (case (treesit-parent-until
                        node (lambda (candidate)
                               (string= (treesit-node-type candidate)
@@ -6714,8 +6717,8 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-term-bounds ()
   "Return the bounds of the smallest complete term at point."
-  (or (when-let* (((treesit-language-available-p 'ocaml))
-                  (node (treesit-node-at (point) 'ocaml))
+  (or (when-let* (((treesit-language-available-p (ocaml-syntax-context-language)))
+                  (node (treesit-node-at (point) (ocaml-syntax-context-language)))
                   (term (if (treesit-node-check node 'named)
                             node
                           (treesit-node-parent node))))
@@ -6726,7 +6729,7 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-expected-type ()
   "Report the type expected where the term at point stands."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (let* ((origin (point))
          (bounds (or (my/ocaml-term-bounds) (cons origin origin)))
@@ -6740,7 +6743,7 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-destruct ()
   "Destructure at point into separate cases with editable leaves."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (let ((origin (copy-marker
                  (if (region-active-p) (region-beginning) (point)) t)))
@@ -6762,7 +6765,7 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-insert-record-value ()
   "Insert a structured OCaml record value."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (let* ((hole (my/ocaml-hole-bounds-at-point))
@@ -6776,7 +6779,7 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
 
 (defun my/ocaml-start-record ()
   "Insert a structured OCaml record type."
-  (declare (modes tuareg-mode))
+  (declare (modes neocaml-mode neocaml-interface-mode))
   (interactive)
   (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
   (my/ocaml-place
@@ -6785,12 +6788,12 @@ Yasnippet revival keeps edits individually undoable after the construct ends.
                      :fields (list (my/ocaml-record-field "field"))))
    '(:body :fields 0 :name)))
 
-(with-eval-after-load 'tuareg
-  (define-key tuareg-mode-map (kbd "C-c .") #'my/ocaml-menu)
-  (define-key tuareg-mode-map (kbd "S-TAB") #'my/completion-next-alternative)
-  (define-key tuareg-mode-map (kbd "<backtab>")
+(with-eval-after-load 'neocaml
+  (define-key neocaml-base-mode-map (kbd "C-c .") #'my/ocaml-menu)
+  (define-key neocaml-base-mode-map (kbd "S-TAB") #'my/completion-next-alternative)
+  (define-key neocaml-base-mode-map (kbd "<backtab>")
               #'my/completion-next-alternative)
-  (define-key tuareg-mode-map (kbd "<iso-lefttab>")
+  (define-key neocaml-base-mode-map (kbd "<iso-lefttab>")
               #'my/completion-next-alternative))
 
 #+end_src
@@ -7500,17 +7503,38 @@ Installed dependency sources retain Eglot navigation without standalone Flymake 
 In the REPL, =RET= only submits once the phrase ends in =;;= and otherwise opens an indented line, and =S-RET= appends the =;;= itself. Neither reaches a program reading stdin, so =C-RET= submits the pending text verbatim.
 
 #+begin_src emacs-lisp
-(use-package tuareg
-  :mode ("\\.ml[ily]?\\'" . tuareg-mode)
-  :bind (:map tuareg-interactive-mode-map
-              ("C-<return>" . my/tuareg-interactive-send-raw-input)
-              ("C-<kp-enter>" . my/tuareg-interactive-send-raw-input)))
+(require 'ocaml-syntax-context)
 
-(defun my/tuareg-interactive-send-raw-input ()
-  "Send pending input to the REPL process verbatim, without appending \";;\"."
+(use-package neocaml
+  :ensure nil
+  :mode (("\\.ml\\'" . neocaml-mode)
+         ("\\.mli\\'" . neocaml-interface-mode)))
+(use-package neocaml-repl
+  :ensure nil
+  :after neocaml
+  :hook (neocaml-base-mode . neocaml-repl-minor-mode)
+  :bind (:map neocaml-repl-mode-map
+              ("RET" . my/ocaml-repl-return-dwim)
+              ("S-RET" . comint-send-input)
+              ("C-<return>" . my/ocaml-repl-send-raw-input)
+              ("C-<kp-enter>" . my/ocaml-repl-send-raw-input)))
+
+(defun my/ocaml-repl-return-dwim ()
+  "Submit a terminated phrase or insert a newline."
+  (interactive)
+  (if (string-suffix-p ";;" (string-trim-right
+                             (buffer-substring-no-properties
+                              (process-mark (get-buffer-process (current-buffer)))
+                              (point-max))))
+      (comint-send-input)
+    (newline-and-indent)))
+
+(defun my/ocaml-repl-send-raw-input ()
+  "Send pending input verbatim to the REPL process."
   (interactive)
   (goto-char (point-max))
-  (comint-send-input))
+  (let ((comint-input-sender #'comint-simple-send))
+    (comint-send-input)))
 
 (defun my/nix-store-buffer-p ()
   "Return non-nil when the current file is in the Nix store."
@@ -7519,20 +7543,20 @@ In the REPL, =RET= only submits once the phrase ends in =;;= and otherwise opens
 
 (defun my/ocaml-disable-dependency-diagnostics ()
   "Hide standalone diagnostics in installed OCaml dependency sources."
-  (when (and (derived-mode-p 'tuareg-mode)
+  (when (and (derived-mode-p 'neocaml-base-mode)
              (my/nix-store-buffer-p))
     (flymake-mode -1)))
 
 
 (use-package ocaml-eglot
-  :after tuareg
+  :after neocaml
   :bind (:map ocaml-eglot-mode-map
               ("C-c C-d" . my/eglot-symbol-documentation))
   :hook
-  (tuareg-mode . ocaml-eglot-mode)
+  (neocaml-base-mode . ocaml-eglot-mode)
   (eglot-managed-mode . my/ocaml-disable-dependency-diagnostics))
 (use-package dune)
-(use-package ocamlformat :after tuareg)
+(use-package ocamlformat :after neocaml)
 #+end_src
 
 ** ReasonML
@@ -8736,3 +8760,27 @@ grown. =org-roam-ui-open= starts it; delegated entirely to the package.
 (keymap-global-set "C-c n" #'liana-dispatch)
 
 #+end_src
+
+* Structural editing
+Combobulate extensions provide ordinary Emacs region commands and syntax target sets; Meow adds selection history and beacon replay through a separate adapter.
+=C-c o= opens structural commands; Meow also exposes them on =SPC o=. Commands which infer a target or action are named =-dwim=.
+
+#+begin_src emacs-lisp
+(use-package combobulate :ensure nil)
+(use-package combobulate-extension
+  :ensure nil
+  :demand t
+  :hook (after-change-major-mode . combobulate-extension-enable))
+(use-package combobulate-meow
+  :ensure nil
+  :after (meow combobulate-extension)
+  :demand t
+  :config (combobulate-meow-setup))
+(use-package ocaml-syntax-context
+  :ensure nil
+  :demand t
+  :config (ocaml-syntax-context-integrate))
+#+end_src
+
+=a= previews direct children; =b= selects a syntax class and =/= accepts a tree-sitter query. A prefix searches the accessible buffer; two prefixes select innermost matches. The default scope is the region or enclosing definition, with outermost nonoverlapping matches. =W= wraps all targets and =q= clears them.
+Meow uses grabbed regions as scope and supplies beacon selections for the same selectors. The extension itself works with Meow disabled. Type-based selectors can later supply the same range interface.

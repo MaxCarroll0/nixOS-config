@@ -44,6 +44,32 @@ in
           extraEmacsPackages =
             epkgs:
             let
+              neocaml = epkgs.trivialBuild {
+                pname = "neocaml";
+                version = "2026-09-08";
+                src = pkgs.fetchFromGitHub {
+                  owner = "bbatsov";
+                  repo = "neocaml";
+                  rev = "e9e0eb5f219c379931a03ea7feb3f934ede584ca";
+                  hash = "sha256-9la6l3uRL+iLWUe3SFa7GcU/u7pS0IS4+yr68CJuRRw=";
+                };
+              };
+              combobulate = epkgs.trivialBuild {
+                pname = "combobulate";
+                version = "2026-09-08";
+                src = pkgs.fetchFromGitHub {
+                  owner = "mickeynp";
+                  repo = "combobulate";
+                  rev = "713bf3081f2d80cbd13ed175a808b242d9cc652d";
+                  hash = "sha256-RbEd52oz0TqbqZDYjlClQFsXFRDqGnTdYoXSgdrk2Do=";
+                };
+              };
+              structural-editing = epkgs.trivialBuild {
+                pname = "structural-editing";
+                version = "1";
+                src = ../emacs/lisp;
+                packageRequires = [ combobulate neocaml epkgs.meow epkgs.yasnippet ];
+              };
               codeium = epkgs.trivialBuild {
                 pname = "codeium";
                 version = "unstable";
@@ -133,7 +159,9 @@ in
               fsharp-mode
               haskell-mode
               idris2-mode
-              tuareg
+              neocaml
+              combobulate
+              structural-editing
               ocaml-eglot
               dune
               ocamlformat
