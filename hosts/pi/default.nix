@@ -195,18 +195,18 @@
       parityFsType = "btrfs";
       dataDisks = {
         disk1 = {
-          device = "/dev/sdd";
+          device = "/dev/disk/by-uuid/a9041494-846e-49ab-be81-4bda1523f56c";
           fsType = "nilfs2";
         };
         disk2 = {
-          device = "/dev/sdb";
+          device = "/dev/disk/by-uuid/4627a0ca-4bbc-4ea1-954f-388f8415c94c";
           fsType = "nilfs2";
         };
       };
     };
     unlock = {
       server = true;
-      parityDevice = "/dev/sdc";
+      parityDevice = "/dev/disk/by-uuid/48be9161-8f27-4b53-94f7-a7aa67bd8f53";
     };
     checkpoints.enable = true;
     versions.enable = true;
