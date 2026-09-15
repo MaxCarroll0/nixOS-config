@@ -13,7 +13,7 @@ usage: browser-sync push [--what LIST]
        browser-sync pull --from HOST [--what LIST]
        browser-sync list
 
-LIST is a comma-separated subset of: sessions,passwords,cookies,bookmarks,history
+LIST is a comma-separated subset of: sessions,passwords,cookies,bookmarks,history,extensions
 (default: sessions). Everything but sessions needs Chromium closed.
 EOF
   exit 2
@@ -25,6 +25,10 @@ filesFor() {
     cookies) printf '%s\n' "Cookies" ;;
     bookmarks) printf '%s\n' "Bookmarks" ;;
     history) printf '%s\n' "History" ;;
+    extensions)
+      printf '%s\n' "Extensions" "Local Extension Settings" "Extension State" \
+        "Extension Rules" "Extension Scripts" "Secure Preferences"
+      ;;
     *)
       echo "browser-sync: unknown category '$1'" >&2
       exit 2
@@ -79,7 +83,7 @@ push() {
       local present=()
       local name
       for name in "${names[@]}"; do
-        [ -f "$profile/$name" ] && present+=("$name")
+        [ -e "$profile/$name" ] && present+=("$name")
       done
       [ ${#present[@]} -gt 0 ] || {
         echo "browser-sync: nothing to push for $category" >&2
@@ -117,7 +121,7 @@ pull() {
       mapfile -t names < <(filesFor "$category")
       local name
       for name in "${names[@]}"; do
-        [ -f "$profile/$name" ] && cp -a "$profile/$name" "$inbox/backup/$stamp/"
+        [ -e "$profile/$name" ] && cp -a "$profile/$name" "$inbox/backup/$stamp/"
       done
       age -d -i "$identity" < "$tmp/$category.age" | tar -C "$profile" -xf -
       echo "pulled $category from $from (previous copy in $inbox/backup/$stamp)"
