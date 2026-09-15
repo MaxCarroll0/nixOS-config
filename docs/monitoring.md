@@ -223,3 +223,85 @@ Note `journalctl -H` is not compiled into this systemd; use `ssh <host> journalc
   nix-shell -p victoriametrics --run 'victoria-metrics -promscrape.config=PATH -promscrape.config.dryRun'
   ```
 - **Grafana trim.** `GOMEMLIMIT` and dropping the now-dead `exploretraces` plugin.
+
+## Electricity accounting audit (2026-09-15)
+
+Energy and cost now use recorded one-second power samples summed into disjoint
+minute buckets, retained in the history store. A watt sampled for one second is
+one joule; kWh is the sum of those joules divided by 3,600,000. A minute containing
+only 30 samples at 100 W contributes 3,000 J, regardless of whether the dashboard
+shows one day or seven days. Neither missing history nor the age of a newly
+started host enlarges that total. Costs apply the dashboard's p/kWh tariff;
+standing charges are outside this per-device calculation.
+
+The previous deployed query multiplied an average of available samples by all
+168 hours in a week. Desktopnew's approximately 77 W average therefore appeared
+as £2.70, despite only about 80 minutes of stored readings at the initial check.
+The intermediate repository formula also extrapolated: dividing by observed
+`host:up` sample count and multiplying by the requested duration still enlarged
+incomplete history.
+
+`pc:power_watts` is instantaneous mains draw: a fresh meter takes precedence,
+otherwise it is estimated from the component model. `pc:power_dc_watts` is device
+load before the AC supply, including use on battery. `pc:usage_power_watts` is the
+electricity attributed to that use and feeds the energy and cost panels:
+
+- Direct mains use includes the supply's conversion loss.
+- Battery use accrues the electricity needed to replenish it, using 90% charging
+  efficiency plus the estimated AC-supply efficiency.
+- Charging energy goes into the battery, so it is excluded from the usage total
+  at charge time. It is accounted for when the battery is used. A mains reading
+  during charging is apportioned by the device and charging DC loads.
+
+This is consumption-based accounting, not a time-of-day electricity bill. It
+cannot reproduce changing tariffs, batteries charged elsewhere, or charging loss
+outside the assumed efficiency. The selected tariff applies to the whole range.
+
+### Model findings and corrections
+
+| Area | Finding and action |
+|---|---|
+| Laptop platform | PSYS was reduced by CPU power, then CPU **and** display, board, storage and fans were added again. A whole-platform reading now replaces overlapping component estimates. Battery discharge power is preferred while unplugged. |
+| CPU domains | The desktop's zenpower `SVI2_P_Core` and `SVI2_P_SoC` are separate rails and remain additive. RAPL package is an alternative, never added to zenpower; duplicate MMIO package reporting is excluded. Implausible package rates are rejected instead of becoming a fabricated 400 W. |
+| PSU loss | Efficiency already includes conversion loss. The old additional idle loss inflated every active reading; idle loss is now a floor on conversion loss. |
+| Freshness | Raw node scrape freshness gates estimates, preventing the server's two-hour lookback from perpetuating a running-host model after telemetry stops. A missing CPU/platform reading cannot produce a board-only total. Meter freshness is checked separately. |
+| Meter | A meter now overrides the model for mains draw. The residual still compares the meter with the independent model. |
+| Drives | SSD/NVMe accounting no longer depends on ATA standby probing succeeding. A known disk retains its idle term while its I/O rate is warming up. Rotating disks use reported standby state, not zero I/O as a proxy. Disk busy fractions are bounded to 0–1. |
+| Fans | Speed ratios are bounded to 0–1 before the power law; negative tachometer values cannot produce invalid fractional powers. |
+| Pi | The VDD_CORE rail and the remaining PMIC rails are disjoint. DDR is already within those rails, and the Pi's separate RAM estimate is disabled. PMIC loss and AC-supply loss are different conversion stages. |
+| Graph stacking | The combined live model line was passed through an instance join after aggregation had removed its instance label. It now smooths and gates each host before summing. Component bands describe the model, which can differ from a wall meter. |
+
+The desktop GPU identifies as AMD `1002:67df` (Polaris), reporting PPT/chip power.
+Its existing `1.13 × reported watts + 7 W` allowance for unreported board loads is
+retained as an **uncalibrated estimate**, not a measured board-power value. The
+separate GPU fan term belongs to this chip-power model. An APU or a GPU reporting
+total board power needs different boundaries; the same extra terms must not be
+applied blindly. The kernel documents that AMD APU power includes its CPU:
+[AMDGPU power interfaces](https://docs.kernel.org/gpu/amdgpu/thermal.html).
+
+The desktop's board (12 W), peripherals (2 W), RAM coefficients, fan curves and
+supply curve remain hardware estimates. A same-window check found zenpower near
+27.8 W versus RAPL near 36.6 W, so neither can establish actual wall draw by
+itself. The Pi's 1.8 W peripheral allowance assumes the unmonitored controller
+load; its PMIC readings do not include direct 5 V and external 12 V loads.
+The configured 60 W supply curve assumes those loads share the modeled supply.
+Separate disk-enclosure power supplies require separate conversion losses.
+See [Pi power telemetry](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html).
+
+No wall-meter calibration was supplied during this audit. Sleep, soft-off and
+unobserved intervals therefore remain **unknown**, not measured zero. The energy
+coverage panel exposes the recorded fraction of the selected period. Short
+telemetry gaps, unmeasured disk spin-up transients, drive power-saving states,
+and coarse component estimates limit accuracy. The power model cannot honestly
+be presented as a revenue-grade electricity meter.
+
+Minute energy buckets are written directly to the history store by the energy
+vmalert instance; they are never averaged into hourly power rollups. Results
+normally lag by up to two minutes. The energy writer reads a minute behind real
+time so the primary recording rules have finished. An hourly repair replays the
+retained power samples after delays or downtime. Both stores deduplicate identical
+millisecond timestamps, so replay and overlapping archive copies cannot count a
+sample twice. Existing averaged historical power cannot be
+converted back into exact energy; retained raw telemetry is needed for repair.
+Rule semantics are covered by `tests/monitoring-power.py`, which accepts the
+JSON evaluation of `rules.nix` and a promtool executable.
