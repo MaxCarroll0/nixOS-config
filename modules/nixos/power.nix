@@ -237,10 +237,20 @@ let
         fi
       done
 
-      # IdleHint is never set under Wayland; the screen lock is, by KDE.
+      # Seatless sessions are skipped because tailscaled registers one per SSH
+      # command, each of them type tty and never idle.
       for session in $(loginctl list-sessions --no-legend | awk '{print $1}'); do
         [ "$(loginctl show-session "$session" -p Class --value)" = user ] || continue
         [ -n "$(loginctl show-session "$session" -p Seat --value)" ] || continue
+
+        # IdleHint is never set under Wayland; the screen lock is, by KDE.
+        if [ "$(loginctl show-session "$session" -p Type --value)" = tty ]; then
+          if [ "$(loginctl show-session "$session" -p IdleHint --value)" != yes ]; then
+            exit 0
+          fi
+          continue
+        fi
+
         if [ "$(loginctl show-session "$session" -p LockedHint --value)" != yes ]; then
           exit 0
         fi
@@ -441,16 +451,21 @@ in
 
       hardware.bluetooth.powerOnBoot = false;
 
+      # A parked input device that never had remote wakeup armed cannot resume
+      # itself, so neither a keypress nor mouse movement reaches the session.
       services.udev.extraRules = ''
         ACTION=="add", SUBSYSTEM=="scsi_host", KERNEL=="host*", ATTR{link_power_management_policy}="med_power_with_dipm"
-        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="258a", ATTR{idProduct}=="1006", TEST=="power/control", ATTR{power/autosuspend_delay_ms}="300000", ATTR{power/control}="auto"
-        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="1d57", ATTR{idProduct}=="ad17", TEST=="power/control", ATTR{power/autosuspend_delay_ms}="300000", ATTR{power/control}="auto"
+        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="258a", ATTR{idProduct}=="1006", TEST=="power/control", ATTR{power/autosuspend_delay_ms}="300000", ATTR{power/control}="auto", ATTR{power/wakeup}="enabled"
+        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="1d57", ATTR{idProduct}=="ad17", TEST=="power/control", ATTR{power/autosuspend_delay_ms}="300000", ATTR{power/control}="auto", ATTR{power/wakeup}="enabled"
+        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="1d6b", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"
       '';
 
       systemd.services.input-autosuspend = {
         description = "Delay USB input autosuspend";
         after = [ "powertop.service" ];
-        wantedBy = [ "multi-user.target" ];
+        # powertop is itself ordered after multi-user.target, so pulling this in
+        # from that target too made systemd drop the job to break the cycle.
+        wantedBy = [ "powertop.service" ];
         serviceConfig.Type = "oneshot";
         script = ''
           for device in /sys/bus/usb/devices/*; do
@@ -458,6 +473,10 @@ in
             if [ "$id" = 258a:1006 ] || [ "$id" = 1d57:ad17 ]; then
               echo 300000 > "$device/power/autosuspend_delay_ms"
               echo auto > "$device/power/control"
+              echo enabled > "$device/power/wakeup"
+            fi
+            if [ "$id" = 1d6b:0002 ] || [ "$id" = 1d6b:0003 ]; then
+              echo enabled > "$device/power/wakeup"
             fi
           done
         '';
@@ -555,10 +574,6 @@ in
           SessionActivity = {
             class = "ExternalCommand";
             command = lib.getExe sessionActivity;
-          };
-          LogindSessionsIdle = {
-            class = "LogindSessionsIdle";
-            types = "tty";
           };
           Load = {
             class = "Load";
