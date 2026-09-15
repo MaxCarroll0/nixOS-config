@@ -20,6 +20,9 @@
     ../../modules/nixos/nas/storage.nix
     ../../modules/nixos/nas/index.nix
     ../../modules/nixos/nas/cache.nix
+    ../../modules/nixos/nas/attic.nix
+    ../../modules/nixos/nas/attic-client.nix
+    ../../modules/nixos/nas/client.nix
     ../../modules/nixos/nas/unlock.nix
     ../../modules/nixos/nas/checkpoints.nix
     ../../modules/nixos/nas/versions.nix
@@ -110,17 +113,18 @@
   local.build.client = {
     enable = true;
     builders.laptop = {
-      user = "max";
-      port = 22;
-      tailscaleSsh = true;
+      user = "nixremote";
+      port = 2222;
+      sshKey = "/home/max/.ssh/id_ed25519";
       systems = [ "aarch64-linux" ];
       maxJobs = 8;
       speedFactor = 4;
     };
     builders.desktopnew = {
-      user = "max";
-      port = 22;
-      tailscaleSsh = true;
+      user = "nixremote";
+      port = 2222;
+      sshKey = "/home/max/.ssh/id_ed25519";
+      publicHostKey = "AAAAC3NzaC1lZDI1NTE5AAAAIEhlS3Kx37nOhE6nAnkXgoHU3JwtFLmT1mLbFLcmLXl8";
       systems = [ "aarch64-linux" ];
       maxJobs = 8;
       speedFactor = 20;
@@ -183,7 +187,14 @@
   local.nas = {
     enable = true;
     dataRoot = "/srv/nas";
-    smb.enable = true;
+    smb = {
+      enable = true;
+      interfaces = [ "end0" "wld0" "tailscale0" ];
+    };
+    cache-server = {
+      enable = true;
+      interfaces = [ "end0" "wld0" "tailscale0" ];
+    };
     index.enable = true;
     accounts.nastest = {
       uid = 3000;
@@ -217,12 +228,18 @@
     prefetch.enable = true;
   };
 
+  local.atticClient = {
+    enable = true;
+    publicKey = lib.removeSuffix "\n" (builtins.readFile ../../keys/attic-public-key);
+  };
+  local.nasClient.enable = true;
+
   local.power = {
     instrument = true;
     idle.optimise = false;
   };
 
-  powerManagement.cpuFreqGovernor = "powersave";
+  powerManagement.cpuFreqGovernor = "schedutil";
 
   environment.systemPackages = [ pkgs.raspberrypi-eeprom ];
 

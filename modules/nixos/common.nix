@@ -202,6 +202,7 @@ in
 
 {
   imports = [
+    ./peer-transport.nix
     ./nix-observer.nix
     ./unclean-boot.nix
     ./last-good-boot.nix
@@ -217,6 +218,14 @@ in
   };
 
   config = {
+    local.peerTransport = {
+      enable = true;
+      peers = {
+        pi.tailscaleAddress = "100.117.13.66";
+        desktopnew.tailscaleAddress = "100.106.140.88";
+        laptop.tailscaleAddress = "100.112.109.20";
+      };
+    };
     boot.loader.grub.enable = lib.mkDefault true;
     boot.loader.efi.canTouchEfiVariables = lib.mkDefault true;
     boot.loader.efi.efiSysMountPoint = lib.mkDefault "/boot";
@@ -316,6 +325,12 @@ in
       secrets = {
         github-API = { };
         exercism-API.owner = "max";
+        claude-swap-export = {
+          sopsFile = ../../secrets/claude-swap.json;
+          format = "json";
+          owner = "max";
+          mode = "0400";
+        };
       }
       # Decrypted to /run/secrets-for-users before accounts exist, so these
       # cannot take an owner.

@@ -9,16 +9,12 @@
 
 let
   cfg = config.local.build.client;
-  tailscale = lib.getExe config.services.tailscale.package;
-
   builders = lib.attrValues cfg.builders;
+  peerConnect = "${config.local.peerTransport.package}/bin/peer-connect";
 
   probe =
     b:
-    if b.tailscaleSsh then
-      ''${tailscale} ping --timeout="${toString b.wake.probeSeconds}s" --c=1 "$host" >/dev/null 2>&1''
-    else
-      ''nc -z -w "${toString b.wake.probeSeconds}" "$host" "${toString b.port}" 2>/dev/null'';
+    ''${peerConnect} ${lib.escapeShellArg b.peer} "${toString b.port}" --probe >/dev/null 2>&1'';
 
   # Delegates to wake-peer when the builder is a configured peer, so a LUKS
   # unlock happens on the way up.
@@ -61,7 +57,7 @@ let
     case "$1" in
       ${lib.concatMapStringsSep "\n" (b: ''
         ${b.host})
-          exec ${if b.tailscaleSsh then "${tailscale} nc" else "${pkgs.netcat-openbsd}/bin/nc"} "$1" "$2" ;;
+          exec ${peerConnect} ${lib.escapeShellArg b.peer} "$2" ;;
       '') builders}
     esac
     exit 1
@@ -75,6 +71,12 @@ let
           type = lib.types.str;
           default = name;
           description = "Hostname of the builder, normally its MagicDNS name.";
+        };
+
+        peer = lib.mkOption {
+          type = lib.types.str;
+          default = name;
+          description = "local.peerTransport.peers entry used to reach this builder.";
         };
 
         wakePeer = lib.mkOption {
@@ -93,13 +95,17 @@ let
           default = 2222;
         };
 
-        tailscaleSsh = lib.mkEnableOption "Tailscale SSH transport";
-
         sshKey = lib.mkOption {
           # str, not path: a path literal would copy the key into the store.
           type = lib.types.str;
           default = "/root/.ssh/nixremote";
           description = "Passphrase-less key owned by root; the daemon cannot prompt.";
+        };
+
+        cipher = lib.mkOption {
+          type = lib.types.str;
+          default = "aes128-gcm@openssh.com";
+          description = "Fast authenticated-encryption cipher for the bulk Nix SSH stream.";
         };
 
         maxJobs = lib.mkOption {
@@ -187,7 +193,7 @@ in
           lib.optionalString (b.remoteProgram != null) "?remote-program=${b.remoteProgram}"
         }";
         sshUser = b.user;
-        sshKey = if b.tailscaleSsh then null else toString b.sshKey;
+        sshKey = toString b.sshKey;
         protocol = "ssh-ng";
         inherit (b)
           systems
@@ -204,13 +210,11 @@ in
         HostName ${b.host}
         Port ${toString b.port}
         User ${b.user}
-        ${lib.optionalString (!b.tailscaleSsh) "IdentityFile ${toString b.sshKey}"}
-        ${lib.optionalString b.tailscaleSsh ''
-          # Tailscale authenticates the peer.
-          StrictHostKeyChecking no
-          UserKnownHostsFile /dev/null
-        ''}
-        ${lib.optionalString (!b.tailscaleSsh) "ConnectTimeout ${toString b.wake.probeSeconds}"}
+        IdentityFile ${toString b.sshKey}
+        IdentitiesOnly yes
+        ConnectTimeout ${toString b.wake.probeSeconds}
+        Compression no
+        Ciphers ${b.cipher}
         ServerAliveInterval 30
         ProxyCommand ${proxy} %h %p
     '') builders;
@@ -219,13 +223,15 @@ in
 
     assertions = map (b: {
       assertion =
-        b.tailscaleSsh || (lib.hasPrefix "/" b.sshKey && !(lib.hasPrefix builtins.storeDir b.sshKey));
+        builtins.hasAttr b.peer config.local.peerTransport.peers
+        && lib.hasPrefix "/" b.sshKey
+        && !(lib.hasPrefix builtins.storeDir b.sshKey);
       message = "sshKey for ${b.host} must be an absolute path outside the world-readable store, not \"${b.sshKey}\".";
     }) builders;
 
     warnings = lib.concatMap (
       b:
-      lib.optional (!b.tailscaleSsh && b.publicHostKey == null)
+      lib.optional (b.publicHostKey == null)
         "publicHostKey for ${b.host} is unset, so the builder is unauthenticated. Get it with: base64 -w0 /etc/ssh/ssh_host_ed25519_key.pub"
     ) builders;
   };

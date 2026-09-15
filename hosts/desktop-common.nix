@@ -17,6 +17,8 @@
     ../modules/nixos/server/tailscale.nix
     ../modules/nixos/server/build-host.nix
     ../modules/nixos/server/web.nix
+    ../modules/nixos/nas/attic-client.nix
+    ../modules/nixos/nas/client.nix
     ../modules/nixos/pam-ssh-agent-sudo.nix
   ];
 
@@ -25,6 +27,12 @@
     "grafana"
     "pi.grafana"
   ];
+
+  local.atticClient = {
+    enable = true;
+    publicKey = lib.removeSuffix "\n" (builtins.readFile ../keys/attic-public-key);
+  };
+  local.nasClient.enable = true;
 
   local.vpn.selection = {
     countries = [ "UK" ];
@@ -69,10 +77,9 @@
     ];
   };
 
-  # Enable once the laptop's root key exists; see TODO.md.
   local.build.host = {
-    enable = false;
-    authorizedKeys = [ ];
+    enable = true;
+    authorizedKeys = [ (builtins.readFile ../keys/max.pub) ];
     emulatedSystems = [ "aarch64-linux" ];
   };
 

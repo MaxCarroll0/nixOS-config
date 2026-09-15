@@ -2,6 +2,7 @@
 
 {
   config,
+  pkgs,
   lib,
   ...
 }:
@@ -27,16 +28,28 @@ in
       description = "Attic's listen port, reachable on the tailnet only.";
     };
 
+    clientPort = lib.mkOption {
+      type = lib.types.port;
+      default = 18080;
+      description = "Stable loopback port used by LAN-first cache clients.";
+    };
+
     hostname = lib.mkOption {
       type = lib.types.str;
       default = "cache";
       description = "Virtual host serving the cache.";
     };
 
-    interface = lib.mkOption {
-      type = lib.types.str;
-      default = "tailscale0";
-      description = "Interface the cache is exposed on; never the public one.";
+    tlsCertificate = lib.mkOption {
+      type = lib.types.path;
+      default = ../../../keys/attic-server.crt;
+      description = "Server certificate for the private cache name.";
+    };
+
+    interfaces = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ "tailscale0" ];
+      description = "LAN and tailnet interfaces on which the cache is reachable.";
     };
 
     garbageCollection = lib.mkOption {
@@ -47,13 +60,23 @@ in
   };
 
   config = lib.mkIf (cfg.enable && acfg.enable) {
+    # A stable account lets sops hand the initialized signing database to
+    # atticd before the service starts.
+    users.users.atticd = {
+      isSystemUser = true;
+      group = "atticd";
+    };
+    users.groups.atticd = { };
+
     services.atticd = {
       enable = true;
       environmentFile = config.sops.secrets."attic-server-token".path;
       settings = {
         listen = "127.0.0.1:${toString acfg.port}";
         allowed-hosts = [ acfg.hostname ];
-        api-endpoint = "http://${acfg.hostname}/";
+        # Every client reaches this stable loopback port; peer-transport then
+        # selects the Pi's LAN address or its tailnet address.
+        api-endpoint = "https://${acfg.hostname}:${toString acfg.clientPort}/";
         require-proof-of-possession = false;
         database.url = "sqlite://${acfg.dataDir}/server.db?mode=rwc";
         storage = {
@@ -73,7 +96,35 @@ in
       };
     };
 
-    sops.secrets."attic-server-token" = { };
+    sops.secrets = {
+      "attic-server-token" = {
+        sopsFile = ../../../secrets/attic-server-token.env;
+        format = "binary";
+      };
+      "attic-tls-key" = {
+        sopsFile = ../../../secrets/attic-tls-key.pem;
+        format = "binary";
+        owner = "nginx";
+      };
+      "attic-seed" = {
+        sopsFile = ../../../secrets/attic-seed.db;
+        format = "binary";
+        owner = "atticd";
+      };
+    };
+
+    systemd.services.atticd.serviceConfig.ExecStartPre = lib.getExe (
+      pkgs.writeShellApplication {
+        name = "attic-install-seed";
+        runtimeInputs = [ pkgs.coreutils ];
+        text = ''
+          if [ ! -e ${acfg.dataDir}/server.db ]; then
+            install -m 0600 ${config.sops.secrets."attic-seed".path} ${acfg.dataDir}/server.db
+          fi
+        '';
+      }
+    );
+    systemd.services.atticd.serviceConfig.ReadWritePaths = [ acfg.dataDir ];
 
     systemd.tmpfiles.rules = [
       "d ${acfg.dataDir} 0750 atticd atticd - -"
@@ -84,9 +135,16 @@ in
       enable = true;
       recommendedProxySettings = true;
       clientMaxBodySize = "4G";
-      virtualHosts.${acfg.hostname}.locations."/".proxyPass = "http://127.0.0.1:${toString acfg.port}";
+      virtualHosts.${acfg.hostname} = {
+        forceSSL = true;
+        sslCertificate = acfg.tlsCertificate;
+        sslCertificateKey = config.sops.secrets."attic-tls-key".path;
+        locations."/".proxyPass = "http://127.0.0.1:${toString acfg.port}";
+      };
     };
 
-    networking.firewall.interfaces.${acfg.interface}.allowedTCPPorts = [ 80 ];
+    networking.firewall.interfaces = lib.genAttrs acfg.interfaces (_: {
+      allowedTCPPorts = [ 443 ];
+    });
   };
 }
