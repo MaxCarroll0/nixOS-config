@@ -20,11 +20,18 @@
     ../../modules/nixos/pam-ssh-agent-sudo.nix
     ../../modules/nixos/nas/accounts.nix
     ../../modules/nixos/nas/unlock.nix
+    ../../modules/nixos/nas/attic-client.nix
+    ../../modules/nixos/nas/client.nix
   ];
 
   networking.hostName = "laptop";
 
   local.nas.unlock.client = true;
+  local.atticClient = {
+    enable = true;
+    publicKey = lib.removeSuffix "\n" (builtins.readFile ../../keys/attic-public-key);
+  };
+  local.nasClient.enable = true;
   sops.secrets."nas-luks-key" = {
     sopsFile = ../../secrets/nas.yaml;
     owner = "max";
@@ -109,6 +116,7 @@
   local.server.ssh = {
     enable = true;
     allowUsers = [ "max" ];
+    lanInterfaces = [ "wlo1" "enp0s31f6" ];
   };
   local.server.tailscale = {
     enable = true;
@@ -144,15 +152,20 @@
 
   system.autoUpgrade.enable = true;
 
-  local.build.host.emulatedSystems = [ "aarch64-linux" ];
+  local.build.host = {
+    enable = true;
+    authorizedKeys = [ (builtins.readFile ../../keys/max.pub) ];
+    emulatedSystems = [ "aarch64-linux" ];
+  };
 
   local.build.client = {
     enable = true;
     builders.desktopnew = {
       wakePeer = "desktopnew";
-      user = "max";
-      port = 22;
-      tailscaleSsh = true;
+      user = "nixremote";
+      port = 2222;
+      sshKey = "/home/max/.ssh/id_ed25519";
+      publicHostKey = "AAAAC3NzaC1lZDI1NTE5AAAAIEhlS3Kx37nOhE6nAnkXgoHU3JwtFLmT1mLbFLcmLXl8";
       systems = [
         "x86_64-linux"
         "aarch64-linux"

@@ -31,10 +31,10 @@ in
   options.local.nas.smb = {
     enable = lib.mkEnableOption "SMB shares for NAS accounts";
 
-    interface = lib.mkOption {
-      type = lib.types.str;
-      default = "tailscale0";
-      description = "Interface SMB is reachable on; never the public interface.";
+    interfaces = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ "tailscale0" ];
+      description = "LAN and tailnet interfaces on which encrypted SMB is reachable.";
     };
   };
 
@@ -57,8 +57,10 @@ in
           "server min protocol" = "SMB3";
           "client min protocol" = "SMB3";
           "smb encrypt" = "required";
+          # All three machines have hardware acceleration for AES-GCM.
+          "server smb3 encryption algorithms" = "AES-128-GCM";
           "bind interfaces only" = "yes";
-          "interfaces" = "lo ${cfg.smb.interface}";
+          "interfaces" = "lo ${lib.concatStringsSep " " cfg.smb.interfaces}";
           "load printers" = "no";
           "printing" = "bsd";
           "printcap name" = "/dev/null";
@@ -71,7 +73,9 @@ in
       // lib.mapAttrs (name: _: shareOf name) cfg.accounts;
     };
 
-    networking.firewall.interfaces.${cfg.smb.interface}.allowedTCPPorts = [ 445 ];
+    networking.firewall.interfaces = lib.genAttrs cfg.smb.interfaces (_: {
+      allowedTCPPorts = [ 445 ];
+    });
 
     systemd.services.samba-nmbd.serviceConfig = {
       After = "network-online.target";

@@ -4,7 +4,6 @@
   pkgs,
   pkgs-unstable,
   curd,
-  claude-code,
   codex-cli,
   anipySrc,
   ...
@@ -133,25 +132,6 @@ let
     doCheck = false;
   };
 
-  # textual >=8.2.8 is only in unstable; 26.05 ships 8.2.6.
-  claude-swap = pkgs-unstable.python3Packages.buildPythonApplication {
-    pname = "claude-swap";
-    version = "0.25.0";
-    pyproject = true;
-    src = pkgs.fetchFromGitHub {
-      owner = "realiti4";
-      repo = "claude-swap";
-      rev = "v0.25.0";
-      hash = "sha256-BDfwyH7h7Ii7QYaunHDnf0Epk5nUEd8OdOH3QCf1CJU=";
-    };
-    build-system = [ pkgs-unstable.python3Packages.hatchling ];
-    dependencies = with pkgs-unstable.python3Packages; [
-      textual
-      truststore
-    ];
-    doCheck = false;
-  };
-
   # Both curd providers (allanime, animepahe) are Cloudflare-gated; curd's plain
   # Go client can't pass the challenge. FlareSolverr solves it once, this patch
   # makes curd replay the cf_clearance + matching UA on every provider request.
@@ -223,6 +203,7 @@ in
 {
   imports = [
     ./base.nix
+    ./claude.nix
     ./emacs.nix
     ./theme.nix
     ./hyprland.nix
@@ -240,7 +221,6 @@ in
     google-meet
     arxiv-latex-mcp
     paper-search-mcp
-    claude-swap
     anipyCliPr
     pkgs-unstable.context7-mcp
     (lib.meta.setPrio 5 pkgs-unstable.mcp-server-sequential-thinking)
@@ -269,7 +249,6 @@ in
     mpv
     yt-dlp
     aniCliHianime
-    claude-code
     codex-cli
     pkgs-unstable.codecrafters-cli
     mcp-nixos
@@ -356,16 +335,6 @@ in
     };
   };
 
-  systemd.user.services.claude-swap-auto = {
-    Unit.Description = "claude-swap account auto-switching";
-    Install.WantedBy = [ "default.target" ];
-    Service = {
-      ExecStart = "${claude-swap}/bin/claude-swap auto --model all";
-      Restart = "always";
-      RestartSec = 30;
-    };
-  };
-
   # Writable copy (not a store symlink) so curd can rewrite it at runtime;
   # replaced on every switch so the repo file stays the source of truth.
   home.activation.curdConf = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
@@ -386,20 +355,6 @@ in
     else
       echo "exercism-API not readable; skipping exercism configure" >&2
     fi
-  '';
-
-  # Merges declarative keys into ~/.claude/settings.json without clobbering
-  # other entries claude code may write.
-  home.activation.claudeSettings = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
-    _settings="$HOME/.claude/settings.json"
-    run mkdir -p "$HOME/.claude"
-    [ -f "$_settings" ] || echo '{}' > "$_settings"
-
-    ${pkgs.jq}/bin/jq '. * {
-      "skipAutoPermissionPrompt": true,
-      "tui": "fullscreen",
-      "includeCoAuthoredBy": false
-    }' "$_settings" > "$_settings.tmp" && mv "$_settings.tmp" "$_settings"
   '';
 
   home.activation.kdeWalkThroughWindows = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
