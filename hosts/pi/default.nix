@@ -28,6 +28,7 @@
     ../../modules/nixos/gpio-pwm-fan.nix
     ../../modules/nixos/build-client.nix
     ../../modules/nixos/pam-ssh-agent-sudo.nix
+    ../../modules/nixos/browser-sync.nix
   ];
 
   networking.hostName = "pi";
@@ -103,6 +104,8 @@
     ../../keys/max.pub
     ../../keys/max-desktopnew.pub
   ];
+
+  local.browserSync.server = true;
 
   local.build.client = {
     enable = true;
