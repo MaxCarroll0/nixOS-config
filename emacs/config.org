@@ -663,6 +663,26 @@ Surround/change/delete pairs around region or semantic units. Works directly on 
 
 #+end_src
 
+** Spelling
+
+Aspell with a British dictionary backs =ispell=; =flyspell= checks prose buffers and comments in code.
+
+#+begin_src emacs-lisp
+
+(use-package ispell
+  :ensure nil
+  :custom
+  (ispell-program-name "aspell")
+  (ispell-dictionary "en_GB")
+  (ispell-extra-args '("--sug-mode=ultra")))
+
+(use-package flyspell
+  :ensure nil
+  :hook ((text-mode . flyspell-mode)
+         (prog-mode . flyspell-prog-mode)))
+
+#+end_src
+
 * Git
 ** Magit
 
@@ -733,6 +753,37 @@ Pure-elisp terminal, with =eat-eshell-mode= upgrading eshell visual commands. Me
 #+end_src
 
 * AI
+** Agent Shell
+Interact with ACP agents in native Emacs buffers using =M-x agent-shell=.
+Claude and Codex use their existing CLI logins. =M-x my/cswap= opens the account
+dashboard; start a new Claude shell after switching accounts so it picks up the
+selected login. The existing =claude-swap-auto= service continues managing rotation.
+
+#+begin_src emacs-lisp
+(use-package agent-shell
+  :commands (agent-shell
+             agent-shell-anthropic-start-claude-code
+             agent-shell-openai-start-codex)
+  :hook (agent-shell-mode . my/disable-line-numbers)
+  :config
+  (require 'agent-shell-anthropic)
+  (require 'agent-shell-openai)
+  (setq agent-shell-anthropic-authentication
+        (agent-shell-anthropic-make-authentication :login t)
+        agent-shell-openai-authentication
+        (agent-shell-openai-make-authentication :login t))
+  (when-let* ((claude (executable-find "claude")))
+    (setq agent-shell-anthropic-claude-environment
+          (list (concat "CLAUDE_CODE_EXECUTABLE=" claude)))))
+
+(defun my/cswap ()
+  "Open the Claude account dashboard in Eat."
+  (interactive)
+  (require 'eat)
+  (let ((eat-buffer-name "*cswap*"))
+    (eat "cswap")))
+#+end_src
+
 ** Codeium
 AI completion / chat.
 
@@ -1618,24 +1669,38 @@ own name into the buffer that Hippie scans."
   (interactive)
   (my/corfu-filter-start 'name))
 
+(defun my/completion-documentation-buffer (candidate)
+  "Return a documentation buffer for CANDIDATE."
+  (when-let* ((text (my/completion-documentation candidate)))
+    (with-current-buffer (get-buffer-create " *my-completion-documentation*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert text)
+        (goto-char (point-min)))
+      (current-buffer))))
+
+(defun my/completion-documentation (candidate)
+  "Return CANDIDATE's type and documentation."
+  (let* ((item (my/completion-lsp-item candidate))
+         (entry (my/type-completion-entry candidate))
+         (detail (my/completion-candidate-detail candidate))
+         (documentation (or (plist-get entry :doc)
+                            (plist-get item :documentation)))
+         (documentation
+          (cond
+           ((stringp documentation) documentation)
+           ((listp documentation) (plist-get documentation :value))))
+         (text (string-join (delq nil (list detail documentation)) "\n\n")))
+    (unless (string-empty-p text) text)))
+
 (defun my/corfu-selected-documentation ()
   "Return the selected Corfu candidate and its documentation."
   (when (and completion-in-region-mode
              (boundp 'corfu--index)
              (>= corfu--index 0))
-    (when-let* ((candidate (nth corfu--index corfu--candidates)))
-      (let* ((item (my/completion-lsp-item candidate))
-             (entry (my/type-completion-entry candidate))
-             (detail (my/completion-candidate-detail candidate))
-             (documentation (or (plist-get entry :doc)
-                                (plist-get item :documentation)))
-             (documentation
-              (cond
-               ((stringp documentation) documentation)
-               ((listp documentation) (plist-get documentation :value))))
-             (text (string-join (delq nil (list detail documentation)) "\n\n")))
-        (unless (string-empty-p text)
-          (cons candidate text))))))
+    (when-let* ((candidate (nth corfu--index corfu--candidates))
+                (text (my/completion-documentation candidate)))
+      (cons candidate text))))
 
 (defun my/type-completion-resolve-selected ()
   "Resolve the selected LSP candidate asynchronously."
@@ -3407,8 +3472,9 @@ RESTORE runs once the reply is in."
                  (scroll (and (boundp 'corfu--scroll) corfu--scroll)))
             (cond
              ((and (bound-and-true-p completion-in-region-mode)
-                   (fboundp 'corfu--refresh))
-              (corfu--refresh)
+                   (bound-and-true-p corfu-mode))
+              (setq corfu--input nil)
+              (corfu--update)
               (when (and selected (boundp 'corfu--candidates))
                 (when-let* ((index
                              (cl-position selected corfu--candidates
@@ -3416,8 +3482,7 @@ RESTORE runs once the reply is in."
                   (setq corfu--index index
                         corfu--scroll
                         (min (or scroll 0) (max 0 index)))))
-              (when (fboundp 'corfu--update)
-                (corfu--update)))
+              (corfu--exhibit))
              ((fboundp 'completion-preview--update)
               (completion-preview--update))))))))
 
@@ -3999,7 +4064,9 @@ completion replaces a bare `_', whose text must not filter the candidates."
                                    beginning original hole))
                  (table
                   (my/type-completion-table
-                   my/type-completion-lsp-candidates
+                   (lambda (string predicate action)
+                     (complete-with-action
+                      action my/type-completion-lsp-candidates string predicate))
                    (my/completion-qualifier-before beginning) hole))
                  (table (if my/type-completion-inhibit-probe
                             (my/completion-preview-table table)
@@ -4008,6 +4075,7 @@ completion replaces a bare `_', whose text must not filter the candidates."
                   :category 'my/type-completion
                   :exclusive 'no
                   :my/completion-beginning beginning
+                  :company-doc-buffer #'my/completion-documentation-buffer
                   :exit-function
                   (apply-partially #'my/type-completion-exit
                                    lsp-exit beginning)))))))
@@ -4340,21 +4408,38 @@ TODO: test Polymode interactively in real Nix, Org, Markdown, and noweb files.
 #+end_src
 
 ** Formatting
-Using Apheleia
+Using Apheleia. OCaml goes through =ocamlformat= as a stdin filter rather than =dune-fmt=: =dune build @fmt= exits non-zero whenever it promoted a file, which Apheleia reads as a formatter failure, and =--auto-promote= rewrites the file on disk behind the buffer. ReasonML keeps =dune-fmt= because =ocamlformat= does not handle its syntax; the =;= there replaces an =&&= for the same exit-code reason.
 
 #+begin_src emacs-lisp
 
 (use-package apheleia
   :config
   (setf (alist-get 'dune-fmt apheleia-formatters)
-        '("sh" "-c" "dune build @fmt --auto-promote >/dev/null && cat \"$1\"" "dune-fmt" file))
-  (setf (alist-get 'tuareg-mode apheleia-mode-alist) 'dune-fmt)
+        '("sh" "-c" "dune build @fmt --auto-promote >/dev/null; cat \"$1\"" "dune-fmt" file))
+  (setf (alist-get 'tuareg-mode apheleia-mode-alist) 'ocamlformat)
   (setf (alist-get 'reason-mode apheleia-mode-alist) 'dune-fmt)
-  (setf (alist-get 'caml-mode apheleia-mode-alist) 'dune-fmt)
+  (setf (alist-get 'caml-mode apheleia-mode-alist) 'ocamlformat)
+  (setf (alist-get 'dune-mode apheleia-mode-alist) 'dune-fmt)
   (setf (alist-get 'nix-ts-mode apheleia-mode-alist) 'nixfmt)
   (setf (alist-get 'markdown-mode apheleia-mode-alist) 'prettier-markdown)
   (setf (alist-get 'markdown-ts-mode apheleia-mode-alist) 'prettier-markdown)
   (apheleia-global-mode +1))
+
+(defun max/ocaml-formatter ()
+  "Pick the OCaml formatter that suits the enclosing project."
+  (let ((dir (or (and buffer-file-name (file-name-directory buffer-file-name))
+                 default-directory)))
+    (cond
+     ((locate-dominating-file dir ".ocamlformat") 'ocamlformat)
+     ((locate-dominating-file dir "dune-project") 'dune-fmt)
+     (t 'ocamlformat))))
+
+(defun max/set-ocaml-formatter ()
+  "Select the OCaml formatter for this buffer."
+  (setq-local apheleia-formatter (max/ocaml-formatter)))
+
+(dolist (hook '(tuareg-mode-hook caml-mode-hook))
+  (add-hook hook #'max/set-ocaml-formatter))
 
 #+end_src
 
@@ -4665,6 +4750,53 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
   (add-to-list 'eglot-server-programs
                '((tex-mode plain-tex-mode latex-mode LaTeX-mode)
                  "digestif")))
+#+end_src
+
+OCaml's server can emit out-of-order semantic tokens with negative line deltas; sort a painting copy while keeping Eglot's delta-update cache intact.
+
+#+begin_src emacs-lisp
+(defvar-local my/eglot-semtok-sorted nil)
+
+(defun my/eglot-semtok-sort (data)
+  "Return DATA in position order without changing the server's token array."
+  (if (not (cl-loop for i from 0 below (length data) by 5
+                    thereis (or (< (aref data i) 0)
+                                (< (aref data (1+ i)) 0))))
+      data
+    (let ((line 0) (column 0) tokens
+          (result (make-vector (length data) 0))
+          (previous-line 0) (previous-column 0) (index 0))
+      (cl-loop for i from 0 below (length data) by 5 do
+               (setq line (+ line (aref data i))
+                     column (if (zerop (aref data i))
+                                (+ column (aref data (1+ i)))
+                              (aref data (1+ i))))
+               (push (list line column (aref data (+ i 2))
+                           (aref data (+ i 3)) (aref data (+ i 4))) tokens))
+      (setq tokens
+            (cl-stable-sort (nreverse tokens)
+                            (lambda (a b)
+                              (or (< (car a) (car b))
+                                  (and (= (car a) (car b))
+                                       (< (cadr a) (cadr b)))))))
+      (dolist (token tokens)
+        (pcase-let ((`(,line ,column ,len ,type ,modifiers) token))
+          (cl-loop for value in (list (- line previous-line)
+                                     (if (= line previous-line)
+                                         (- column previous-column) column)
+                                     len type modifiers)
+                   do (aset result index value) (cl-incf index))
+          (setq previous-line line previous-column column)))
+      result)))
+
+(defun my/eglot-semtok-paint-sorted (original beg end data)
+  "Paint semantic tokens in source order, retaining the wire-order cache."
+  (unless (eq data (car my/eglot-semtok-sorted))
+    (setq my/eglot-semtok-sorted (cons data (my/eglot-semtok-sort data))))
+  (funcall original beg end (cdr my/eglot-semtok-sorted)))
+
+(with-eval-after-load 'eglot
+  (advice-add 'eglot--semtok-font-lock-1 :around #'my/eglot-semtok-paint-sorted))
 #+end_src
 
 ** Nix
@@ -7673,8 +7805,20 @@ A shared Tree-sitter parser buffer finds the leaf patterns and typed holes insid
 *** Other
 Installed dependency sources retain Eglot navigation without standalone Flymake diagnostics. A module annotated =: S= offers the items declared by =S= with their names fixed and arity from the declared type. Labelled arguments render with their labels and optional arguments stay omitted until =TAB= adds them. =C-c .= collects snippets, type queries, navigation and refactors.
 
+In the REPL, =RET= only submits once the phrase ends in =;;= and otherwise opens an indented line, and =S-RET= appends the =;;= itself. Neither reaches a program reading stdin, so =C-RET= submits the pending text verbatim.
+
 #+begin_src emacs-lisp
-(use-package tuareg :mode ("\\.ml[ily]?\\'" . tuareg-mode))
+(use-package tuareg
+  :mode ("\\.ml[ily]?\\'" . tuareg-mode)
+  :bind (:map tuareg-interactive-mode-map
+              ("C-<return>" . my/tuareg-interactive-send-raw-input)
+              ("C-<kp-enter>" . my/tuareg-interactive-send-raw-input)))
+
+(defun my/tuareg-interactive-send-raw-input ()
+  "Send pending input to the REPL process verbatim, without appending \";;\"."
+  (interactive)
+  (goto-char (point-max))
+  (comint-send-input))
 
 (defun my/nix-store-buffer-p ()
   "Return non-nil when the current file is in the Nix store."
