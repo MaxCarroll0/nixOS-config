@@ -1,10 +1,6 @@
 # Home for the AMD desktop.
 
-{
-  lib,
-  pkgs,
-  ...
-}:
+{ ... }:
 
 {
   imports = [ ./common.nix ];
@@ -164,15 +160,6 @@
       AutoSuspendAction=0
     '';
   };
-
-  # The forced HDMI connector must never hold priority 1, or the panel, new
-  # windows and the lock screen land on a screen that does not exist.
-  home.activation.kwinOutputLayout = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
-    _outputs="$HOME/.config/kwinoutputconfig.json"
-    if [ ! -f "$_outputs" ]; then
-      run ${pkgs.coreutils}/bin/install -Dm644 ${./desktop-outputs.json} "$_outputs"
-    fi
-  '';
 
   # autosuspend reads the lock state as its "user is away" signal, so this
   # timeout must stay below local.power.idle.autosuspend.idleMinutes.
