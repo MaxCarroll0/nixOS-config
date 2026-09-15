@@ -225,6 +225,9 @@
       deploy = {
         sshUser = "max";
         user = "root";
+        # deploy-rs appends the activation user, so activate-detached is handed
+        # "root" ahead of the activate-rs command it runs as a transient unit.
+        sudo = "sudo activate-detached";
         magicRollback = true;
         autoRollback = true;
         confirmTimeout = 120;
