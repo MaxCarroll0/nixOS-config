@@ -80,9 +80,7 @@
 
   local.wake.peers.desktopnew = {
     mac = "b4:2e:99:92:d6:18";
-    broadcast = "192.168.0.255";
-    address = "192.168.0.161";
-    timeoutSeconds = 90;
+    timeoutSeconds = 120;
   };
 
   local.server.ssh = {
