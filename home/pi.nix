@@ -3,5 +3,8 @@
 { ... }:
 
 {
-  imports = [ ./base.nix ];
+  imports = [
+    ./base.nix
+    ./claude.nix
+  ];
 }
