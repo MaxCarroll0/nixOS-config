@@ -6,6 +6,7 @@
   imports = [
     ./hardware.nix
     ../../modules/nixos/common.nix
+    ../../modules/nixos/containers.nix
     ../../modules/nixos/desktop-env.nix
     ../../modules/nixos/vpn.nix
     ../../modules/nixos/wake.nix
@@ -117,19 +118,22 @@
 
   local.wake.peers.desktopnew = {
     mac = "b4:2e:99:92:d6:18";
-    broadcast = "192.168.0.255";
-    address = "192.168.0.161";
-    timeoutSeconds = 90;
+    timeoutSeconds = 120;
   };
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
 
   users.users.max.linger = true;
 
+  boot.loader.grub.configurationLimit = 15;
+
   boot.loader.grub.extraEntries = /* bash */ ''
     menuentry "Ubuntu iso" {
       insmod ext2
-      set isofile="/ubuntu/ubuntu.iso"
-      loopback loop (hd0,5)$isofile
+      insmod loopback
+      insmod iso9660
+      search --no-floppy --fs-uuid --set=root dbb5c694-3987-4403-a523-ace9f7d16c97
+      set isofile="/ubuntu.iso"
+      loopback loop $isofile
       linux (loop)/casper/vmlinuz boot=casper iso-scan/filename=$isofile quiet noeject noprompt splash
       initrd (loop)/casper/initrd
     }
