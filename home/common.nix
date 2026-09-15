@@ -197,6 +197,24 @@ let
   # load on a wallet this host can never unlock: autologin gives PAM no password.
   chromium = pkgs.chromium.override { commandLineArgs = "--password-store=basic"; };
 
+  # age takes ssh recipients directly, so both GUI hosts decrypt the store with
+  # the key they already have and nothing new goes into sops.
+  browser-sync = pkgs.writeShellApplication {
+    name = "browser-sync";
+    runtimeInputs = with pkgs; [
+      age
+      gnutar
+      inetutils
+      procps
+      rsync
+      tailscale
+    ];
+    text = ''
+      recipients="${../keys/max.pub} ${../keys/max-desktopnew.pub}"
+    ''
+    + builtins.readFile ../scripts/browser-sync.sh;
+  };
+
   google-meet = pkgs.writeShellScriptBin "google-meet" ''
     exec /run/wrappers/bin/sg novpn -c '${chromium}/bin/chromium --ozone-platform=wayland --enable-features=WebRTCPipeWireCapturer --disable-features=Vulkan --no-first-run --app=https://meet.google.com'
   '';
@@ -214,6 +232,7 @@ in
   fonts.fontconfig.enable = true;
 
   home.packages = [
+    browser-sync
     chromium
     curdWrapped
     curd-cf-refresh
