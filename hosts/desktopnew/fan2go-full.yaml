@@ -1,10 +1,24 @@
 tempSensorPollingRate: 2s
 tempRollingWindowSize: 12
 
+# The ARCTIC hub and amdgpu tachs jitter ~30 rpm, so at the default of 20
+# waitForFanToSettle never exits and those fans never finish initialising.
+maxRpmDiffForSettledFan: 100
+
 sensors:
   - id: cpu
     hwmon:
       platform: zenpower
+      index: 1
+
+  - id: vrm
+    hwmon:
+      platform: gigabyte_wmi
+      index: 5
+
+  - id: gpu
+    hwmon:
+      platform: amdgpu
       index: 1
 
   - id: case
@@ -12,7 +26,8 @@ sensors:
       exec: /run/current-system/sw/bin/case-temp-millicelsius
 
 curves:
-  # 32-thread load holds 60C with this fan at its 601rpm floor, so it stays there.
+  # 32-thread load holds 60C with this fan at its 601 rpm floor, so it stays
+  # there. Flat below 70C also makes single-core boost spikes invisible to it.
   - id: radiator_curve
     linear:
       sensor: cpu
@@ -22,6 +37,8 @@ curves:
         - 85: 60%
         - 92: 100%
 
+  # Percentages scale over minPwm..maxPwm, so 0% here is pwm 140: Tdie is flat
+  # from 2812 down to 1951 rpm, then rises 8.6C at pwm 100 as the pump cavitates.
   - id: pump_curve
     linear:
       sensor: cpu
@@ -30,8 +47,6 @@ curves:
         - 80: 50%
         - 90: 100%
 
-  # VRM MOS settles at 82C under sustained all-core load with these fans stopped,
-  # and the CPU holds 107W throughout, so that is not a throttling point.
   - id: intake_vertical_curve
     linear:
       sensor: case
@@ -59,6 +74,29 @@ curves:
         - 70: 40%
         - 80: 70%
         - 88: 100%
+
+  # Airflow barely moves VRM MOS (identical at 380 and 2169 rpm), so this is a
+  # safety ramp rather than a control loop.
+  - id: vrm_curve
+    linear:
+      sensor: vrm
+      steps:
+        - 66: 0%
+        - 74: 30%
+        - 80: 60%
+        - 88: 100%
+
+  # The card's own curve parks at 790 rpm, sits at 89C under 119W and throttles
+  # to 108W. Measured: pwm 128 -> 75C, pwm 180 -> 67C, both at full power.
+  - id: gpu_curve
+    linear:
+      sensor: gpu
+      steps:
+        - 50: 0%
+        - 60: 25%
+        - 70: 45%
+        - 78: 70%
+        - 85: 100%
 
 fans:
   - id: radiator
@@ -90,7 +128,7 @@ fans:
     controlMode:
       onExit: restore
     minPwm: 140
-    startPwm: 120
+    startPwm: 150
     maxPwm: 230
 
   - id: intake_vertical
@@ -119,6 +157,37 @@ fans:
         maxPwmChangePerCycle: 5
     minPwm: 0
     startPwm: 20
+    maxPwm: 255
+
+  # This fan will not stop: it holds ~400 rpm at pwm 0.
+  - id: vrm_fan
+    hwmon:
+      platform: arctic_fan
+      rpmChannel: 7
+      pwmChannel: 7
+    curve: vrm_curve
+    neverStop: true
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 8
+    minPwm: 0
+    startPwm: 40
+    maxPwm: 255
+
+  - id: gpu_fan
+    hwmon:
+      platform: amdgpu
+      rpmChannel: 1
+      pwmChannel: 1
+    curve: gpu_curve
+    neverStop: false
+    controlAlgorithm:
+      direct:
+        maxPwmChangePerCycle: 5
+    controlMode:
+      onExit: restore
+    minPwm: 0
+    startPwm: 40
     maxPwm: 255
 
   # The fan fitted here is 3-pin, and the ARCTIC hub is PWM-only (its driver

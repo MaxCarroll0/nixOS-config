@@ -10,21 +10,24 @@
 let
   cfg = config.local.gaming;
 
-  # sg -c hands the inner shell no positional arguments, so the steam:// URL
-  # has to arrive through the environment.
-  steamNovpn = pkgs.writeShellScriptBin "steam-novpn" ''
-    export STEAM_URL="''${1:-}"
-    exec /run/wrappers/bin/sg novpn -c '${config.programs.steam.package}/bin/steam ''${STEAM_URL:+"$STEAM_URL"}'
+  steamPkg = config.programs.steam.package;
+
+  # sg -c takes a single command string, so argv has to be requoted into it.
+  novpn = name: ''
+    args=""
+    if [ "$#" -gt 0 ]; then
+      printf -v args ' %q' "$@"
+    fi
+    exec /run/wrappers/bin/sg novpn -c "${steamPkg}/bin/${name}$args"
   '';
 
-  steamNovpnItem = pkgs.makeDesktopItem {
-    name = "steam-novpn";
-    desktopName = "Steam (no VPN)";
-    exec = "steam-novpn %U";
-    icon = "steam";
-    categories = [ "Game" ];
-    mimeTypes = [ "x-scheme-handler/steam" ];
-  };
+  # hiPrio so this shadows the package's own bin/steam, which the desktop entry,
+  # the steam:// handlers and the gamescope session all resolve off PATH.
+  steamNovpn = lib.hiPrio (pkgs.writeShellScriptBin "steam" (novpn "steam"));
+
+  steamVpn = pkgs.writeShellScriptBin "steam-vpn" ''
+    exec ${steamPkg}/bin/steam "$@"
+  '';
 in
 
 {
@@ -45,7 +48,7 @@ in
 
     environment.systemPackages = [
       steamNovpn
-      steamNovpnItem
+      steamVpn
       pkgs.mangohud
       pkgs.protonup-qt
     ];
