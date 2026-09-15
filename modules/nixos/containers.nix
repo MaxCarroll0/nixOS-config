@@ -1,15 +1,24 @@
 # Rootless podman and distrobox, for running foreign-distro binaries.
 
-{ pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 {
-  virtualisation.podman = {
-    enable = true;
-    autoPrune = {
-      enable = true;
-      dates = "weekly";
-    };
-  };
+  options.local.containers.enable = lib.mkEnableOption "rootless podman and distrobox";
 
-  environment.systemPackages = [ pkgs.distrobox ];
+  config = lib.mkIf config.local.containers.enable {
+    virtualisation.podman = {
+      enable = true;
+      autoPrune = {
+        enable = true;
+        dates = "weekly";
+      };
+    };
+
+    environment.systemPackages = [ pkgs.distrobox ];
+  };
 }
