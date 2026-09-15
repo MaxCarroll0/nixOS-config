@@ -36,17 +36,29 @@ let
   perDisk = metric: "max by (instance, device) (${metric})";
   perFan = metric: "max by (instance, fan) (${metric})";
 
+  freshNode = ''max by (instance) ((up{job="node"} == 1) and (timestamp(up{job="node"}) > time() - 5))'';
+
+  supplyEfficiency = loadRatio: ''
+    clamp(${coefficient "pc_power_supply_peak_efficiency"}
+      * (1 - ${coefficient "pc_power_supply_curvature"}
+        * (${loadRatio} - ${coefficient "pc_power_supply_peak_load_ratio"}) ^ 2), 0.5, 0.96)'';
+
+  supplyLoss = watts: efficiency: ''
+    (clamp_min(${watts} * (1 / (${efficiency}) - 1)
+      - ${coefficient "pc_power_supply_idle_watts"}, 0)
+      + ${coefficient "pc_power_supply_idle_watts"})'';
+
   component = name: expr: ''label_replace(${expr}, "component", "${name}", "", "")'';
 
   raplPackage = ''rate(node_rapl_package_joules_total{path!~".*mmio.*"}[1m])'';
   cpuBusy = ''clamp(1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m])), 0, 1)'';
   cpuCoreBusy = ''clamp(1 - rate(node_cpu_seconds_total{mode="idle"}[15s]), 0, 1)'';
 
-  plausible = ceiling: expr: "clamp_max(${expr}, ${toString ceiling})";
+  plausible = ceiling: expr: "((${expr}) >= 0 <= ${toString ceiling})";
 
   hwmonPower = chipName: ''
     sum by (instance) (
-      node_hwmon_power_watt
+      clamp_min(node_hwmon_power_watt, 0)
       and on(instance, chip) node_hwmon_chip_names{chip_name="${chipName}"}
     )'';
 
@@ -70,11 +82,11 @@ let
     }
     {
       record = "pc:platform_power_watts";
-      expr = plausible 1000 ''
-        clamp_min(
-          sum by (instance) (rate(node_rapl_psys_joules_total[1m]))
-          - sum by (instance) (${raplPackage}),
-          0)'';
+      expr = ''
+        sum by (instance) (laptop_battery_power_watts
+          and on(instance, battery) laptop_battery_status_info{status="Discharging"}
+          and on(instance) (max by (instance) (node_power_supply_online) == 0))
+        or (sum by (instance) (rate(node_rapl_psys_joules_total{path!~".*mmio.*"}[1m])) > 0)'';
     }
     {
       record = "pc:soc_rail_watts";
@@ -103,7 +115,7 @@ let
     }
     {
       record = "pc:disk_activity";
-      expr = "clamp_max(sum by (instance, device) (rate(node_disk_io_time_seconds_total[1m])), 1)";
+      expr = "clamp(sum by (instance, device) (rate(node_disk_io_time_seconds_total[1m])), 0, 1)";
     }
     {
       record = "pc:disk_power_watts";
@@ -112,7 +124,8 @@ let
         + (1 - ${perDisk "pc_disk_standby"})
         * (${perDisk ''pc_power_disk_watts{state="idle"}''}
            + (${perDisk ''pc_power_disk_watts{state="active"}''}
-              - ${perDisk ''pc_power_disk_watts{state="idle"}''}) * pc:disk_activity)'';
+              - ${perDisk ''pc_power_disk_watts{state="idle"}''})
+              * (pc:disk_activity or (${perDisk ''pc_power_disk_watts{state="idle"}''} * 0)))'';
     }
     {
       record = "pc:fan_rpm_modelled";
@@ -128,7 +141,7 @@ let
       expr = ''
         ${perFan "pc_power_fan_constant_watts"}
         or ${perFan "pc_power_fan_max_watts"}
-        * clamp_max(pc:fan_rpm_modelled / ${perFan "pc_power_fan_max_rpm"}, 1)
+        * clamp(pc:fan_rpm_modelled / ${perFan "pc_power_fan_max_rpm"}, 0, 1)
         ^ ${perFan "pc_power_fan_exponent"}'';
     }
     {
@@ -137,59 +150,97 @@ let
     }
     {
       record = "pc:power_dc_component_watts";
-      expr = lib.concatStringsSep "\n or " [
-        (component "CPU" "pc:cpu_power_watts")
-        (component "GPU" "pc:gpu_power_watts")
-        (component "Platform" "pc:platform_power_watts")
-        (component "SoC rails" "pc:soc_rail_watts")
-        (component "PMIC loss" "pc:pmic_loss_watts")
-        (component "RAM" "pc:ram_power_watts")
-        (component "Display" "pc:backlight_power_watts")
-        (component "Storage" "pc:disk_power_watts")
-        (component "Fans" "pc:fan_power_watts")
-        (component "Board" (coefficient "pc_power_board_watts"))
-        (component "Peripherals" (coefficient "pc_power_peripherals_watts"))
-      ];
+      expr =
+        "(("
+        + lib.concatStringsSep "\n or " [
+          (component "CPU" "pc:cpu_power_watts")
+          (component "GPU" "pc:gpu_power_watts")
+          (component "SoC rails" "pc:soc_rail_watts")
+          (component "PMIC loss" "pc:pmic_loss_watts")
+          (component "RAM" "pc:ram_power_watts")
+          (component "Display" "pc:backlight_power_watts")
+          (component "Storage" "pc:disk_power_watts")
+          (component "Fans" "pc:fan_power_watts")
+          (component "Board" (coefficient "pc_power_board_watts"))
+          (component "Peripherals" (coefficient "pc_power_peripherals_watts"))
+        ]
+        + ") unless on(instance) pc:platform_power_watts)\n or "
+        + component "Platform" "pc:platform_power_watts";
     }
     {
       record = "pc:power_dc_watts";
-      expr = "clamp_min(sum by (instance) (pc:power_dc_component_watts), 0)";
+      expr =
+        "clamp_min(sum by (instance) (pc:power_dc_component_watts), 0)"
+        + " and on(instance) (${freshNode})"
+        + " and on(instance) (pc:cpu_power_watts or pc:platform_power_watts)";
+    }
+    {
+      record = "pc:ac_online";
+      expr = "max by (instance) (node_power_supply_online) or (${coefficient "pc_power_supply_rated_watts"} * 0 + 1)";
+    }
+    {
+      record = "pc:battery_charge_watts";
+      expr = ''sum by (instance) (laptop_battery_power_watts and on(instance, battery) laptop_battery_status_info{status="Charging"}) or (pc:power_dc_watts * 0)'';
+    }
+    {
+      record = "pc:supply_output_watts";
+      expr = "(pc:power_dc_watts + pc:battery_charge_watts / 0.9) * on(instance) pc:ac_online";
     }
     {
       record = "pc:supply_load_ratio";
-      expr = "pc:power_dc_watts / ${coefficient "pc_power_supply_rated_watts"}";
+      expr = "pc:supply_output_watts / ${coefficient "pc_power_supply_rated_watts"}";
     }
     {
       record = "pc:supply_efficiency";
-      expr = ''
-        clamp(
-          ${coefficient "pc_power_supply_peak_efficiency"}
-          * (1 - ${coefficient "pc_power_supply_curvature"}
-                 * (pc:supply_load_ratio
-                    - ${coefficient "pc_power_supply_peak_load_ratio"}) ^ 2),
-          0.5, 0.96)'';
+      expr = supplyEfficiency "pc:supply_load_ratio";
     }
     {
       record = "pc:supply_loss_watts";
-      expr = ''
-        pc:power_dc_watts * (1 / pc:supply_efficiency - 1)
-        + ${coefficient "pc_power_supply_idle_watts"}'';
+      expr = "${supplyLoss "pc:supply_output_watts" "pc:supply_efficiency"} * on(instance) pc:ac_online";
     }
     {
       record = "pc:power_component_watts";
-      expr = "pc:power_dc_component_watts or ${component "Supply loss" "pc:supply_loss_watts"}";
+      expr =
+        "(pc:power_dc_component_watts * on(instance) group_left() pc:ac_online)"
+        + " or ${component "Battery charging" "(pc:battery_charge_watts / 0.9 * on(instance) pc:ac_online)"}"
+        + " or ${component "Supply loss" "pc:supply_loss_watts"}";
     }
     {
-      record = "pc:power_watts";
-      expr = "pc:power_dc_watts + pc:supply_loss_watts";
+      record = "pc:power_model_watts";
+      expr = "(pc:supply_output_watts + pc:supply_loss_watts) and on(instance) (${freshNode})";
     }
     {
       record = "pc:power_meter_watts";
-      expr = coefficient "pc_power_meter_watts";
+      expr = "max by (instance) (clamp_min(pc_power_meter_watts, 0) and (timestamp(pc_power_meter_watts) > time() - 15))";
+    }
+    {
+      record = "pc:power_watts";
+      expr =
+        "(pc:power_meter_watts and on(instance) (max by (instance) (timestamp(pc_power_meter_watts)) > time() - 15))"
+        + " or (pc:power_model_watts and on(instance) (${freshNode}))";
     }
     {
       record = "pc:power_model_error_watts";
-      expr = "pc:power_meter_watts - pc:power_watts";
+      expr = "pc:power_meter_watts - pc:power_model_watts";
+    }
+    {
+      record = "pc:usage_dc_watts";
+      expr = "pc:power_dc_watts * (pc:ac_online + (1 - pc:ac_online) / 0.9)";
+    }
+    {
+      record = "pc:usage_supply_efficiency";
+      expr = supplyEfficiency "pc:usage_dc_watts / ${coefficient "pc_power_supply_rated_watts"}";
+    }
+    {
+      record = "pc:usage_power_watts";
+      expr = ''
+        ((pc:power_watts unless on(instance) node_power_supply_online)
+        or ((pc:power_watts * pc:power_dc_watts / (pc:supply_output_watts > 0))
+          and on(instance) (pc:ac_online == 1))
+        or ((pc:usage_dc_watts + ${supplyLoss "pc:usage_dc_watts" "pc:usage_supply_efficiency"})
+          and on(instance) (${freshNode})))
+        and on(instance) ((${freshNode})
+          or (max by (instance) (timestamp(pc_power_meter_watts)) > time() - 15))'';
     }
     {
       record = "pc:tariff_gbp_per_kwh";
@@ -913,6 +964,23 @@ in
       name = "downsample";
       interval = "1m";
       rules = minuteRollup;
+    }
+  ];
+
+  energy = [
+    {
+      name = "energy";
+      interval = "1m";
+      rules = [
+        {
+          record = "pc:energy_joules:1m";
+          expr = "sum by (instance) (sum_over_time(pc:usage_power_watts[1m]))";
+        }
+        {
+          record = "pc:energy_observed_seconds:1m";
+          expr = "max by (instance) (count_over_time(pc:usage_power_watts[1m]))";
+        }
+      ];
     }
   ];
 

@@ -165,6 +165,39 @@ let
     '';
   };
 
+  activateDetached = pkgs.writeShellApplication {
+    name = "activate-detached";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.systemd
+    ];
+    text = ''
+      user="''${1:?deploy-rs passes the activation user as the first argument}"
+      shift
+
+      unit="deploy-activate-$$-$(date +%s)"
+
+      journalctl --unit "$unit" --follow --output cat --no-pager --since "-1 min" &
+      follower=$!
+      trap 'kill "$follower" 2>/dev/null || true' EXIT
+
+      # A transient unit outlives the ssh session it was started from, so a
+      # tailscaled restart mid-switch can no longer kill activate-rs and leave
+      # the host stranded between generations with no magic rollback left.
+      status=0
+      systemd-run \
+        --quiet --wait --collect \
+        --property=CollectMode=inactive-or-failed \
+        --unit="$unit" \
+        --uid="$user" \
+        --setenv=PATH="$PATH" \
+        -- "$@" || status=$?
+
+      sleep 1
+      exit "$status"
+    '';
+  };
+
 in
 
 {
@@ -221,6 +254,7 @@ in
 
     services.journald.extraConfig = ''
       Storage=persistent
+      SystemMaxUse=1G
     '';
 
     nix.settings.connect-timeout = 5;
@@ -362,6 +396,7 @@ in
 
     environment.systemPackages = [
       rebuild
+      activateDetached
       editSecrets
       projectClosureRetention
       pkgs.nix-sweep

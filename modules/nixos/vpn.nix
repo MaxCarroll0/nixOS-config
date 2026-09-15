@@ -84,6 +84,20 @@ let
     nameserver ${cfg.bypassResolver}
   '';
 
+  disableTable = "vpn-disabled";
+
+  # Marking what the tunnel would have carried reuses the split tunnel the kill
+  # switch already accepts, so disabling reloads no table but this one.
+  disableRules = pkgs.writeText "${disableTable}.nft" ''
+    table inet ${disableTable} {
+      chain output {
+        type route hook output priority mangle - 1; policy accept;
+
+        oifname "${cfg.interface}" counter meta mark set 0xca6c
+      }
+    }
+  '';
+
   vpnSwitch = pkgs.writeShellApplication {
     name = "vpn-switch";
     runtimeInputs = with pkgs; [
@@ -93,6 +107,7 @@ let
       coreutils
       gawk
       iputils
+      nftables
     ];
     text = /* bash */ ''
       usage() {
@@ -108,11 +123,16 @@ let
           '  vpn-switch --p2p|--no-p2p     require or ignore P2P support' \
           '  vpn-switch --list             show candidate servers and exit' \
           '  vpn-switch --status           show the current peer and handshake' \
+          '  vpn-switch --disable          route all traffic around the tunnel' \
+          '  vpn-switch --enable           restore tunnel routing' \
           '  vpn-switch --bootstrap FILE   write a config for wg-quick, do not apply' \
           '  vpn-switch --help             this text' \
           "" \
           'The peer is swapped on the running interface, so no unit is restarted.' \
-          'On failure the previous peer is restored.'
+          'On failure the previous peer is restored.' \
+          "" \
+          '--disable sends traffic out the physical link in the clear, with no' \
+          'kill switch in front of it. It lasts until --enable or the next reboot.'
       }
 
       case "''${1:-}" in
@@ -135,6 +155,8 @@ let
       status=0
       bootstrap=""
       list=0
+      disable=0
+      enable=0
       secure=${lib.boolToString selection.secureCore}
       p2p=${lib.boolToString selection.p2p}
 
@@ -145,6 +167,8 @@ let
           --bootstrap) bootstrap="$2"; shift 2 ;;
           --status) status=1; shift ;;
           --list) list=1; shift ;;
+          --disable) disable=1; shift ;;
+          --enable) enable=1; shift ;;
           --secure-core) secure=true; shift ;;
           --no-secure-core) secure=false; shift ;;
           --p2p) p2p=true; shift ;;
@@ -156,6 +180,35 @@ let
       selectFlags=(-no-session "-p2p-only=$p2p")
       if [ "$secure" = true ]; then
         selectFlags+=(-secure-core)
+      fi
+
+      vpnDisabled() {
+        nft list table inet ${disableTable} >/dev/null 2>&1
+      }
+
+      if [ "$disable" -eq 1 ] && [ "$enable" -eq 1 ]; then
+        echo "--disable and --enable are mutually exclusive" >&2
+        exit 2
+      fi
+
+      if [ "$disable" -eq 1 ]; then
+        if vpnDisabled; then
+          echo "vpn already disabled"
+          exit 0
+        fi
+        nft -f ${disableRules}
+        echo "vpn disabled: traffic leaves in the clear until --enable or reboot" >&2
+        exit 0
+      fi
+
+      if [ "$enable" -eq 1 ]; then
+        if vpnDisabled; then
+          nft delete table inet ${disableTable}
+          echo "vpn enabled"
+        else
+          echo "vpn already enabled"
+        fi
+        exit 0
       fi
 
       iface=""
@@ -174,6 +227,11 @@ let
       fi
 
       if [ "$status" -eq 1 ]; then
+        if vpnDisabled; then
+          echo "vpn: DISABLED, traffic is bypassing $iface"
+        else
+          echo "vpn: enabled"
+        fi
         wg show "$iface"
         exit 0
       fi
@@ -295,7 +353,7 @@ let
           return
           ;;
       esac
-      COMPREPLY=($(compgen -W "--country --server --list --status --secure-core --no-secure-core --p2p --no-p2p --bootstrap --help" -- "$cur"))
+      COMPREPLY=($(compgen -W "--country --server --list --status --disable --enable --secure-core --no-secure-core --p2p --no-p2p --bootstrap --help" -- "$cur"))
     }
     complete -F _vpn_switch vpn-switch
   '';

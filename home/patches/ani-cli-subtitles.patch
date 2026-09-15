@@ -1,0 +1,69 @@
+--- a/ani-cli	2026-09-05 18:01:29.118601301 +0100
++++ b/ani-cli	2026-09-05 18:01:55.200534710 +0100
+@@ -180,7 +180,10 @@
+         _char=$((_byte ^ _key))
+         _output="${_output}\\$((_char / 64))$(((_char / 8) % 8))$((_char % 8))"
+     done
+-    printf "%b" "$_output" | sed -n 's|.*"src":"\([^"]*\.m3u8[^"]*\)".*|\1|p'
++    _json="$(printf "%b" "$_output")"
++    printf "%s" "$_json" | sed -n 's|.*"src":"\([^"]*\.m3u8[^"]*\)".*|\1|p'
++    printf "\n"
++    printf "SUBTITLE:%s" "$(printf "%s" "$_json" | sed -n 's|.*"default":true,"src":"\([^"]*\.vtt[^"]*\)".*|\1|p' | head -n 1)"
+ )
+ 
+ # search the query and give results. format is (id \t name)
+@@ -245,7 +248,9 @@
+     [ -z "$_blob" ] && return 1
+ 
+     # 5. Deobfuscate
+-    _m3u8_master="$(deobfuscate_blob "$_blob")"
++    _deob="$(deobfuscate_blob "$_blob")"
++    _m3u8_master="$(printf '%s\n' "$_deob" | sed -n '1p')"
++    _sub_track_url="$(printf '%s\n' "$_deob" | sed -n 's|^SUBTITLE:||p')"
+     [ -z "$_m3u8_master" ] && return 1
+ 
+     # 6. Fetch the master playlist and expand quality variants.
+@@ -265,6 +270,7 @@
+     else
+         printf "default >%s\n" "$_m3u8_master"
+     fi
++    [ -n "$_sub_track_url" ] && printf "SUBTITLE:%s\n" "$_sub_track_url"
+ }
+ 
+ # select the quality according to the setting
+@@ -281,7 +287,9 @@
+ 
+ # gets embed url, collects direct links and selects one with desired quality into $episode
+ get_video_link() {
+-    links=$(hianime_m3u8 "$ep_no" "$mode" | sort -g -r -s)
++    _raw_links="$(hianime_m3u8 "$ep_no" "$mode")"
++    sub_track_url="$(printf '%s\n' "$_raw_links" | sed -n 's|^SUBTITLE:||p')"
++    links=$(printf '%s\n' "$_raw_links" | grep -v '^SUBTITLE:' | sort -g -r -s)
+     [ -z "$links" ] && die "No sources found for $mode!"
+     info "hianime.at links fetched"
+     select_quality "$quality"
+@@ -379,6 +387,8 @@
+     [ "$log_episode" = 1 ] && [ "$player_function" != "debug" ] && [ "$player_function" != "download" ] && command -v logger >/dev/null && logger -t ani-cli "${anime_title} ${ep_no}"
+     [ "$skip_intro" = 1 ] && skip_flag="$(ani-skip -i "$mal_id" -e "$canon_ep_no")"
+     [ -z "$video_link" ] && get_video_link
++    sub_flag=""
++    [ -n "$sub_track_url" ] && sub_flag="--sub-file=$sub_track_url"
+     # wait for the previous player to close (in range selection)
+     wait
+     # shellcheck disable=SC2086
+@@ -386,12 +396,12 @@
+         debug) printf "All links:\n%s\nSelected link:\n%s\n" "$links" "$video_link" ;;
+         android_mpv) nohup am start --user 0 -a android.intent.action.VIEW -d "$video_link" -n is.xyz.mpv/.MPVActivity -e "title" "${anime_title} Episode ${ep_no}" $player_extra_flags >/dev/null 2>&1 & ;;
+         android_vlc) nohup am start --user 0 -a android.intent.action.VIEW -d "$video_link" -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -e "title" "${anime_title} Episode ${ep_no}" $player_extra_flags >/dev/null 2>&1 & ;;
+-        *flatpak*mpv*) flatpak run io.mpv.Mpv --http-header-fields="Referer: https://zokoanime.video/" $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link" >/dev/null 2>&1 & ;;
++        *flatpak*mpv*) flatpak run io.mpv.Mpv --http-header-fields="Referer: https://zokoanime.video/" $skip_flag $sub_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link" >/dev/null 2>&1 & ;;
+         *mpv*)
+             if [ "$no_detach" = 0 ]; then
+-                nohup $player_function --http-header-fields="Referer: https://zokoanime.video/" $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link" >/dev/null 2>&1 &
++                nohup $player_function --http-header-fields="Referer: https://zokoanime.video/" $skip_flag $sub_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link" >/dev/null 2>&1 &
+             else
+-                $player_function --http-header-fields="Referer: https://zokoanime.video/" $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link"
++                $player_function --http-header-fields="Referer: https://zokoanime.video/" $skip_flag $sub_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link"
+                 mpv_exitcode=$?
+                 [ "$exit_after_play" = 1 ] && [ -z "$_range" ] && exit "$mpv_exitcode"
+             fi

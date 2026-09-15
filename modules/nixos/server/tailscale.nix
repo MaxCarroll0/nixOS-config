@@ -70,6 +70,11 @@ in
         # Use native nftables backend.
         systemd.services.tailscaled.environment.TS_DEBUG_FIREWALL_MODE = "nftables";
 
+        # Tailnet SSH sessions live inside tailscaled, so restarting it during a
+        # switch kills the deploy that asked for the restart. The new daemon
+        # takes over at the next reboot instead.
+        systemd.services.tailscaled.restartIfChanged = false;
+
       }
 
       (lib.mkIf (cfg.authKeySecret != null) {

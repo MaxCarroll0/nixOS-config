@@ -30,7 +30,11 @@ let
         }
     // lib.optionalAttrs (maxDataPoints != null) { inherit maxDataPoints; }
     // lib.optionalAttrs (refId != null) { inherit refId; }
-    // lib.optionalAttrs (datasource != null) { inherit datasource; };
+    // lib.optionalAttrs (datasource != null) { inherit datasource; }
+    // lib.optionalAttrs (lib.hasInfix "pc:energy_" expr) {
+      datasource = archiveDatasource;
+      interval = if interval == null || interval == "$smooth" then "1m" else interval;
+    };
 
   withRefIds = lib.imap0 (
     i: t: if t ? refId then t else t // { refId = lib.elemAt lib.strings.upperChars i; }
@@ -87,7 +91,15 @@ let
     // lib.optionalAttrs (repeatDirection != null) { inherit repeatDirection; }
     // lib.optionalAttrs (maxPerRow != null) { inherit maxPerRow; }
     // lib.optionalAttrs (datasource != null) { inherit datasource; }
-    // lib.optionalAttrs (description != null) { inherit description; };
+    // lib.optionalAttrs (description != null) { inherit description; }
+    // lib.optionalAttrs (lib.any (t: lib.hasInfix "pc:energy_" t.expr) targets) {
+      description =
+        (if description == null then "" else description + " ")
+        + "Electricity attributed to recorded device use, stored in non-overlapping minute totals. "
+        + "Uses a wall meter when available, otherwise the power model. Battery use includes estimated replenishment losses; charging is not billed again. "
+        + "Unobserved time (including unmetered sleep and shutdown) is excluded, not estimated. "
+        + "Totals may lag by up to two minutes; cost uses the selected tariff.";
+    };
 
   lineCustom = {
     lineWidth = 2;
@@ -180,6 +192,7 @@ let
     "Board"
     "Peripherals"
     "Supply loss"
+    "Battery charging"
     "nvme0n1"
     "sda"
     "sdb"
@@ -226,14 +239,27 @@ let
   gatedSmooth = expression: "(${expression}) and on(instance) (${liveHost "host:up"})";
 
   energyKwh =
-    range: seconds:
-    "sum by (instance) (sum_over_time(pc:power_watts{instance=~\"$host\"}[${range}]))"
-    + " / on(instance) max by (instance) (count_over_time(host:up{instance=~\"$host\"}[${range}]))"
-    + " * ${seconds} / 3.6e6";
+    range:
+    "sum by (instance) (sum_over_time(pc:energy_joules:1m{instance=~\"$host\"}[${range}])) / 3.6e6";
 
-  costGbp = range: seconds: "(${energyKwh range seconds}) * ($tariff / 100)";
-  totalEnergyKwh = range: seconds: "sum(${energyKwh range seconds})";
-  totalCostGbp = range: seconds: "sum(${costGbp range seconds})";
+  costGbp = range: "(${energyKwh range}) * ($tariff / 100)";
+  totalEnergyKwh = range: "sum(${energyKwh range})";
+  totalCostGbp = range: "sum(${costGbp range})";
+
+  energyCoverage = stat {
+    title = "Recorded energy coverage";
+    w = 12;
+    h = 5;
+    unit = "percentunit";
+    decimals = 1;
+    targets = [
+      (target {
+        expr = ''sum by (instance) (sum_over_time(pc:energy_observed_seconds:1m{instance=~"$host"}[$__range])) / $__range_s'';
+        legend = "{{instance}}";
+        instant = true;
+      })
+    ];
+  };
 
   smoothLiveTarget =
     seriesTarget:
@@ -1567,7 +1593,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = energyKwh "24h" "86400";
+            expr = energyKwh "24h";
             legend = "{{instance}}";
             instant = true;
           })
@@ -1585,7 +1611,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = energyKwh "7d" "604800";
+            expr = energyKwh "7d";
             legend = "{{instance}}";
             instant = true;
           })
@@ -1603,7 +1629,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = costGbp "24h" "86400";
+            expr = costGbp "24h";
             legend = "{{instance}}";
             instant = true;
           })
@@ -1621,7 +1647,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = costGbp "7d" "604800";
+            expr = costGbp "7d";
             legend = "{{instance}}";
             instant = true;
           })
@@ -1639,7 +1665,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = totalEnergyKwh "24h" "86400";
+            expr = totalEnergyKwh "24h";
             instant = true;
           })
         ];
@@ -1656,7 +1682,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = totalEnergyKwh "7d" "604800";
+            expr = totalEnergyKwh "7d";
             instant = true;
           })
         ];
@@ -1673,7 +1699,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = totalCostGbp "24h" "86400";
+            expr = totalCostGbp "24h";
             instant = true;
           })
         ];
@@ -1690,7 +1716,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = totalCostGbp "7d" "604800";
+            expr = totalCostGbp "7d";
             instant = true;
           })
         ];
@@ -2154,7 +2180,7 @@ let
     ];
     panels = livePanels [
       (stat {
-        title = "Total draw";
+        title = "Mains draw";
         w = 6;
         h = 5;
         unit = "watt";
@@ -2206,8 +2232,8 @@ let
         ];
       })
       (ts {
-        title = "Total device power, broken down";
-        description = "Every component of the model, stacked, so the bands add up to wall draw. Measured where the hardware reports watts and modelled from datasheet coefficients elsewhere. The unstacked line is the recorded total and should sit on top of the stack.";
+        title = "Modelled mains power, broken down";
+        description = "Non-overlapping components of the mains-power model, including charging and conversion losses. The unstacked line is their combined total; a wall-meter reading can differ from this estimate.";
         w = 24;
         h = 9;
         unit = "watt";
@@ -2246,7 +2272,7 @@ let
         gradientSeries = powerBands;
         targets = powerBandTargets "" "" ++ [
           (target {
-            expr = ''sum(pc:power_watts{instance=~"$host"}) >= 0'';
+            expr = "sum(${boundedAverage "host:up" ''pc:power_model_watts{instance=~"$host"}''})";
             legend = "combined total";
           })
         ];
@@ -2263,7 +2289,7 @@ let
             legend = "{{instance}} meter";
           })
           (target {
-            expr = ''pc:power_watts{instance=~"$host"} >= 0'';
+            expr = ''pc:power_model_watts{instance=~"$host"} >= 0'';
             legend = "{{instance}} model";
           })
           (target {
@@ -2759,6 +2785,22 @@ let
       (dashboardLink "Thermal archive" "archive-thermal")
     ];
     panels = [
+      energyCoverage
+      (stat {
+        title = "Device load (DC)";
+        description = "Power used by the device, including while on battery; excludes battery charging and AC adapter losses.";
+        w = 12;
+        h = 5;
+        unit = "watt";
+        decimals = 1;
+        targets = [
+          (target {
+            expr = ''pc:power_dc_watts{instance=~"$host"}'';
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
       (barGauge {
         title = "Power draw";
         w = 6;
@@ -2786,12 +2828,12 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = energyKwh "24h" "86400";
+            expr = energyKwh "24h";
             legend = "{{instance}} 24h";
             instant = true;
           })
           (target {
-            expr = energyKwh "7d" "604800";
+            expr = energyKwh "7d";
             legend = "{{instance}} 7d";
             instant = true;
           })
@@ -2805,19 +2847,19 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = costGbp "24h" "86400";
+            expr = costGbp "24h";
             legend = "{{instance}} 24h";
             instant = true;
           })
           (target {
-            expr = costGbp "7d" "604800";
+            expr = costGbp "7d";
             legend = "{{instance}} 7d";
             instant = true;
           })
         ];
       })
       (ts {
-        title = "Total PC power";
+        title = "Mains power";
         description = "Solid line is the smoothed mean; dashed lines are the true per-minute maximum and minimum, so peaks survive whatever smoothing window is selected.";
         w = 24;
         h = 9;
@@ -2840,7 +2882,7 @@ let
       })
       (ts {
         title = "Power by component";
-        description = "The same breakdown as the live dashboard over the selected range; the bands add up to wall draw.";
+        description = "Non-overlapping components of the mains-power model; a wall meter can differ from this estimate.";
         w = 24;
         h = 9;
         unit = "watt";
@@ -2870,7 +2912,7 @@ let
         };
         targets = [
           (target {
-            expr = energyKwh "$__interval" "($__interval_ms / 1000)";
+            expr = energyKwh "$__interval";
             legend = "{{instance}}";
             interval = "$smooth";
           })
@@ -2886,12 +2928,12 @@ let
         overrides = [ (rightAxisUnit "Cost" "currencyGBP") ];
         targets = [
           (target {
-            expr = totalEnergyKwh "1d" "86400";
+            expr = totalEnergyKwh "1d";
             legend = "Energy";
             interval = "1d";
           })
           (target {
-            expr = totalCostGbp "1d" "86400";
+            expr = totalCostGbp "1d";
             legend = "Cost";
             interval = "1d";
           })
@@ -2907,12 +2949,12 @@ let
         overrides = [ (rightAxisUnit "Cost" "currencyGBP") ];
         targets = [
           (target {
-            expr = totalEnergyKwh "30d" "2592000";
+            expr = totalEnergyKwh "30d";
             legend = "Energy";
             interval = "30d";
           })
           (target {
-            expr = totalCostGbp "30d" "2592000";
+            expr = totalCostGbp "30d";
             legend = "Cost";
             interval = "30d";
           })
@@ -4438,6 +4480,7 @@ let
       (dashboardLink "Overview" "overview")
     ];
     panels = [
+      energyCoverage
       (bar {
         title = "Power draw";
         w = 24;
@@ -4506,7 +4549,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = energyKwh "24h" "86400";
+            expr = energyKwh "24h";
             legend = "{{instance}}";
             instant = true;
           })
@@ -4520,7 +4563,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = energyKwh "7d" "604800";
+            expr = energyKwh "7d";
             legend = "{{instance}}";
             instant = true;
           })
@@ -4534,7 +4577,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = costGbp "24h" "86400";
+            expr = costGbp "24h";
             legend = "{{instance}}";
             instant = true;
           })
@@ -4548,7 +4591,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = costGbp "7d" "604800";
+            expr = costGbp "7d";
             legend = "{{instance}}";
             instant = true;
           })
@@ -4562,7 +4605,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = energyKwh "$__range" "$__range_s";
+            expr = energyKwh "$__range";
             legend = "{{instance}}";
             instant = true;
           })
@@ -4576,7 +4619,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            expr = costGbp "$__range" "$__range_s";
+            expr = costGbp "$__range";
             legend = "{{instance}}";
             instant = true;
           })
@@ -4598,7 +4641,7 @@ let
       })
       (ts {
         title = "Energy use over time";
-        description = "Energy use per smoothing interval, stacked by host.";
+        description = "Electricity attributed to device use per interval, stacked by host; missing telemetry is not extrapolated.";
         w = 24;
         h = 9;
         unit = "kwatth";
@@ -4613,7 +4656,7 @@ let
         };
         targets = [
           (target {
-            expr = energyKwh "$__interval" "($__interval_ms / 1000)";
+            expr = energyKwh "$__interval";
             legend = "{{instance}}";
             interval = "$smooth";
           })
@@ -4631,7 +4674,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = costGbp "1d" "86400";
+            expr = costGbp "1d";
             legend = "{{instance}}";
             interval = "1d";
           })
@@ -4649,7 +4692,7 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = energyKwh "30d" "2592000";
+            expr = energyKwh "30d";
             legend = "{{instance}}";
             interval = "30d";
           })

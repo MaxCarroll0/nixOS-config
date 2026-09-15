@@ -268,10 +268,14 @@ let
           printf 'pc_power_disk_watts{device="%s",state="active"} %s\n' "$device" "$active"
           printf 'pc_power_disk_watts{device="%s",state="spinup"} %s\n' "$device" "$spinup"
 
-          case $(drive_power_state "$device") in
-            active) printf 'pc_disk_standby{device="%s"} 0\n' "$device" ;;
-            standby) printf 'pc_disk_standby{device="%s"} 1\n' "$device" ;;
-          esac
+          if [ "$rotational" != 1 ]; then
+            printf 'pc_disk_standby{device="%s"} 0\n' "$device"
+          else
+            case $(drive_power_state "$device") in
+              active) printf 'pc_disk_standby{device="%s"} 0\n' "$device" ;;
+              standby) printf 'pc_disk_standby{device="%s"} 1\n' "$device" ;;
+            esac
+          fi
         done
       '';
 
