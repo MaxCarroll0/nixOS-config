@@ -59,7 +59,7 @@ in
 
   local.fancontrol = {
     enable = true;
-    configFile = ./fan2go.yaml;
+    configFile = ./fan2go-full.yaml;
   };
 
   environment.systemPackages = [ caseTemp ];
@@ -79,8 +79,12 @@ in
     "zenpower:temp2" = "CPU Tctl";
     "zenpower:temp3" = "CPU CCD1";
     "zenpower:temp4" = "CPU CCD2";
-    "it8792:fan1" = "CPU fan";
-    "it8792:fan2" = "Chassis fan";
+    "it8792:fan1" = "Radiator";
+    "it8792:fan2" = "Pump";
+    "arctic_fan:fan2" = "Intake vertical";
+    "arctic_fan:fan3" = "Extraction";
+    "arctic_fan:fan6" = "Intake horizontal";
+    "arctic_fan:fan7" = "VRM";
     "gigabyte_wmi:temp1" = "System 1";
     "gigabyte_wmi:temp2" = "Chipset";
     "gigabyte_wmi:temp3" = "CPU socket";

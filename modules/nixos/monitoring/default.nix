@@ -77,6 +77,23 @@ let
 
   historyDataDir = "/var/lib/victoriametrics-history";
 
+  energyRepair = pkgs.writeShellApplication {
+    name = "vm-energy-repair";
+    runtimeInputs = [
+      config.services.victoriametrics.package
+      pkgs.coreutils
+    ];
+    text = ''
+      exec vmalert \
+        -rule=${yaml.generate "energy-rules.yml" { groups = rules.energy; }} \
+        -datasource.url=http://127.0.0.1:${toString hiresPort} \
+        -remoteWrite.url=http://127.0.0.1:${toString longtermPort} \
+        -replay.timeFrom="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:00Z)" \
+        -replay.timeTo="$(date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:00Z)" \
+        -replay.rulesDelay=0 -replay.disableProgressBar
+    '';
+  };
+
   rollupCopy = pkgs.writeShellApplication {
     name = "vm-rollup-copy";
     runtimeInputs = [
@@ -541,6 +558,7 @@ in
         extraOptions = [
           "-promscrape.config=${vmScrapeConfig}"
           "-search.maxStalenessInterval=2h"
+          "-dedup.minScrapeInterval=1ms"
         ];
       };
 
@@ -553,6 +571,7 @@ in
             "${config.services.victoriametrics.package}/bin/victoria-metrics"
             "-httpListenAddr=127.0.0.1:${toString longtermPort}"
             "-retentionPeriod=100y"
+            "-dedup.minScrapeInterval=1ms"
             "-storageDataPath=${historyDataDir}"
           ];
           DynamicUser = true;
@@ -572,6 +591,40 @@ in
           "evaluationInterval" = "1s";
         };
         rules.groups = rules.hires ++ rules.hourly;
+      };
+
+      services.vmalert.instances.energy = {
+        enable = true;
+        settings = {
+          "httpListenAddr" = "127.0.0.1:8881";
+          "datasource.url" = "http://127.0.0.1:${toString hiresPort}";
+          "remoteWrite.url" = "http://127.0.0.1:${toString longtermPort}";
+          "remoteRead.url" = "http://127.0.0.1:${toString longtermPort}";
+          "notifier.blackhole" = true;
+          "rule.evalDelay" = "1m";
+        };
+        rules.groups = rules.energy;
+      };
+
+      systemd.services.vm-energy-repair = {
+        description = "Repair minute energy totals from retained power samples";
+        after = [
+          "victoriametrics.service"
+          "victoriametrics-history.service"
+        ];
+        serviceConfig = {
+          Type = "oneshot";
+          DynamicUser = true;
+          ExecStart = lib.getExe energyRepair;
+        };
+      };
+
+      systemd.timers.vm-energy-repair = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnActiveSec = "3m";
+          OnUnitActiveSec = "1h";
+        };
       };
 
       systemd.services.vm-rollup-copy = {

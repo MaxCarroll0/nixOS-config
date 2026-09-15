@@ -4,6 +4,8 @@
   config,
   lib,
   pkgs,
+  pkgs-unstable,
+  claude-code,
   ...
 }:
 
@@ -21,6 +23,13 @@ in
     home.sessionVariables.EDITOR = "emacs";
 
     home.packages = [
+      (pkgs.aspellWithDicts (d: [
+        d.en
+        d.en-computers
+        d.en-science
+      ]))
+      (pkgs-unstable.claude-agent-acp.override { inherit claude-code; })
+      pkgs-unstable.codex-acp
       (pkgs.writeShellScriptBin "agda-desktop" ''
         remote_command='/home/max/.nix-profile/bin/direnv exec /home/max/part-iii/hazel-type-slicing-formalism agda'
         printf -v remote_args ' %q' "$@"
@@ -31,6 +40,10 @@ in
         exec /home/max/.nix-profile/bin/emacs
       '')
     ];
+
+    # config.org documents the daemon as systemd-managed and restarts it with
+    # `systemctl --user restart emacs.service`, which needs this unit to exist.
+    services.emacs.enable = true;
 
     programs.emacs = {
       enable = true;
@@ -151,6 +164,7 @@ in
               eat
               embrace
               codeium
+              agent-shell
               gptel
               llm-tool-collection
               ellama

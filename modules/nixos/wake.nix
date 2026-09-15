@@ -29,6 +29,9 @@ let
       wol
       openssh
       coreutils
+      gnugrep
+      iproute2
+      tailscale
     ];
     text = ''
       host="''${1:?usage: wake-peer <host>}"
@@ -42,18 +45,27 @@ let
       esac
 
       ready() {
-        if [ -n "$lanHost" ]; then
-          ping -c 1 -W 1 "$lanHost" >/dev/null 2>&1
-        else
-          probe "$host" 22
+        if [ -n "$lanHost" ] && ping -c 1 -W 1 "$lanHost" >/dev/null 2>&1; then
+          return 0
         fi
+        if tailscale ping -c 1 --timeout 2s --until-direct=false "$host" >/dev/null 2>&1; then
+          return 0
+        fi
+        probe "$host" 22
+      }
+
+      send_magic() {
+        [ -n "$mac" ] || return 0
+        for target in $bcast $(ip -4 -oneline address show scope global \
+              | grep -oE 'brd [0-9.]+' | cut -d ' ' -f 2 | sort -u) 255.255.255.255; do
+          wol -i "$target" "$mac" >/dev/null 2>&1 || true
+        done
       }
 
       ready && exit 0
 
-      if [ -n "$mac" ]; then
-        if [ -n "$bcast" ]; then wol -i "$bcast" "$mac"; else wol "$mac"; fi
-      fi
+      send_magic
+      resend=$(( $(date +%s) + 20 ))
 
       deadline=$(( $(date +%s) + timeout ))
 
@@ -74,6 +86,10 @@ let
 
       while [ "$(date +%s)" -lt "$deadline" ]; do
         ready && exit 0
+        if [ "$(date +%s)" -ge "$resend" ]; then
+          send_magic
+          resend=$(( $(date +%s) + 20 ))
+        fi
         sleep 0.5
       done
       exit 1
@@ -96,12 +112,13 @@ in
             broadcast = lib.mkOption {
               type = lib.types.nullOr lib.types.str;
               default = null;
+              description = "Optional extra broadcast address; local ones are derived at runtime.";
             };
 
             address = lib.mkOption {
               type = lib.types.nullOr lib.types.str;
               default = null;
-              description = "LAN address, reachable well before the tailnet name is.";
+              description = "Optional LAN address; only needed for the initrd unlock probe.";
             };
             unlockPort = lib.mkOption {
               type = lib.types.port;

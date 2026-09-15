@@ -60,6 +60,17 @@ let
     dontCheckRuntimeDeps = true;
   };
 
+  aniCliHianime = pkgs-unstable.ani-cli.overrideAttrs (old: {
+    version = "5.0-hianime";
+    src = pkgs-unstable.fetchFromGitHub {
+      owner = "Dhairya3391";
+      repo = "ani-cli";
+      rev = "685cb77d422f8e1d6ddd8263dd40e4224d3629c6";
+      hash = "sha256-pxOHyyqCfkJfCj7WXccbT08CQoW6M1ZCbig6X6c/nXs=";
+    };
+    patches = (old.patches or [ ]) ++ [ ./patches/ani-cli-subtitles.patch ];
+  });
+
   arxiv-to-prompt = pkgs.python3Packages.buildPythonPackage {
     pname = "arxiv-to-prompt";
     version = "0.10.0";
@@ -185,12 +196,15 @@ let
   google-meet = pkgs.writeShellScriptBin "google-meet" ''
     exec /run/wrappers/bin/sg novpn -c '${pkgs.chromium}/bin/chromium --ozone-platform=wayland --enable-features=WebRTCPipeWireCapturer --disable-features=Vulkan --no-first-run --app=https://meet.google.com'
   '';
+
 in
 {
   imports = [
     ./base.nix
     ./emacs.nix
+    ./theme.nix
     ./hyprland.nix
+    ./workspaces.nix
   ];
 
   fonts.fontconfig.enable = true;
@@ -230,18 +244,7 @@ in
     ghostscript
     mpv
     yt-dlp
-    (overrides.againstVersion "ani-cli" "4.15.0-unstable-2026-08-01" pkgs-unstable.ani-cli.version (
-      pkgs-unstable.ani-cli.overrideAttrs (old: {
-        version = "4.15.0-unstable-2026-08-01";
-        runtimeInputs = (old.runtimeInputs or [ ]) ++ [ pkgs.botan3 ];
-        src = pkgs.fetchFromGitHub {
-          owner = "pystardust";
-          repo = "ani-cli";
-          rev = "489087b541eb1457393b997fdd3589ffe7a8d6a2";
-          hash = "sha256-nl4c0ASIvoBylnk/F4AxVxQl68de9kWPwnNtiTOLzZc=";
-        };
-      })
-    ))
+    aniCliHianime
     claude-code
     codex-cli
     pkgs-unstable.codecrafters-cli
@@ -365,14 +368,13 @@ in
     }' "$_settings" > "$_settings.tmp" && mv "$_settings.tmp" "$_settings"
   '';
 
-  home.activation.kdeWalkThroughWindows =
-    lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
-      _shortcuts="$HOME/.config/kglobalshortcutsrc"
-      if [ -f "$_shortcuts" ]; then
-        run ${pkgs.gnused}/bin/sed -i \
-          -e 's|^Walk Through Windows=Alt+Tab,|Walk Through Windows=Meta+Tab,|' \
-          -e 's|^Walk Through Windows (Reverse)=Alt+Shift+Tab,|Walk Through Windows (Reverse)=Meta+Shift+Tab,|' \
-          "$_shortcuts"
-      fi
-    '';
+  home.activation.kdeWalkThroughWindows = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
+    _shortcuts="$HOME/.config/kglobalshortcutsrc"
+    if [ -f "$_shortcuts" ]; then
+      run ${pkgs.gnused}/bin/sed -i \
+        -e 's|^Walk Through Windows=Alt+Tab,|Walk Through Windows=Meta+Tab,|' \
+        -e 's|^Walk Through Windows (Reverse)=Alt+Shift+Tab,|Walk Through Windows (Reverse)=Meta+Shift+Tab,|' \
+        "$_shortcuts"
+    fi
+  '';
 }
