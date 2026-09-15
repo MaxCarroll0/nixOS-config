@@ -226,6 +226,7 @@ in
     curd-cf-refresh
     zoom-novpn
     google-meet
+    pkgs.discord
     arxiv-latex-mcp
     paper-search-mcp
     anipyCliPr

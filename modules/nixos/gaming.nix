@@ -49,7 +49,6 @@ in
     environment.systemPackages = [
       steamNovpn
       steamVpn
-      pkgs.mangohud
       pkgs.protonup-qt
     ];
   };
