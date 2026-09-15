@@ -94,6 +94,9 @@ in
     "gigabyte_wmi:temp6" = "VSoC MOS";
   };
 
+  # Focusrite firmware does not survive a USB resume; it dropped off the bus.
+  local.power.idle.usb.neverSuspend = [ "1235:8202" ];
+
   local.power.wakeOnLan = {
     interface = "enp5s0";
     mac = "b4:2e:99:92:d6:18";

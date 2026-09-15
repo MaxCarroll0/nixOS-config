@@ -21,9 +21,10 @@ sensors:
       platform: amdgpu
       index: 1
 
-  - id: case
-    cmd:
-      exec: /run/current-system/sw/bin/case-temp-millicelsius
+  - id: ambient
+    hwmon:
+      platform: gigabyte_wmi
+      index: 1
 
 curves:
   # 32-thread load holds 60C with this fan at its 601 rpm floor, so it stays
@@ -33,9 +34,8 @@ curves:
       sensor: cpu
       steps:
         - 70: 0%
-        - 78: 30%
-        - 85: 60%
-        - 92: 100%
+        - 78: 50%
+        - 86: 100%
 
   # Percentages scale over minPwm..maxPwm, so 0% here is pwm 140: Tdie is flat
   # from 2812 down to 1951 rpm, then rises 8.6C at pwm 100 as the pump cavitates.
@@ -44,39 +44,39 @@ curves:
       sensor: cpu
       steps:
         - 70: 0%
-        - 80: 50%
-        - 90: 100%
+        - 80: 60%
+        - 88: 100%
 
   - id: intake_vertical_curve
     linear:
-      sensor: case
+      sensor: ambient
       steps:
-        - 82: 0%
-        - 88: 35%
-        - 94: 70%
-        - 100: 100%
+        - 32: 0%
+        - 36: 35%
+        - 40: 75%
+        - 44: 100%
 
   - id: intake_horizontal_curve
     linear:
-      sensor: case
+      sensor: ambient
       steps:
-        - 82: 0%
-        - 88: 35%
-        - 94: 70%
-        - 100: 100%
+        - 32: 0%
+        - 36: 35%
+        - 40: 75%
+        - 44: 100%
 
   - id: extract_curve
     linear:
-      sensor: case
+      sensor: ambient
       steps:
-        - 35: 18%
-        - 55: 25%
-        - 70: 40%
-        - 80: 70%
-        - 88: 100%
+        - 32: 0%
+        - 36: 35%
+        - 40: 75%
+        - 44: 100%
 
-  # Airflow barely moves VRM MOS (identical at 380 and 2169 rpm), so this is a
-  # safety ramp rather than a control loop.
+  # Airflow above this fan's ~400 rpm floor barely moves VRM MOS (identical at
+  # 380 and 2169 rpm), but without the fan entirely it reaches 105C.
+
   - id: vrm_curve
     linear:
       sensor: vrm
