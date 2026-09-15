@@ -7,24 +7,20 @@ sensors:
       platform: zenpower
       index: 1
 
-  - id: vrm
-    hwmon:
-      platform: gigabyte_wmi
-      index: 5
-
   - id: case
     cmd:
       exec: /run/current-system/sw/bin/case-temp-millicelsius
 
 curves:
+  # 32-thread load holds 60C with this fan at its 601rpm floor, so it stays there.
   - id: radiator_curve
     linear:
       sensor: cpu
       steps:
-        - 40: 20%
-        - 60: 35%
-        - 70: 60%
-        - 80: 100%
+        - 70: 0%
+        - 78: 30%
+        - 85: 60%
+        - 92: 100%
 
   - id: pump_curve
     linear:
@@ -34,23 +30,25 @@ curves:
         - 60: 60%
         - 80: 100%
 
+  # VRM MOS settles at 82C under sustained all-core load with these fans stopped,
+  # and the CPU holds 107W throughout, so that is not a throttling point.
   - id: intake_vertical_curve
     linear:
       sensor: case
       steps:
-        - 42: 20%
-        - 58: 32%
-        - 70: 58%
-        - 84: 100%
+        - 82: 0%
+        - 88: 35%
+        - 94: 70%
+        - 100: 100%
 
   - id: intake_horizontal_curve
     linear:
       sensor: case
       steps:
-        - 45: 20%
-        - 60: 30%
-        - 72: 55%
-        - 85: 100%
+        - 82: 0%
+        - 88: 35%
+        - 94: 70%
+        - 100: 100%
 
   - id: extract_curve
     linear:
@@ -62,15 +60,6 @@ curves:
         - 80: 70%
         - 88: 100%
 
-  - id: vrm_curve
-    linear:
-      sensor: vrm
-      steps:
-        - 45: 20%
-        - 60: 40%
-        - 75: 70%
-        - 85: 100%
-
 fans:
   - id: radiator
     hwmon:
@@ -78,14 +67,14 @@ fans:
       rpmChannel: 1
       pwmChannel: 1
     curve: radiator_curve
-    neverStop: true
+    neverStop: false
     controlAlgorithm:
       direct:
-        maxPwmChangePerCycle: 5
+        maxPwmChangePerCycle: 2
     controlMode:
       onExit: restore
-    minPwm: 40
-    startPwm: 60
+    minPwm: 0
+    startPwm: 40
     maxPwm: 255
 
   - id: pump
@@ -115,7 +104,7 @@ fans:
       direct:
         maxPwmChangePerCycle: 5
     minPwm: 0
-    startPwm: 45
+    startPwm: 20
     maxPwm: 255
 
   - id: intake_horizontal
@@ -129,26 +118,12 @@ fans:
       direct:
         maxPwmChangePerCycle: 5
     minPwm: 0
-    startPwm: 45
-    maxPwm: 255
-
-  - id: vrm_fan
-    hwmon:
-      platform: arctic_fan
-      rpmChannel: 7
-      pwmChannel: 7
-    curve: vrm_curve
-    neverStop: false
-    controlAlgorithm:
-      direct:
-        maxPwmChangePerCycle: 8
-    minPwm: 0
-    startPwm: 45
+    startPwm: 20
     maxPwm: 255
 
   # The fan fitted here is 3-pin, and the ARCTIC hub is PWM-only (its driver
   # exposes no pwm_mode), so this curve has no effect until a 4-pin fan is
-  # fitted; the fan runs at a constant ~1330 rpm.
+  # fitted; the fan runs at a constant ~1300 rpm.
   - id: extract
     hwmon:
       platform: arctic_fan
