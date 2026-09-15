@@ -194,6 +194,12 @@ let
       [ -w "$device/power/control" ] || continue
       [ "$(cat "$device/bDeviceClass" 2>/dev/null || true)" = "09" ] && continue
       [ -d "$device/net" ] && continue
+      ${lib.optionalString (cfg.idle.usb.neverSuspend != [ ]) ''
+        id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
+        case "$id" in
+          ${lib.concatStringsSep "|" cfg.idle.usb.neverSuspend}) continue ;;
+        esac
+      ''}
       echo "$device"
     done
     exit 0
@@ -537,8 +543,15 @@ in
       type = lib.types.int;
       # An idle host already sits near 0.5 MB/s on telemetry and scrapes alone,
       # while a real download runs 13 MB/s and up.
-      default = 2000000;
+      default = 1000000;
       description = "Bytes per second, each direction, above which traffic counts as work.";
+    };
+
+    idle.usb.neverSuspend = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "1235:8202" ];
+      description = "USB vendor:product ids that must keep runtime power management off.";
     };
 
     keepAwakePackage = lib.mkOption {
@@ -683,6 +696,13 @@ in
             if [ "$id" = 1d6b:0002 ] || [ "$id" = 1d6b:0003 ]; then
               echo enabled > "$device/power/wakeup"
             fi
+            ${lib.optionalString (cfg.idle.usb.neverSuspend != [ ]) ''
+              case "$id" in
+                ${lib.concatStringsSep "|" cfg.idle.usb.neverSuspend})
+                  echo on > "$device/power/control"
+                  ;;
+              esac
+            ''}
           done
         '';
       };
