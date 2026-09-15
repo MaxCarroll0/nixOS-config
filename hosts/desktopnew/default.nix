@@ -117,10 +117,6 @@ in
 
   networking.hostName = "desktopnew";
 
-  # Headless: no connector is plugged in, so amdgpu exposes no CRTC and any GL or
-  # Vulkan client fails to create a surface. Force one on.
-  boot.kernelParams = [ "video=HDMI-A-1:1920x1080@60e" ];
-
   fileSystems."/boot".options = [
     "nofail"
     "x-systemd.automount"
@@ -131,6 +127,8 @@ in
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max-desktopnew.pub ];
 
   local.server.ssh.lanInterfaces = [ "enp5s0" ];
+
+  local.gaming.enable = true;
 
   local.fancontrol = {
     enable = true;
