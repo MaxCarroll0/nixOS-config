@@ -535,7 +535,9 @@ in
 
     idle.autosuspend.bandwidthThreshold = lib.mkOption {
       type = lib.types.int;
-      default = 1000000;
+      # An idle host already sits near 0.5 MB/s on telemetry and scrapes alone,
+      # while a real download runs 13 MB/s and up.
+      default = 2000000;
       description = "Bytes per second, each direction, above which traffic counts as work.";
     };
 
