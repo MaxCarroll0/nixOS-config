@@ -26,8 +26,8 @@ curves:
     linear:
       sensor: cpu
       steps:
-        - 70: 55%
-        - 80: 75%
+        - 70: 0%
+        - 80: 50%
         - 90: 100%
 
   # VRM MOS settles at 82C under sustained all-core load with these fans stopped,
