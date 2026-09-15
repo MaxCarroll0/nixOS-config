@@ -55,6 +55,10 @@ in
     "x-systemd.automount"
   ];
 
+  # This host's own key, so sudo-grant's agent can satisfy pam_ssh_agent_auth;
+  # keys/max.pub is a different key and lives on no host's disk here.
+  users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max-desktopnew.pub ];
+
   local.server.ssh.lanInterfaces = [ "enp5s0" ];
 
   local.fancontrol = {
