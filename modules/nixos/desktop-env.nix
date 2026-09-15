@@ -176,18 +176,6 @@ in
   security.pam.services.login.kwallet.enable = lib.mkForce false;
   security.pam.services.kde.kwallet.enable = lib.mkForce false;
 
-  # Session management lives in the browser; Tab Session Manager is installed
-  # removably (normal_installed) so it can be swapped out if it disappoints.
-  programs.chromium = {
-    enable = true;
-    extraOpts.ExtensionSettings = {
-      "iaiomicjabeggjcfkbimgmglanimpnae" = {
-        installation_mode = "normal_installed";
-        update_url = "https://clients2.google.com/service/update2/crx";
-      };
-    };
-  };
-
   services.xserver.xkb.layout = "gb";
   services.xserver.xkb.options = "caps:escape";
   hardware.keyboard.qmk.enable = true;
