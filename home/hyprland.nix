@@ -285,6 +285,7 @@ in
     ./wm-keys.nix
     ./wm-bridge.nix
     ./quickshell.nix
+    ./wm-idle.nix
   ];
 
   config = {
