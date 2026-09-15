@@ -84,10 +84,16 @@ in
           path = "${acfg.dataDir}/store";
         };
         chunking = {
-          nar-size-threshold = 65536;
+          # The Pi serves one SSD on a trusted gigabit LAN. Whole NARs avoid
+          # FastCDC CPU work while retaining Attic's whole-NAR deduplication.
+          nar-size-threshold = 0;
           min-size = 16384;
           avg-size = 65536;
           max-size = 262144;
+        };
+        compression = {
+          type = "zstd";
+          level = 1;
         };
         garbage-collection = {
           interval = "12 hours";
