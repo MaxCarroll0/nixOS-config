@@ -421,16 +421,16 @@ in
       # after the network stack is gone but before power is cut.
       systemd.services.wake-on-lan-shutdown = {
         description = "Re-arm Wake-on-LAN across shutdown";
-        wantedBy = [ "shutdown.target" ];
-        before = [ "shutdown.target" ];
+        wantedBy = [ "final.target" ];
+        after = [ "final.target" ];
         unitConfig.DefaultDependencies = false;
         serviceConfig = {
           Type = "oneshot";
-          RemainAfterExit = true;
-          ExecStart = "${pkgs.coreutils}/bin/true";
-          ExecStop = "${pkgs.ethtool}/bin/ethtool -s ${cfg.wakeOnLan.interface} wol g";
+          ExecStart = "${pkgs.ethtool}/bin/ethtool -s ${cfg.wakeOnLan.interface} wol g";
         };
       };
+
+      powerManagement.powerDownCommands = "${pkgs.ethtool}/bin/ethtool -s ${cfg.wakeOnLan.interface} wol g";
     })
 
     (lib.mkIf cfg.idle.optimise {
