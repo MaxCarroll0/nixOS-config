@@ -1,7 +1,7 @@
 remote="${BROWSER_SYNC_REMOTE:-pi}"
 remoteRoot="${BROWSER_SYNC_ROOT:-/srv/browser-sync}"
 profile="${BROWSER_SYNC_PROFILE:-$HOME/.config/chromium/Default}"
-sessionDir="${BROWSER_SYNC_SESSIONS:-$HOME/Downloads/TabSessionManager}"
+sessionDir="${BROWSER_SYNC_SESSIONS:-$HOME/Downloads/TabSessionManager - Backup}"
 inbox="${BROWSER_SYNC_INBOX:-$HOME/.local/share/browser-sync}"
 identity="${BROWSER_SYNC_IDENTITY:-$HOME/.ssh/id_ed25519}"
 transport="${BROWSER_SYNC_SSH:-tailscale ssh}"
