@@ -193,8 +193,12 @@ let
     fi
   '';
 
+  # Chromium picks the kwallet backend under Plasma and then blocks every page
+  # load on a wallet this host can never unlock: autologin gives PAM no password.
+  chromium = pkgs.chromium.override { commandLineArgs = "--password-store=basic"; };
+
   google-meet = pkgs.writeShellScriptBin "google-meet" ''
-    exec /run/wrappers/bin/sg novpn -c '${pkgs.chromium}/bin/chromium --ozone-platform=wayland --enable-features=WebRTCPipeWireCapturer --disable-features=Vulkan --no-first-run --app=https://meet.google.com'
+    exec /run/wrappers/bin/sg novpn -c '${chromium}/bin/chromium --ozone-platform=wayland --enable-features=WebRTCPipeWireCapturer --disable-features=Vulkan --no-first-run --app=https://meet.google.com'
   '';
 
 in
@@ -210,6 +214,7 @@ in
   fonts.fontconfig.enable = true;
 
   home.packages = [
+    chromium
     curdWrapped
     curd-cf-refresh
     zoom-novpn
@@ -294,6 +299,16 @@ in
     associations.added."x-scheme-handler/claude-cli" = "claude-code-url-handler.desktop";
   };
   xdg.configFile."mimeapps.list".force = true;
+
+  # Nothing can unlock the wallet on an autologin host, so kwalletd only ever
+  # prompts; disabled, it fails the request instead.
+  xdg.configFile."kwalletrc" = {
+    force = true;
+    text = ''
+      [Wallet]
+      Enabled=false
+    '';
+  };
 
   xdg.desktopEntries.google-meet = {
     name = "Google Meet";
