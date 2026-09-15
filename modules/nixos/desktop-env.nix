@@ -171,6 +171,11 @@ in
     user = "max";
   };
 
+  # Autologin never hands PAM a password, so kwallet-pam can only fail and leave
+  # kwalletd prompting for the rest of the session.
+  security.pam.services.login.kwallet.enable = lib.mkForce false;
+  security.pam.services.kde.kwallet.enable = lib.mkForce false;
+
   services.xserver.xkb.layout = "gb";
   services.xserver.xkb.options = "caps:escape";
   hardware.keyboard.qmk.enable = true;
