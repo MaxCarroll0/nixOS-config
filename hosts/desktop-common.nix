@@ -6,6 +6,7 @@
   imports = [
     ../modules/nixos/common.nix
     ../modules/nixos/desktop-env.nix
+    ../modules/nixos/gaming.nix
     ../modules/nixos/vpn.nix
     ../modules/nixos/wake.nix
     ../modules/nixos/power.nix
@@ -95,6 +96,8 @@
   };
 
   local.fancontrol.enable = lib.mkDefault false;
+
+  local.gaming.enable = lib.mkDefault false;
 
   systemd.services.schedutil-rate-limit = {
     wantedBy = [ "multi-user.target" ];
