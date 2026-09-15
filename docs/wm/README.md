@@ -162,6 +162,22 @@ It also supplies something Emacs needs: an unambiguous **linear order** over eve
 workspace, which is what makes `windmove-left/right` and `C-x o` semantics well-defined across
 the whole desktop rather than only within a frame.
 
+### Ideas: pivot, interleave and two-dimensional scrolling
+
+These are proposed extensions to the workspace model; interaction details and compositor
+support still need investigation.
+
+- **Pivot:** pivot from the left or right edge, clockwise or anticlockwise, to merge the
+  current workspace with the workspace above or below, according to the chosen edge and
+  rotation. Preserve the relative scroll positions in other workspaces so the operation does
+  not disturb their views. The exact edge/rotation-to-neighbour mapping remains to be defined.
+- **Interleave:** show two scrollable workspaces side by side, keeping each workspace's
+  identity and its own scroll position. This should allow working across both while retaining
+  their grouping when separated again.
+- **Two-dimensional scrolling:** allow scrolling horizontally and vertically while retaining
+  workspace identity. Explore how movement within a workspace and across workspace boundaries
+  should interact, with each workspace remembering its relative viewport position.
+
 ## 5. Invariant: the window manager never blocks on Emacs
 
 The obvious implementation of this project contains a fatal dependency inversion. If `SUPER+h`

@@ -196,6 +196,7 @@ let
   google-meet = pkgs.writeShellScriptBin "google-meet" ''
     exec /run/wrappers/bin/sg novpn -c '${pkgs.chromium}/bin/chromium --ozone-platform=wayland --enable-features=WebRTCPipeWireCapturer --disable-features=Vulkan --no-first-run --app=https://meet.google.com'
   '';
+
 in
 {
   imports = [
@@ -203,6 +204,7 @@ in
     ./emacs.nix
     ./theme.nix
     ./hyprland.nix
+    ./workspaces.nix
   ];
 
   fonts.fontconfig.enable = true;
@@ -366,14 +368,13 @@ in
     }' "$_settings" > "$_settings.tmp" && mv "$_settings.tmp" "$_settings"
   '';
 
-  home.activation.kdeWalkThroughWindows =
-    lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
-      _shortcuts="$HOME/.config/kglobalshortcutsrc"
-      if [ -f "$_shortcuts" ]; then
-        run ${pkgs.gnused}/bin/sed -i \
-          -e 's|^Walk Through Windows=Alt+Tab,|Walk Through Windows=Meta+Tab,|' \
-          -e 's|^Walk Through Windows (Reverse)=Alt+Shift+Tab,|Walk Through Windows (Reverse)=Meta+Shift+Tab,|' \
-          "$_shortcuts"
-      fi
-    '';
+  home.activation.kdeWalkThroughWindows = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
+    _shortcuts="$HOME/.config/kglobalshortcutsrc"
+    if [ -f "$_shortcuts" ]; then
+      run ${pkgs.gnused}/bin/sed -i \
+        -e 's|^Walk Through Windows=Alt+Tab,|Walk Through Windows=Meta+Tab,|' \
+        -e 's|^Walk Through Windows (Reverse)=Alt+Shift+Tab,|Walk Through Windows (Reverse)=Meta+Shift+Tab,|' \
+        "$_shortcuts"
+    fi
+  '';
 }
