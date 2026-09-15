@@ -13,7 +13,8 @@ usage: browser-sync push [--what LIST]
        browser-sync pull --from HOST [--what LIST]
        browser-sync list
 
-LIST is a comma-separated subset of: sessions,passwords,cookies,bookmarks,history,extensions
+LIST is a comma-separated subset of:
+  sessions,passwords,cookies,bookmarks,history,autofill,extensions
 (default: sessions). Everything but sessions needs Chromium closed.
 EOF
   exit 2
@@ -24,7 +25,8 @@ filesFor() {
     passwords) printf '%s\n' "Login Data" "Login Data For Account" ;;
     cookies) printf '%s\n' "Cookies" ;;
     bookmarks) printf '%s\n' "Bookmarks" ;;
-    history) printf '%s\n' "History" ;;
+    history) printf '%s\n' "History" "Shortcuts" "Top Sites" "Favicons" ;;
+    autofill) printf '%s\n' "Web Data" "Account Web Data" ;;
     extensions)
       printf '%s\n' "Extensions" "Local Extension Settings" "Extension State" \
         "Extension Rules" "Extension Scripts" "Secure Preferences"
