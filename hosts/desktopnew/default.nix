@@ -8,8 +8,8 @@
 }:
 
 let
-  # Case airflow tracks whichever of GPU, VRM or chipset is hottest; Tdie peaks
-  # at 53 C under full load and would leave the later fan stages dormant.
+  # VRM MOS is excluded: measured identical at 380 and 2169 rpm, so it is heated
+  # by conduction from CPU package power and airflow cannot move it.
   caseTemp = pkgs.writeShellApplication {
     name = "case-temp-millicelsius";
     runtimeInputs = [ pkgs.coreutils ];
@@ -21,7 +21,7 @@ let
         case "$(cat "$name")" in
           zenpower) inputs=("$chip/temp1_input") ;;
           amdgpu) inputs=("$chip/temp1_input") ;;
-          gigabyte_wmi) inputs=("$chip/temp2_input" "$chip/temp5_input") ;;
+          gigabyte_wmi) inputs=("$chip/temp2_input") ;;
           *) continue ;;
         esac
         for input in "''${inputs[@]}"; do
@@ -39,6 +39,40 @@ let
   # fan2go 0.13.0 never finishes analysing this fan: its RPM-curve measurement
   # waits for a zero reading that a fan with a 379 rpm floor never produces, so
   # the controller loop never starts while it keeps writing PWM. Drive it here.
+
+  # The card's own curve parks the fan at 790 rpm, settles at 89 C under a 119 W
+  # load and throttles to 108 W. fan2go cannot drive it either: like vrm_fan it
+  # never finishes analysis, so it holds pwm without ever applying a curve.
+  gpuFan = pkgs.writeShellApplication {
+    name = "gpu-fan-control";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      for name in /sys/class/hwmon/*/name; do
+        [ "$(cat "$name")" = amdgpu ] && gpu="''${name%/name}"
+      done
+      [ -n "''${gpu:-}" ] || exit 1
+      echo 1 > "$gpu/pwm1_enable"
+
+      while :; do
+        t=$(( $(cat "$gpu/temp1_input") / 1000 ))
+        if [ "$t" -le 50 ]; then
+          pwm=0
+        elif [ "$t" -le 60 ]; then
+          pwm=$(( (t - 50) * 64 / 10 ))
+        elif [ "$t" -le 70 ]; then
+          pwm=$(( 64 + (t - 60) * 51 / 10 ))
+        elif [ "$t" -le 78 ]; then
+          pwm=$(( 115 + (t - 70) * 64 / 8 ))
+        elif [ "$t" -le 85 ]; then
+          pwm=$(( 179 + (t - 78) * 76 / 7 ))
+        else
+          pwm=255
+        fi
+        echo "$pwm" > "$gpu/pwm1"
+        sleep 4
+      done
+    '';
+  };
   vrmFan = pkgs.writeShellApplication {
     name = "vrm-fan-control";
     runtimeInputs = [ pkgs.coreutils ];
@@ -83,10 +117,6 @@ in
 
   networking.hostName = "desktopnew";
 
-  # Headless: no connector is plugged in, so amdgpu exposes no CRTC and any GL or
-  # Vulkan client fails to create a surface. Force one on.
-  boot.kernelParams = [ "video=HDMI-A-1:1920x1080@60e" ];
-
   fileSystems."/boot".options = [
     "nofail"
     "x-systemd.automount"
@@ -98,6 +128,8 @@ in
 
   local.server.ssh.lanInterfaces = [ "enp5s0" ];
 
+  local.gaming.enable = true;
+
   local.fancontrol = {
     enable = true;
     configFile = ./fan2go-full.yaml;
@@ -105,6 +137,16 @@ in
 
   environment.systemPackages = [ caseTemp ];
 
+  systemd.services.gpu-fan = {
+    wantedBy = [ "multi-user.target" ];
+    after = [ "systemd-udev-settle.service" ];
+    serviceConfig = {
+      ExecStart = "${gpuFan}/bin/gpu-fan-control";
+      ExecStopPost = "${pkgs.bash}/bin/bash -c 'for e in /sys/class/hwmon/*/pwm1_enable; do grep -q amdgpu \"$(dirname \"$e\")/name\" && echo 2 > \"$e\"; done'";
+      Restart = "always";
+      RestartSec = 5;
+    };
+  };
   systemd.services.vrm-fan = {
     wantedBy = [ "multi-user.target" ];
     after = [ "systemd-udev-settle.service" ];
