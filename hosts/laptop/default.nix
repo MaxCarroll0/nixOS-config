@@ -120,7 +120,10 @@
     mac = "b4:2e:99:92:d6:18";
     timeoutSeconds = 120;
   };
-  users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
+  users.users.max.openssh.authorizedKeys.keyFiles = [
+    ../../keys/max.pub
+    ../../keys/max-desktopnew.pub
+  ];
 
   users.users.max.linger = true;
 

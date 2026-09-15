@@ -99,7 +99,10 @@
     authKeySecret = "tailscale-auth-key";
   };
 
-  users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max.pub ];
+  users.users.max.openssh.authorizedKeys.keyFiles = [
+    ../../keys/max.pub
+    ../../keys/max-desktopnew.pub
+  ];
 
   local.build.client = {
     enable = true;
