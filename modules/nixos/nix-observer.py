@@ -19,6 +19,8 @@ from pathlib import Path
 
 BUILD_LOG = 101
 BUILD_PHASE = 104
+PROGRESS_TYPES = (105, 106)
+PROGRESS_MIN_INTERVAL = 2.0
 SECRET = re.compile(
     r"(?i)(authorization|access[-_]?token|api[-_]?key|password|passwd|cookie)(=|:|\s+)([^\s]+)"
 )
@@ -68,6 +70,8 @@ class Observer:
         self.root_span_id = secrets.token_hex(8)
         self.started = time.time_ns()
         self.activities = {}
+        self.last_progress = {}
+        self.last_progress_at = {}
         self.completed = []
         self.error = ""
         self.failed_drv = ""
@@ -111,13 +115,29 @@ class Observer:
     def span_id(self, activity_id):
         return hashlib.blake2b(str(activity_id).encode(), digest_size=8).hexdigest()
 
+    def redundant_progress(self, event):
+        if event is None or event.get("action") != "result":
+            return False
+        if event.get("type") not in PROGRESS_TYPES:
+            return False
+        key = (event.get("id"), event.get("type"))
+        fields = event.get("fields", [])
+        if self.last_progress.get(key) == fields:
+            return True
+        now = time.monotonic()
+        if now - self.last_progress_at.get(key, 0.0) < PROGRESS_MIN_INTERVAL:
+            return True
+        self.last_progress[key] = fields
+        self.last_progress_at[key] = now
+        return False
+
     def parse(self, raw):
         if not raw.startswith("@nix "):
-            return
+            return None
         try:
             event = json.loads(raw[5:])
         except json.JSONDecodeError:
-            return
+            return None
         action = event.get("action")
         activity_id = event.get("id")
         if action == "start":
@@ -151,10 +171,14 @@ class Observer:
                 activity["phase"] = str(fields[0])
             if event.get("type") == BUILD_LOG and fields and activity["logs"]:
                 activity["logs"].write(str(fields[0]) + "\n")
-        elif action == "stop" and activity_id in self.activities:
-            activity = self.activities.pop(activity_id)
-            activity["ended"] = time.time_ns()
-            self.completed.append(activity)
+        elif action == "stop":
+            for progress_type in PROGRESS_TYPES:
+                self.last_progress.pop((activity_id, progress_type), None)
+                self.last_progress_at.pop((activity_id, progress_type), None)
+            if activity_id in self.activities:
+                activity = self.activities.pop(activity_id)
+                activity["ended"] = time.time_ns()
+                self.completed.append(activity)
         elif action == "msg":
             message = event.get("msg", "")
             if event.get("level", 1) == 0 or message.startswith("error:"):
@@ -162,6 +186,7 @@ class Observer:
                 match = re.search(r"(/nix/store/[0-9a-z]{32}-[^ '\"]+\.drv)", message)
                 if match:
                     self.failed_drv = match.group(1)
+        return event
 
     def log(self, event):
         event.update(
@@ -407,14 +432,14 @@ def main():
     child = subprocess.Popen(command, stderr=subprocess.PIPE, text=True, bufsize=1)
     try:
         for line in child.stderr:
-            observer.parse(line.rstrip("\n"))
+            event = observer.parse(line.rstrip("\n"))
             if nom:
                 try:
                     nom.stdin.write(line)
                     nom.stdin.flush()
                 except BrokenPipeError:
                     sys.stderr.write(line)
-            else:
+            elif not observer.redundant_progress(event):
                 sys.stderr.write(line)
         exit_code = child.wait()
     except KeyboardInterrupt:
