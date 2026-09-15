@@ -260,6 +260,164 @@ let
     '';
   };
 
+  keepAwake = pkgs.writeShellApplication {
+    name = "keep-awake";
+    runtimeInputs = with pkgs; [
+      coreutils
+      systemd
+    ];
+    text = ''
+      usage() {
+        printf '%s\n' \
+          'keep-awake [--why REASON] [--shutdown] [--] COMMAND [ARGS...]' \
+          'keep-awake --for DURATION [--why REASON] [--shutdown]' \
+          'keep-awake --take NAME [--why REASON] [--for DURATION] [--shutdown]' \
+          'keep-awake --release NAME|all' \
+          'keep-awake --list' \
+          "" \
+          'Holds a block inhibitor so the idle watcher leaves the host alone.' \
+          'DURATION accepts 90, 30m, 2h.'
+      }
+
+      seconds() {
+        case "$1" in
+          *h) echo $(( ''${1%h} * 3600 )) ;;
+          *m) echo $(( ''${1%m} * 60 )) ;;
+          *s) echo "''${1%s}" ;;
+          *) echo "$1" ;;
+        esac
+      }
+
+      unit_scope() {
+        if [ "$(id -u)" = 0 ] || [ -z "''${XDG_RUNTIME_DIR:-}" ]; then
+          echo system
+        else
+          echo user
+        fi
+      }
+
+      run_scoped() {
+        if [ "$(unit_scope)" = user ]; then
+          systemd-run --user "$@"
+        else
+          systemd-run "$@"
+        fi
+      }
+
+      why="keep-awake"
+      what="sleep"
+      duration=""
+      name=""
+      release=""
+      list=0
+
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --why) why="$2"; shift 2 ;;
+          --for) duration="$2"; shift 2 ;;
+          --take) name="$2"; shift 2 ;;
+          --release) release="$2"; shift 2 ;;
+          --list) list=1; shift ;;
+          --shutdown) what="sleep:shutdown"; shift ;;
+          -h|--help) usage; exit 0 ;;
+          --) shift; break ;;
+          -*) echo "unknown option $1" >&2; usage >&2; exit 2 ;;
+          *) break ;;
+        esac
+      done
+
+      if [ "$list" -eq 1 ]; then
+        systemd-inhibit --list --no-pager
+        exit 0
+      fi
+
+      if [ -n "$release" ]; then
+        if [ "$release" = all ]; then
+          if [ "$(unit_scope)" = user ]; then
+            systemctl --user stop 'keep-awake-*' 2>/dev/null || true
+          else
+            systemctl stop 'keep-awake-*' 2>/dev/null || true
+          fi
+        elif [ "$(unit_scope)" = user ]; then
+          systemctl --user stop "keep-awake-$release.service" 2>/dev/null || true
+        else
+          systemctl stop "keep-awake-$release.service" 2>/dev/null || true
+        fi
+        exit 0
+      fi
+
+      if [ -n "$name" ]; then
+        unit="keep-awake-$name"
+        secs=$(seconds "''${duration:-24h}")
+        if systemctl ''${XDG_RUNTIME_DIR:+--user} is-active --quiet "$unit.service" 2>/dev/null; then
+          exit 0
+        fi
+        run_scoped --quiet --collect --unit "$unit" \
+          --property=RuntimeMaxSec="$secs" \
+          --description="keep-awake: $why" \
+          -- systemd-inhibit --mode=block --what="$what" --who=keep-awake --why="$why" \
+            -- sleep "$secs"
+        echo "$unit"
+        exit 0
+      fi
+
+      if [ -n "$duration" ]; then
+        secs=$(seconds "$duration")
+        unit="keep-awake-$(date +%s)-$$"
+        run_scoped --quiet --collect --unit "$unit" \
+          --property=RuntimeMaxSec="$secs" \
+          --description="keep-awake: $why" \
+          -- systemd-inhibit --mode=block --what="$what" --who=keep-awake --why="$why" \
+            -- sleep "$secs"
+        echo "$unit"
+        exit 0
+      fi
+
+      if [ $# -eq 0 ]; then
+        usage >&2
+        exit 2
+      fi
+
+      exec systemd-inhibit --mode=block --what="$what" --who=keep-awake --why="$why" -- "$@"
+    '';
+  };
+
+  keepAwakeActive = pkgs.writeShellApplication {
+    name = "keep-awake-active";
+    runtimeInputs = with pkgs; [
+      coreutils
+      jq
+      procps
+      systemd
+    ];
+    text = ''
+      # A block lock on idle is not a claim about work: Steam and KDE take one
+      # whenever a game or video plays, which would pin the host awake forever.
+      pids=$(busctl --json=short call org.freedesktop.login1 /org/freedesktop/login1 \
+        org.freedesktop.login1.Manager ListInhibitors \
+        | jq -r '.data[0][]
+                 | select(.[3] == "block")
+                 | select(.[0] | split(":") | any(. == "sleep" or . == "shutdown"))
+                 | .[5]')
+
+      [ -n "$pids" ] || exit 1
+
+      ${lib.optionalString (cfg.idle.autosuspend.maxHoldHours != null) ''
+        fresh=""
+        for pid in $pids; do
+          age=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')
+          [ -n "$age" ] || continue
+          if [ "$age" -lt ${toString (cfg.idle.autosuspend.maxHoldHours * 3600)} ]; then
+            fresh="yes"
+          fi
+        done
+        [ -n "$fresh" ] || exit 1
+      ''}
+
+      exit 0
+    '';
+  };
+
   deepSleepTarget = "/run/deep-sleep-target";
 
   suspendThenPowerOff =
@@ -282,7 +440,13 @@ let
 
         # systemctl suspend returns once logind accepts the request, not on
         # resume, so whether to power off is decided by resumeCommands.
-        exec systemctl suspend
+        # A refused suspend must disarm both, or the next resume reads a target
+        # already in the past and escalates to poweroff.
+        if ! systemctl suspend --check-inhibitors=yes; then
+          echo 0 > "$alarm"
+          rm -f ${deepSleepTarget}
+          exit 1
+        fi
       '';
     };
 in
@@ -342,6 +506,45 @@ in
       type = lib.types.nullOr lib.types.int;
       default = null;
       description = "Escalate from suspend to power off after this long still idle.";
+    };
+
+    idle.autosuspend.keepAwake = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Honour block inhibitors and ship the keep-awake helper.";
+    };
+
+    idle.autosuspend.keepAwakeGroup = lib.mkOption {
+      type = lib.types.str;
+      default = "wheel";
+      description = "Members may hold the host awake from a session with no seat.";
+    };
+
+    idle.autosuspend.maxHoldHours = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+      description = "Stop honouring an inhibitor once its holder is this old.";
+    };
+
+    idle.autosuspend.watchInterfaces = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = lib.optional (cfg.wakeOnLan.interface != null) cfg.wakeOnLan.interface;
+      defaultText = lib.literalExpression "[ config.local.power.wakeOnLan.interface ]";
+      description = "Traffic on these counts as activity.";
+    };
+
+    idle.autosuspend.bandwidthThreshold = lib.mkOption {
+      type = lib.types.int;
+      default = 1000000;
+      description = "Bytes per second, each direction, above which traffic counts as work.";
+    };
+
+    keepAwakePackage = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      default = keepAwake;
+      defaultText = lib.literalExpression "keep-awake";
+      description = "The keep-awake helper, for modules that hold leases of their own.";
     };
 
     wakeOnLan.interface = lib.mkOption {
@@ -580,6 +783,19 @@ in
             threshold = cfg.idle.autosuspend.loadThreshold;
           };
         }
+        // lib.optionalAttrs cfg.idle.autosuspend.keepAwake {
+          KeepAwake = {
+            class = "ExternalCommand";
+            command = lib.getExe keepAwakeActive;
+          };
+        }
+        // lib.optionalAttrs (cfg.idle.autosuspend.watchInterfaces != [ ]) {
+          NetworkBandwidth = {
+            interfaces = lib.concatStringsSep "," cfg.idle.autosuspend.watchInterfaces;
+            threshold_send = cfg.idle.autosuspend.bandwidthThreshold;
+            threshold_receive = cfg.idle.autosuspend.bandwidthThreshold;
+          };
+        }
         // lib.optionalAttrs (cfg.idle.autosuspend.watchPorts != [ ]) {
           SshConnections = {
             class = "ActiveConnection";
@@ -589,13 +805,33 @@ in
       };
     })
 
+    (lib.mkIf (cfg.idle.policy == "autosuspend" && cfg.idle.autosuspend.keepAwake) {
+      environment.systemPackages = [ keepAwake ];
+
+      # login1 ships these as allow_active, so a session with no seat - every SSH
+      # login, and the lingering user manager a lease runs under - is refused.
+      security.polkit.enable = true;
+      security.polkit.extraConfig = ''
+        polkit.addRule(function (action, subject) {
+          var inhibits = [
+            "org.freedesktop.login1.inhibit-block-sleep",
+            "org.freedesktop.login1.inhibit-block-shutdown"
+          ];
+          if (inhibits.indexOf(action.id) >= 0
+              && subject.isInGroup("${cfg.idle.autosuspend.keepAwakeGroup}")) {
+            return polkit.Result.YES;
+          }
+        });
+      '';
+    })
+
     (lib.mkIf (cfg.idle.policy == "autosuspend" && cfg.idle.autosuspend.powerOffAfterHours != null) {
       systemd.services.deep-sleep-escalate = {
         description = "Power off when a timed wake finds the host still idle";
         serviceConfig.Type = "oneshot";
         script = ''
           sleep 60
-          if ${lib.getExe sessionActivity}; then
+          if ${lib.getExe keepAwakeActive} || ${lib.getExe sessionActivity}; then
             exit 0
           fi
           ${pkgs.systemd}/bin/systemctl poweroff

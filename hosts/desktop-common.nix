@@ -189,5 +189,6 @@
       22
       2222
     ];
+    idle.autosuspend.maxHoldHours = 24;
   };
 }
