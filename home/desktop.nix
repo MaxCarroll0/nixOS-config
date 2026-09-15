@@ -161,6 +161,8 @@
     '';
   };
 
+  # The lock must fire before the display blanks: kde#523504 kills the greeter
+  # when PowerDevil powers the output off while it is still initialising.
   # autosuspend reads the lock state as its "user is away" signal, so this
   # timeout must stay below local.power.idle.autosuspend.idleMinutes.
   xdg.configFile."kscreenlockerrc" = {
@@ -168,7 +170,7 @@
     text = ''
       [Daemon]
       Autolock=true
-      Timeout=10
+      Timeout=4
     '';
   };
 }
