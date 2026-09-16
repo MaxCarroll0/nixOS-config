@@ -553,8 +553,8 @@ in
     idle.disableWakeSources = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      example = [ "PNP0C0C:00" ];
-      description = "Platform devices that must not wake the host from suspend.";
+      example = [ "/sys/bus/usb/devices/usb1" ];
+      description = "Sysfs device paths, globs allowed, that must not wake the host.";
     };
 
     idle.usb.neverSuspend = lib.mkOption {
@@ -837,21 +837,26 @@ in
       };
     })
 
-    (lib.mkIf (cfg.idle.disableWakeSources != [ ]) {
-      services.udev.extraRules = lib.concatMapStringsSep "\n" (device: ''
-        ACTION=="add", SUBSYSTEM=="platform", KERNEL=="${device}", TEST=="power/wakeup", ATTR{power/wakeup}="disabled"
-      '') cfg.idle.disableWakeSources;
-
-      systemd.services.disable-wake-sources = {
-        description = "Stop listed platform devices waking the host";
-        wantedBy = [ "multi-user.target" ];
-        serviceConfig.Type = "oneshot";
-        serviceConfig.RemainAfterExit = true;
-        script = lib.concatMapStringsSep "\n" (device: ''
-          echo disabled > /sys/devices/platform/${device}/power/wakeup 2>/dev/null || true
+    (lib.mkIf (cfg.idle.disableWakeSources != [ ]) (
+      let
+        disarm = lib.concatMapStringsSep "\n" (path: ''
+          for node in ${path}; do
+            echo disabled > "$node/power/wakeup" 2>/dev/null || true
+          done
         '') cfg.idle.disableWakeSources;
-      };
-    })
+      in
+      {
+        systemd.services.disable-wake-sources = {
+          description = "Stop listed devices waking the host";
+          wantedBy = [ "multi-user.target" ];
+          serviceConfig.Type = "oneshot";
+          serviceConfig.RemainAfterExit = true;
+          script = disarm;
+        };
+
+        powerManagement.powerDownCommands = disarm;
+      }
+    ))
 
     (lib.mkIf (cfg.idle.policy == "autosuspend" && cfg.idle.autosuspend.keepAwake) {
       environment.systemPackages = [ keepAwake ];
