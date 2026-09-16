@@ -426,6 +426,12 @@ let
 
   deepSleepTarget = "/run/deep-sleep-target";
 
+  disarmWakeSources = ''
+    for node in ${toString cfg.idle.disableWakeSources}; do
+      echo disabled > "$node/power/wakeup" 2>/dev/null || true
+    done
+  '';
+
   suspendThenPowerOff =
     hours:
     pkgs.writeShellApplication {
@@ -837,26 +843,9 @@ in
       };
     })
 
-    (lib.mkIf (cfg.idle.disableWakeSources != [ ]) (
-      let
-        disarm = lib.concatMapStringsSep "\n" (path: ''
-          for node in ${path}; do
-            echo disabled > "$node/power/wakeup" 2>/dev/null || true
-          done
-        '') cfg.idle.disableWakeSources;
-      in
-      {
-        systemd.services.disable-wake-sources = {
-          description = "Stop listed devices waking the host";
-          wantedBy = [ "multi-user.target" ];
-          serviceConfig.Type = "oneshot";
-          serviceConfig.RemainAfterExit = true;
-          script = disarm;
-        };
-
-        powerManagement.powerDownCommands = disarm;
-      }
-    ))
+    (lib.mkIf (cfg.idle.disableWakeSources != [ ]) {
+      powerManagement.powerDownCommands = disarmWakeSources;
+    })
 
     (lib.mkIf (cfg.idle.policy == "autosuspend" && cfg.idle.autosuspend.keepAwake) {
       environment.systemPackages = [ keepAwake ];
