@@ -448,7 +448,10 @@ let
         # resume, so whether to power off is decided by resumeCommands.
         # A refused suspend must disarm both, or the next resume reads a target
         # already in the past and escalates to poweroff.
-        if ! systemctl suspend --check-inhibitors=yes; then
+        # Not --check-inhibitors=yes: that also refuses whenever any user is
+        # logged in, and the autologin session on tty1 never goes away. The
+        # default still lets logind honour block inhibitors.
+        if ! systemctl suspend; then
           echo 0 > "$alarm"
           rm -f ${deepSleepTarget}
           exit 1
