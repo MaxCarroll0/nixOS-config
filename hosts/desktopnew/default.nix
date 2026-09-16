@@ -97,9 +97,9 @@ in
   # Focusrite firmware does not survive a USB resume; it dropped off the bus.
   local.power.idle.usb.neverSuspend = [ "1235:8202" ];
 
-  # Both latch a wake event as S3 is entered, so every suspend resumes itself
-  # within milliseconds: serio0 raises IRQ 1 with no PS/2 keyboard attached, and
-  # the 02:00.0 root hubs assert PME regardless of what is plugged into them.
+  # Both latch a wake as S3 is entered, resuming within milliseconds: serio0
+  # raises IRQ 1 with no PS/2 keyboard attached, and the Promontory root hubs
+  # assert PME with every device unbound.
   local.power.idle.disableWakeSources = [
     "/sys/bus/serio/devices/serio0"
     "/sys/bus/pci/devices/0000:02:00.0/usb*"
