@@ -35,5 +35,9 @@ in
         RestartSec = 5;
       };
     };
+
+    # The EC restores its own defaults across a resume, so the fans run up until
+    # fan2go's next tick notices and pulls them back down.
+    powerManagement.resumeCommands = "${pkgs.systemd}/bin/systemctl restart fan2go.service";
   };
 }

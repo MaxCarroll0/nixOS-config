@@ -550,6 +550,13 @@ in
       description = "Bytes per second, each direction, above which traffic counts as work.";
     };
 
+    idle.disableWakeSources = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "PNP0C0C:00" ];
+      description = "Platform devices that must not wake the host from suspend.";
+    };
+
     idle.usb.neverSuspend = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -827,6 +834,22 @@ in
             ports = lib.concatMapStringsSep "," toString cfg.idle.autosuspend.watchPorts;
           };
         };
+      };
+    })
+
+    (lib.mkIf (cfg.idle.disableWakeSources != [ ]) {
+      services.udev.extraRules = lib.concatMapStringsSep "\n" (device: ''
+        ACTION=="add", SUBSYSTEM=="platform", KERNEL=="${device}", TEST=="power/wakeup", ATTR{power/wakeup}="disabled"
+      '') cfg.idle.disableWakeSources;
+
+      systemd.services.disable-wake-sources = {
+        description = "Stop listed platform devices waking the host";
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig.Type = "oneshot";
+        serviceConfig.RemainAfterExit = true;
+        script = lib.concatMapStringsSep "\n" (device: ''
+          echo disabled > /sys/devices/platform/${device}/power/wakeup 2>/dev/null || true
+        '') cfg.idle.disableWakeSources;
       };
     })
 
