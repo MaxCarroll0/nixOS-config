@@ -97,6 +97,13 @@ in
   # Focusrite firmware does not survive a USB resume; it dropped off the bus.
   local.power.idle.usb.neverSuspend = [ "1235:8202" ];
 
+  # The board asserts PWRB the moment it enters S3, so every suspend resumes
+  # itself a few milliseconds later.
+  local.power.idle.disableWakeSources = [
+    "PNP0C0C:00"
+    "LNXPWRBN:00"
+  ];
+
   local.power.wakeOnLan = {
     interface = "enp5s0";
     mac = "b4:2e:99:92:d6:18";
