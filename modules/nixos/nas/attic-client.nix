@@ -34,14 +34,14 @@ let
     name = "attic-client-config";
     runtimeInputs = [ pkgs.coreutils ];
     text = ''
-      install -d -m 0700 /run/attic
+      install -d -m 0700 /run/attic /run/attic/attic
       token=$(cat ${lib.escapeShellArg cfg.tokenFile})
-      cat > /run/attic/client.toml <<EOF
+      cat > /run/attic/attic/config.toml <<EOF
       [servers.lan]
       endpoint = "${endpoint}"
       token = "$token"
       EOF
-      chmod 0600 /run/attic/client.toml
+      chmod 0600 /run/attic/attic/config.toml
     '';
   };
 
@@ -150,7 +150,7 @@ in
       serviceConfig = {
         Type = "oneshot";
         User = "root";
-        Environment = "ATTIC_CONFIG=/run/attic/client.toml";
+        Environment = "XDG_CONFIG_HOME=/run/attic";
         ExecStartPre = "${writeConfig}/bin/attic-client-config";
         ExecStart = "${uploadQueued}/bin/attic-upload-queued";
         Nice = 19;
