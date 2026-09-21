@@ -82,10 +82,7 @@
     ];
   };
 
-  local.wake.peers.desktopnew = {
-    mac = "b4:2e:99:92:d6:18";
-    timeoutSeconds = 120;
-  };
+  local.wake.peers.desktopnew.timeoutSeconds = 120;
 
   local.server.ssh = {
     enable = true;
@@ -124,7 +121,7 @@
       user = "nixremote";
       port = 2222;
       sshKey = "/home/max/.ssh/id_ed25519";
-      publicHostKey = "AAAAC3NzaC1lZDI1NTE5AAAAIEhlS3Kx37nOhE6nAnkXgoHU3JwtFLmT1mLbFLcmLXl8";
+      publicHostKey = "c3NoLWVkMjU1MTkgQUFBQUMzTnphQzFsWkRJMU5URTVBQUFBSUVobFMzS3gzN25PaEU2bkFua1hnb0hVM0p3dEZMbVQxbUxiRkxjbUxYbDggcm9vdEBkZXNrdG9wCg==";
       systems = [ "aarch64-linux" ];
       maxJobs = 8;
       speedFactor = 20;
@@ -189,11 +186,19 @@
     dataRoot = "/srv/nas";
     smb = {
       enable = true;
-      interfaces = [ "end0" "wld0" "tailscale0" ];
+      interfaces = [
+        "end0"
+        "wld0"
+        "tailscale0"
+      ];
     };
     cache-server = {
       enable = true;
-      interfaces = [ "end0" "wld0" "tailscale0" ];
+      interfaces = [
+        "end0"
+        "wld0"
+        "tailscale0"
+      ];
     };
     index.enable = true;
     accounts.nastest = {
