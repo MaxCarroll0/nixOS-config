@@ -54,6 +54,9 @@ let
           --local)
             opts+=(--option builders "")
             shift ;;
+          --mixed)
+            opts+=(--option builders "@/etc/nix/machines")
+            shift ;;
           --host)
             target="''${2:?--host needs a node name}"
             shift 2 ;;
