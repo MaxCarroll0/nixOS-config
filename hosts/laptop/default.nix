@@ -180,5 +180,8 @@
     CPUWeight = 20;
     IOWeight = 50;
     Nice = 10;
+    MemoryHigh = "4G";
   };
+
+  systemd.slices.user.sliceConfig.MemoryLow = "4G";
 }
