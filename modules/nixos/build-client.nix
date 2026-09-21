@@ -317,6 +317,8 @@ in
     nix.settings.builders = "@${machinesFile}";
     nix.settings.build-hook = "${offload}/bin/nix-build-offload";
 
+    environment.etc."nix/offload-builders".text = lib.concatMapStrings (b: "${b.host}\n") builders;
+
     systemd.tmpfiles.rules = [
       "d ${stateDir} 0755 root root -"
       "f ${machinesFile} 0644 root root -"

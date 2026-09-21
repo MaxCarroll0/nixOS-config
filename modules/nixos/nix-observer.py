@@ -17,6 +17,10 @@ import urllib.request
 from pathlib import Path
 
 
+PLAN_HEADER = re.compile(r"derivations? will be built")
+PLAN_DRV = re.compile(r"([^\s\"]+\.drv)")
+OFFLOAD_BUILDERS = "/etc/nix/offload-builders"
+
 BUILD_LOG = 101
 BUILD_PHASE = 104
 PROGRESS_TYPES = (105, 106)
@@ -79,6 +83,8 @@ class Observer:
         self.substituted = 0
         self.closure_paths = 0
         self.closure_nar_bytes = 0
+        self.reading_plan = False
+        self.wake_settled = False
 
     def detect_kind(self):
         joined = " ".join(self.argv)
@@ -131,7 +137,38 @@ class Observer:
         self.last_progress_at[key] = now
         return False
 
+    def consider_wake(self, raw):
+        if self.wake_settled:
+            return
+        if not self.reading_plan:
+            self.reading_plan = bool(PLAN_HEADER.search(raw))
+            return
+        match = PLAN_DRV.search(raw)
+        if match is None:
+            self.wake_settled = True
+            return
+        try:
+            with open(match.group(1), "rb") as handle:
+                if b"preferLocalBuild" in handle.read():
+                    return
+        except OSError:
+            return
+        self.wake_settled = True
+        try:
+            hosts = Path(OFFLOAD_BUILDERS).read_text().split()
+        except OSError:
+            return
+        for host in hosts:
+            subprocess.Popen(
+                ["builder-wake", "--async", host],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+
     def parse(self, raw):
+        self.consider_wake(raw)
         if not raw.startswith("@nix "):
             return None
         try:
