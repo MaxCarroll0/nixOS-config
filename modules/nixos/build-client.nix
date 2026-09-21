@@ -276,13 +276,13 @@ in
 
     localGraceMinutes = lib.mkOption {
       type = lib.types.int;
-      default = 5;
+      default = 0;
       description = "Minutes of building here before the rest goes to a builder.";
     };
 
     stallMinutes = lib.mkOption {
       type = lib.types.int;
-      default = 10;
+      default = 2;
       description = "Build here again if offloading has accepted nothing for this long.";
     };
 

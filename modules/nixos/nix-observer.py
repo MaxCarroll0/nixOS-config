@@ -159,6 +159,10 @@ class Observer:
         except OSError:
             return
         for host in hosts:
+            sys.stderr.write(
+                "\033[1;33m[offload] build plan needs a builder: waking %s\033[0m\n" % host
+            )
+            sys.stderr.flush()
             subprocess.Popen(
                 ["builder-wake", "--async", host],
                 stdin=subprocess.DEVNULL,

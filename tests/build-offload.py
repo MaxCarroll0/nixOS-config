@@ -45,15 +45,15 @@ def texts(values):
     return u64(len(values)) + b"".join(text(value) for value in values)
 
 
-def preamble():
-    return u64(1) + text("builders") + text("@/dev/null") + u64(0)
+def preamble(builders="@/dev/null"):
+    return u64(1) + text("builders") + text(builders) + u64(0)
 
 
 def request(system="x86_64-linux", features=()):
     return text("try") + u64(1) + text(system) + text("/nix/store/a.drv") + texts(list(features))
 
 
-def run(tmp, replies, probe, requests, grace=0, stall=600, machines=None):
+def run(tmp, replies, probe, requests, grace=0, stall=600, machines=None, setting="@/dev/null"):
     state = tmp / "state"
     state.mkdir(exist_ok=True)
     stub = tmp / "stub.py"
@@ -106,7 +106,7 @@ def run(tmp, replies, probe, requests, grace=0, stall=600, machines=None):
         pass_fds=(4, 5),
         env=dict(os.environ, NIX_OFFLOAD_STATE=str(state)),
     )
-    out = child.communicate(preamble() + b"".join(requests), timeout=60)[1]
+    out = child.communicate(preamble(setting) + b"".join(requests), timeout=60)[1]
     verdicts = [
         line[2:] for line in out.decode().splitlines() if line.startswith("# ")
     ]
@@ -234,6 +234,31 @@ def main():
         )
         failures += check(
             "a postponing child is reused", (held / "spawns").read_text().count("spawn"), 1
+        )
+
+        verdicts, _, _ = run(
+            case("waking"),
+            ["# decline\n", "# decline\n"],
+            False,
+            [request(), request()],
+            grace=0,
+        )
+        failures += check(
+            "the laptop keeps building while the builder is down",
+            verdicts,
+            ["decline", "decline"],
+        )
+
+        forced = case("forced")
+        verdicts, _, woken = run(
+            forced, ["# decline\n"], True, [request()], grace=0, setting=""
+        )
+        failures += check(
+            "an empty builders setting forces a local build", verdicts, ["decline"]
+        )
+        failures += check("forcing local never wakes a builder", woken, False)
+        failures += check(
+            "forcing local never starts a child", (forced / "spawns").exists(), False
         )
 
     return 1 if failures else 0

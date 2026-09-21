@@ -51,9 +51,11 @@ class Reader:
 
 
 def read_settings(reader):
+    settings = {}
     while reader.number():
-        reader.text()
-        reader.text()
+        key = reader.text()
+        settings[key] = reader.text()
+    return settings
 
 
 def read_request(reader):
@@ -108,6 +110,22 @@ class Offload:
         self.session = os.path.join(STATE_DIR, "session-%d" % os.getppid())
         self.child = None
         self.serving = None
+        self.local_only = False
+
+    def notify(self, colour, message):
+        sys.stderr.buffer.write(
+            ("\033[%sm[offload] %s\033[0m\n" % (colour, message)).encode()
+        )
+        sys.stderr.buffer.flush()
+
+    def announce_once(self, key):
+        def mark(state):
+            if state.get(key):
+                return False
+            state[key] = True
+            return True
+
+        return with_state(self.session, mark)
 
     def started(self):
         def begin(state):
@@ -142,6 +160,7 @@ class Offload:
                 os.path.join(STATE_DIR, "wake-" + builder["host"]),
                 self.config["wakeSeconds"],
             ):
+                self.notify("1;33", "waking %s" % builder["host"])
                 detached(builder["wake"])
         return up
 
@@ -256,8 +275,9 @@ class Offload:
 
     def run(self):
         reader = Reader()
-        read_settings(reader)
+        settings = read_settings(reader)
         preamble = reader.take()
+        self.local_only = not settings.get("builders", "").strip()
         self.started()
 
         while True:
@@ -269,6 +289,10 @@ class Offload:
                 return 0
             payload = reader.take()
             system, features = request
+
+            if self.local_only:
+                self.answer("decline")
+                continue
 
             builders = self.reachable()
             self.hold_awake(builders)
@@ -300,6 +324,11 @@ class Offload:
                 # dropped link retires the builder for this child's whole life.
                 self.stop_child()
                 if self.offload_only():
+                    if self.announce_once("told"):
+                        self.notify(
+                            "1;36",
+                            "builders up: finishing local derivations, offloading the rest",
+                        )
                     verdict = "postpone"
             self.answer(verdict)
 
