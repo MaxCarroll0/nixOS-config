@@ -83,7 +83,7 @@ let
             exec ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=10 \
               -o StrictHostKeyChecking=accept-new \
               -o UserKnownHostsFile=${leaseKnownHosts} \
-              -o ProxyCommand="${peerConnect} ${lib.escapeShellArg b.peer} 22" \
+              -o ProxyCommand="${peerConnect} ${lib.escapeShellArg b.peer} ${toString b.port}" \
               -i ${toString b.sshKey} -l ${cfg.leaseUser} "$host" \
               ${cfg.leaseCommand} --take ${cfg.leaseName} --why nix-offload --for ${cfg.leaseDuration} ;;
         '') builders}
@@ -345,6 +345,9 @@ in
       Host ${b.host}-builder
         HostName ${b.host}
         Port ${toString b.port}
+        # nix pins publicHostKey under the alias, so verification must use it
+        # too, not the rewritten [${b.host}]:${toString b.port}.
+        HostKeyAlias ${b.host}-builder
         User ${b.user}
         IdentityFile ${toString b.sshKey}
         IdentitiesOnly yes
@@ -361,13 +364,22 @@ in
       offload
     ];
 
-    assertions = map (b: {
-      assertion =
-        builtins.hasAttr b.peer config.local.peerTransport.peers
-        && lib.hasPrefix "/" b.sshKey
-        && !(lib.hasPrefix builtins.storeDir b.sshKey);
-      message = "sshKey for ${b.host} must be an absolute path outside the world-readable store, not \"${b.sshKey}\".";
-    }) builders;
+    assertions = lib.concatMap (b: [
+      {
+        assertion =
+          builtins.hasAttr b.peer config.local.peerTransport.peers
+          && lib.hasPrefix "/" b.sshKey
+          && !(lib.hasPrefix builtins.storeDir b.sshKey);
+        message = "sshKey for ${b.host} must be an absolute path outside the world-readable store, not \"${b.sshKey}\".";
+      }
+      {
+        # nix writes base64Decode(publicHostKey) straight into a known_hosts file,
+        # so it must encode the whole .pub line. A raw key blob base64s to "AAAA"
+        # and lands as binary there, failing verification with no useful error.
+        assertion = b.publicHostKey == null || lib.hasPrefix "c3No" b.publicHostKey;
+        message = "publicHostKey for ${b.host} must be base64 of the whole .pub file: base64 -w0 /etc/ssh/ssh_host_ed25519_key.pub";
+      }
+    ]) builders;
 
     warnings = lib.concatMap (
       b:

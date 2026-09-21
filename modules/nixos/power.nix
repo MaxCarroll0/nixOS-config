@@ -294,11 +294,22 @@ let
         esac
       }
 
+      # Tailscale SSH exports a usable user bus but no XDG_RUNTIME_DIR.
       unit_scope() {
-        if [ "$(id -u)" = 0 ] || [ -z "''${XDG_RUNTIME_DIR:-}" ]; then
+        if [ "$(id -u)" = 0 ]; then
           echo system
-        else
+        elif [ -n "''${XDG_RUNTIME_DIR:-}" ] || [ -n "''${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
           echo user
+        else
+          echo system
+        fi
+      }
+
+      scoped_systemctl() {
+        if [ "$(unit_scope)" = user ]; then
+          systemctl --user "$@"
+        else
+          systemctl "$@"
         fi
       }
 
@@ -339,15 +350,9 @@ let
 
       if [ -n "$release" ]; then
         if [ "$release" = all ]; then
-          if [ "$(unit_scope)" = user ]; then
-            systemctl --user stop 'keep-awake-*' 2>/dev/null || true
-          else
-            systemctl stop 'keep-awake-*' 2>/dev/null || true
-          fi
-        elif [ "$(unit_scope)" = user ]; then
-          systemctl --user stop "keep-awake-$release.service" 2>/dev/null || true
+          scoped_systemctl stop 'keep-awake-*' 2>/dev/null || true
         else
-          systemctl stop "keep-awake-$release.service" 2>/dev/null || true
+          scoped_systemctl stop "keep-awake-$release.service" 2>/dev/null || true
         fi
         exit 0
       fi
@@ -355,11 +360,11 @@ let
       if [ -n "$name" ]; then
         unit="keep-awake-$name"
         secs=$(seconds "''${duration:-24h}")
-        if systemctl ''${XDG_RUNTIME_DIR:+--user} is-active --quiet "$unit.service" 2>/dev/null; then
+        if scoped_systemctl is-active --quiet "$unit.service" 2>/dev/null; then
           if [ -z "$duration" ]; then
             exit 0
           fi
-          systemctl ''${XDG_RUNTIME_DIR:+--user} stop "$unit.service" 2>/dev/null || true
+          scoped_systemctl stop "$unit.service" 2>/dev/null || true
         fi
         run_scoped --quiet --collect --unit "$unit" \
           --property=RuntimeMaxSec="$secs" \

@@ -97,7 +97,8 @@ in
       environment = {
         NIX_OBSERVER_KIND = "rebuild";
         NIX_OBSERVER_UNATTENDED = "1";
-        NIX_OBSERVER_NOM = lib.getExe pkgs.nix-output-monitor;
+        # A unit has no TTY, where nom emits only a ticking elapsed timer.
+        NIX_OBSERVER_PLAIN = "1";
       }
       // lib.optionalAttrs (config.local.vpn.enable or false) { NIX_OBSERVER_NOVPN = "1"; };
       path = lib.mkBefore [ observedNix ];
