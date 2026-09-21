@@ -34,7 +34,13 @@ let
       tailscale
     ];
     text = ''
-      host="''${1:?usage: wake-peer <host>}"
+      sendOnly=0
+      if [ "''${1:-}" = --send-only ]; then
+        sendOnly=1
+        shift
+      fi
+
+      host="''${1:?usage: wake-peer [--send-only] <host>}"
       probe() { nc -z -w 2 "$1" "$2" 2>/dev/null; }
 
       mac=""; bcast=""; unlockPort=""; passFile=""; timeout=90
@@ -62,9 +68,53 @@ let
         done
       }
 
+      relayDir="''${XDG_CACHE_HOME:-''${HOME:-/tmp}/.cache}/wake-peer"
+      relayHint="$relayDir/$host.relay"
+
+      # A relay on the wrong segment broadcasts harmlessly, so no host needs to know
+      # which LAN the sleeper is on.
+      delegate() {
+        local sent=0 relay candidate hinted="" seen=""
+        local -a candidates=()
+
+        if [ -r "$relayHint" ]; then
+          hinted="$(cat "$relayHint")"
+          [ -n "$hinted" ] && candidates+=("$hinted")
+        fi
+        candidates+=(${
+          lib.escapeShellArgs (lib.mapAttrsToList (name: address: "${name}=${address}") cfg.relays)
+        })
+
+        for candidate in "''${candidates[@]}"; do
+          relay="''${candidate#*=}"
+          [ "''${candidate%%=*}" = "$host" ] && continue
+          case " $seen " in *" $relay "*) continue ;; esac
+          seen="$seen $relay"
+
+          tailscale ping -c 1 --timeout 3s --until-direct=false "$relay" >/dev/null 2>&1 || continue
+          # Bounded: a relay still running a wake-peer without --send-only would
+          # otherwise poll for a host named "--send-only" until its own deadline.
+          if timeout 10 ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+                 "$relay" wake-peer --send-only "$host" >/dev/null 2>&1; then
+            sent=1
+            if [ "$relay" != "$hinted" ] && mkdir -p "$relayDir" 2>/dev/null; then
+              printf '%s\n' "$relay" > "$relayHint" 2>/dev/null || true
+            fi
+          fi
+        done
+
+        [ "$sent" = 1 ]
+      }
+
+      if [ "$sendOnly" = 1 ]; then
+        send_magic
+        exit 0
+      fi
+
       ready && exit 0
 
       send_magic
+      delegate || true
       resend=$(( $(date +%s) + 20 ))
 
       deadline=$(( $(date +%s) + timeout ))
@@ -88,6 +138,7 @@ let
         ready && exit 0
         if [ "$(date +%s)" -ge "$resend" ]; then
           send_magic
+          delegate || true
           resend=$(( $(date +%s) + 20 ))
         fi
         sleep 0.5
@@ -136,6 +187,12 @@ in
           };
         }
       );
+    };
+
+    relays = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      description = "Hosts that may be asked to send the magic packet on this host's behalf.";
     };
 
     package = lib.mkOption {

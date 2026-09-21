@@ -12,6 +12,11 @@ let
   cfg = config.local.users;
   wakePeers = lib.attrNames (config.local.wake.peers or { });
 
+  facts = import ../../hosts/facts.nix;
+  selfName = config.networking.hostName;
+  onTailnet = lib.filterAttrs (_: f: f ? tailscale) facts;
+  wakeable = lib.filterAttrs (name: f: name != selfName && f ? mac) facts;
+
   rebuild = pkgs.writeShellApplication {
     name = "rebuild";
     runtimeInputs = [
@@ -220,11 +225,12 @@ in
   config = {
     local.peerTransport = {
       enable = true;
-      peers = {
-        pi.tailscaleAddress = "100.117.13.66";
-        desktopnew.tailscaleAddress = "100.106.140.88";
-        laptop.tailscaleAddress = "100.112.109.20";
-      };
+      peers = lib.mapAttrs (_: f: { tailscaleAddress = f.tailscale; }) onTailnet;
+    };
+
+    local.wake = {
+      peers = lib.mapAttrs (_: f: { mac = lib.mkDefault f.mac; }) wakeable;
+      relays = lib.mapAttrs (_: f: f.tailscale) (lib.filterAttrs (name: _: name != selfName) onTailnet);
     };
     boot.loader.grub.enable = lib.mkDefault true;
     boot.loader.efi.canTouchEfiVariables = lib.mkDefault true;
