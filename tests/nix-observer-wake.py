@@ -21,7 +21,7 @@ def drv(tmp, name, local):
     return str(path)
 
 
-def observe(tmp, lines, builders=("desktopnew",)):
+def observe(tmp, lines, builders=("desktopnew",), argv=()):
     listing = tmp / "offload-builders"
     listing.write_text("".join(h + "\n" for h in builders))
     observer.OFFLOAD_BUILDERS = str(listing)
@@ -30,6 +30,7 @@ def observe(tmp, lines, builders=("desktopnew",)):
     observer.subprocess.Popen = lambda argv, **kw: woken.append(argv) or None
 
     watcher = observer.Observer.__new__(observer.Observer)
+    watcher.argv = argv
     watcher.reading_plan = False
     watcher.wake_settled = False
     for line in lines:
@@ -103,6 +104,23 @@ def main():
 
         woken = observe(tmp, ["these 2 derivations will be built:", "unrelated line", "  " + remote])
         failures += check("the plan block ends at the first non-drv line", woken, [])
+
+        plan = ["these 2 derivations will be built:", "  " + remote]
+
+        woken = observe(tmp, plan, argv=["nix", "build", "--option", "builders", ""])
+        failures += check("--option builders '' never wakes", woken, [])
+
+        woken = observe(tmp, plan, argv=["nix", "build", "--builders", ""])
+        failures += check("--builders '' never wakes", woken, [])
+
+        woken = observe(
+            tmp, plan, argv=["nix", "build", "--option", "builders", "@/etc/nix/machines"]
+        )
+        failures += check(
+            "a non-empty builders override still wakes",
+            woken,
+            [["builder-wake", "--async", "desktopnew"]],
+        )
 
     return 1 if failures else 0
 

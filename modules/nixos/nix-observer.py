@@ -137,8 +137,23 @@ class Observer:
         self.last_progress_at[key] = now
         return False
 
+    def builders_disabled(self):
+        for index, argument in enumerate(self.argv):
+            if argument == "--builders" and index + 1 < len(self.argv):
+                return not self.argv[index + 1].strip()
+            if (
+                argument == "--option"
+                and index + 2 < len(self.argv)
+                and self.argv[index + 1] == "builders"
+            ):
+                return not self.argv[index + 2].strip()
+        return False
+
     def consider_wake(self, raw):
         if self.wake_settled:
+            return
+        if self.builders_disabled():
+            self.wake_settled = True
             return
         if not self.reading_plan:
             self.reading_plan = bool(PLAN_HEADER.search(raw))
