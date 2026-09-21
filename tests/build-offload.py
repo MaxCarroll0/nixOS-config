@@ -20,6 +20,8 @@ from importlib.machinery import SourceFileLoader
 offload = SourceFileLoader("offload", %r).load_module()
 replies = %r
 
+open(%r, "a").write("spawn ")
+
 reader = offload.Reader()
 offload.read_settings(reader)
 for reply in replies:
@@ -55,7 +57,8 @@ def run(tmp, replies, probe, requests, grace=0, stall=600, machines=None):
     state = tmp / "state"
     state.mkdir(exist_ok=True)
     stub = tmp / "stub.py"
-    stub.write_text(STUB % (str(MODULE), str(HOOK), replies))
+    spawns = tmp / "spawns"
+    stub.write_text(STUB % (str(MODULE), str(HOOK), replies, str(spawns)))
 
     source = tmp / "machines"
     source.write_text(
@@ -204,15 +207,33 @@ def main():
         )
         failures += check("postpone passes through", verdicts, ["postpone"])
 
+        sequence = case("sequence")
         verdicts, _, _ = run(
-            case("sequence"),
+            sequence,
             ["# decline\n", "# decline\n"],
             True,
             [request(), request()],
             grace=0,
         )
         failures += check(
-            "one child serves consecutive requests", verdicts, ["postpone", "postpone"]
+            "consecutive requests still postpone", verdicts, ["postpone", "postpone"]
+        )
+        failures += check(
+            "a decline a reachable builder could serve respawns the child",
+            (sequence / "spawns").read_text().count("spawn"),
+            2,
+        )
+
+        held = case("held")
+        verdicts, _, _ = run(
+            held,
+            ["# postpone\n", "# postpone\n"],
+            True,
+            [request(), request()],
+            grace=0,
+        )
+        failures += check(
+            "a postponing child is reused", (held / "spawns").read_text().count("spawn"), 1
         )
 
     return 1 if failures else 0

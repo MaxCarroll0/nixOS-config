@@ -294,12 +294,13 @@ class Offload:
                 self.stop_child()
                 self.answer("decline")
                 continue
-            if (
-                verdict == "decline"
-                and self.usable(builders, system, features)
-                and self.offload_only()
-            ):
-                verdict = "postpone"
+            if verdict == "decline" and self.usable(builders, system, features):
+                # build-remote disables a machine in-process after a failed
+                # connection and never reconsiders it, so without a respawn one
+                # dropped link retires the builder for this child's whole life.
+                self.stop_child()
+                if self.offload_only():
+                    verdict = "postpone"
             self.answer(verdict)
 
 
