@@ -12,9 +12,11 @@ let
   builders = lib.attrValues cfg.builders;
   peerConnect = "${config.local.peerTransport.package}/bin/peer-connect";
 
+  stateDir = "/run/nix-offload";
+  machinesFile = "${stateDir}/machines";
+
   probe =
-    b:
-    ''${peerConnect} ${lib.escapeShellArg b.peer} "${toString b.port}" --probe >/dev/null 2>&1'';
+    b: ''${peerConnect} ${lib.escapeShellArg b.peer} "${toString b.port}" --probe >/dev/null 2>&1'';
 
   # Delegates to wake-peer when the builder is a configured peer, so a LUKS
   # unlock happens on the way up.
@@ -27,6 +29,15 @@ let
         wol ${lib.optionalString (b.wake.broadcast != null) "-i ${b.wake.broadcast}"} ${b.wake.mac}
       '';
 
+  sendOnly =
+    b:
+    if config.local.wake.peers ? ${b.wakePeer} then
+      "exec ${config.local.wake.package}/bin/wake-peer --send-only ${b.wakePeer}"
+    else
+      lib.optionalString (b.wake.mac != null) ''
+        wol ${lib.optionalString (b.wake.broadcast != null) "-i ${b.wake.broadcast}"} ${b.wake.mac}
+      '';
+
   wake = pkgs.writeShellApplication {
     name = "builder-wake";
     runtimeInputs = with pkgs; [
@@ -34,12 +45,22 @@ let
       wol
     ];
     text = ''
-      host="''${1:?usage: builder-wake HOST}"
+      async=0
+      if [ "''${1:-}" = --async ]; then
+        async=1
+        shift
+      fi
+
+      host="''${1:?usage: builder-wake [--async] HOST}"
       case "$host" in
         ${lib.concatMapStringsSep "\n" (b: ''
           ${b.host})
             if ${probe b}; then
               exit 0
+            fi
+            if [ "$async" = 1 ]; then
+              ${sendOnly b}
+              exit 1
             fi
             ${rouse b}
             exit 1 ;;
@@ -50,6 +71,73 @@ let
       esac
     '';
   };
+
+  lease = pkgs.writeShellApplication {
+    name = "builder-lease";
+    runtimeInputs = [ pkgs.openssh ];
+    text = ''
+      host="''${1:?usage: builder-lease HOST}"
+      case "$host" in
+        ${lib.concatMapStringsSep "\n" (b: ''
+          ${b.host})
+            exec ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=10 \
+              -o StrictHostKeyChecking=accept-new \
+              -o UserKnownHostsFile=${leaseKnownHosts} \
+              -o ProxyCommand="${peerConnect} ${lib.escapeShellArg b.peer} 22" \
+              -i ${toString b.sshKey} -l ${cfg.leaseUser} "$host" \
+              ${cfg.leaseCommand} --take ${cfg.leaseName} --why nix-offload --for ${cfg.leaseDuration} ;;
+        '') builders}
+        *)
+          echo "no builder called $host" >&2
+          exit 2 ;;
+      esac
+    '';
+  };
+
+  leaseKnownHosts = "/root/.ssh/known_hosts.builders";
+
+  offload = pkgs.writeShellApplication {
+    name = "nix-build-offload";
+    runtimeInputs = [ pkgs.python3 ];
+    text = ''
+      exec python3 ${./build-offload.py} ${offloadConfig} "$@"
+    '';
+  };
+
+  offloadConfig = pkgs.writeText "nix-build-offload.json" (
+    builtins.toJSON {
+      hook = [
+        "${config.nix.package}/bin/nix"
+        "__build-remote"
+      ];
+      graceSeconds = cfg.localGraceMinutes * 60;
+      stallSeconds = cfg.stallMinutes * 60;
+      probeSeconds = 5;
+      wakeSeconds = 60;
+      leaseSeconds = 300;
+      source = "/etc/nix/machines";
+      builders = map (b: {
+        inherit (b) host systems;
+        features = b.supportedFeatures;
+        uri = "ssh-ng://${b.user}@${b.host}-builder";
+        probe = [
+          peerConnect
+          b.peer
+          (toString b.port)
+          "--probe"
+        ];
+        wake = [
+          (lib.getExe wake)
+          "--async"
+          b.host
+        ];
+        lease = [
+          (lib.getExe lease)
+          b.host
+        ];
+      }) builders;
+    }
+  );
 
   # nc must not get -w: it caps idle time too, tearing down long builds.
   proxy = pkgs.writeShellScript "builder-proxy" ''
@@ -166,6 +254,12 @@ let
             default = 2;
           };
         };
+
+        connectTimeoutSeconds = lib.mkOption {
+          type = lib.types.int;
+          default = 180;
+          description = "ssh ConnectTimeout; must outlast a cold boot and LUKS unlock.";
+        };
       };
     };
 in
@@ -179,12 +273,54 @@ in
       default = { };
       description = "Builders to offload to, keyed by hostname.";
     };
+
+    localGraceMinutes = lib.mkOption {
+      type = lib.types.int;
+      default = 5;
+      description = "Minutes of building here before the rest goes to a builder.";
+    };
+
+    stallMinutes = lib.mkOption {
+      type = lib.types.int;
+      default = 10;
+      description = "Build here again if offloading has accepted nothing for this long.";
+    };
+
+    leaseUser = lib.mkOption {
+      type = lib.types.str;
+      default = "max";
+      description = "Account on the builder allowed to hold it awake.";
+    };
+
+    leaseCommand = lib.mkOption {
+      type = lib.types.str;
+      default = "/run/current-system/sw/bin/keep-awake";
+      description = "keep-awake path, resolved on the builder, not here.";
+    };
+
+    leaseName = lib.mkOption {
+      type = lib.types.str;
+      default = "nix-offload";
+      description = "Name of the keep-awake lease held while offloading.";
+    };
+
+    leaseDuration = lib.mkOption {
+      type = lib.types.str;
+      default = "20m";
+      description = "Lease lifetime; expires on its own if this host dies.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
     nix.distributedBuilds = true;
     nix.settings.builders-use-substitutes = true;
-    nix.settings.builders = "@/etc/nix/machines";
+    nix.settings.builders = "@${machinesFile}";
+    nix.settings.build-hook = "${offload}/bin/nix-build-offload";
+
+    systemd.tmpfiles.rules = [
+      "d ${stateDir} 0755 root root -"
+      "f ${machinesFile} 0644 root root -"
+    ];
 
     nix.buildMachines = map (
       b:
@@ -212,14 +348,18 @@ in
         User ${b.user}
         IdentityFile ${toString b.sshKey}
         IdentitiesOnly yes
-        ConnectTimeout ${toString b.wake.probeSeconds}
+        ConnectTimeout ${toString b.connectTimeoutSeconds}
         Compression no
         Ciphers ${b.cipher}
         ServerAliveInterval 30
         ProxyCommand ${proxy} %h %p
     '') builders;
 
-    environment.systemPackages = [ wake ];
+    environment.systemPackages = [
+      wake
+      lease
+      offload
+    ];
 
     assertions = map (b: {
       assertion =

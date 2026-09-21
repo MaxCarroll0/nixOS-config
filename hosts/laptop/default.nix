@@ -48,7 +48,6 @@
 
   local.monitoring = {
     exporter.enable = true;
-    laptopTelemetry.enable = true;
     smart.enable = true;
     userReadable = true;
     telemetry.journalGateway.enable = true;
@@ -116,7 +115,10 @@
   local.server.ssh = {
     enable = true;
     allowUsers = [ "max" ];
-    lanInterfaces = [ "wlo1" "enp0s31f6" ];
+    lanInterfaces = [
+      "wlo1"
+      "enp0s31f6"
+    ];
   };
   local.server.tailscale = {
     enable = true;
@@ -124,10 +126,7 @@
     authKeySecret = "tailscale-auth-key";
   };
 
-  local.wake.peers.desktopnew = {
-    mac = "b4:2e:99:92:d6:18";
-    timeoutSeconds = 120;
-  };
+  local.wake.peers.desktopnew.timeoutSeconds = 120;
   users.users.max.openssh.authorizedKeys.keyFiles = [
     ../../keys/max.pub
     ../../keys/max-desktopnew.pub
@@ -156,6 +155,7 @@
     enable = true;
     authorizedKeys = [ (builtins.readFile ../../keys/max.pub) ];
     emulatedSystems = [ "aarch64-linux" ];
+    cpuQuota = "1200%";
   };
 
   local.build.client = {
@@ -170,8 +170,15 @@
         "x86_64-linux"
         "aarch64-linux"
       ];
-      maxJobs = 8;
+      maxJobs = 16;
       speedFactor = 20;
     };
+  };
+
+  systemd.services.nix-daemon.serviceConfig = {
+    CPUQuota = "1200%";
+    CPUWeight = 20;
+    IOWeight = 50;
+    Nice = 10;
   };
 }

@@ -356,7 +356,10 @@ let
         unit="keep-awake-$name"
         secs=$(seconds "''${duration:-24h}")
         if systemctl ''${XDG_RUNTIME_DIR:+--user} is-active --quiet "$unit.service" 2>/dev/null; then
-          exit 0
+          if [ -z "$duration" ]; then
+            exit 0
+          fi
+          systemctl ''${XDG_RUNTIME_DIR:+--user} stop "$unit.service" 2>/dev/null || true
         fi
         run_scoped --quiet --collect --unit "$unit" \
           --property=RuntimeMaxSec="$secs" \
@@ -872,7 +875,7 @@ in
         description = "Power off when a timed wake finds the host still idle";
         serviceConfig.Type = "oneshot";
         script = ''
-          sleep 60
+          sleep 5
           if ${lib.getExe keepAwakeActive} || ${lib.getExe sessionActivity}; then
             exit 0
           fi

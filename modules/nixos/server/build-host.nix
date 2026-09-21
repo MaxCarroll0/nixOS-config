@@ -10,9 +10,25 @@
 let
   cfg = config.local.build.host;
 
+  daemon = "${config.nix.package}/bin/nix-daemon --stdio";
+
+  slice = "nixbuild";
+
+  # Every incoming build shares one slice, so the cap holds however many
+  # connections the client opens. A scope that cannot be created would take
+  # remote builds down with it, hence the probe.
+  capped = pkgs.writeShellScript "nix-daemon-capped" ''
+    scope="${pkgs.systemd}/bin/systemd-run --user --scope --quiet --slice=${slice}"
+    if $scope ${pkgs.coreutils}/bin/true 2>/dev/null; then
+      exec $scope ${daemon}
+    fi
+    exec ${daemon}
+  '';
+
   # The key buys a Nix protocol session, not a shell. This must stay in step
   # with protocol = "ssh-ng" on the client; plain ssh:// wants nix-store --serve.
-  forcedCommand = key: ''command="${config.nix.package}/bin/nix-daemon --stdio",restrict ${key}'';
+  forcedCommand =
+    key: ''command="${if cfg.cpuQuota == null then daemon else capped}",restrict ${key}'';
 in
 
 {
@@ -29,6 +45,12 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = "Foreign systems to build for via binfmt emulation, e.g. aarch64-linux.";
+    };
+
+    cpuQuota = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "CPU all incoming builds share, e.g. \"1200%\". Null leaves them uncapped.";
     };
   };
 
@@ -47,6 +69,14 @@ in
       users.groups.nixremote = { };
 
       local.server.ssh.allowUsers = [ "nixremote" ];
+
+      systemd.user.slices.${slice} = lib.mkIf (cfg.cpuQuota != null) {
+        sliceConfig = {
+          CPUQuota = cfg.cpuQuota;
+          CPUWeight = 20;
+          IOWeight = 50;
+        };
+      };
 
       # trusted-users lets the client push unsigned paths and override settings.
       # That is a trust relationship between two machines you own, not a sandbox.
