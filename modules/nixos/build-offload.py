@@ -111,6 +111,7 @@ class Offload:
         self.child = None
         self.serving = None
         self.local_only = False
+        self.mixed = False
 
     def notify(self, colour, message):
         sys.stderr.buffer.write(
@@ -246,38 +247,20 @@ class Offload:
 
     def offload_only(self):
         grace = self.config["graceSeconds"]
-        stall = self.config["stallSeconds"]
 
         def judge(state):
             now = time.time()
-            if now - state.get("start", now) < grace:
-                return False
-            if now < state.get("bypass", 0):
-                return False
-            since = state.get("since")
-            if since is None or state.get("accepted", 0) > since:
-                since = now
-                state["since"] = since
-            if now - since > stall:
-                state["bypass"] = now + stall
-                state["since"] = None
-                return False
-            return True
+            return now - state.get("start", now) >= grace
 
         return with_state(self.session, judge)
-
-    def note_accept(self):
-        def mark(state):
-            state["accepted"] = time.time()
-            state["since"] = None
-
-        with_state(self.session, mark)
 
     def run(self):
         reader = Reader()
         settings = read_settings(reader)
         preamble = reader.take()
-        self.local_only = not settings.get("builders", "").strip()
+        chosen = settings.get("builders", "").strip()
+        self.local_only = not chosen
+        self.mixed = bool(chosen) and chosen != self.config.get("managed", chosen)
         self.started()
 
         while True:
@@ -309,7 +292,6 @@ class Offload:
             verdict = self.relay_until_verdict()
 
             if verdict == "accept":
-                self.note_accept()
                 self.answer("accept")
                 return self.passthrough()
             if verdict is None or verdict == "decline-permanently":
@@ -323,7 +305,7 @@ class Offload:
                 # connection and never reconsiders it, so without a respawn one
                 # dropped link retires the builder for this child's whole life.
                 self.stop_child()
-                if self.offload_only():
+                if not self.mixed and self.offload_only():
                     if self.announce_once("told"):
                         self.notify(
                             "1;36",

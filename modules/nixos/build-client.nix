@@ -111,11 +111,11 @@ let
         "__build-remote"
       ];
       graceSeconds = cfg.localGraceMinutes * 60;
-      stallSeconds = cfg.stallMinutes * 60;
       probeSeconds = 5;
       wakeSeconds = 60;
       leaseSeconds = 300;
       source = "/etc/nix/machines";
+      managed = "@${machinesFile}";
       builders = map (b: {
         inherit (b) host systems;
         features = b.supportedFeatures;
@@ -278,12 +278,6 @@ in
       type = lib.types.int;
       default = 0;
       description = "Minutes of building here before the rest goes to a builder.";
-    };
-
-    stallMinutes = lib.mkOption {
-      type = lib.types.int;
-      default = 2;
-      description = "Build here again if offloading has accepted nothing for this long.";
     };
 
     leaseUser = lib.mkOption {

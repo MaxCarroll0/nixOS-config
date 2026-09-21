@@ -53,7 +53,7 @@ def request(system="x86_64-linux", features=()):
     return text("try") + u64(1) + text(system) + text("/nix/store/a.drv") + texts(list(features))
 
 
-def run(tmp, replies, probe, requests, grace=0, stall=600, machines=None, setting="@/dev/null"):
+def run(tmp, replies, probe, requests, grace=0, machines=None, setting="@/dev/null"):
     state = tmp / "state"
     state.mkdir(exist_ok=True)
     stub = tmp / "stub.py"
@@ -72,11 +72,11 @@ def run(tmp, replies, probe, requests, grace=0, stall=600, machines=None, settin
     config = {
         "hook": [sys.executable, str(stub)],
         "graceSeconds": grace,
-        "stallSeconds": stall,
         "probeSeconds": 0,
         "wakeSeconds": 0,
         "leaseSeconds": 3600,
         "source": str(source),
+        "managed": "@/dev/null",
         "builders": [
             {
                 "host": "desktopnew",
@@ -189,17 +189,16 @@ def main():
         )
 
         verdicts, _, _ = run(
-            case("stall"),
-            ["# decline\n", "# decline\n"],
+            case("persist"),
+            ["# decline\n", "# decline\n", "# decline\n"],
             True,
-            [request(), request()],
+            [request(), request(), request()],
             grace=0,
-            stall=0,
         )
         failures += check(
-            "stall guard releases work back to the laptop",
+            "offloading is never cancelled, however long it declines",
             verdicts,
-            ["postpone", "decline"],
+            ["postpone", "postpone", "postpone"],
         )
 
         verdicts, _, _ = run(
@@ -245,6 +244,21 @@ def main():
         )
         failures += check(
             "the laptop keeps building while the builder is down",
+            verdicts,
+            ["decline", "decline"],
+        )
+
+        mixed = case("mixed")
+        verdicts, _, _ = run(
+            mixed,
+            ["# decline\n", "# decline\n"],
+            True,
+            [request(), request()],
+            grace=0,
+            setting="@/etc/nix/machines",
+        )
+        failures += check(
+            "an overridden builders list keeps building locally as well",
             verdicts,
             ["decline", "decline"],
         )
