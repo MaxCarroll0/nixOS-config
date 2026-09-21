@@ -865,7 +865,11 @@ in
         polkit.addRule(function (action, subject) {
           var inhibits = [
             "org.freedesktop.login1.inhibit-block-sleep",
-            "org.freedesktop.login1.inhibit-block-shutdown"
+            "org.freedesktop.login1.inhibit-block-shutdown",
+            "org.freedesktop.login1.suspend",
+            "org.freedesktop.login1.suspend-multiple-sessions",
+            "org.freedesktop.login1.power-off",
+            "org.freedesktop.login1.power-off-multiple-sessions"
           ];
           if (inhibits.indexOf(action.id) >= 0
               && subject.isInGroup("${cfg.idle.autosuspend.keepAwakeGroup}")) {
