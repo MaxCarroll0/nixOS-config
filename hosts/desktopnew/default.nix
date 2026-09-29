@@ -107,6 +107,8 @@ in
     "/sys/bus/pci/devices/0000:02:00.0/usb*"
   ];
 
+  system.autoUpgrade.enable = true;
+
   local.power.wakeOnLan = {
     inherit (facts.desktopnew) interface mac;
   };
