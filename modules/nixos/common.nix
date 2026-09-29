@@ -359,7 +359,7 @@ in
     systemd.services.nixos-upgrade.preStart = /* bash */ ''
       if [ -d ${flakePath}/.git ]; then
         ${pkgs.git}/bin/git config --global --add safe.directory ${flakePath}
-        ${config.nix.package}/bin/nix flake update --flake ${flakePath} nixpkgs nixpkgs-unstable
+        ${config.nix.package}/bin/nix flake update --flake ${flakePath}
         ${pkgs.coreutils}/bin/chown max:users ${flakePath}/flake.lock
       fi
     '';
