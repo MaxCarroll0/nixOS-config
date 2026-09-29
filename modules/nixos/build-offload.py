@@ -11,6 +11,8 @@ import time
 
 STATE_DIR = os.environ.get("NIX_OFFLOAD_STATE", "/run/nix-offload")
 MACHINES = os.path.join(STATE_DIR, "machines")
+# preferLocalBuild is present but empty when false; structuredAttrs puts it in __json.
+LOCAL_ONLY = (b'"preferLocalBuild","1"', b'"preferLocalBuild":true')
 
 
 def read_exact(count):
@@ -63,8 +65,8 @@ def read_request(reader):
         return None
     reader.number()
     system = reader.text()
-    reader.text()
-    return system, set(reader.texts())
+    drv = reader.text()
+    return system, drv, set(reader.texts())
 
 
 def with_state(path, mutate):
@@ -90,6 +92,15 @@ def stale(path, interval):
         return True
 
     return with_state(path, check)
+
+
+def offloadable(drv):
+    try:
+        with open(drv, "rb") as handle:
+            content = handle.read()
+    except OSError:
+        return False
+    return not any(marker in content for marker in LOCAL_ONLY)
 
 
 def detached(argv):
@@ -137,6 +148,7 @@ class Offload:
 
     def reachable(self):
         up = []
+        down = []
         for builder in self.config["builders"]:
             path = os.path.join(STATE_DIR, "probe-" + builder["host"])
 
@@ -157,13 +169,18 @@ class Offload:
 
             if with_state(path, check):
                 up.append(builder)
-            elif stale(
+            else:
+                down.append(builder)
+        return up, down
+
+    def wake(self, builders):
+        for builder in builders:
+            if stale(
                 os.path.join(STATE_DIR, "wake-" + builder["host"]),
                 self.config["wakeSeconds"],
             ):
                 self.notify("1;33", "waking %s" % builder["host"])
                 detached(builder["wake"])
-        return up
 
     def hold_awake(self, builders):
         for builder in builders:
@@ -271,14 +288,18 @@ class Offload:
             if request is None:
                 return 0
             payload = reader.take()
-            system, features = request
+            system, drv, features = request
 
             if self.local_only:
                 self.answer("decline")
                 continue
 
-            builders = self.reachable()
-            self.hold_awake(builders)
+            builders, asleep = self.reachable()
+            worthwhile = offloadable(drv)
+            if worthwhile and self.usable(asleep, system, features):
+                self.wake(asleep)
+            if worthwhile and self.usable(builders, system, features):
+                self.hold_awake(builders)
             if [builder["host"] for builder in builders] != self.serving:
                 self.stop_child()
             if not builders:
