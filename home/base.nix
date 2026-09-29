@@ -141,7 +141,7 @@
     useFlake = true;
     flakeDir = "/home/max/.config/nix";
     frequency = "weekly";
-    preSwitchCommands = [ "nix flake update nixpkgs-unstable" ];
+    preSwitchCommands = [ "nix flake update" ];
   };
 
   systemd.user.services.sudo-agent = {
