@@ -20,6 +20,8 @@ from pathlib import Path
 PLAN_HEADER = re.compile(r"derivations? will be built")
 PLAN_DRV = re.compile(r"([^\s\"]+\.drv)")
 OFFLOAD_BUILDERS = "/etc/nix/offload-builders"
+# preferLocalBuild is present but empty when false; structuredAttrs puts it in __json.
+LOCAL_ONLY = (b'"preferLocalBuild","1"', b'"preferLocalBuild":true')
 
 BUILD_LOG = 101
 BUILD_PHASE = 104
@@ -164,9 +166,10 @@ class Observer:
             return
         try:
             with open(match.group(1), "rb") as handle:
-                if b"preferLocalBuild" in handle.read():
-                    return
+                content = handle.read()
         except OSError:
+            return
+        if any(marker in content for marker in LOCAL_ONLY):
             return
         self.wake_settled = True
         try:
