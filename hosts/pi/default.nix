@@ -107,6 +107,8 @@
 
   local.browserSync.server = true;
 
+  system.autoUpgrade.enable = true;
+
   local.build.client = {
     enable = true;
     builders.laptop = {
