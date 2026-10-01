@@ -163,6 +163,41 @@ in
     pulse.enable = true;
   };
 
+  # Discord's Krisp suppression is Windows/macOS only, so denoise in PipeWire.
+  services.pipewire.extraConfig.pipewire."99-rnnoise-source" = {
+    "context.modules" = [
+      {
+        name = "libpipewire-module-filter-chain";
+        args = {
+          "node.description" = "Noise Suppressed Microphone";
+          "media.name" = "Noise Suppressed Microphone";
+          "filter.graph".nodes = [
+            {
+              type = "ladspa";
+              name = "rnnoise";
+              plugin = "${pkgs.rnnoise-plugin}/lib/ladspa/librnnoise_ladspa.so";
+              label = "noise_suppressor_mono";
+              control = {
+                "VAD Threshold (%)" = 50.0;
+                "VAD Grace Period (ms)" = 200;
+              };
+            }
+          ];
+          "capture.props" = {
+            "node.name" = "capture.rnnoise_source";
+            "node.passive" = true;
+            "audio.rate" = 48000;
+          };
+          "playback.props" = {
+            "node.name" = "rnnoise_source";
+            "media.class" = "Audio/Source";
+            "audio.rate" = 48000;
+          };
+        };
+      }
+    ];
+  };
+
   services.desktopManager.plasma6.enable = true;
   services.displayManager.sddm.enable = true;
   services.displayManager.sddm.wayland.enable = true;
