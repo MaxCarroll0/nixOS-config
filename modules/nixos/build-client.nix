@@ -385,18 +385,17 @@ in
         message = "sshKey for ${b.host} must be an absolute path outside the world-readable store, not \"${b.sshKey}\".";
       }
       {
-        # nix writes base64Decode(publicHostKey) straight into a known_hosts file,
-        # so it must encode the whole .pub line. A raw key blob base64s to "AAAA"
-        # and lands as binary there, failing verification with no useful error.
-        assertion = b.publicHostKey == null || lib.hasPrefix "c3No" b.publicHostKey;
-        message = "publicHostKey for ${b.host} must be base64 of the whole .pub file: base64 -w0 /etc/ssh/ssh_host_ed25519_key.pub";
+        # knownHosts prepends the key type, so this must be the bare body:
+        # a whole .pub line or its base64 lands in known_hosts malformed.
+        assertion = b.publicHostKey == null || lib.hasPrefix "AAAAC3NzaC1lZDI1NTE5" b.publicHostKey;
+        message = "publicHostKey for ${b.host} must be the bare ed25519 key body: awk '{print $2}' /etc/ssh/ssh_host_ed25519_key.pub";
       }
     ]) builders;
 
     warnings = lib.concatMap (
       b:
       lib.optional (b.publicHostKey == null)
-        "publicHostKey for ${b.host} is unset, so the builder is unauthenticated. Get it with: base64 -w0 /etc/ssh/ssh_host_ed25519_key.pub"
+        "publicHostKey for ${b.host} is unset, so the builder is unauthenticated. Get it with: awk '{print $2}' /etc/ssh/ssh_host_ed25519_key.pub"
     ) builders;
   };
 }
