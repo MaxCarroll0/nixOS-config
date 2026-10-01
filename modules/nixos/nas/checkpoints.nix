@@ -149,6 +149,7 @@ let
       pkgs.nilfs-utils
       pkgs.util-linux
       pkgs.coreutils
+      pkgs.gawk
     ];
     text = ''
       tmp=${ccfg.metricsFile}.tmp

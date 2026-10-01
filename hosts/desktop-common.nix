@@ -80,7 +80,10 @@
 
   local.build.host = {
     enable = true;
-    authorizedKeys = [ (builtins.readFile ../keys/max.pub) ];
+    authorizedKeys = [
+      (builtins.readFile ../keys/max.pub)
+      (builtins.readFile ../keys/pi-nixremote.pub)
+    ];
     emulatedSystems = [ "aarch64-linux" ];
   };
 
