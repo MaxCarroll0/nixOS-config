@@ -194,12 +194,6 @@ let
       [ -w "$device/power/control" ] || continue
       [ "$(cat "$device/bDeviceClass" 2>/dev/null || true)" = "09" ] && continue
       [ -d "$device/net" ] && continue
-      ${lib.optionalString (cfg.idle.usb.neverSuspend != [ ]) ''
-        id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
-        case "$id" in
-          ${lib.concatStringsSep "|" cfg.idle.usb.neverSuspend}) continue ;;
-        esac
-      ''}
       echo "$device"
     done
     exit 0
@@ -759,6 +753,12 @@ in
         script = ''
           ${peripherals} | while read -r device; do
             echo on > "$device/power/control"
+            ${lib.optionalString (cfg.idle.usb.neverSuspend != [ ]) ''
+              id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
+              case "$id" in
+                ${lib.concatStringsSep "|" cfg.idle.usb.neverSuspend}) continue ;;
+              esac
+            ''}
             echo 300000 > "$device/power/autosuspend_delay_ms"
             echo auto > "$device/power/control"
           done

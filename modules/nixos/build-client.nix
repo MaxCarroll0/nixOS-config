@@ -224,7 +224,7 @@ let
         publicHostKey = lib.mkOption {
           type = lib.types.nullOr lib.types.str;
           default = null;
-          description = "Base64 host key of the builder. Null skips verification.";
+          description = "OpenSSH ed25519 public-key body pinned for the builder alias.";
         };
 
         systems = lib.mkOption {
@@ -318,24 +318,40 @@ in
       "f ${machinesFile} 0644 root root -"
     ];
 
-    nix.buildMachines = map (
-      b:
-      {
-        hostName = "${b.host}-builder${
-          lib.optionalString (b.remoteProgram != null) "?remote-program=${b.remoteProgram}"
-        }";
-        sshUser = b.user;
-        sshKey = toString b.sshKey;
-        protocol = "ssh-ng";
-        inherit (b)
-          systems
-          maxJobs
-          speedFactor
-          supportedFeatures
-          ;
-      }
-      // lib.optionalAttrs (b.publicHostKey != null) { inherit (b) publicHostKey; }
-    ) builders;
+    nix.buildMachines = map (b: {
+      hostName = "${b.host}-builder${
+        lib.optionalString (b.remoteProgram != null) "?remote-program=${b.remoteProgram}"
+      }";
+      sshUser = b.user;
+      sshKey = toString b.sshKey;
+      protocol = "ssh-ng";
+      inherit (b)
+        systems
+        maxJobs
+        speedFactor
+        supportedFeatures
+        ;
+    }) builders;
+
+    # Nix's machine-file publicHostKey handling does not cooperate with the
+    # ProxyCommand alias. Pin that exact alias in OpenSSH's system known-hosts
+    # file instead; Nix then uses normal strict host-key verification.
+    programs.ssh.knownHosts = lib.listToAttrs (
+      lib.concatMap (
+        b:
+        lib.optional (b.publicHostKey != null) {
+          name = "${b.host}-builder";
+          value = {
+            publicKey = "ssh-ed25519 ${b.publicHostKey}";
+            hostNames = [
+              "${b.host}-builder"
+              b.host
+              "[${b.host}]:${toString b.port}"
+            ];
+          };
+        }
+      ) builders
+    );
 
     programs.ssh.extraConfig = lib.concatMapStrings (b: ''
       Host ${b.host}-builder

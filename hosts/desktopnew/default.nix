@@ -97,7 +97,11 @@ in
   };
 
   # Focusrite firmware does not survive a USB resume; it dropped off the bus.
-  local.power.idle.usb.neverSuspend = [ "1235:8202" ];
+  # The G403 goes silent once parked and a replug is the only way back.
+  local.power.idle.usb.neverSuspend = [
+    "1235:8202"
+    "046d:c08f"
+  ];
 
   # Both latch a wake as S3 is entered, resuming within milliseconds: serio0
   # raises IRQ 1 with no PS/2 keyboard attached, and the Promontory root hubs

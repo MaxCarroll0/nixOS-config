@@ -114,7 +114,6 @@
     builders.laptop = {
       user = "nixremote";
       port = 2222;
-      sshKey = "/home/max/.ssh/id_ed25519";
       systems = [ "aarch64-linux" ];
       maxJobs = 8;
       speedFactor = 4;
@@ -123,7 +122,7 @@
       user = "nixremote";
       port = 2222;
       sshKey = "/home/max/.ssh/id_ed25519";
-      publicHostKey = "c3NoLWVkMjU1MTkgQUFBQUMzTnphQzFsWkRJMU5URTVBQUFBSUVobFMzS3gzN25PaEU2bkFua1hnb0hVM0p3dEZMbVQxbUxiRkxjbUxYbDggcm9vdEBkZXNrdG9wCg==";
+      publicHostKey = "AAAAC3NzaC1lZDI1NTE5AAAAIEhlS3Kx37nOhE6nAnkXgoHU3JwtFLmT1mLbFLcmLXl8";
       systems = [ "aarch64-linux" ];
       maxJobs = 8;
       speedFactor = 20;
