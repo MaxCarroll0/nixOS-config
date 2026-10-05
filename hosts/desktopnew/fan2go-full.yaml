@@ -109,6 +109,9 @@ fans:
     controlAlgorithm:
       direct:
         maxPwmChangePerCycle: 2
+    sanityCheck:
+      fanModeChangedByThirdParty:
+        throttleDuration: 2s
     controlMode:
       onExit: restore
     minPwm: 0
@@ -125,6 +128,9 @@ fans:
     controlAlgorithm:
       direct:
         maxPwmChangePerCycle: 5
+    sanityCheck:
+      fanModeChangedByThirdParty:
+        throttleDuration: 2s
     controlMode:
       onExit: restore
     minPwm: 140
@@ -184,6 +190,9 @@ fans:
     controlAlgorithm:
       direct:
         maxPwmChangePerCycle: 5
+    sanityCheck:
+      fanModeChangedByThirdParty:
+        throttleDuration: 2s
     controlMode:
       onExit: restore
     minPwm: 0
