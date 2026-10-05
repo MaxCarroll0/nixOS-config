@@ -60,14 +60,15 @@ let
   };
 
   aniCliHianime = pkgs-unstable.ani-cli.overrideAttrs (old: {
-    version = "5.0-hianime";
+    version = "5.1.4-megaplay";
     src = pkgs-unstable.fetchFromGitHub {
-      owner = "Dhairya3391";
+      owner = "pystardust";
       repo = "ani-cli";
-      rev = "685cb77d422f8e1d6ddd8263dd40e4224d3629c6";
-      hash = "sha256-pxOHyyqCfkJfCj7WXccbT08CQoW6M1ZCbig6X6c/nXs=";
+      rev = "dc43f329a8a19b4c82939d0c857aa8298cdafe55";
+      hash = "sha256-AoCdBsJ+cNhCiGzx47JnKFDvydLp+U1VM6oRRPm/2xE=";
     };
-    patches = (old.patches or [ ]) ++ [ ./patches/ani-cli-subtitles.patch ];
+    patches = (old.patches or [ ]) ++ [ ./patches/ani-cli-megaplay.patch ];
+    runtimeInputs = (old.runtimeInputs or [ ]) ++ [ pkgs-unstable.openssl ];
   });
 
   arxiv-to-prompt = pkgs.python3Packages.buildPythonPackage {
