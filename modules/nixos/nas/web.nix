@@ -74,7 +74,7 @@ in
         PrivateTmp = true;
         ProtectSystem = "strict";
         ProtectHome = "read-only";
-        ReadOnlyPaths = [ "${cfg.dataRoot}/%i" ];
+        ReadWritePaths = [ "${cfg.dataRoot}/%i" ];
         RestrictAddressFamilies = [ "AF_UNIX" ];
         SystemCallFilter = [ "@system-service" ];
       };
