@@ -796,7 +796,7 @@ Read EPUBs with nov.el.
 * Terminal
 ** Eat
 
-Pure-elisp terminal, with =eat-eshell-mode= upgrading eshell visual commands. Meow normal ↔ eat-emacs-mode, meow insert ↔ eat-semi-char-mode. =<escape>= in semi-char must be rebound because eat otherwise forwards it to the terminal. =C-l= is resent on window-size change because fullscreen TUIs cache cells and leave restored rows blank.
+Pure-elisp terminal, with =eat-eshell-mode= upgrading eshell visual commands. Meow normal ↔ eat-emacs-mode, meow insert ↔ eat-semi-char-mode. =<escape>= in semi-char must be rebound because eat otherwise forwards it to the terminal. =C-l= is resent on window-size change because fullscreen TUIs cache cells and leave restored rows blank. A TUI emits many full-screen repaints a second and eat renders each one, so output latency follows the cursor: at the default 33ms a background terminal cost 969ms of emulation per burst, and batching at 500ms brought the same burst to 37ms by collapsing the intermediate frames.
 
 #+begin_src emacs-lisp
 
@@ -826,7 +826,24 @@ Pure-elisp terminal, with =eat-eshell-mode= upgrading eshell visual commands. Me
         (eat-term-send-string eat-terminal "\C-l"))))
   (add-hook 'window-size-change-functions
             (lambda (frame)
-              (walk-windows #'my/eat-redraw-on-resize nil frame))))
+              (walk-windows #'my/eat-redraw-on-resize nil frame)))
+
+  (defconst my/eat-latency-focused '(0.008 . 0.033))
+  (defconst my/eat-latency-background '(0.15 . 0.5))
+
+  (defun my/eat-latency-follow-selection (&optional _frame)
+    "Batch terminal output harder while point is outside the terminal."
+    (dolist (buffer (buffer-list))
+      (when (buffer-local-value 'eat-terminal buffer)
+        (let ((latency (if (eq buffer (window-buffer (selected-window)))
+                           my/eat-latency-focused
+                         my/eat-latency-background)))
+          (with-current-buffer buffer
+            (setq-local eat-minimum-latency (car latency)
+                        eat-maximum-latency (cdr latency)))))))
+
+  (add-hook 'window-selection-change-functions #'my/eat-latency-follow-selection)
+  (add-hook 'buffer-list-update-hook #'my/eat-latency-follow-selection))
 
 #+end_src
 
