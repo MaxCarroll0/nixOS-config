@@ -37,6 +37,9 @@ Lexical binding.
 
 (use-package emacs
   :custom
+  (gc-cons-threshold (* 128 1024 1024))
+  (gc-cons-percentage 0.2)
+  (read-process-output-max (* 1024 1024))
   (tab-always-indent t)
 
   ;; Disable Ispell completion function.
