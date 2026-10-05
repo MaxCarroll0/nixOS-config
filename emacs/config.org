@@ -2144,7 +2144,7 @@ and preview over a term that is already correct."
                                             (max 0 (- (point) beg dropped))
                                             md)))
          (last (last all))
-         (base (or (cdr last) 0))
+         (base (min (or (cdr last) 0) (length string)))
          (prefix (substring string base)))
     (when last
       (setcdr last nil)
@@ -2158,9 +2158,11 @@ and preview over a term that is already correct."
                   (common (if (eq raw t) prefix raw))
                   (lencom (length common)))
         (unless (and (cdr sorted) completion-preview-exact-match-only)
-          (list (substring string 0 base) common
-                (mapcar (lambda (candidate) (substring candidate lencom))
-                        sorted)))))))
+          (when-let* ((suffixes (mapcar (lambda (candidate)
+                                          (substring candidate lencom))
+                                        sorted))
+                      ((not (string-empty-p (car suffixes)))))
+            (list (substring string 0 base) common suffixes)))))))
 
 (defun my/completion-preview-reset-rendering ()
   "Forget rendering state installed by the previous preview update."
@@ -2389,9 +2391,6 @@ and preview over a term that is already correct."
         (copy-keymap completion-preview--mouse-map))
   (define-key my/completion-preview-mouse-map
               (kbd "<mouse-1>") #'my/completion-preview-accept)
-  (dolist (command '(forward-char backward-char next-line previous-line
-                     meow-left meow-right meow-next meow-prev))
-    (add-to-list 'completion-preview-commands command))
   (advice-add #'completion-preview--update
               :around #'my/completion-preview-without-probe)
   (advice-add #'completion-preview--try-table
