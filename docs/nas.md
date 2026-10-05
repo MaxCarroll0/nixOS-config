@@ -1524,3 +1524,28 @@ than what is running.
 5. `nas-unlock` from the laptop, then `sudo bash docs/nas-verify.sh` on the pi.
 6. `git -C /home/max/.config/nix pull --ff-only` on the pi, so its own clone can no longer
    activate the old configuration.
+
+Both blockers in step 4 come from the same shape of problem: the stranded generation predates the
+mechanism its own replacement needs.
+
+- No `pam_ssh_agent_auth` in `/etc/pam.d/sudo`, so an agent-authorized deploy dies at
+  `sudo: a password is required` after a full successful build and copy.
+- No `activate-detached` on `PATH`, while `flake.nix` sets `sudo = "sudo activate-detached"`.
+  deploy-rs prefixes that string verbatim and appends the activation user, so activation would run
+  `sudo activate-detached root …` and fail with command not found.
+
+One command clears both, from a real terminal rather than an agent:
+
+```bash
+NIX_OBSERVER_PLAIN=1 rebuild --host pi switch --sudo "sudo -u"
+```
+
+`rebuild` forwards trailing arguments to deploy-rs and leaves `--interactive-sudo` at the node
+default, so this prompts for the pi's sudo password; a genuine tty is required, since without
+`/dev/tty` deploy-rs sends an empty password and never prompts.
+
+Dropping `activate-detached` for that one hop is safe here only because the restart that would
+otherwise kill the session cannot happen: `tailscaled.restartIfChanged = false`, and
+`tailscaled-autoconnect` is forced off the activation path onto a timer. The deploy arrives over
+Tailscale SSH, which lives inside `tailscaled`. Magic rollback still applies. Do not generalise
+this to a deploy that *does* restart a connectivity service.
