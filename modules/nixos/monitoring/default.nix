@@ -695,6 +695,19 @@ in
         };
         settings.live.max_connections = 0;
         settings."auth.anonymous".enabled = false;
+        settings."auth.proxy" = {
+          enabled = true;
+          header_name = "Tailscale-User-Login";
+          header_property = "username";
+          auto_sign_up = true;
+          enable_login_token = true;
+          whitelist = "127.0.0.1, ::1";
+          headers = "Name:Tailscale-User-Name";
+        };
+        settings.users = {
+          auto_assign_org = true;
+          auto_assign_org_role = "Admin";
+        };
 
         provision.datasources.settings = {
           apiVersion = 1;
