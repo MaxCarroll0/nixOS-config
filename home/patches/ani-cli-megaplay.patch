@@ -1,0 +1,277 @@
+--- a/ani-cli
++++ b/ani-cli
+@@ -1,6 +1,6 @@
+ #!/bin/sh
+ 
+-version_number="5.1.4"
++version_number="5.1.5"
+ 
+ # UI
+ 
+@@ -145,6 +145,7 @@
+     [ "$player_function" = "android_mpv" ] && : >"/storage/emulated/0/mpv/mpv.config.mp4" 2>/dev/null
+     tput sgr0               # clears colors
+     rm -f "${histfile}.new" # remove temp logfile
++    [ -n "${_megaplay_cookie:-}" ] && rm -f "$_megaplay_cookie"
+ }
+ 
+ # SCRAPING
+@@ -195,6 +196,24 @@
+     printf "%b" "$_output"
+ )
+ 
++# MegaPlay stores its source config as base64url-encoded AES-256-CBC.
++megaplay_decrypt() {
++    _b64="$(printf "%s" "$1" | tr '_-' '/+')"
++
++    case $((${#_b64} % 4)) in
++        0) ;;
++        2) _b64="${_b64}==" ;;
++        3) _b64="${_b64}=" ;;
++        *) return 1 ;;
++    esac
++
++    b64_decode "$_b64" |
++        openssl enc -d -aes-256-cbc \
++            -K 693f4c4d5441783051362c3a7d35305500000000000000000000000000000000 \
++            -iv 57303b3237546f6155706c5f50252763 \
++            2>/dev/null
++}
++
+ # search the query and give results. format is (id \t name)
+ hianime_search() {
+     #shellcheck disable=SC2059
+@@ -218,26 +237,172 @@
+         sed -nE "s|.*data-number=\"([^\"]*)\".*data-id=\"([0-9]+)\".*/watch/${1}[?]ep=.*|\\2\\t\\1|p"
+ }
+ 
++# MegaPlay spreads streams over several CDN pools and some of them answer a 302 to
++# cloudflare-terms-of-service-abuse.com for us, which mpv sits on forever. One segment
++# says whether the pool this request landed on actually serves.
++megaplay_cdn_ok() {
++    _probe_variant="$(hianime_curl "$1" -e "https://megaplay.buzz/" | grep -v '^#' | head -n 1)"
++    [ -z "$_probe_variant" ] && return 1
++    case "$_probe_variant" in http*) ;; *) _probe_variant="${1%/*}/$_probe_variant" ;; esac
++
++    _probe_segment="$(hianime_curl "$_probe_variant" -e "https://megaplay.buzz/" | grep -v '^#' | head -n 1)"
++    [ -z "$_probe_segment" ] && return 1
++    case "$_probe_segment" in http*) ;; *) _probe_segment="${_probe_variant%/*}/$_probe_segment" ;; esac
++
++    #shellcheck disable=SC2086
++    _probe_code="$($curl_exe -s -o /dev/null -w '%{http_code}' -A "$agent" --max-time 10 $cipher_flag -e "https://megaplay.buzz/" "$_probe_segment")"
++    case "$_probe_code" in 2??) return 0 ;; *) return 1 ;; esac
++}
++
+ # resolves episode $1 in mode $2 (sub/dub): sets links (quality >url per line), sub_link, mal_id and refr
+ hianime_m3u8() {
+     _ep_id=$(printf "%s" "$episode_maps" | sed -nE "s|^([0-9]+)\t${1}$|\1|p")
++
+     #shellcheck disable=SC2059
+     _servers="$(hianime_curl "$(printf "$servers_api" "$_ep_id")" | sed 's|\\"|"|g; s|server-item|\nserver-item|g')"
+-    # only the zokoanime embed is understood by deobfuscate_blob, the other servers use different players
+-    _hash="$(printf "%s\n" "$_servers" | sed -nE 's|.*data-type="'"$2"'".*data-server-name="ZokoAnime".*data-hash="([^"]*)".*|\1|p' | head -n 1)"
+-    _embed="$(b64_decode "$_hash")"
+-    [ -z "$_embed" ] && return 1
+-    # the stream host wants the embed site as referer, and the embed url carries the mal id for ani-skip
+-    refr="$(printf "%s" "$_embed" | sed -E 's|^(https?://[^/]*).*|\1/|')"
+-    mal_id="$(printf "%s" "$_embed" | sed -nE 's|.*/mal/([0-9]+)/.*|\1|p')"
+-    _blob="$(hianime_curl "$_embed" | sed -nE 's|.*window\.__P="([^"]*)".*|\1|p')"
+-    [ -z "$_blob" ] && return 1
+-    _json="$(deobfuscate_blob "$_blob")"
+-    _m3u8_master="$(printf "%s" "$_json" | sed -nE 's|.*"src":"([^"]*\.m3u8[^"]*)".*|\1|p')"
+-    [ -z "$_m3u8_master" ] && return 1
+-    sub_link="$(printf "%s" "$_json" | sed 's|.*"subtitles":\[||; s|}\].*||; s|},{|}\n{|g' | grep -m 1 '"default":true' | sed -nE 's|.*"src":"([^"]*)".*|\1|p')"
+-    # quality variants are relative to the master playlist
+-    links="$(hianime_curl "$_m3u8_master" -e "$refr" | sed 's|^#EXT-X-STREAM.*x||g; s|,.*|p|g; /^#/d; $!N; s|\n| >|;/EXT-X-I-FRAME/d' | sed "\|>https*://|!s|>|>${_m3u8_master%/*}/|" | sort -g -r -s)"
++
++    # Prefer the current MegaPlay source; hianime renamed that server Vidstream-2 -> HD-1.
++    _hash="$(printf "%s\n" "$_servers" | sed -nE 's|.*data-type="'"$2"'".*data-server-name="(Vidstream-2\|HD-1)".*data-hash="([^"]*)".*|\2|p' | head -n 1)"
++
++    if [ -n "$_hash" ]; then
++        _embed="$(b64_decode "$_hash")"
++        [ -z "$_embed" ] && return 1
++
++        # HiAnime currently provides the old /stream/ URL while the
++        # working MegaPlay player lives under /videojs/stream/.
++        case "$_embed" in
++            https://megaplay.buzz/stream/*)
++                _embed="https://megaplay.buzz/videojs/${_embed#https://megaplay.buzz/}"
++                ;;
++            https://megaplay.buzz/videojs/stream/*) ;;
++            *) return 1 ;;
++        esac
++
++        _megaplay_cookie="${TMPDIR:-/tmp}/ani-cli-megaplay-$$.cookie"
++        rm -f "$_megaplay_cookie"
++
++        _page="$(hianime_curl "$_embed" \
++            -e "https://megaplay.buzz/" \
++            -c "$_megaplay_cookie" \
++            -b "$_megaplay_cookie")"
++
++        _data_id="$(printf "%s" "$_page" |
++            sed -nE 's|.*data-id="([0-9]+)".*|\1|p' |
++            head -n 1)"
++
++        [ -z "$_data_id" ] && return 1
++
++        for _cdn in "" "&s=bcdn"; do
++            _m3u8_master=""
++
++            _src_json="$(hianime_curl \
++                "https://megaplay.buzz/videojs/stream/getSources?id=$_data_id$_cdn" \
++                -H "Origin: https://megaplay.buzz" \
++                -H "X-Requested-With: XMLHttpRequest" \
++                -e "$_embed" \
++                -b "$_megaplay_cookie" \
++                -c "$_megaplay_cookie")"
++
++            _enc="$(printf "%s" "$_src_json" |
++                tr -d '\n' |
++                sed -nE 's|.*"enc"[[:space:]]*:[[:space:]]*"([^"]+)".*|\1|p')"
++
++            [ -z "$_enc" ] && continue
++
++            _json="$(megaplay_decrypt "$_enc")" || continue
++
++            _m3u8_master="$(printf "%s" "$_json" |
++                tr -d '\n' |
++                sed -nE 's|.*"file"[[:space:]]*:[[:space:]]*"([^"]*\.m3u8[^"]*)".*|\1|p')"
++
++            [ -z "$_m3u8_master" ] && continue
++
++            megaplay_cdn_ok "$_m3u8_master" && break
++        done
++
++        rm -f "$_megaplay_cookie"
++        _megaplay_cookie=""
++
++        [ -z "$_m3u8_master" ] && return 1
++
++        # ani-cli currently exposes the English subtitle track.
++        sub_link="$(printf "%s" "$_src_json" |
++            sed 's|},{|}\n{|g' |
++            grep -E -m 1 '"label"[[:space:]]*:[[:space:]]*"English"' |
++            sed -nE 's|.*"file"[[:space:]]*:[[:space:]]*"([^"]*)".*|\1|p')"
++
++        # Fall back to the first caption track if there is no English label.
++        if [ -z "$sub_link" ]; then
++            sub_link="$(printf "%s" "$_src_json" |
++                sed 's|},{|}\n{|g' |
++                grep -E -m 1 '"kind"[[:space:]]*:[[:space:]]*"captions"' |
++                sed -nE 's|.*"file"[[:space:]]*:[[:space:]]*"([^"]*)".*|\1|p')"
++        fi
++
++        # getSources returns raw json, so the track url still carries escaped slashes.
++        sub_link="$(printf "%s" "$sub_link" | sed "s|\\\\/|/|g")"
++
++        refr="https://megaplay.buzz/"
++
++        # Unlike the old ZokoAnime embed URL, MegaPlay does not expose
++        # the MAL id used by ani-skip.
++        mal_id=""
++
++    else
++        # Fall back to the older ZokoAnime player where it is still available.
++        _hash="$(printf "%s\n" "$_servers" | sed -nE 's|.*data-type="'"$2"'".*data-server-name="ZokoAnime".*data-hash="([^"]*)".*|\1|p' | head -n 1)"
++
++        _embed="$(b64_decode "$_hash")"
++        [ -z "$_embed" ] && return 1
++
++        refr="$(printf "%s" "$_embed" | sed -E 's|^(https?://[^/]*).*|\1/|')"
++        mal_id="$(printf "%s" "$_embed" | sed -nE 's|.*/mal/([0-9]+)/.*|\1|p')"
++
++        _blob="$(hianime_curl "$_embed" | sed -nE 's|.*window\.__P="([^"]*)".*|\1|p')"
++        [ -z "$_blob" ] && return 1
++
++        _json="$(deobfuscate_blob "$_blob")"
++
++        _m3u8_master="$(printf "%s" "$_json" | sed -nE 's|.*"src":"([^"]*\.m3u8[^"]*)".*|\1|p')"
++        [ -z "$_m3u8_master" ] && return 1
++
++        sub_link="$(printf "%s" "$_json" |
++            sed 's|.*"subtitles":\[||; s|}\].*||; s|},{|}\n{|g' |
++            grep -m 1 '"default":true' |
++            sed -nE 's|.*"src":"([^"]*)".*|\1|p')"
++    fi
++
++    _master="$(hianime_curl "$_m3u8_master" -e "$refr")"
++
++    # Quality variants are relative to the master playlist.
++    links="$(printf "%s\n" "$_master" |
++        sed 's|^#EXT-X-STREAM.*x||g; s|,.*|p|g; /^#/d; $!N; s|\n| >|;/EXT-X-I-FRAME/d' |
++        sed "\|>https*://|!s|>|>${_m3u8_master%/*}/|" |
++        sort -g -r -s)"
++
++    # A dual-audio source keeps its audio in EXT-X-MEDIA renditions, so the quality variant
++    # on its own is video-only and plays silent; the rendition goes to the player as an
++    # external audio track.
++    audio_link=""
++    _renditions="$(printf "%s\n" "$_master" | grep '^#EXT-X-MEDIA:TYPE=AUDIO' || true)"
++
++    if [ -n "$_renditions" ]; then
++        case "$2" in
++            dub) _wanted='LANGUAGE="en' ;;
++            *) _wanted='LANGUAGE="ja' ;;
++        esac
++
++        _rendition="$(printf "%s\n" "$_renditions" | grep -m 1 -F "$_wanted")"
++        [ -z "$_rendition" ] && _rendition="$(printf "%s\n" "$_renditions" | grep -m 1 -F 'DEFAULT=YES')"
++        [ -z "$_rendition" ] && _rendition="$(printf "%s\n" "$_renditions" | head -n 1)"
++
++        audio_link="$(printf "%s" "$_rendition" | sed -nE 's|.*URI="([^"]*)".*|\1|p')"
++        case "$audio_link" in
++            "" | http*) ;;
++            *) audio_link="${_m3u8_master%/*}/$audio_link" ;;
++        esac
++    fi
++
+     [ -n "$links" ]
+ }
+ 
+@@ -369,15 +534,15 @@
+     wait
+     # shellcheck disable=SC2086
+     case "$player_function" in
+-        debug) printf "All links:\n%s\nSelected link:\n%s\nSubtitles:\n%s\n" "$links" "$video_link" "$sub_link" ;;
++        debug) printf "All links:\n%s\nSelected link:\n%s\nSubtitles:\n%s\nAudio:\n%s\n" "$links" "$video_link" "$sub_link" "$audio_link" ;;
+         android_mpv) android_mpv ;;
+         android_vlc) nohup am start --user 0 -a android.intent.action.VIEW -d "$video_link" -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -e "title" "${anime_title} Episode ${ep_no}" $player_extra_flags >/dev/null 2>&1 & ;;
+-        *flatpak*mpv*) flatpak run io.mpv.Mpv --referrer="$refr" ${sub_link:+--sub-file="$sub_link"} $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link" >/dev/null 2>&1 & ;;
++        *flatpak*mpv*) flatpak run io.mpv.Mpv --referrer="$refr" ${sub_link:+--sub-file="$sub_link"} ${audio_link:+--audio-file="$audio_link"} $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link" >/dev/null 2>&1 & ;;
+         *mpv*)
+             if [ "$no_detach" = 0 ]; then
+-                nohup $player_function --referrer="$refr" ${sub_link:+--sub-file="$sub_link"} $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link" >/dev/null 2>&1 &
++                nohup $player_function --referrer="$refr" ${sub_link:+--sub-file="$sub_link"} ${audio_link:+--audio-file="$audio_link"} $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link" >/dev/null 2>&1 &
+             else
+-                $player_function --referrer="$refr" ${sub_link:+--sub-file="$sub_link"} $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link"
++                $player_function --referrer="$refr" ${sub_link:+--sub-file="$sub_link"} ${audio_link:+--audio-file="$audio_link"} $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link"
+                 mpv_exitcode=$?
+                 [ "$exit_after_play" = 1 ] && [ -z "$_range" ] && exit "$mpv_exitcode"
+             fi
+@@ -393,7 +558,7 @@
+             fi
+             ;;
+         *vlc*) nohup $player_function --http-referrer="$refr" $player_extra_flags --play-and-exit --meta-title="${anime_title} Episode ${ep_no}" "$video_link" ${sub_link:+:input-slave="$sub_link"} >/dev/null 2>&1 & ;;
+-        *yncpla*) nohup $player_function $player_extra_flags "$video_link" -- $skip_flag --referrer="$refr" ${sub_link:+--sub-file="$sub_link"} --force-media-title="${anime_title} Episode ${ep_no}" >/dev/null 2>&1 & ;;
++        *yncpla*) nohup $player_function $player_extra_flags "$video_link" -- $skip_flag --referrer="$refr" ${sub_link:+--sub-file="$sub_link"} ${audio_link:+--audio-file="$audio_link"} --force-media-title="${anime_title} Episode ${ep_no}" >/dev/null 2>&1 & ;;
+         download) "$player_function" "$video_link" "${anime_title} Episode ${ep_no}" $player_extra_flags ;;
+         catt) nohup catt cast $player_extra_flags "$video_link" >/dev/null 2>&1 & ;;
+         iSH)
+@@ -403,7 +568,7 @@
+         *) nohup $player_function $player_extra_flags "$video_link" >/dev/null 2>&1 & ;;
+     esac
+     replay="$video_link"
+-    unset video_link
++    unset video_link audio_link
+     update_history
+     [ "$menu_program" != "fzf" ] && wait
+ }
+@@ -565,6 +730,7 @@
+ info "Checking dependencies..."
+ dep_ch "sed"
+ dep_ch "grep"
++dep_ch "openssl"
+ [ "$skip_intro" = 1 ] && dep_ch "ani-skip"
+ dep_ch "$menu_program" # TODO: use dep_ch_failover to iterate through options
+ 
