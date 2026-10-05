@@ -143,6 +143,13 @@ let
     ) power.fans
   );
 
+  fixedComponentCoefficients = lib.concatStrings (
+    lib.mapAttrsToList (
+      name: watts:
+      "echo ${lib.escapeShellArg ''pc_power_fixed_component_watts{component="${name}"} ${toString watts}''}\n"
+    ) power.fixedComponents
+  );
+
   drivePowerState = ''
     drive_power_state() {
       local device=$1 mode report
@@ -190,6 +197,7 @@ let
         echo 'pc_power_supply_idle_watts ${toString power.supply.idleWatts}'
         echo 'pc_power_board_watts ${toString power.boardWatts}'
         echo 'pc_power_peripherals_watts ${toString power.peripheralsWatts}'
+        ${fixedComponentCoefficients}
         echo 'pc_power_gpu_board_factor ${toString power.gpu.boardFactor}'
         echo 'pc_power_gpu_overhead_watts ${toString power.gpu.overheadWatts}'
         echo 'pc_power_pmic_efficiency ${toString power.pmicEfficiency}'
@@ -307,39 +315,6 @@ let
           printf 'pi_firmware_flag{flag="%s"} %s\n' "$name" "$(( (value >> bit) & 1 ))"
         done
       '';
-
-  laptopBatteryMetrics = writeCollector "laptop-battery" [ pkgs.gawk ] ''
-    echo '# TYPE laptop_battery_energy_watt_hours gauge'
-    echo '# TYPE laptop_battery_power_watts gauge'
-    echo '# TYPE laptop_battery_health_ratio gauge'
-    for battery in /sys/class/power_supply/BAT*; do
-      [ -d "$battery" ] || continue
-      name=$(basename "$battery")
-      read_value() { cat "$battery/$1" 2>/dev/null || echo 0; }
-      energy_now=$(read_value energy_now)
-      energy_full=$(read_value energy_full)
-      energy_design=$(read_value energy_full_design)
-      power_now=$(read_value power_now)
-      voltage_now=$(read_value voltage_now)
-      current_now=$(read_value current_now)
-      capacity=$(read_value capacity)
-      cycles=$(read_value cycle_count)
-      status=$(read_value status | tr -cd '[:alnum:]_-')
-      [ "$power_now" -gt 0 ] 2>/dev/null || power_now=$(( voltage_now * current_now / 1000000 ))
-      awk -v name="$name" -v now="$energy_now" -v full="$energy_full" -v design="$energy_design" -v power="$power_now" -v capacity="$capacity" -v cycles="$cycles" -v status="$status" '
-        BEGIN {
-          printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"current\"} %.6f\n", name, now / 1000000
-          printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"full\"} %.6f\n", name, full / 1000000
-          printf "laptop_battery_energy_watt_hours{battery=\"%s\",kind=\"design\"} %.6f\n", name, design / 1000000
-          printf "laptop_battery_power_watts{battery=\"%s\"} %.6f\n", name, power / 1000000
-          if (design > 0) printf "laptop_battery_health_ratio{battery=\"%s\"} %.6f\n", name, full / design
-          printf "laptop_battery_capacity_ratio{battery=\"%s\"} %.6f\n", name, capacity / 100
-          printf "laptop_battery_cycles{battery=\"%s\"} %s\n", name, cycles
-          printf "laptop_battery_status_info{battery=\"%s\",status=\"%s\"} 1\n", name, status
-        }
-      '
-    done
-  '';
 
   tailscaleMetrics =
     writeCollector "tailscale"
@@ -636,15 +611,6 @@ in
         );
 
         systemd.timers.textfile-pi-firmware = lib.mkIf cfg.piFirmware.enable (collectorTimer "1s");
-
-        systemd.services.textfile-laptop-battery = lib.mkIf cfg.laptopTelemetry.enable (
-          lib.mkMerge [
-            (collectorService laptopBatteryMetrics)
-            { description = "Publish laptop battery telemetry"; }
-          ]
-        );
-
-        systemd.timers.textfile-laptop-battery = lib.mkIf cfg.laptopTelemetry.enable (collectorTimer "5s");
 
         systemd.services.textfile-memory-by-unit = lib.mkMerge [
           (collectorService memoryByUnit)

@@ -187,8 +187,7 @@
       };
       pmicEfficiency = 0.87;
       ram.modelled = false;
-      boardWatts = 0.5;
-      peripheralsWatts = 1.8;
+      fixedComponents."X1009 SATA controller" = 1.8;
       fans.hdd-bay.constantWatts = 0.35;
       fans.active-cooler = {
         chip = "pwmfan";

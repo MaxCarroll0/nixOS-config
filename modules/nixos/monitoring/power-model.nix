@@ -110,6 +110,13 @@ in
 
     peripheralsWatts = wattsOption 0 "Anything attached that reports nothing, such as radios or a HBA.";
 
+    fixedComponents = lib.mkOption {
+      type = lib.types.attrsOf lib.types.number;
+      default = { };
+      example."SATA controller" = 1.8;
+      description = "Unmetered fixed draws, keyed by the component name shown in Grafana.";
+    };
+
     fans = lib.mkOption {
       type = lib.types.attrsOf fanType;
       default = { };
