@@ -75,7 +75,9 @@ in
     ${pkgs.jq}/bin/jq '. * {
       "skipAutoPermissionPrompt": true,
       "tui": "fullscreen",
-      "includeCoAuthoredBy": false
+      "includeCoAuthoredBy": false,
+      "promptSuggestionEnabled": false,
+      "env": ((.env // {}) * { "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "0" })
     }' "$_settings" > "$_settings.tmp" && mv "$_settings.tmp" "$_settings"
   '';
 }
