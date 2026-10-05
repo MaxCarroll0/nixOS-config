@@ -3,10 +3,13 @@
 Design-of-record for turning `pi` into a shared, encrypted, observable family NAS while
 keeping it the always-on Grafana and Wake-on-LAN node it already is.
 
-**Status: Stage 0 (design). No NAS storage exists yet.** The monitoring trim of section 13 is
-a prerequisite and is partly built and measured; everything about the array itself is still
-design. Every later stage updates this document as decisions are settled by measurement
-rather than assumption.
+**Status: stages 1-6 built; the array holds live data and is versioned.** Storage, checkpoints,
+per-file versions, parity, SMB, the browse index, prefetch and the Attic cache are deployed and
+exercised against the real disks. What remains is onboarding anyone other than Max (stage 3's
+enrolment and Tailscale sharing, gated on real per-request identity), the application-tier choice
+(stage 7) and the offsite follow-ons (stage 8). Section 15 carries the per-stage detail, and
+section 19 records the time autoUpgrade silently uninstalled the lot. Every later stage updates
+this document as decisions are settled by measurement rather than assumption.
 
 Decisions revised during design, so the original write-up is not the current one: placement
 became user-affinity (`mspmfs`) with automatic overflow rather than proportional spread
@@ -454,11 +457,10 @@ the unit removes it in `ExecStartPre`), and the file cannot be renamed or trunca
 under it. Ingest therefore reads forward from a stored byte offset, and rotates only by deleting
 the file and restarting the watcher once it passes `rotateBytes` (64 MB).
 
-**The known weakness is missed events while the watcher is down, and it is currently unmitigated.**
-The intended backstop is a periodic pass comparing each file's mtime against its newest recorded
-version, which detects *that* a file changed but not that it changed three times. **That pass is
-not built yet** — `versions.nix` defines only the per-branch watchers and the ingest timer, so a
-watcher outage silently loses those versions with nothing to repair the gap.
+**The known weakness is missed events while the watcher is down.** The backstop is
+`nas-versions-reconcile`, a timed pass comparing each file's mtime against its newest recorded
+version. It is built and runs, and it recovers *that* a file changed, not that it changed three
+times: a watcher outage still collapses several versions into one.
 
 Version *number* is the ordinal of a checkpoint within that inode's history, so "currently on
 version 12" is a `COUNT(*)` and the full timestamped list is one indexed range scan.
@@ -1116,11 +1118,15 @@ on are:
 
 ### 11.0 Grafana must be fixed before anyone is shared in
 
-**Current state, measured:** Grafana listens on `0.0.0.0:3000`, port 3000 is open on
-`tailscale0`, and `auth.anonymous` grants `Admin`. Any tailnet device gets full admin,
-including every dashboard and the ability to edit alerting. That is fine while the tailnet is
-only Max's own machines and **unacceptable the moment the pi is shared with anyone**. Treat it
-as a gate on Stage 3 onboarding, not a later polish item.
+**Half closed as of 2026-10-05.** Grafana now listens on `127.0.0.1:3000` only, anonymous access
+is off, and an auth proxy accepts `Tailscale-User-Login` from loopback. nginx publishes port 80 on
+the pi's tailnet address alone and **overwrites** any client-supplied identity header, so a header
+from the network is never trusted.
+
+**What is still open:** the header nginx writes is hardcoded to the owner's login and
+`auto_assign_org_role` is `Admin`, so every visitor authenticates as Max-as-admin. Real
+per-request identity needs `tailscale serve`, which needs HTTPS enabled for the tailnet. This
+remains a gate on Stage 3 onboarding, not a later polish item.
 
 The fix, using the identity headers proven above:
 
@@ -1252,10 +1258,10 @@ Outstanding: the VictoriaMetrics migration (est. ~380 MB) and a Grafana trim.
 |---|---|---|
 | 0 | **This document.** Written before any measurement or code, and updated by every later stage. | **done** |
 | 1 | Measure and prepare. Confirm the `sdd` passphrase, unlock read-only, measure fill, record a checksum manifest. Replace `sdc`'s SATA cable, run `smartctl -t long` on all three, re-read the CRC counter. *Gate: the `sdd` fill number decides the migration path.* | **done bar the cable** — passphrase confirmed, unlocked read-only, 425 GB measured, gate resolved to the simple path; SMART baseline in section 3; checksum manifest still to record |
-| 2 | Storage. Image and repartition the SSD offline; `modules/nixos/nas/storage.nix` with LUKS, Clevis/Tang, unlock units, bcache, btrfs, mergerfs, mover, snapshot timer, SnapRAID and the degraded-mode guard. Execute the migration. | **module written**, mergerfs pool + SnapRAID sync/scrub timers; LUKS/Tang/bcache/mover and the **migration** still to do |
-| 3 | Accounts and access. `accounts.nix` and `samba.nix`, `nas-user`, Tailscale device sharing, ACL reference. | **modules written**; `nas-user` and the Tailscale sharing runbook outstanding |
-| 4 | Prefetch, browse index and metrics. `nas-prefetch`; `nas-index` (SQLite store, `find-new` reconciler, snapshot-diff version counter, thumbnailer); the metadata warmer; the new collectors; per-user dashboards; Grafana authentication. | `nas-index` and the metadata warmer **written and exercised**; `nas-prefetch`, dashboards and Grafana auth outstanding |
-| 5 | Attic on `/srv/cache`, nginx vhost, `attic watch-store` on laptop and desktop, substituter for Max's hosts only. | blocked on Stage 2 storage |
+| 2 | Storage. Image and repartition the SSD offline; `modules/nixos/nas/storage.nix` with LUKS, Clevis/Tang, unlock units, bcache, btrfs, mergerfs, mover, snapshot timer, SnapRAID and the degraded-mode guard. Execute the migration. | **migration done**, mergerfs pool + SnapRAID sync/scrub timers live; LUKS by manual passphrase. Clevis/Tang, bcache and the mover were never built, and the SSD write tier does not exist |
+| 3 | Accounts and access. `accounts.nix` and `samba.nix`, `nas-user`, Tailscale device sharing, ACL reference. | **modules written and enabled**, SMB bound to `tailscale0` only; `nas-user.py` exists but is packaged by nothing, and the Tailscale sharing runbook is still unwritten. No account but Max's has ever been minted |
+| 4 | Prefetch, browse index and metrics. `nas-prefetch`; `nas-index` (SQLite store, `find-new` reconciler, snapshot-diff version counter, thumbnailer); the metadata warmer; the new collectors; per-user dashboards; Grafana authentication. | **done bar two things.** `nas-index`, `nas-prefetch` and the `nas-usage` dashboard are built and enabled; Grafana no longer allows anonymous access. The metadata warmer is written but **not enabled on the pi**, and the dashboard is fleet-wide rather than per-user |
+| 5 | Attic on `/srv/cache`, nginx vhost, `attic watch-store` on laptop and desktop, substituter for Max's hosts only. | **done** — `attic.nix` server on the pi, `attic-client.nix` on the pi, laptop and desktop; reachable on `tailscale0` only |
 | 6 | Monitoring trim. | **done** — see `docs/monitoring.md`; ~800 MB freed, `MemAvailable` median 500 MB to 747 MB |
 | 7 | Application-tier bake-off and adoption. |
 | 8 | Follow-ons: offsite backup, 3-node mirror, bidirectional sync, the 2 x 8 TB purchase, the SSD upgrade with LVM. |
@@ -1327,42 +1333,54 @@ or stop it, before reorganising the tree.
 
 ### Module status
 
-`modules/nixos/nas/` is imported by `hosts/pi/default.nix` and builds, contributing **zero
-systemd units** because `local.nas.enable` defaults false. Every `config` block sits behind
-`mkIf`, so nothing changes on the pi until storage exists.
+`local.nas.enable` is **true** on the pi. Every `config` block still sits behind `mkIf`, so the
+tree is inert on every other host, but on the pi it contributes `nas-snapraid-sync`,
+`nas-snapraid-scrub`, `nas-index`, `nas-checkpoint-promote`, `nas-versions-ingest`,
+`nas-versions-reconcile`, one `nas-prefetch-<branch>` per data disk, `atticd`, their timers and
+the cifs automount.
 
-| file | provides |
-|---|---|
-| `accounts.nix` | `local.nas.accounts`, explicit uids 3000-3999, homes 0700, uid-uniqueness assertion |
-| `samba.nix` | one private share per account, `valid users` scoped to the owner, SMB3 + required encryption, bound to `tailscale0`, `vfs_recycle` |
-| `storage.nix` | mergerfs pool with the placement policy from section 4, SnapRAID config, sync and scrub timers that no-op unless every branch is mounted |
-| `index.nix` + `nas-index.py` | SQLite browse index, `find-new` incremental scan, version counter, thumbnailer, per-user usage metrics |
-| `cache.nix` | metadata warmer, run inside the SnapRAID window while disks already spin |
-| `nas-user.py` | proposes an account (random uid in 3000-3999, the Nix block, the sops and `smbpasswd` steps) and applies nothing |
-| `checkpoints.nix` | `nas-checkpoint-promote` (retention), the `@GMT-` window for Samba, `nas-at` time travel, checkpoint metrics |
-| `versions.nix` | one `fatrace` watcher per NILFS2 branch, the ingest timer, `nas-versions list`/`restore` |
+| file | provides | on the pi |
+|---|---|---|
+| `accounts.nix` | `local.nas.accounts`, explicit uids 3000-3999, homes 0700, uid-uniqueness assertion, and `/etc/nas/identity-map` from each account's `tailscaleLogin` | enabled, two accounts |
+| `samba.nix` | one private share per account, `valid users` scoped to the owner, SMB3 + required encryption, `vfs_recycle` | enabled, `tailscale0` only |
+| `storage.nix` | mergerfs pool with the placement policy from section 4, SnapRAID config, sync and scrub timers that no-op unless every branch is mounted | enabled |
+| `index.nix` + `nas-index.py` | SQLite browse index, `find-new` incremental scan, version counter, thumbnailer, per-user usage and file-age metrics | enabled |
+| `checkpoints.nix` | `nas-checkpoint-promote` (retention), the `@GMT-` window for Samba, `nas-at` time travel, checkpoint metrics | enabled |
+| `versions.nix` | one `fatrace` watcher per NILFS2 branch, the ingest timer, the `nas-versions-reconcile` mtime backstop, `nas-versions list`/`restore` | enabled |
+| `prefetch.nix` | `nas-prefetch`: `fatrace -c -f O -j` driving a read-ahead loop with per-directory cooldown, file and byte budgets, a bulk-reader ignore list and textfile counters | enabled, one unit per branch |
+| `unlock.nix` | `nas-unlock-local`/`nas-lock-local` plus `nas.target` on the server; `nas-unlock`/`nas-lock` on the client | server on the pi, client on the laptop |
+| `attic.nix` | atticd on `/srv/cache`, nginx vhost and TLS, 7-day GC | enabled, `tailscale0` only |
+| `attic-client.nix` | netrc and config, substituter and trusted key, `attic watch-store` hook | enabled on the pi, laptop and desktop |
+| `client.nix` | cifs automount of `//127.0.0.1/<share>` through `peerTransport`, SMB3.1.1 `seal`, 10-minute idle timeout, `nas-set-password` | enabled on the pi, laptop and desktop |
+| `cache.nix` | metadata warmer, run inside the SnapRAID window while disks already spin | **written, not enabled** |
+| `web.nix` + `nas-web-dispatch.py` | identity-mapped browser: one `copyparty` worker per account, as that account, in `nas-web.slice` | **written, not imported** |
+| `enroll.nix` + `nas-enroll-web.py` | one-time enrolment tokens so an owner sets their own Unix and SMB passwords | **written, not imported** |
+| `nas-user.py` | proposes an account (random uid in 3000-3999, the Nix block, the sops and `smbpasswd` steps) and applies nothing | **packaged by nothing, on no PATH** |
 
 Metrics exported for dashboards, all read from the index rather than the array so no exporter
-ever wakes a disk: `nas_user_bytes`, `nas_user_files`, `nas_user_directories`,
-`nas_metadata_warm_entries`, `nas_metadata_warm_seconds`,
-`nas_metadata_warm_timestamp_seconds`. The `NAS usage` dashboard (uid `nas-usage`, in the
-metrics folder) charts totals, per-account usage and warm-pass age.
+ever wakes a disk: `nas_user_bytes`, `nas_user_files`, `nas_user_directories`, `nas_age_bytes`,
+`nas_age_files`, `nas_oldest_file_seconds`, `nas_metadata_warm_entries`,
+`nas_metadata_warm_seconds`, `nas_metadata_warm_timestamp_seconds`, `nas_branch_size_bytes`,
+`nas_branch_used_ratio`, `nas_checkpoints`, `nas_checkpoint_snapshots`, `nas_checkpoints_exposed`,
+`nas_metrics_timestamp_seconds` and `nas_prefetch_{files,bytes,skipped}_total`. The `NAS usage`
+dashboard (uid `nas-usage`, in the metrics folder) charts totals, per-account usage, file age and
+warm-pass age. Alerts live in `modules/nixos/monitoring/rules.nix`: `nas-branch-filling`,
+`nas-branch-nearly-full`, `nas-array-unmounted` and `nas-metrics-stale`.
 
-**The dashboard is fleet-wide, not per-user.** Section 1's requirement that each person sees
-only their own usage plus an aggregate of everyone else needs Grafana authentication and
-per-user scoping, which is not built: today's Grafana is anonymous-admin on the tailnet. Until
-that lands, treat these panels as an operator view only, and do not share the Grafana URL with
-NAS account holders.
+Two gaps in that list. The warm-pass age panel reads permanently stale because `cache.nix` is not
+enabled, and the `nas_prefetch_*` counters have no panel and no alert despite prefetch running.
 
-Built and inert is **not** the same as working: enabling these against real disks will exercise
-the mergerfs option string, the SnapRAID layout and the Samba share syntax for the first time.
-`nas-index` is the exception — its scan, version counter and metric output were exercised
-against a scratch tree.
+**Grafana is no longer anonymous, but it is not per-user either.** Anonymous access is off and an
+auth proxy accepts `Tailscale-User-Login` from loopback only. What nginx hands it is **hardcoded**
+to the owner's login, and `auto_assign_org_role` is `Admin`, so this is one passwordless admin
+identity rather than real per-request identity. Section 1's requirement that each person sees only
+their own usage plus an aggregate of everyone else needs `tailscale serve` supplying the real
+header, which needs HTTPS enabled for the tailnet. Until that lands, treat these panels as an
+operator view and do not share the Grafana URL with NAS account holders.
 
-`nas-prefetch` is deliberately unwritten. It needs fanotify `FAN_OPEN` via raw `ctypes`
-syscalls and `CAP_SYS_ADMIN`, so it cannot be tested without root and real branch mounts, and
-an untested privileged daemon with feedback-exclusion logic is a poor trade. It is a cache
-optimisation only: the NAS is correct without it, merely colder on first access.
+Built and inert is **not** the same as working. What has now been exercised against the live array
+is storage, checkpoints, versions and parity (section 15's build progress); what has not is every
+module still marked "not enabled" or "not imported" above.
 
 ### Migration, preserving `sdd`
 
@@ -1460,3 +1478,49 @@ at `for: 0s`.
 
 **Do not re-run a full scrub until the power question is settled**; it is the most demanding
 workload available and has now been adjacent to a reset twice.
+
+## 19. autoUpgrade uninstalled the NAS
+
+On 2026-09-30 at 23:58 the pi's `nixos-upgrade` ran for the first time, four weeks after
+`7cab804` enabled it, and switched the machine to a configuration from 2026-08-08. Generation 134
+had **no `nas-*` units at all**, no `nas-unlock` on `PATH`, and no nginx or Grafana. It stayed
+that way for five days.
+
+`system.autoUpgrade.flake` in `modules/nixos/common.nix` points at `${flakePath}#${hostName}`,
+where `flakePath` is `/home/max/.config/nix` on the host being upgraded. The pi's clone sat at
+`6f843fe`, 328 commits behind `main`, and dirty. So the upgrade dutifully built *that* and
+activated it.
+
+Nothing failed. The build succeeded, the switch succeeded, the generation advanced. The only
+trace was a `warning: Git tree '/home/max/.config/nix' is dirty` in the upgrade's own journal.
+
+**Nothing was lost.** The disks stayed LUKS, every UUID in `hosts/pi/default.nix` still resolved,
+and the array simply stayed locked, which is what section 6 specifies after an unattended boot.
+The NAS was uninstalled, not damaged.
+
+Two things make this worse than section 18's hard resets. First, it is silent: a reset leaves a
+truncated journal and now trips `node_boot_unclean_total`, whereas this looks like a successful
+deploy. Second, it is self-inflicted by a safety feature, and it can recur on any host whose
+clone lags — the hazard the multi-host warning in `CLAUDE.md` already described.
+
+`system.autoUpgrade.enable = false` on the pi closes it there. The laptop and the desktop still
+have it on: the laptop's clone is current by construction because that is where the work happens,
+the desktop's is not guaranteed. The structural fix, not taken, is to point the flake at
+`github:MaxCarroll0/nixOS-config#<host>` so an upgrade is incapable of deploying something older
+than what is running.
+
+### Runbook: restore the pi after a configuration regression
+
+1. Confirm the regression rather than assuming it: `systemctl list-unit-files | grep -c nas-`
+   returns `0`, and `findmnt | grep -E 'disks|parity|srv/nas'` is empty.
+2. Confirm the data is untouched: `lsblk -o NAME,SIZE,SERIAL,FSTYPE,UUID` must still show
+   `crypto_LUKS` on every array device, and each UUID in `hosts/pi/default.nix` must resolve under
+   `/dev/disk/by-uuid/`.
+3. Commit and push the intended configuration from the laptop, then deploy it.
+4. An **agent-authorized** `deploy-request` cannot do step 3 if the stranded generation predates
+   `modules/nixos/pam-ssh-agent-sudo.nix`: activation dies at `sudo: a password is required` after
+   a full successful build and copy. Break that loop with one interactive terminal
+   `rebuild --host pi switch`, which prompts for the pi's sudo password on a tty.
+5. `nas-unlock` from the laptop, then `sudo bash docs/nas-verify.sh` on the pi.
+6. `git -C /home/max/.config/nix pull --ff-only` on the pi, so its own clone can no longer
+   activate the old configuration.
