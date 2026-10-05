@@ -264,6 +264,15 @@ in
       }
     ];
 
+    # randomEncryption gives the swapfile a new UUID every boot, so a hibernation
+    # image is unresumable and its stale HibernateLocation EFI variable costs the
+    # next boot a two-minute device timeout.
+    systemd.sleep.settings.Sleep = {
+      AllowHibernation = false;
+      AllowHybridSleep = false;
+      AllowSuspendThenHibernate = false;
+    };
+
     services.earlyoom = {
       enable = true;
       freeMemThreshold = lib.mkDefault 5;
