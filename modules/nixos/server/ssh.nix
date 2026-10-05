@@ -13,6 +13,29 @@ let
     u != null && (u.openssh.authorizedKeys.keys != [ ] || u.openssh.authorizedKeys.keyFiles != [ ]);
 
   keyless = lib.filter (n: !hasKeys n) cfg.allowUsers;
+
+  lanAllowed = [ cfg.port ] ++ cfg.allowGlobalTCPPorts;
+
+  portsOn =
+    interface:
+    let
+      rules = config.networking.firewall.interfaces.${interface};
+    in
+    rules.allowedTCPPorts ++ rules.allowedUDPPorts;
+
+  offTailnet = lib.filter (interface: interface != cfg.interface && interface != "lo") (
+    lib.attrNames config.networking.firewall.interfaces
+  );
+
+  reachableOffTailnet = lib.concatMap (
+    interface:
+    let
+      allowed = if lib.elem interface cfg.lanInterfaces then lanAllowed else [ ];
+    in
+    map (port: "${interface}:${toString port}") (
+      lib.filter (port: !(lib.elem port allowed)) (portsOn interface)
+    )
+  ) offTailnet;
 in
 
 {
@@ -105,6 +128,10 @@ in
             lib.filter (p: !(lib.elem p cfg.allowGlobalTCPPorts)) config.networking.firewall.allowedTCPPorts
           )
         }. Bind to loopback, move to networking.firewall.interfaces.${cfg.interface}, or list in allowGlobalTCPPorts.";
+      }
+      {
+        assertion = reachableOffTailnet == [ ];
+        message = "Reachable off ${cfg.interface}: ${lib.concatStringsSep ", " reachableOffTailnet}. Service ports belong on ${cfg.interface} so they are reachable only over the tailnet or a shared node; lanInterfaces carries sshd's recovery path alone.";
       }
     ];
   };
