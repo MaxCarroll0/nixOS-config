@@ -752,6 +752,10 @@ Aspell with a British dictionary backs =ispell=; =flyspell= checks prose buffers
 
 (use-package flyspell
   :ensure nil
+  :custom
+  (flyspell-issue-message-flag nil)
+  (flyspell-issue-welcome-flag nil)
+  (flyspell-delay 0.3)
   :hook ((text-mode . flyspell-mode)
          (prog-mode . flyspell-prog-mode)))
 
@@ -4157,8 +4161,16 @@ completion replaces a bare `_', whose text must not filter the candidates."
   (defun my/completion-tags-capf ()
     "Return project symbols from the tags table, when one has been built."
     (and (bound-and-true-p tags-table-list)
+         (not (and (fboundp 'eglot-managed-p) (eglot-managed-p)))
          (fboundp 'tags-completion-at-point-function)
          (ignore-errors (tags-completion-at-point-function))))
+
+  (defun my/tags-completion-table-quietly (orig &rest args)
+    "Build the tags completion table without touching the echo area."
+    (cl-letf (((symbol-function 'message) #'ignore))
+      (apply orig args)))
+
+  (advice-add 'tags-completion-table :around #'my/tags-completion-table-quietly)
 
   (defun my/completion-refresh-capfs ()
     "Install cached Eglot completion or compose local CAPFs."
@@ -4207,7 +4219,7 @@ completion replaces a bare `_', whose text must not filter the candidates."
 #+end_src
 
 ** Project symbols
-Without a language server there is nothing to populate the ill-typed tier, so a tags table stands in for it. =etags-regen-mode= builds and incrementally updates one from the =project.el= project, and its completion at point contributes the project's own symbols. Buffers with a server ignore it, since the server already knows more.
+Without a language server there is nothing to populate the ill-typed tier, so a tags table stands in for it. =etags-regen-mode= builds and incrementally updates one from the =project.el= project, and its completion at point contributes the project's own symbols. Buffers with a server ignore it, since the server already knows more. =tags-completion-at-point-function= also sits in the global value of =completion-at-point-functions=, so it is reached by paths this function does not gate, and the table announces itself on every query: twice a second in a terminal buffer, wiping whatever diagnostic Eldoc had just displayed. =inhibit-message= is not enough, since a suppressed message still clears the echo area.
 
 #+begin_src emacs-lisp
 
@@ -4812,6 +4824,7 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
 (use-package eglot
   :custom
   (eglot-extend-to-xref t)
+  (eglot-events-buffer-config '(:size 0 :format short))
   :hook
   (prog-mode . eglot-ensure)
   ((LaTeX-mode latex-mode tex-mode) . eglot-ensure)
@@ -4825,6 +4838,85 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
   (add-to-list 'eglot-server-programs
                '((tex-mode plain-tex-mode latex-mode LaTeX-mode)
                  "digestif")))
+#+end_src
+
+Eglot forces =eldoc-documentation-compose=, which runs its five documentation
+functions in series and shows nothing until the slowest returns. On ocamllsp
+=signatureHelp= alone costs about 220ms and =codeAction= another 150ms, so
+every pause spent a second before the echo area said anything.
+
+#+begin_src emacs-lisp
+(defun my/eglot-eldoc-responsive ()
+  "Show each Eglot documentation source as soon as it answers."
+  (setq-local eldoc-documentation-strategy #'eldoc-documentation-compose-eagerly
+              eldoc-idle-delay 0.15)
+  (remove-hook 'eldoc-documentation-functions #'eglot-code-action-suggestion t))
+
+(add-hook 'eglot-managed-mode-hook #'my/eglot-eldoc-responsive)
+#+end_src
+
+A server that can attribute one diagnostic to several places reports those
+locations only when the client asks for them. ocamllsp then gives each
+signature mismatch the exact range of the offending value, and drops the
+=File "..."= trailer lines it otherwise appends to the message.
+
+#+begin_src emacs-lisp
+(with-eval-after-load 'eglot
+  (cl-defmethod eglot-client-capabilities :around (_server)
+    (let ((capabilities (cl-call-next-method)))
+      (plist-put (plist-get (plist-get capabilities :textDocument) :publishDiagnostics)
+                 :relatedInformation t)
+      capabilities)))
+#+end_src
+
+Flymake reports each diagnostic twice: the full text for the documentation
+buffer, and an =:echo= variant cut at the first newline, which Eldoc prefers in
+the echo area. That drops everything after =Signature mismatch:=.
+
+#+begin_src emacs-lisp
+(defun my/flymake-diagnostic-concealed-p (diag)
+  "Return non-nil when DIAG is listed but deliberately unpainted."
+  (alist-get 'my/flymake-concealed (flymake-diagnostic-data diag)))
+
+(defun my/flymake-diagnostics-innermost-first (position)
+  "Return paintable diagnostics at POSITION, tightest range first."
+  (sort (cl-remove-if #'my/flymake-diagnostic-concealed-p
+                      (copy-sequence (flymake-diagnostics position)))
+        (lambda (a b)
+          (< (- (flymake-diagnostic-end a) (flymake-diagnostic-beg a))
+             (- (flymake-diagnostic-end b) (flymake-diagnostic-beg b))))))
+
+(defun my/flymake-diagnostic-painted (diag text)
+  "Return TEXT with DIAG's echo face, as `flymake-diagnostic-oneliner' applies it."
+  (propertize text 'face
+              (flymake--lookup-type-property
+               (flymake-diagnostic-type diag) 'echo-face 'flymake-error)))
+
+(defun my/flymake-eldoc-conclusion (diags budget)
+  "Return the last lines of each of DIAGS in turn, within BUDGET lines."
+  (let ((remaining budget) (acc '()))
+    (dolist (d diags (mapconcat #'identity (nreverse acc) "\n"))
+      (when (> remaining 0)
+        (let* ((lines (split-string (flymake-diagnostic-text d) "\n"))
+               (keep (if (<= (length lines) remaining) lines (last lines remaining))))
+          (setq remaining (- remaining (length keep)))
+          (push (my/flymake-diagnostic-painted
+                 d (mapconcat #'identity keep "\n"))
+                acc))))))
+
+(defun my/flymake-eldoc-full-text (report-doc &rest _)
+  "Report diagnostics at point, innermost first, echoing each conclusion."
+  (when-let* ((diags (my/flymake-diagnostics-innermost-first (point))))
+    (funcall report-doc
+             (mapconcat (lambda (d)
+                          (my/flymake-diagnostic-painted
+                           d (flymake-diagnostic-text d)))
+                        diags "\n")
+             :echo (my/flymake-eldoc-conclusion
+                    diags (max 1 (truncate (* (frame-height)
+                                              max-mini-window-height)))))))
+
+(advice-add 'flymake-eldoc-function :override #'my/flymake-eldoc-full-text)
 #+end_src
 
 OCaml's server can emit out-of-order semantic tokens with negative line deltas; sort a painting copy while keeping Eglot's delta-update cache intact.
