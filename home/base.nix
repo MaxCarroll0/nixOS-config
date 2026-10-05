@@ -21,6 +21,7 @@
       "CLAUDE.md"
 
       # Editor / OS / local state
+      "TAGS"
       ".direnv/"
       "result"
       "result-*"
