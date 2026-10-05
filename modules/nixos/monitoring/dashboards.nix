@@ -31,10 +31,17 @@ let
     // lib.optionalAttrs (maxDataPoints != null) { inherit maxDataPoints; }
     // lib.optionalAttrs (refId != null) { inherit refId; }
     // lib.optionalAttrs (datasource != null) { inherit datasource; }
-    // lib.optionalAttrs (lib.hasInfix "pc:energy_" expr) {
-      datasource = archiveDatasource;
-      interval = if interval == null || interval == "$smooth" then "1m" else interval;
-    };
+    //
+      lib.optionalAttrs
+        (
+          lib.hasInfix "pc:energy_" expr
+          || lib.hasInfix "host:uptime_seconds:1m" expr
+          || lib.hasInfix "host:up_observed_seconds:1m" expr
+        )
+        {
+          datasource = archiveDatasource;
+          interval = if interval == null || interval == "$smooth" then "1m" else interval;
+        };
 
   withRefIds = lib.imap0 (
     i: t: if t ? refId then t else t // { refId = lib.elemAt lib.strings.upperChars i; }
@@ -63,7 +70,22 @@ let
       maxPerRow ? null,
       datasource ? null,
       color ? null,
+      timeFrom ? null,
+      noLiveSmoothing ? false,
     }:
+    let
+      panelDatasource =
+        if datasource != null then
+          datasource
+        else if
+          targets != [ ]
+          && (builtins.head targets) ? datasource
+          && lib.all (t: (t.datasource or null) == (builtins.head targets).datasource) targets
+        then
+          (builtins.head targets).datasource
+        else
+          null;
+    in
     {
       inherit
         type
@@ -90,13 +112,15 @@ let
     // lib.optionalAttrs (repeat != null) { inherit repeat; }
     // lib.optionalAttrs (repeatDirection != null) { inherit repeatDirection; }
     // lib.optionalAttrs (maxPerRow != null) { inherit maxPerRow; }
-    // lib.optionalAttrs (datasource != null) { inherit datasource; }
+    // lib.optionalAttrs (panelDatasource != null) { datasource = panelDatasource; }
+    // lib.optionalAttrs (timeFrom != null) { inherit timeFrom; }
+    // lib.optionalAttrs noLiveSmoothing { __noLiveSmoothing = true; }
     // lib.optionalAttrs (description != null) { inherit description; }
     // lib.optionalAttrs (lib.any (t: lib.hasInfix "pc:energy_" t.expr) targets) {
       description =
         (if description == null then "" else description + " ")
         + "Electricity attributed to recorded device use, stored in non-overlapping minute totals. "
-        + "Uses a wall meter when available, otherwise the power model. Battery use includes estimated replenishment losses; charging is not billed again. "
+        + "Uses a wall meter when available, otherwise the mains-equivalent power model. The model uses the same supply-loss calculation for the laptop regardless of AC state. "
         + "Unobserved time (including unmetered sleep and shutdown) is excluded, not estimated. "
         + "Totals may lag by up to two minutes; cost uses the selected tariff.";
     };
@@ -192,7 +216,6 @@ let
     "Board"
     "Peripherals"
     "Supply loss"
-    "Battery charging"
     "nvme0n1"
     "sda"
     "sdb"
@@ -203,6 +226,7 @@ let
     "chassis fan"
     "active-cooler fan"
     "hdd-bay fan"
+    "X1009 SATA controller"
     "total"
   ];
 
@@ -238,9 +262,25 @@ let
 
   gatedSmooth = expression: "(${expression}) and on(instance) (${liveHost "host:up"})";
 
-  energyKwh =
-    range:
-    "sum by (instance) (sum_over_time(pc:energy_joules:1m{instance=~\"$host\"}[${range}])) / 3.6e6";
+  energyBucketSum =
+    metric: range:
+    ''(sum by (instance) (sum_over_time(${metric}{instance=~"$host",instance!="laptop"}[${range}]))''
+    + " or "
+    + ''sum by (instance) (sum_over_time(${metric}{instance="laptop",instance=~"$host",model="no-battery"}[${range}])))'';
+
+  energyKwh = range: "(${energyBucketSum "pc:energy_joules:1m" range}) / 3.6e6";
+
+  observedUptimeSeconds =
+    range: "sum by (instance) (sum_over_time(host:up{instance=~\"$host\"}[${range}]))";
+
+  archivedUptimeSeconds =
+    range: "sum by (instance) (sum_over_time(host:uptime_seconds:1m${upSelector}[${range}]))";
+
+  archivedObservedSeconds =
+    range: "sum by (instance) (sum_over_time(host:up_observed_seconds:1m${upSelector}[${range}]))";
+
+  archivedAvailability =
+    range: "(${archivedUptimeSeconds range}) / on(instance) (${archivedObservedSeconds range})";
 
   costGbp = range: "(${energyKwh range}) * ($tariff / 100)";
   totalEnergyKwh = range: "sum(${energyKwh range})";
@@ -254,7 +294,7 @@ let
     decimals = 1;
     targets = [
       (target {
-        expr = ''sum by (instance) (sum_over_time(pc:energy_observed_seconds:1m{instance=~"$host"}[$__range])) / $__range_s'';
+        expr = "${energyBucketSum "pc:energy_observed_seconds:1m" "$__range"} / $__range_s";
         legend = "{{instance}}";
         instant = true;
       })
@@ -275,6 +315,7 @@ let
         "timeseries"
         "status-history"
       ]
+      && !(panel.__noLiveSmoothing or false)
     then
       panel // { targets = map smoothLiveTarget panel.targets; }
     else
@@ -1116,7 +1157,7 @@ let
   hostVariable =
     datasource:
     let
-      metric = "host:up";
+      metric = if datasource == "prometheus-archive" then "host:up:1h" else "host:up";
       # Historical series created before host relabelling must not surface as
       # selectable hosts in Grafana.
       hostSelector = ''{instance!~"127[.]0[.]0[.]1(:[0-9]+)?"}'';
@@ -1335,7 +1376,7 @@ let
         let
           panelDatasource = p.datasource or ds;
         in
-        p
+        (removeAttrs p [ "__noLiveSmoothing" ])
         // {
           datasource = panelDatasource;
           targets = map (t: t // { datasource = t.datasource or panelDatasource; }) (p.targets or [ ]);
@@ -1513,70 +1554,54 @@ let
           })
         ];
       })
-      (bar {
-        title = "Power draw";
+      (ts {
+        title = "Equivalent wall power while awake (24h)";
+        description = "Height is comparable mains-equivalent power while observed; horizontal span is time awake. Filled area approximates recorded energy. Power is modelled without a wall meter; missing telemetry remains a gap.";
         w = 24;
-        h = 8;
-        unit = "watt";
-        decimals = 0;
-        options = {
-          xField = "category";
-          stacking = "normal";
-          showValue = "never";
-          xTickLabelRotation = 0;
-          legend = {
-            displayMode = "list";
-            placement = "bottom";
-            showLegend = true;
-            calcs = [ ];
-          };
-          tooltip.mode = "multi";
-          tooltip.sort = "desc";
+        h = 9;
+        timeFrom = "24h";
+        noLiveSmoothing = true;
+        datasource = {
+          type = "prometheus";
+          uid = "prometheus-lt";
         };
-        transformations = [
-          {
-            id = "labelsToFields";
-            options = {
-              keepLabels = [
-                "instance"
-                "category"
-              ];
-              valueLabel = "instance";
-            };
-          }
-          {
-            id = "merge";
-            options = { };
-          }
-        ];
-        custom = {
-          fillOpacity = 80;
+        unit = "watt";
+        min = 0;
+        decimals = 1;
+        options = legendOptions // {
+          legend = legendOptions.legend // {
+            calcs = [ "mean" ];
+          };
+        };
+        custom = lineCustom // {
+          fillOpacity = 55;
           lineWidth = 1;
+          lineInterpolation = "stepAfter";
+          spanNulls = false;
         };
         targets = [
           (target {
-            expr = "label_replace(max by (instance) (${boundedAverage "host:up" "pc:power_watts{instance=~\"$host\"}"}), \"category\", \"Current\", \"__name__\", \".*\")";
-            instant = true;
+            expr = ''avg_over_time(pc:equivalent_power_watts{instance=~"$host"}[5m])'';
+            legend = "{{instance}}";
+            interval = "5m";
           })
+        ];
+      })
+      (barGauge {
+        title = "Peak equivalent wall power (24h)";
+        description = "Highest one-second mains-equivalent draw in the past day. Modelled without a wall meter.";
+        w = 24;
+        h = 5;
+        datasource = {
+          type = "prometheus";
+          uid = "prometheus-lt";
+        };
+        unit = "watt";
+        decimals = 1;
+        targets = [
           (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
-            expr = ''label_replace(max by (instance) (avg_over_time(pc:power_watts{instance=~"$host"}[24h])), "category", "Mean (24h)", "__name__", ".*")'';
-            instant = true;
-          })
-          (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
-            expr = ''label_replace(max by (instance) (max_over_time((pc:power_watts_max{instance=~"$host"} or pc:power_watts{instance=~"$host"})[24h:])), "category", "Max (24h)", "__name__", ".*")'';
-            instant = true;
-          })
-          (target {
-            datasource = archiveDatasource;
-            expr = allTimeMaxPower;
+            expr = ''max_over_time(pc:equivalent_power_watts{instance=~"$host"}[24h])'';
+            legend = "{{instance}}";
             instant = true;
           })
         ];
@@ -1589,10 +1614,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
+            datasource = archiveDatasource;
             expr = energyKwh "24h";
             legend = "{{instance}}";
             instant = true;
@@ -1607,10 +1629,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
+            datasource = archiveDatasource;
             expr = energyKwh "7d";
             legend = "{{instance}}";
             instant = true;
@@ -1625,10 +1644,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
+            datasource = archiveDatasource;
             expr = costGbp "24h";
             legend = "{{instance}}";
             instant = true;
@@ -1643,10 +1659,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
+            datasource = archiveDatasource;
             expr = costGbp "7d";
             legend = "{{instance}}";
             instant = true;
@@ -1661,10 +1674,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
+            datasource = archiveDatasource;
             expr = totalEnergyKwh "24h";
             instant = true;
           })
@@ -1678,10 +1688,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
+            datasource = archiveDatasource;
             expr = totalEnergyKwh "7d";
             instant = true;
           })
@@ -1695,10 +1702,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
+            datasource = archiveDatasource;
             expr = totalCostGbp "24h";
             instant = true;
           })
@@ -1712,10 +1716,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
+            datasource = archiveDatasource;
             expr = totalCostGbp "7d";
             instant = true;
           })
@@ -1723,11 +1724,15 @@ let
       })
       (table {
         title = "System session summary";
-        description = "Current awake session, maximum session and observed reachable time over 7 days; suspend ends a session.";
+        description = "Current awake session, maximum session and recorded reachable time over 7 days, shown in days, hours and minutes. Missing telemetry is unknown, not uptime.";
         w = 24;
         h = 7;
-        unit = "suffix: min";
-        decimals = 0;
+        datasource = {
+          type = "prometheus";
+          uid = "prometheus-lt";
+        };
+        unit = "dtdurations";
+        decimals = 2;
         options = {
           showHeader = true;
           cellHeight = "sm";
@@ -1747,7 +1752,7 @@ let
               instance = "Host";
               "Value #A" = "Current continuous";
               "Value #B" = "Maximum session";
-              "Value #C" = "Total uptime (7d)";
+              "Value #C" = "Recorded uptime (7d)";
             };
             options.excludeByName = {
               Time = true;
@@ -1782,7 +1787,7 @@ let
               }
               {
                 id = "max";
-                value = 2880;
+                value = 172800;
               }
               {
                 # A down host has no running session; keep that cell neutral
@@ -1811,7 +1816,7 @@ let
           {
             matcher = {
               id = "byName";
-              options = "Total uptime (7d)";
+              options = "Recorded uptime (7d)";
             };
             properties = [
               {
@@ -1834,20 +1839,20 @@ let
               }
               {
                 id = "max";
-                value = 10080;
+                value = 604800;
               }
             ];
           }
         ];
         targets = [
           (target {
-            expr = ''(round((time() - max by (instance) (host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"})) / 60) and on(instance) (host:up == 1)) or on(instance) (-2 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S3"})) or on(instance) (-3 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S5"})) or on(instance) ((host:up == 0) * -1)'';
+            expr = ''(round((time() - max by (instance) (host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"})) / 60) * 60 and on(instance) (host:up == 1)) or on(instance) (-2 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S3"})) or on(instance) (-3 * (host:up == 0) * on(instance) max by (instance) (host_power_state{state="S5"})) or on(instance) ((host:up == 0) * -1)'';
             legend = "{{instance}} current";
             format = "table";
             instant = true;
           })
           (target {
-            expr = ''round(max_over_time((time() - max by (instance) (host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))[$__range:]) / 60)'';
+            expr = ''round(max_over_time((time() - max by (instance) (host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))[$__range:]) / 60) * 60'';
             legend = "{{instance}} maximum session";
             format = "table";
             instant = true;
@@ -1857,8 +1862,8 @@ let
               type = "prometheus";
               uid = "prometheus-lt";
             };
-            expr = ''round(max by (instance) (sum_over_time((host:up{instance=~"$host"})[7d:]) * 60 or ((time() - max by (instance) ((host:awake_since_seconds_max{instance=~"$host"} or host:awake_since_seconds{instance=~"$host"} or host:boot_time_seconds_max{instance=~"$host"} or host:boot_time_seconds{instance=~"$host"}))) and on(instance) (host:up == 1))) / 60)'';
-            legend = "{{instance}} total uptime (7d)";
+            expr = "round((${observedUptimeSeconds "7d"}) / 60) * 60";
+            legend = "{{instance}} recorded uptime (7d)";
             format = "table";
             instant = true;
           })
@@ -2180,7 +2185,7 @@ let
     ];
     panels = livePanels [
       (stat {
-        title = "Mains draw";
+        title = "Mains-equivalent draw";
         w = 6;
         h = 5;
         unit = "watt";
@@ -2233,7 +2238,7 @@ let
       })
       (ts {
         title = "Modelled mains power, broken down";
-        description = "Non-overlapping components of the mains-power model, including charging and conversion losses. The unstacked line is their combined total; a wall-meter reading can differ from this estimate.";
+        description = "Non-overlapping components of the mains-equivalent power model, including conversion loss. The unstacked line is their combined total; a wall-meter reading can differ from this estimate.";
         w = 24;
         h = 9;
         unit = "watt";
@@ -2320,30 +2325,6 @@ let
           (target {
             expr = ''pi_pmic_voltage_volts{instance=~"$host",rail="EXT5V"}'';
             legend = "{{instance}} 5 V supply";
-          })
-        ];
-      })
-      (ts {
-        title = "Laptop battery power";
-        w = 12;
-        h = 8;
-        unit = "watt";
-        targets = [
-          (target {
-            expr = ''laptop_battery_power_watts{instance=~"$host"}'';
-            legend = "{{instance}} {{battery}}";
-          })
-        ];
-      })
-      (ts {
-        title = "Laptop battery energy";
-        w = 12;
-        h = 8;
-        unit = "watth";
-        targets = [
-          (target {
-            expr = ''laptop_battery_energy_watt_hours{instance=~"$host"}'';
-            legend = "{{instance}} {{kind}}";
           })
         ];
       })
@@ -2788,7 +2769,7 @@ let
       energyCoverage
       (stat {
         title = "Device load (DC)";
-        description = "Power used by the device, including while on battery; excludes battery charging and AC adapter losses.";
+        description = "Power used by the device before supply conversion loss, regardless of AC state.";
         w = 12;
         h = 5;
         unit = "watt";
@@ -2828,11 +2809,13 @@ let
         decimals = 1;
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = energyKwh "24h";
             legend = "{{instance}} 24h";
             instant = true;
           })
           (target {
+            datasource = archiveDatasource;
             expr = energyKwh "7d";
             legend = "{{instance}} 7d";
             instant = true;
@@ -2847,11 +2830,13 @@ let
         decimals = 2;
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = costGbp "24h";
             legend = "{{instance}} 24h";
             instant = true;
           })
           (target {
+            datasource = archiveDatasource;
             expr = costGbp "7d";
             legend = "{{instance}} 7d";
             instant = true;
@@ -2912,6 +2897,7 @@ let
         };
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = energyKwh "$__interval";
             legend = "{{instance}}";
             interval = "$smooth";
@@ -2928,11 +2914,13 @@ let
         overrides = [ (rightAxisUnit "Cost" "currencyGBP") ];
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = totalEnergyKwh "1d";
             legend = "Energy";
             interval = "1d";
           })
           (target {
+            datasource = archiveDatasource;
             expr = totalCostGbp "1d";
             legend = "Cost";
             interval = "1d";
@@ -2949,11 +2937,13 @@ let
         overrides = [ (rightAxisUnit "Cost" "currencyGBP") ];
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = totalEnergyKwh "30d";
             legend = "Energy";
             interval = "30d";
           })
           (target {
+            datasource = archiveDatasource;
             expr = totalCostGbp "30d";
             legend = "Cost";
             interval = "30d";
@@ -3779,7 +3769,9 @@ let
     let
       shed =
         x:
-        if (x ? expr) && longLookback x.expr then
+        if (x.datasource.uid or null) == "prometheus-archive" then
+          x
+        else if (x ? expr) && longLookback x.expr then
           x
           // {
             datasource = {
@@ -4549,6 +4541,7 @@ let
         decimals = 1;
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = energyKwh "24h";
             legend = "{{instance}}";
             instant = true;
@@ -4563,6 +4556,7 @@ let
         decimals = 1;
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = energyKwh "7d";
             legend = "{{instance}}";
             instant = true;
@@ -4577,6 +4571,7 @@ let
         decimals = 2;
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = costGbp "24h";
             legend = "{{instance}}";
             instant = true;
@@ -4591,6 +4586,7 @@ let
         decimals = 2;
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = costGbp "7d";
             legend = "{{instance}}";
             instant = true;
@@ -4605,6 +4601,7 @@ let
         decimals = 1;
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = energyKwh "$__range";
             legend = "{{instance}}";
             instant = true;
@@ -4619,6 +4616,7 @@ let
         decimals = 2;
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = costGbp "$__range";
             legend = "{{instance}}";
             instant = true;
@@ -4656,6 +4654,7 @@ let
         };
         targets = [
           (target {
+            datasource = archiveDatasource;
             expr = energyKwh "$__interval";
             legend = "{{instance}}";
             interval = "$smooth";
@@ -4670,10 +4669,7 @@ let
         decimals = 2;
         targets = [
           (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
+            datasource = archiveDatasource;
             expr = costGbp "1d";
             legend = "{{instance}}";
             interval = "1d";
@@ -4688,10 +4684,7 @@ let
         decimals = 1;
         targets = [
           (target {
-            datasource = {
-              type = "prometheus";
-              uid = "prometheus-lt";
-            };
+            datasource = archiveDatasource;
             expr = energyKwh "30d";
             legend = "{{instance}}";
             interval = "30d";
@@ -4741,7 +4734,7 @@ let
         decimals = 4;
         targets = [
           (target {
-            expr = "max by (instance) (avg_over_time(host:up${upSelector}[$__range]))";
+            expr = archivedAvailability "$__range";
             legend = "{{instance}}";
             instant = true;
           })
@@ -4749,13 +4742,28 @@ let
       })
       (stat {
         title = "Downtime over range";
+        description = "Recorded unreachable seconds. Missing history is excluded and shown separately as coverage.";
         w = 12;
         h = 5;
         unit = "s";
         decimals = 0;
         targets = [
           (target {
-            expr = "(1 - max by (instance) (avg_over_time(host:up${upSelector}[$__range]))) * $__range_s";
+            expr = "(${archivedObservedSeconds "$__range"}) - on(instance) (${archivedUptimeSeconds "$__range"})";
+            legend = "{{instance}}";
+            instant = true;
+          })
+        ];
+      })
+      (stat {
+        title = "Recorded coverage over range";
+        w = 12;
+        h = 5;
+        unit = "percentunit";
+        decimals = 3;
+        targets = [
+          (target {
+            expr = "(${archivedObservedSeconds "$__range"}) / $__range_s";
             legend = "{{instance}}";
             instant = true;
           })
@@ -4772,7 +4780,7 @@ let
         decimals = 3;
         targets = [
           (target {
-            expr = "max by (instance) (avg_over_time(host:up${upSelector}[1d]))";
+            expr = archivedAvailability "1d";
             legend = "{{instance}}";
             interval = "1d";
           })
@@ -4788,14 +4796,14 @@ let
         decimals = 4;
         targets = [
           (target {
-            expr = "max by (instance) (avg_over_time(host:up${upSelector}[30d]))";
+            expr = archivedAvailability "30d";
             legend = "{{instance}}";
             interval = "30d";
           })
         ];
       })
       (timeline {
-        title = "Reachability";
+        title = "Reachability (hourly majority)";
         w = 12;
         h = 8;
         mappings = upMappings;
@@ -4804,7 +4812,7 @@ let
         max = 1;
         targets = [
           (target {
-            expr = "round(max by (instance) (host:up${upSelector}))";
+            expr = "round(max by (instance) (host:up:1h${upSelector}))";
             legend = "{{instance}}";
           })
         ];

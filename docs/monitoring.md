@@ -249,27 +249,28 @@ The intermediate repository formula also extrapolated: dividing by observed
 `host:up` sample count and multiplying by the requested duration still enlarged
 incomplete history.
 
-`pc:power_watts` is instantaneous mains draw: a fresh meter takes precedence,
-otherwise it is estimated from the component model. `pc:power_dc_watts` is device
-load before the AC supply, including use on battery. `pc:usage_power_watts` is the
-electricity attributed to that use and feeds the energy and cost panels:
+`pc:power_watts` is a mains-equivalent instantaneous draw: a fresh wall meter
+takes precedence, otherwise the disjoint component model includes supply
+conversion loss on every host. The laptop uses the same model whether plugged in
+or not. Battery state, charge rate and discharge rate do not enter the power
+model. `pc:equivalent_power_watts` mirrors that total and feeds energy and cost.
 
-- Direct mains use includes the supply's conversion loss.
-- Battery use accrues the electricity needed to replenish it, using 90% charging
-  efficiency plus the estimated AC-supply efficiency.
-- Charging energy goes into the battery, so it is excluded from the usage total
-  at charge time. It is accounted for when the battery is used. A mains reading
-  during charging is apportioned by the device and charging DC loads.
+The battery-free laptop energy buckets carry `model="no-battery"`. Cost and
+energy panels exclude its older battery-accounting buckets, so its seven-day
+total begins with the first new bucket after activation. Other hosts retain
+their earlier compatible buckets. The recorded-coverage panel shows how much
+of the selected period has new laptop data.
 
-This is consumption-based accounting, not a time-of-day electricity bill. It
-cannot reproduce changing tariffs, batteries charged elsewhere, or charging loss
-outside the assumed efficiency. The selected tariff applies to the whole range.
+For laptop use away from mains, this is the hypothetical electricity it would
+consume if connected directly to its modeled supply. It deliberately excludes
+the real battery's charging losses, so it is not a bill for actual recharge.
+The selected tariff applies to the whole range.
 
 ### Model findings and corrections
 
 | Area | Finding and action |
 |---|---|
-| Laptop platform | PSYS was reduced by CPU power, then CPU **and** display, board, storage and fans were added again. A whole-platform reading now replaces overlapping component estimates. Battery discharge power is preferred while unplugged. |
+| Laptop platform | PSYS was reduced by CPU power, then CPU **and** display, board, storage and fans were added again. A whole-platform reading now replaces overlapping component estimates regardless of AC state. |
 | CPU domains | The desktop's zenpower `SVI2_P_Core` and `SVI2_P_SoC` are separate rails and remain additive. RAPL package is an alternative, never added to zenpower; duplicate MMIO package reporting is excluded. Implausible package rates are rejected instead of becoming a fabricated 400 W. |
 | PSU loss | Efficiency already includes conversion loss. The old additional idle loss inflated every active reading; idle loss is now a floor on conversion loss. |
 | Freshness | Raw node scrape freshness gates estimates, preventing the server's two-hour lookback from perpetuating a running-host model after telemetry stops. A missing CPU/platform reading cannot produce a board-only total. Meter freshness is checked separately. |
@@ -290,8 +291,12 @@ applied blindly. The kernel documents that AMD APU power includes its CPU:
 The desktop's board (12 W), peripherals (2 W), RAM coefficients, fan curves and
 supply curve remain hardware estimates. A same-window check found zenpower near
 27.8 W versus RAPL near 36.6 W, so neither can establish actual wall draw by
-itself. The Pi's 1.8 W peripheral allowance assumes the unmonitored controller
-load; its PMIC readings do not include direct 5 V and external 12 V loads.
+itself. The Pi's tachometer-driven active cooler and fixed 0.35 W HDD-bay fan are
+separate. The old 0.5 W generic board term was removed because the PMIC system
+rails already cover the base board. Its remaining 1.8 W fixed term is explicitly
+the unmetered X1009/JMB585 SATA controller, including its LEDs and local
+conversion overhead; this value remains uncalibrated. The PMIC readings do not
+include direct 5 V and external 12 V loads.
 The configured 60 W supply curve assumes those loads share the modeled supply.
 Separate disk-enclosure power supplies require separate conversion losses.
 See [Pi power telemetry](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html).

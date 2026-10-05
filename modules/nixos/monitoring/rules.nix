@@ -50,6 +50,15 @@ let
 
   component = name: expr: ''label_replace(${expr}, "component", "${name}", "", "")'';
 
+  modelledPower =
+    "sum by (instance) (pc:power_component_watts)"
+    + " and on(instance) pc:power_dc_watts"
+    + " and on(instance) (${freshNode})";
+  meteredPower =
+    "pc:power_meter_watts and on(instance) "
+    + "(max by (instance) (timestamp(pc:power_meter_watts)) > time() - 15)";
+  selectedPower = "(${meteredPower}) or (${modelledPower})";
+
   raplPackage = ''rate(node_rapl_package_joules_total{path!~".*mmio.*"}[1m])'';
   cpuBusy = ''clamp(1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m])), 0, 1)'';
   cpuCoreBusy = ''clamp(1 - rate(node_cpu_seconds_total{mode="idle"}[15s]), 0, 1)'';
@@ -82,11 +91,7 @@ let
     }
     {
       record = "pc:platform_power_watts";
-      expr = ''
-        sum by (instance) (laptop_battery_power_watts
-          and on(instance, battery) laptop_battery_status_info{status="Discharging"}
-          and on(instance) (max by (instance) (node_power_supply_online) == 0))
-        or (sum by (instance) (rate(node_rapl_psys_joules_total{path!~".*mmio.*"}[1m])) > 0)'';
+      expr = ''(sum by (instance) (rate(node_rapl_psys_joules_total{path!~".*mmio.*"}[1m])) > 0)'';
     }
     {
       record = "pc:soc_rail_watts";
@@ -161,8 +166,9 @@ let
           (component "Display" "pc:backlight_power_watts")
           (component "Storage" "pc:disk_power_watts")
           (component "Fans" "pc:fan_power_watts")
-          (component "Board" (coefficient "pc_power_board_watts"))
-          (component "Peripherals" (coefficient "pc_power_peripherals_watts"))
+          (component "Board" "(${coefficient "pc_power_board_watts"} > 0)")
+          (component "Peripherals" "(${coefficient "pc_power_peripherals_watts"} > 0)")
+          "max by (instance, component) (pc_power_fixed_component_watts)"
         ]
         + ") unless on(instance) pc:platform_power_watts)\n or "
         + component "Platform" "pc:platform_power_watts";
@@ -175,16 +181,8 @@ let
         + " and on(instance) (pc:cpu_power_watts or pc:platform_power_watts)";
     }
     {
-      record = "pc:ac_online";
-      expr = "max by (instance) (node_power_supply_online) or (${coefficient "pc_power_supply_rated_watts"} * 0 + 1)";
-    }
-    {
-      record = "pc:battery_charge_watts";
-      expr = ''sum by (instance) (laptop_battery_power_watts and on(instance, battery) laptop_battery_status_info{status="Charging"}) or (pc:power_dc_watts * 0)'';
-    }
-    {
       record = "pc:supply_output_watts";
-      expr = "(pc:power_dc_watts + pc:battery_charge_watts / 0.9) * on(instance) pc:ac_online";
+      expr = "pc:power_dc_watts";
     }
     {
       record = "pc:supply_load_ratio";
@@ -196,18 +194,15 @@ let
     }
     {
       record = "pc:supply_loss_watts";
-      expr = "${supplyLoss "pc:supply_output_watts" "pc:supply_efficiency"} * on(instance) pc:ac_online";
+      expr = supplyLoss "pc:supply_output_watts" "pc:supply_efficiency";
     }
     {
       record = "pc:power_component_watts";
-      expr =
-        "(pc:power_dc_component_watts * on(instance) group_left() pc:ac_online)"
-        + " or ${component "Battery charging" "(pc:battery_charge_watts / 0.9 * on(instance) pc:ac_online)"}"
-        + " or ${component "Supply loss" "pc:supply_loss_watts"}";
+      expr = "pc:power_dc_component_watts or ${component "Supply loss" "pc:supply_loss_watts"}";
     }
     {
       record = "pc:power_model_watts";
-      expr = "(pc:supply_output_watts + pc:supply_loss_watts) and on(instance) (${freshNode})";
+      expr = modelledPower;
     }
     {
       record = "pc:power_meter_watts";
@@ -215,32 +210,15 @@ let
     }
     {
       record = "pc:power_watts";
-      expr =
-        "(pc:power_meter_watts and on(instance) (max by (instance) (timestamp(pc_power_meter_watts)) > time() - 15))"
-        + " or (pc:power_model_watts and on(instance) (${freshNode}))";
+      expr = selectedPower;
     }
     {
       record = "pc:power_model_error_watts";
-      expr = "pc:power_meter_watts - pc:power_model_watts";
+      expr = "(${meteredPower}) - (${modelledPower})";
     }
     {
-      record = "pc:usage_dc_watts";
-      expr = "pc:power_dc_watts * (pc:ac_online + (1 - pc:ac_online) / 0.9)";
-    }
-    {
-      record = "pc:usage_supply_efficiency";
-      expr = supplyEfficiency "pc:usage_dc_watts / ${coefficient "pc_power_supply_rated_watts"}";
-    }
-    {
-      record = "pc:usage_power_watts";
-      expr = ''
-        ((pc:power_watts unless on(instance) node_power_supply_online)
-        or ((pc:power_watts * pc:power_dc_watts / (pc:supply_output_watts > 0))
-          and on(instance) (pc:ac_online == 1))
-        or ((pc:usage_dc_watts + ${supplyLoss "pc:usage_dc_watts" "pc:usage_supply_efficiency"})
-          and on(instance) (${freshNode})))
-        and on(instance) ((${freshNode})
-          or (max by (instance) (timestamp(pc_power_meter_watts)) > time() - 15))'';
+      record = "pc:equivalent_power_watts";
+      expr = selectedPower;
     }
     {
       record = "pc:tariff_gbp_per_kwh";
@@ -489,21 +467,6 @@ let
         "avg"
         "max"
       ];
-    };
-    laptop_battery_power_watts = {
-      source = "laptop_battery_power_watts";
-      aggs = [
-        "avg"
-        "max"
-      ];
-    };
-    laptop_battery_energy_watt_hours = {
-      source = "laptop_battery_energy_watt_hours";
-      aggs = [ "avg" ];
-    };
-    laptop_battery_health_ratio = {
-      source = "laptop_battery_health_ratio";
-      aggs = [ "avg" ];
     };
     pc_gpu_power_watts = {
       source = "pc:gpu_power_watts";
@@ -974,11 +937,21 @@ in
       rules = [
         {
           record = "pc:energy_joules:1m";
-          expr = "sum by (instance) (sum_over_time(pc:usage_power_watts[1m]))";
+          expr = "sum by (instance) (sum_over_time(pc:equivalent_power_watts[1m]))";
+          labels.model = "no-battery";
         }
         {
           record = "pc:energy_observed_seconds:1m";
-          expr = "max by (instance) (count_over_time(pc:usage_power_watts[1m]))";
+          expr = "max by (instance) (count_over_time(pc:equivalent_power_watts[1m]))";
+          labels.model = "no-battery";
+        }
+        {
+          record = "host:uptime_seconds:1m";
+          expr = "sum by (instance) (sum_over_time(host:up[1m]))";
+        }
+        {
+          record = "host:up_observed_seconds:1m";
+          expr = "max by (instance) (count_over_time(host:up[1m]))";
         }
       ];
     }

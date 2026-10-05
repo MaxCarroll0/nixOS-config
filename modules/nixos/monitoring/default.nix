@@ -287,8 +287,6 @@ in
 
     piFirmware.enable = lib.mkEnableOption "Raspberry Pi firmware and PMIC telemetry";
 
-    laptopTelemetry.enable = lib.mkEnableOption "laptop battery and platform telemetry";
-
     # Linux 5.10 made these root-only over the PLATYPUS side channel; without
     # this the rapl collector sees nothing.
     userReadable = lib.mkOption {
