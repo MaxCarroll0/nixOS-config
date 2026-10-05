@@ -145,6 +145,14 @@ compared against was taken after long uptime.
 The dead `exploretraces` and `lokiexplore` plugins were dropped when Loki and Tempo were removed;
 only `grafana-metricsdrilldown-app` remains.
 
+Grafana listens only on `127.0.0.1:3000`. Nginx publishes HTTP port 80 on the
+Pi's Tailscale address only, overwrites any client-supplied identity header with
+the owner's login, and passes it to Grafana from loopback. Grafana's auth proxy
+creates that identity with the Admin role. Anonymous access is disabled. This
+gives the owner's tailnet devices passwordless admin access at `observatory`,
+`grafana` or `pi` without exposing Grafana's listener or trusting a header
+received from the network.
+
 **Renaming a provisioned datasource is a breaking change.** Grafana matches provisioned
 datasources by *name*, not uid, so renaming while keeping the uid makes it try to insert a row
 whose uid already exists, and it fails to start:

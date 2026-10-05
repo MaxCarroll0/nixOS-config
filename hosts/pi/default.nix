@@ -43,16 +43,35 @@
     "pi.grafana"
   ];
 
-  # Grafana itself binds to loopback and no longer allows anonymous access, so reaching this
-  # vhost gets a login form rather than an admin session. Per-user Tailscale identity via
-  # auth.proxy needs `tailscale serve`, which needs HTTPS enabled for the tailnet.
   services.nginx = {
     enable = true;
     recommendedProxySettings = true;
-    virtualHosts.observatory.locations."/" = {
-      proxyPass = "http://127.0.0.1:3000";
-      proxyWebsockets = true;
+    virtualHosts.observatory = {
+      serverAliases = [
+        "grafana"
+        "pi.grafana"
+        "pi"
+        "pi.taild5b88a.ts.net"
+      ];
+      listen = [
+        {
+          addr = "100.117.13.66";
+          port = 80;
+        }
+      ];
+      locations."/" = {
+        proxyPass = "http://127.0.0.1:3000";
+        proxyWebsockets = true;
+        extraConfig = ''
+          proxy_set_header Tailscale-User-Login "MaxCarroll0@github";
+          proxy_set_header Tailscale-User-Name "Max";
+        '';
+      };
     };
+  };
+  systemd.services.nginx = {
+    after = [ "tailscaled.service" ];
+    wants = [ "tailscaled.service" ];
   };
   networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 80 ];
 
@@ -99,6 +118,7 @@
     ssh = true;
     authKeySecret = "tailscale-auth-key";
   };
+  services.tailscale.extraSetFlags = lib.mkAfter [ "--hostname=observatory" ];
 
   users.users.max.openssh.authorizedKeys.keyFiles = [
     ../../keys/max.pub

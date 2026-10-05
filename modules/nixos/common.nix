@@ -226,6 +226,13 @@ in
   };
 
   config = {
+    # Proton owns resolv.conf and Tailscale DNS is deliberately disabled, while
+    # Tailscale Serve still requires the node's MagicDNS host name.
+    networking.hosts.${facts.pi.tailscale} = [
+      "pi"
+      "pi.taild5b88a.ts.net"
+    ];
+
     local.peerTransport = {
       enable = true;
       peers = lib.mapAttrs (_: f: { tailscaleAddress = f.tailscale; }) onTailnet;
