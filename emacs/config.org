@@ -397,6 +397,77 @@ Setup
   (add-hook 'ediff-mode-hook #'meow-motion-mode))
 
 #+end_src
+
+Once a keypad sequence has started, Meow reads every further key as a control
+key and reserves =SPC= for the unmodified one, so =SPC c h= means =C-c C-h=.
+That is backwards for a leader whose bindings are mostly plain letters, so the
+two are swapped: bare keys stay literal and =SPC= is what adds the control.
+An uppercase key still means itself, so the popup lists the case actually bound.
+
+#+begin_src emacs-lisp
+(defvar meow--use-control nil)
+
+(defun my/meow-keypad-handle-input-event (input-event)
+  "Handle INPUT-EVENT with literal keys by default and SPC for control."
+  (meow--keypad-clear-message)
+  (when-let* ((key (single-key-description input-event)))
+    (let ((has-sub-meta (meow--keypad-has-sub-meta-keymap-p)))
+      (cond
+       (meow--use-control
+        (push (cons 'control key) meow--keypad-keys)
+        (setq meow--use-control nil))
+       (meow--use-literal
+        (push (cons 'literal key) meow--keypad-keys)
+        (setq meow--use-literal nil))
+       (meow--use-both
+        (push (cons 'both key) meow--keypad-keys)
+        (setq meow--use-both nil))
+       (meow--use-meta
+        (push (cons 'meta key) meow--keypad-keys)
+        (setq meow--use-meta nil))
+       ((and (equal input-event meow-keypad-meta-prefix)
+             (not meow--use-meta)
+             has-sub-meta)
+        (setq meow--use-meta t))
+       ((and (equal input-event meow-keypad-ctrl-meta-prefix)
+             (not meow--use-both)
+             has-sub-meta)
+        (setq meow--use-both t))
+       ((and (equal input-event meow-keypad-literal-prefix)
+             (not meow--use-control)
+             meow--keypad-keys)
+        (setq meow--use-control t))
+       (meow--keypad-keys
+        (push (cons 'literal key) meow--keypad-keys))
+       ((alist-get input-event meow-keypad-start-keys)
+        (push (cons 'control (meow--parse-input-event
+                              (alist-get input-event meow-keypad-start-keys)))
+              meow--keypad-keys))
+       (t
+        (if-let* ((keymap (meow--get-leader-keymap)))
+            (setq meow--keypad-base-keymap keymap)
+          (setq meow--keypad-keys
+                (meow--parse-string-to-keypad-keys meow-keypad-leader-dispatch)))
+        (push (cons 'literal key) meow--keypad-keys))))
+    (if (or meow--use-literal
+            meow--use-meta
+            meow--use-both
+            meow--use-control)
+        (progn
+          (when meow-keypad-message (meow--keypad-show-message))
+          (meow--keypad-display-message)
+          nil)
+      (meow--keypad-try-execute))))
+
+(defun my/meow-keypad-reset-control (&rest _)
+  "Clear the pending control prefix when keypad state ends."
+  (setq meow--use-control nil))
+
+(with-eval-after-load 'meow
+  (advice-add 'meow--keypad-handle-input-event
+              :override #'my/meow-keypad-handle-input-event)
+  (advice-add 'meow--keypad-quit :after #'my/meow-keypad-reset-control))
+#+end_src
 * Window manager
 
 Hyprland tiles frames and Emacs splits them; these commands are the Emacs half of that split,
