@@ -205,22 +205,8 @@
   local.nas = {
     enable = true;
     dataRoot = "/srv/nas";
-    smb = {
-      enable = true;
-      interfaces = [
-        "end0"
-        "wld0"
-        "tailscale0"
-      ];
-    };
-    cache-server = {
-      enable = true;
-      interfaces = [
-        "end0"
-        "wld0"
-        "tailscale0"
-      ];
-    };
+    smb.enable = true;
+    cache-server.enable = true;
     index.enable = true;
     accounts.nastest = {
       uid = 3000;
