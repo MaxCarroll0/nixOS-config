@@ -7987,6 +7987,225 @@ A shared Tree-sitter parser buffer finds the leaf patterns and typed holes insid
 
 #+end_src
 
+*** Signature mismatches
+
+One signature mismatch arrives as a single diagnostic spanning the whole
+=struct ... end=, so the module reads as uniformly broken. Each inconsistency
+ocamllsp reports is given its own diagnostic on the value it blames, phrased the
+way an ordinary type error is, while the original stays in the diagnostics list
+with its overlay unpainted so nothing is lost. Missing declarations have no
+value to point at and mark the =struct= and =end= keywords instead. A signal
+raised while rewriting a report makes Flymake disable the whole Eglot backend
+for that buffer permanently, so the filter yields its arguments untouched
+rather than ever letting one escape.
+
+#+begin_src emacs-lisp
+(defconst my/ocaml-sigmismatch-head-rx
+  (rx bol (? (+ digit) ". ")
+      (group (or "Values" "Type declarations" "Module type declarations"
+                 "Class declarations" "Class type declarations" "Extension declarations"))
+      " do not match:" eol))
+
+(defconst my/ocaml-sigmismatch-missing-rx
+  (rx bol (? (+ digit) ". ")
+      "The " (group (or "value" "type" "module type" "module" "class type" "class"
+                        "extension constructor"))
+      " " (? "\"") (group (+ (not (any " \"")))) (? "\"")
+      " is required but not provided" eol))
+
+(defun my/ocaml-sigmismatch-p (text)
+  "Return non-nil when TEXT is an OCaml signature mismatch report."
+  (and text (string-match-p (rx bos (* space) "Signature mismatch:") text)))
+
+(defun my/ocaml-sigmismatch-kind (head)
+  "Return the item symbol for a do-not-match HEAD."
+  (pcase head
+    ("Values" 'values)
+    ("Type declarations" 'types)
+    (_ 'other)))
+
+(defun my/ocaml-sigmismatch-name (decl)
+  "Return the name declared by DECL."
+  (when decl
+    (cond
+     ((string-match (rx bos "val" (+ space) (group (+ (not (any " :"))))) decl)
+      (match-string 1 decl))
+     ((string-match (rx bos (or "module type" "module" "class type" "class" "type")
+                        (+ space) (group (+ nonl)))
+                    decl)
+      (let* ((head (car (split-string (match-string 1 decl) "=" t)))
+             (tokens (split-string (string-trim head) nil t)))
+        (car (last tokens)))))))
+
+(defun my/ocaml-sigmismatch-type (decl)
+  "Return the type part of value declaration DECL."
+  (if (and decl (string-match (rx bos "val" (+ space) (+ (not (any " :")))
+                                  (* space) ":" (* space))
+                              decl))
+      (substring decl (match-end 0))
+    (or decl "")))
+
+(defun my/ocaml-sigmismatch-close (item body)
+  "Return ITEM completed from its BODY lines."
+  (let* ((trimmed (mapcar #'string-trim body))
+         (split (cl-position "is not included in" trimmed :test #'string=))
+         (actual (and split (string-join (seq-take trimmed split) " ")))
+         (rest (and split (nthcdr (1+ split) trimmed)))
+         (expected (and rest (car rest)))
+         (details (and rest (seq-remove #'string-empty-p (cdr rest)))))
+    (append item (list :actual actual :expected expected :details details
+                       :name (my/ocaml-sigmismatch-name actual)))))
+
+(defun my/ocaml-sigmismatch-items (text)
+  "Return the individual inconsistencies reported in TEXT."
+  (let ((items '()) (current nil) (body '()))
+    (dolist (line (split-string text "\n"))
+      (let ((head (when (string-match my/ocaml-sigmismatch-head-rx line)
+                    (match-string 1 line)))
+            (gone (when (string-match my/ocaml-sigmismatch-missing-rx line)
+                    (cons (match-string 1 line) (match-string 2 line)))))
+        (cond
+         (gone
+          (when current (push (my/ocaml-sigmismatch-close current (nreverse body)) items))
+          (push (list :kind 'missing :sort (car gone) :name (cdr gone)) items)
+          (setq current nil body nil))
+         (head
+          (when current (push (my/ocaml-sigmismatch-close current (nreverse body)) items))
+          (setq current (list :kind (my/ocaml-sigmismatch-kind head)) body nil))
+         (current (push line body)))))
+    (when current (push (my/ocaml-sigmismatch-close current (nreverse body)) items))
+    (nreverse items)))
+
+(defun my/ocaml-sigmismatch-message (item)
+  "Return ITEM rendered as an ordinary OCaml type error."
+  (string-join
+   (delq nil
+         (append
+          (pcase (plist-get item :kind)
+            ('values
+             (list "This value has type"
+                   (concat "  " (my/ocaml-sigmismatch-type (plist-get item :actual)))
+                   "but a value was expected of type"
+                   (concat "  " (my/ocaml-sigmismatch-type (plist-get item :expected)))))
+            ('types
+             (list "This type declaration is"
+                   (concat "  " (or (plist-get item :actual) ""))
+                   "but a declaration was expected of the form"
+                   (concat "  " (or (plist-get item :expected) ""))))
+            ('missing
+             (list (format "The %s %s is required but not provided"
+                           (plist-get item :sort) (plist-get item :name))))
+            (_ (list (or (plist-get item :actual) ""))))
+          (list "because of a module signature mismatch")
+          (plist-get item :details)))
+   "\n"))
+
+(defun my/ocaml-sigmismatch-compress (text)
+  "Return the conclusion of TEXT as one line."
+  (let* ((lines (seq-remove #'string-empty-p
+                            (mapcar #'string-trim (split-string text "\n"))))
+         (tail (seq-remove (lambda (line)
+                             (member line '("Signature mismatch:" "is not included in")))
+                           lines)))
+    (replace-regexp-in-string
+     (rx (+ space)) " "
+     (or (car (last tail)) "signature mismatch"))))
+
+(defun my/ocaml-sigmismatch-summary (items text)
+  "Return a one-line summary of ITEMS, falling back to TEXT."
+  (let ((missing (seq-filter (lambda (item) (eq (plist-get item :kind) 'missing)) items))
+        (others (seq-remove (lambda (item) (eq (plist-get item :kind) 'missing)) items))
+        (names (lambda (some)
+                 (string-join
+                  (delq nil (mapcar (lambda (item) (plist-get item :name)) some))
+                  ", "))))
+    (concat "Signature mismatch: "
+            (if (null items)
+                (my/ocaml-sigmismatch-compress text)
+              (string-join
+               (delq nil
+                     (list (when missing
+                             (format "missing declarations (%s)" (funcall names missing)))
+                           (when others
+                             (format "inconsistencies (%s)" (funcall names others)))))
+               "; ")))))
+
+(defun my/ocaml-sigmismatch-actual-region (spec)
+  "Return the buffer region ocamllsp blames for SPEC, if it names one here."
+  (seq-some (lambda (related)
+              (when (equal (plist-get related :message) "Actual declaration")
+                (let* ((location (plist-get related :location))
+                       (path (ignore-errors
+                               (eglot-uri-to-path (plist-get location :uri)))))
+                  (when (and path buffer-file-name (file-equal-p path buffer-file-name))
+                    (eglot-range-region (plist-get location :range))))))
+            (append (plist-get spec :relatedInformation) nil)))
+
+(defun my/ocaml-sigmismatch-keyword-regions (beg end)
+  "Return the struct and end keyword regions between BEG and END."
+  (save-excursion
+    (let (regions)
+      (goto-char beg)
+      (when (re-search-forward (rx symbol-start "struct" symbol-end) end t)
+        (push (cons (match-beginning 0) (match-end 0)) regions))
+      (goto-char end)
+      (when (re-search-backward (rx symbol-start "end" symbol-end) beg t)
+        (push (cons (match-beginning 0) (match-end 0)) regions))
+      (nreverse regions))))
+
+(defun my/ocaml-sigmismatch-derive (diag spec text)
+  "Return diagnostics for each inconsistency reported by DIAG."
+  (let* ((items (my/ocaml-sigmismatch-items text))
+         (beg (flymake-diagnostic-beg diag))
+         (end (flymake-diagnostic-end diag))
+         (blamed (my/ocaml-sigmismatch-actual-region spec))
+         (data (flymake-diagnostic-data diag))
+         (derived '()))
+    (dolist (item items (nreverse derived))
+      (let ((regions (if (eq (plist-get item :kind) 'missing)
+                         (my/ocaml-sigmismatch-keyword-regions beg end)
+                       (and blamed (list blamed))))
+            (rendered (my/ocaml-sigmismatch-message item)))
+        (dolist (region regions)
+          (push (flymake-make-diagnostic
+                 (current-buffer) (car region) (cdr region)
+                 (flymake-diagnostic-type diag)
+                 (list "ocamllsp" nil rendered)
+                 (cons '(my/flymake-derived . t) data))
+                derived))))))
+
+(defun my/ocaml-sigmismatch-conceal (diag items text)
+  "Keep DIAG listed but unpainted, summarising ITEMS above TEXT."
+  (setf (cl-struct-slot-value 'flymake--diag 'message diag)
+        (concat (my/ocaml-sigmismatch-summary items text) "\n" text))
+  (setf (cl-struct-slot-value 'flymake--diag 'overlay-properties diag)
+        '((face . nil) (before-string . nil)))
+  (setf (cl-struct-slot-value 'flymake--diag 'data diag)
+        (cons '(my/flymake-concealed . t) (flymake-diagnostic-data diag))))
+
+(defun my/eglot-flymake-decompose (args)
+  "Split OCaml signature mismatches in ARGS into per-value diagnostics."
+  (condition-case nil
+      (let ((diags (car args))
+            (derived '()))
+        (dolist (diag diags)
+          (let ((data (flymake-diagnostic-data diag)))
+            (unless (or (alist-get 'my/flymake-derived data)
+                        (alist-get 'my/flymake-concealed data))
+              (when-let* ((spec (alist-get 'eglot-lsp-diag data))
+                          (text (plist-get spec :message))
+                          ((my/ocaml-sigmismatch-p text)))
+                (setq derived
+                      (append derived (my/ocaml-sigmismatch-derive diag spec text)))
+                (my/ocaml-sigmismatch-conceal
+                 diag (my/ocaml-sigmismatch-items text) text)))))
+        (cons (append diags derived) (cdr args)))
+    (error args)))
+
+(with-eval-after-load 'eglot
+  (advice-add 'eglot--flymake-report-2 :filter-args #'my/eglot-flymake-decompose))
+#+end_src
+
 *** Other
 Installed dependency sources retain Eglot navigation without standalone Flymake diagnostics. A module annotated =: S= offers the items declared by =S= with their names fixed and arity from the declared type. Labelled arguments render with their labels and optional arguments stay omitted until =TAB= adds them. =C-c .= collects snippets, type queries, navigation and refactors.
 
