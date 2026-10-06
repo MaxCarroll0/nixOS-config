@@ -1549,3 +1549,38 @@ otherwise kill the session cannot happen: `tailscaled.restartIfChanged = false`,
 `tailscaled-autoconnect` is forced off the activation path onto a timer. The deploy arrives over
 Tailscale SSH, which lives inside `tailscaled`. Magic rollback still applies. Do not generalise
 this to a deploy that *does* restart a connectivity service.
+
+## 20. Parity silently stopped syncing for six weeks
+
+Found on 2026-10-06 while verifying the restore. `snapraid status` reported the newest block
+scrubbed **44 days ago**, even though `nas-snapraid-sync.timer` had been active throughout the
+15-30 September window when the NAS was deployed and running.
+
+`nas-unlock-local` mounted every data branch and the mergerfs pool, and then started
+`nas.target` — which is an empty target with `wantedBy = [ ]`. **Nothing ever mounted
+`/mnt/parity`.** Both `nas-snapraid-sync` and `nas-snapraid-scrub` open with
+
+```bash
+for m in <data mounts> /mnt/parity; do mountpoint -q "$m" || exit 0; done
+```
+
+so with parity unmounted they exited **0** on every run: a silent no-op that systemd records as
+success, with no failed unit and no alert. The array's entire recovery guarantee was off while
+every indicator said it was on.
+
+Nothing was lost. `snapraid diff` reported `No differences` across 1453 files, because the array
+is `noauto` and spent that period locked, so there were no writes to protect. The bug was latent,
+not destructive — but it would have bitten the first time a file changed.
+
+Two fixes, both in `modules/nixos/nas/unlock.nix`:
+
+- the unlock mounts `/mnt/parity` alongside the data branches, from one `mountTargets` list shared
+  by the mount loop and the count, so the two cannot drift apart again
+- the unlock reports `mounted=N/M` and **fails** unless every target mounted. It used to return
+  success on `mounted > 0`, so a partially mounted array looked fine; `nas-unlock` on the client
+  now surfaces that as a failed notification
+
+The deeper lesson is the `|| exit 0` guard itself: it was written so the timers would not fail on
+a locked array, and the cost is that a *misconfigured* array is indistinguishable from a
+deliberately locked one. `docs/nas-verify.sh` now checks `/mnt/parity` explicitly, which is what
+caught it.
