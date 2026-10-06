@@ -13,6 +13,13 @@ let
 
   disks = scfg: lib.mapAttrsToList (name: d: "${name}=${d.device}") cfg.storage.dataDisks;
 
+  # SnapRAID's sync and scrub exit 0 unless every branch *and* parity is
+  # mounted, so leaving parity out makes them silent no-ops.
+  mountTargets = lib.escapeShellArgs (
+    lib.mapAttrsToList (n: _: "${cfg.storage.diskRoot}/${n}") cfg.storage.dataDisks
+    ++ [ cfg.storage.parityMount ]
+  );
+
   serverUnlock = pkgs.writeShellApplication {
     name = "nas-unlock-local";
     runtimeInputs = [
@@ -41,27 +48,21 @@ let
       done
       unset key
 
-      for m in ${
-        lib.escapeShellArgs (
-          lib.mapAttrsToList (n: _: "${cfg.storage.diskRoot}/${n}") cfg.storage.dataDisks
-        )
-      }; do
+      for m in ${mountTargets}; do
         mountpoint -q "$m" || mount "$m" || true
       done
       systemctl start "$(systemd-escape -p --suffix=mount ${cfg.dataRoot})" || true
       systemctl start ${ucfg.target} || true
 
       mounted=0
-      for m in ${
-        lib.escapeShellArgs (
-          lib.mapAttrsToList (n: _: "${cfg.storage.diskRoot}/${n}") cfg.storage.dataDisks
-        )
-      }; do
+      expected=0
+      for m in ${mountTargets}; do
+        expected=$((expected + 1))
         mountpoint -q "$m" && mounted=$((mounted + 1))
       done
 
-      echo "unlocked=$opened mounted=$mounted"
-      [ "$mounted" -gt 0 ]
+      echo "unlocked=$opened mounted=$mounted/$expected"
+      [ "$mounted" -eq "$expected" ]
     '';
   };
 
