@@ -28,9 +28,11 @@ for u in nas-versions-watch-disk1 nas-versions-watch-disk2 nas-prefetch-disk1 \
 done
 
 # A completed oneshot without RemainAfterExit reads as inactive, so judge these
-# by their last result instead.
+# by their last result instead. `show -p Result` prints "success" for a unit that
+# does not exist at all, so existence has to be checked separately.
 for u in nas-smb-passwords flight-recorder tailscale-identity; do
-  [ "$(systemctl show -p Result --value $u.service)" = success ] \
+  systemctl cat "$u.service" >/dev/null 2>&1 || { bad "$u does not exist"; continue; }
+  [ "$(systemctl show -p Result --value "$u.service")" = success ] \
     && ok "$u ran" || bad "$u did not succeed"
 done
 
