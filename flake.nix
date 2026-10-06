@@ -105,6 +105,10 @@
       pkgs = pkgsFor system;
       pkgs-unstable = pkgsUnstableFor system;
 
+      # autoUpgrade compares this against origin to refuse moving a host
+      # backwards, so a dirty deploy must stay distinguishable from a commit.
+      revision = self.rev or "${self.dirtyRev or "unknown"}";
+
       mkHost =
         {
           modules ? [ ],
@@ -118,6 +122,7 @@
             {
               nixpkgs.overlays = [ emacs-overlay.overlay ];
               nixpkgs.config.allowUnfree = true;
+              system.configurationRevision = revision;
             }
             module
           ]
@@ -136,6 +141,7 @@
         inputs.nixos-raspberrypi.lib.nixosSystem {
           modules = [
             sops-nix.nixosModules.sops
+            { system.configurationRevision = revision; }
             module
           ]
           ++ modules;
