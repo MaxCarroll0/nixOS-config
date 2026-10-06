@@ -118,7 +118,6 @@
     ssh = true;
     authKeySecret = "tailscale-auth-key";
   };
-  services.tailscale.extraSetFlags = lib.mkAfter [ "--hostname=observatory" ];
 
   users.users.max.openssh.authorizedKeys.keyFiles = [
     ../../keys/max.pub
