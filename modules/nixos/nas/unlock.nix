@@ -74,9 +74,31 @@ let
     ];
     text = ''
       systemctl stop ${ucfg.target} || true
-      for name in ${lib.escapeShellArgs (lib.attrNames cfg.storage.dataDisks)} parity; do
-        [ -e "/dev/mapper/nas-$name" ] && cryptsetup luksClose "nas-$name" || true
+
+      # luksClose cannot succeed while a branch is still mounted, and the pool
+      # holds every branch open, so it has to come down first.
+      systemctl stop "$(systemd-escape -p --suffix=mount ${cfg.dataRoot})" || true
+      umount ${lib.escapeShellArg cfg.dataRoot} 2>/dev/null || true
+      for m in ${mountTargets}; do
+        mountpoint -q "$m" && umount "$m" || true
       done
+
+      open=0
+      for name in ${lib.escapeShellArgs (lib.attrNames cfg.storage.dataDisks)} parity; do
+        [ -e "/dev/mapper/nas-$name" ] || continue
+        cryptsetup luksClose "nas-$name" || true
+        [ -e "/dev/mapper/nas-$name" ] && open=$((open + 1))
+      done
+
+      still=0
+      for m in ${lib.escapeShellArg cfg.dataRoot} ${mountTargets}; do
+        mountpoint -q "$m" && still=$((still + 1))
+      done
+
+      if [ "$open" -gt 0 ] || [ "$still" -gt 0 ]; then
+        echo "not locked: $still still mounted, $open still open" >&2
+        exit 1
+      fi
       echo "locked"
     '';
   };
