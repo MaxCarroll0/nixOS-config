@@ -14,6 +14,55 @@ let
 
   facts = import ../../hosts/facts.nix;
   selfName = config.networking.hostName;
+
+  upgradeAllowed = pkgs.writeShellApplication {
+    name = "nixos-upgrade-allowed";
+    runtimeInputs = [
+      pkgs.git
+      pkgs.coreutils
+      config.nix.package
+    ];
+    text = ''
+      metrics=/var/lib/node-exporter-textfile/autoupgrade.prom
+
+      verdict() {
+        if [ -d "$(dirname "$metrics")" ]; then
+          {
+            printf 'node_autoupgrade_blocked{reason="%s"} %s\n' "$2" "$1" > "$metrics.tmp" \
+              && mv "$metrics.tmp" "$metrics"
+          } || echo "could not record the upgrade verdict as a metric" >&2
+        fi
+        [ "$1" = 0 ] || echo "skipping upgrade: $3" >&2
+        exit "$1"
+      }
+
+      [ -d ${flakePath}/.git ] || verdict 0 none "no clone to guard"
+
+      git config --global --add safe.directory ${flakePath}
+      git -C ${flakePath} fetch -q origin || verdict 1 fetch-failed "cannot reach origin"
+
+      if [ -n "$(git -C ${flakePath} status --porcelain)" ]; then
+        verdict 1 dirty-clone "the clone has uncommitted changes, which an upgrade would discard"
+      fi
+
+      running=$(nixos-version --configuration-revision 2>/dev/null || true)
+
+      case "$running" in
+        "")
+          verdict 1 unknown-running "the running system records no revision, so nothing can be shown to supersede it"
+          ;;
+        *-dirty)
+          verdict 1 dirty-running "the running system was built from an uncommitted tree, so no commit supersedes it"
+          ;;
+      esac
+
+      if ! git -C ${flakePath} merge-base --is-ancestor "$running" origin/HEAD; then
+        verdict 1 unpushed-running "the running revision $running is not an ancestor of origin, so upgrading would revert it"
+      fi
+
+      verdict 0 none "forward from $running"
+    '';
+  };
   onTailnet = lib.filterAttrs (_: f: f ? tailscale) facts;
   wakeable = lib.filterAttrs (name: f: name != selfName && f ? mac) facts;
 
@@ -225,6 +274,12 @@ in
     description = "Accounts whose password hash comes from sops.";
   };
 
+  options.local.update.ownsInputBump = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    description = "Whether this host bumps flake inputs and pushes them. Exactly one host should.";
+  };
+
   config = {
     # Proton owns resolv.conf and Tailscale DNS is deliberately disabled, while
     # Tailscale Serve still requires the node's MagicDNS host name.
@@ -370,13 +425,25 @@ in
     # !include, not readFile: readFile which needs--impure
     nix.extraOptions = "!include ${config.sops.templates."conf-access-tokens".path}";
 
-    # nixos-rebuild's --update-input was removed; inputs are bumped separately.
-    # The unit runs as root, so hand the lock back to its owner afterwards.
+    # An upgrade must never move a host backwards. ExecCondition, not preStart:
+    # a non-zero condition skips the unit cleanly instead of marking it failed.
+    systemd.services.nixos-upgrade.serviceConfig.ExecCondition = lib.getExe upgradeAllowed;
+
     systemd.services.nixos-upgrade.preStart = /* bash */ ''
       if [ -d ${flakePath}/.git ]; then
         ${pkgs.git}/bin/git config --global --add safe.directory ${flakePath}
-        ${config.nix.package}/bin/nix flake update --flake ${flakePath}
-        ${pkgs.coreutils}/bin/chown max:users ${flakePath}/flake.lock
+        ${pkgs.git}/bin/git -C ${flakePath} merge --ff-only origin/HEAD
+        ${lib.optionalString config.local.update.ownsInputBump ''
+          ${config.nix.package}/bin/nix flake update --flake ${flakePath}
+          if ! ${pkgs.git}/bin/git -C ${flakePath} diff --quiet -- flake.lock; then
+            ${pkgs.git}/bin/git -C ${flakePath} commit -q -m "flake: bump every input" -- flake.lock
+            # A rejected push means another host already bumped; its lock wins,
+            # so drop ours rather than leaving the clone diverged from origin.
+            ${pkgs.git}/bin/git -C ${flakePath} push -q origin HEAD \
+              || ${pkgs.git}/bin/git -C ${flakePath} reset -q --hard origin/HEAD
+          fi
+        ''}
+        ${pkgs.coreutils}/bin/chown -R max:users ${flakePath}/.git ${flakePath}/flake.lock
       fi
     '';
 

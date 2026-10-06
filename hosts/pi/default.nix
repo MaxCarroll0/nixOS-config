@@ -127,9 +127,7 @@
 
   local.browserSync.server = true;
 
-  # The host-local clone cannot see reviewed working-tree deployments and would
-  # replace them with its older committed configuration.
-  system.autoUpgrade.enable = false;
+  system.autoUpgrade.enable = true;
 
   local.build.client = {
     enable = true;

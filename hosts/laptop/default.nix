@@ -8,6 +8,7 @@
     ../../modules/nixos/common.nix
     ../../modules/nixos/containers.nix
     ../../modules/nixos/desktop-env.nix
+    ../../modules/nixos/gaming.nix
     ../../modules/nixos/vpn.nix
     ../../modules/nixos/wake.nix
     ../../modules/nixos/monitoring
@@ -25,6 +26,8 @@
   ];
 
   networking.hostName = "laptop";
+
+  local.gaming.enable = true;
 
   local.nas.unlock.client = true;
   local.atticClient = {
@@ -150,6 +153,7 @@
   '';
 
   system.autoUpgrade.enable = true;
+  local.update.ownsInputBump = true;
 
   local.build.host = {
     enable = true;
