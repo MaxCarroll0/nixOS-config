@@ -1708,3 +1708,19 @@ Three "reports success while doing nothing" bugs were found in this module tree 
 (sections 20, 21, and the attic queue). The common cause is `|| true` / `|| exit 0` on a step
 whose failure is indistinguishable from a legitimate skip. Any such guard in this tree should be
 paired with a count-and-verify afterwards, which is what both fixes now do.
+
+A fourth instance was in `docs/nas-verify.sh` itself, which is the tool trusted to catch the other
+three. It judged three oneshots by `systemctl show -p Result --value`, and **systemd prints
+`success` for a unit that does not exist at all**, so the check could not distinguish "ran and
+succeeded" from "was never built". All three units it names are in fact missing:
+
+| unit | state |
+|---|---|
+| `nas-smb-passwords` | exists in no `.nix` file; the samba passdb holds `max` and `nastest`, set by hand, so SMB auth is not declarative and an empty passdb would be silent |
+| `flight-recorder` | `modules/nixos/flight-recorder.nix` is imported by no host |
+| `tailscale-identity` | exists nowhere in the repo |
+
+The script now checks existence with `systemctl cat` before reading `Result`, so a missing unit
+fails. The three gaps above are real and still open; the verification was simply never reporting
+them. `smb-password-max` is the related secret: it is referenced only by the verify script, exists
+in no sops file, and is why the SMB authentication path has never actually been exercised.
