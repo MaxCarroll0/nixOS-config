@@ -73,6 +73,18 @@ let
         exit 0
       fi
 
+      # A single collected path makes attic reject the whole batch, and the
+      # requeue below would then retry it forever.
+      while read -r path; do
+        [ -e "$path" ] && printf '%s\n' "$path"
+      done < ${stateDir}/pending > ${stateDir}/pending.valid
+      mv ${stateDir}/pending.valid ${stateDir}/pending
+
+      if [ ! -s ${stateDir}/pending ]; then
+        rm -f ${stateDir}/pending
+        exit 0
+      fi
+
       if attic push --stdin --jobs 1 lan:${cfg.cache} < ${stateDir}/pending; then
         rm -f ${stateDir}/pending
       else
