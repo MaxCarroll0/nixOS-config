@@ -1584,3 +1584,44 @@ The deeper lesson is the `|| exit 0` guard itself: it was written so the timers 
 a locked array, and the cost is that a *misconfigured* array is indistinguishable from a
 deliberately locked one. `docs/nas-verify.sh` now checks `/mnt/parity` explicitly, which is what
 caught it.
+
+### Runbook: adding a data disk
+
+`modules/nixos/nas/{storage,unlock,checkpoints,versions,prefetch}.nix` are all generic over
+`local.nas.storage.dataDisks`, so a new branch needs **no module changes** — only the host, plus
+the on-disk setup. SnapRAID requires parity to be at least as large as the largest data disk;
+confirm that before promoting anything.
+
+1. **Prove the disk is disposable.** Mount every partition read-only and look, before any wipe.
+   Use `-o ro,noload`, because a plain `-o ro` still replays the ext3/ext4 journal and writes to
+   the disk you are trying to preserve. `du -xh --max-depth=1` is worth the wait: the 1 TB disk
+   added as `disk3` looked like a spare and held 787 GB of Humax PVR recordings.
+
+2. **Whole-disk LUKS2, no partition table**, matching the existing members, and the **same
+   passphrase from `secrets/nas.yaml`** — `nas-unlock-local` pipes one key to every device, so a
+   different passphrase silently breaks unlock for that branch alone. Clear the old signatures,
+   `luksFormat --type luks2`, `luksOpen` it as `nas-disk3`, make a NILFS2 filesystem on the
+   mapper device, then record the **LUKS** UUID from `lsblk -o NAME,SERIAL,UUID` (not the
+   filesystem's).
+
+3. **Declare it by UUID** in `local.nas.storage.dataDisks`, never as `/dev/sdX`: device letters
+   shift when disks are added, and they already have on this host.
+
+4. **Deploy with the pool unmounted.** The mergerfs device string *is* the branch list, so adding
+   a branch changes it, and a busy FUSE mount cannot be reloaded in place:
+
+   ```bash
+   nas-lock && deploy-request --host pi switch && nas-unlock
+   ```
+
+5. **Sync parity, and do not reach for `--force-empty`.** A brand-new data name has no recorded
+   files, so the guard does not fire; if it does fire, something is wrong with the *existing*
+   branches and the override would overwrite parity with their absence. Confirm with
+   `snapraid status` (new disk listed and empty) and `snapraid diff` (`removed=0`) before starting
+   `nas-snapraid-sync.service`.
+
+6. **Check parity actually mounted** (`findmnt /mnt/parity`). Section 20 exists because it was
+   not, and sync then exits 0 while doing nothing.
+
+Run step 5 attended and check `node_boot_unclean_total` afterwards: a sync reads every disk at
+once, the heaviest load this hardware sees, and section 18's power question is unsettled.
