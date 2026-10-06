@@ -247,6 +247,7 @@
   local.power = {
     instrument = true;
     idle.optimise = false;
+    oopsPanic = false;
   };
 
   powerManagement.cpuFreqGovernor = "schedutil";

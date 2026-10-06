@@ -478,6 +478,12 @@ in
       description = "Cut idle draw without suspending. Applies under every policy.";
     };
 
+    oopsPanic = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Reboot on a kernel Oops; turn off to keep the trace for diagnosis.";
+    };
+
     idle.policy = lib.mkOption {
       type = lib.types.enum [
         "always-on"
@@ -773,8 +779,10 @@ in
     (lib.mkIf (cfg.idle.policy == "always-on") {
       boot.kernelParams = [
         "panic=10"
-        "oops=panic"
-      ];
+      ]
+      ++ lib.optional cfg.oopsPanic "oops=panic";
+
+      boot.kernel.sysctl."kernel.panic_on_oops" = if cfg.oopsPanic then 1 else 0;
 
       systemd.settings.Manager = {
         RuntimeWatchdogSec = "60s";
