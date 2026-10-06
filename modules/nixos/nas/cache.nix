@@ -1,4 +1,4 @@
-# NAS cache warming: keeps btrfs metadata resident by walking the branches while disks spin.
+# NAS cache warming: keeps filesystem metadata resident by walking the branches while disks spin.
 
 {
   config,
@@ -70,7 +70,7 @@ in
 
   config = lib.mkIf (cfg.enable && ccfg.enable) {
     systemd.services.nas-metadata-warm = {
-      description = "Warm btrfs metadata into the read cache";
+      description = "Warm filesystem metadata into the read cache";
       after = [ "nas-snapraid-sync.service" ];
       serviceConfig = {
         Type = "oneshot";

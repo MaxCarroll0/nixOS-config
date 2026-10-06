@@ -205,6 +205,7 @@
     dataRoot = "/srv/nas";
     smb.enable = true;
     cache-server.enable = true;
+    cache.enable = true;
     index.enable = true;
     accounts.nastest = {
       uid = 3000;
