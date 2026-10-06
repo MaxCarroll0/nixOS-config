@@ -1725,3 +1725,63 @@ The script now checks existence with `systemctl cat` before reading `Result`, so
 fails. The three gaps above are real and still open; the verification was simply never reporting
 them. `smb-password-max` is the related secret: it is referenced only by the verify script, exists
 in no sops file, and is why the SMB authentication path has never actually been exercised.
+
+## 22. The reset was a NILFS2 bug, caught in the act
+
+On 2026-10-06 at 21:20:32, with `local.power.oopsPanic = false` in force and the journal
+persistent, the pi finally produced a complete trace of the crash section 18 attributed to power:
+
+```
+CPU: 2 PID: 148176 Comm: mount.nilfs2   (kernel 6.18.34, aarch64)
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000028
+pc : nilfs_ifile_get_inode_block+0x18/0xb8 [nilfs2]      x0 = 0000000000000000
+Call trace:
+ nilfs_ifile_get_inode_block
+ nilfs_iget
+ nilfs_get_root_dentry
+ nilfs_get_tree
+ vfs_get_tree
+ __arm64_sys_fsconfig
+```
+
+The faulting process is `mount.nilfs2`, and the path is a **mount of a NILFS2 checkpoint**, not
+anything in the write path. The call is this one, in `modules/nixos/nas/checkpoints.nix`:
+
+```bash
+mount -t nilfs2 -o "cp=$cno,ro" "$device" "$snapdir/$name"
+```
+
+which is how checkpoints become the `@GMT-*` generations SMB serves as Previous Versions.
+`nas-checkpoint-promote.timer` runs it every 15 minutes (`local.nas.checkpoints.interval`).
+**The timer fired at 21:20:29 and the Oops was at 21:20:32.**
+
+This retires the power hypothesis as the primary explanation:
+
+- the death at 19:58:30 the same evening has a byte-identical signature, and the 15-minute promote
+  cadence lands exactly on 19:43 and 19:58
+- the bursts of `nas-prefetch` `/proc` churn either side of that crash, which looked like a
+  fanotify storm, were this machinery walking and mounting, not read-ahead
+- the three August resets were all judged "not software" on the strength of a missing trace, which
+  `oops=panic` guaranteed would be missing
+
+The scrub correlation in section 18 also reads differently now. A scrub is write- and
+mount-adjacent, and it runs on the same array the promote timer keeps mounting, so "the heaviest
+electrical load" and "the moment most checkpoints exist to be mounted" are the same window.
+
+**Mitigation, which the design already shipped and we failed to use.**
+`local.nas.checkpoints.suspendFile` defaults to `/run/nas-promote-suspended` and its description
+reads "use it during bulk ingest". `nas-checkpoint-promote` carries
+`unitConfig.ConditionPathExists = "!${suspendFile}"`, so the promotion is skipped cleanly (not
+failed) while the file exists. Create that file before any bulk write or a `snapraid sync`, and
+delete it afterwards.
+
+It lives in `/run`, so a reboot re-enables promotion by itself: suspension cannot be left on by
+accident across a restart, and equally cannot be relied on to persist.
+
+**Open, and not fixed here.** The underlying fault looks like an upstream NILFS2 bug: a NULL
+`ifile` when mounting a checkpoint while the filesystem is under heavy write load. Nothing in this
+repo can fix that. What this repo can do is stop mounting checkpoints during bulk writes, which is
+what the suspend file is for. Until the bug is understood upstream, treat the Previous Versions
+window as unsafe to refresh concurrently with a large ingest, restore or sync. Keep
+`oopsPanic = false` on the pi while this is open, because with the default the next occurrence is
+once again an unexplained reboot rather than a trace.
