@@ -1625,3 +1625,55 @@ confirm that before promoting anything.
 
 Run step 5 attended and check `node_boot_unclean_total` afterwards: a sync reads every disk at
 once, the heaviest load this hardware sees, and section 18's power question is unsettled.
+
+## 21. The lock said "locked" while the array was still open
+
+Found on 2026-10-06, immediately after section 20's fix, while locking the array to protect it
+during a crash investigation. `nas-lock-local` printed nothing and exited 0, and the array was
+still mounted and still unlocked. Three distinct faults stacked:
+
+1. **It stopped the wrong thing.** `systemctl stop nas.target` tears down nothing: `nas.target`
+   has `wantedBy = [ ]` and no unit is `PartOf` it, so it is an empty handle (the same property
+   that hid section 20's bug).
+2. **It did not verify.** Every step ended in `|| true`, and there was no check afterwards, so a
+   complete failure to unmount was reported as success. Same shape as section 20: the happy path
+   and the total-failure path produce identical output.
+3. **A bare `umount` cannot release the branches.** This is the real mechanism, and it is not
+   obvious. `nas-versions-watch-disk{1,2}` and `nas-prefetch-disk{1,2}` are four `fatrace`
+   processes whose `WorkingDirectory` is inside the branch, and they are correctly declared
+   `partOf = [ mountUnit ]`. But **`PartOf=` propagates only a unit stop.** `umount` takes the
+   mount down behind systemd's back, the `.mount` unit is never stopped, the watchers are never
+   signalled, and their open descriptors keep the branch busy:
+
+   ```
+   umount.nilfs2: /mnt/disks/disk2: target is busy
+   ```
+
+The fix is to go through the mount units in both directions, so systemd's own dependencies do the
+work:
+
+```bash
+systemctl stop "$(systemd-escape -p --suffix=mount "$m")" || true
+mountpoint -q "$m" && umount "$m" || true     # fallback for mounts systemd does not own
+```
+
+Verified live: stopping `mnt-disks-disk{1,2}.mount` took all four watcher units to inactive and
+both NILFS2 branches unmounted with no "target is busy", after which `luksClose` succeeded and
+the lock reported `locked` truthfully. The unlock path now uses `systemctl start` for the same
+reason, so `wantedBy = [ mountUnit ]` pulls the watchers back up instead of relying on systemd
+noticing an external mount.
+
+The lock also now counts what is still mounted and still open and fails loudly:
+
+```
+not locked: 2 still mounted, 2 still open
+```
+
+**Operational note:** `cryptsetup` is not in the pi's system PATH. Only `nas-lock-local` and
+`nas-unlock-local` carry it inside their own closures, so an ad-hoc `sudo cryptsetup luksClose`
+fails with `command not found`. Use the wrappers, not the raw tool.
+
+Three "reports success while doing nothing" bugs were found in this module tree in one day
+(sections 20, 21, and the attic queue). The common cause is `|| true` / `|| exit 0` on a step
+whose failure is indistinguishable from a legitimate skip. Any such guard in this tree should be
+paired with a count-and-verify afterwards, which is what both fixes now do.
