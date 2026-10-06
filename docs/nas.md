@@ -67,14 +67,21 @@ fire, theft, or ransomware. Offsite replication is a later stage.
 
 ## 3. Hardware
 
-| Device | Size | Model | Power-on | Realloc / Pending / Uncorrectable | UDMA CRC | Load cycles | Role |
-|---|---|---|---|---|---|---|---|
-| `sda` | 120 GB | Patriot Burst Elite (USB) | 65 h | n/a | n/a | n/a | root, Attic, write tier, read cache |
-| `sdb` | 1 TB | ST1000VM002 (CMR, 5900 rpm) | 74 h | 0 / 0 / 0 | 0 | 195 | data disk 2 |
-| `sdc` | 4 TB | ST4000DM004 (**SMR**, 5425 rpm) | 10,295 h | 0 / 0 / 0 | **329** | 13,754 | parity (interim) |
-| `sdd` | 2 TB | ST2000DM006 (CMR, 7200 rpm) | 11,571 h | 0 / 0 / 0 | 0 | 49,038 | data disk 1, holds data to preserve |
+Five disks, four of them on SATA. Device letters have shifted since this table was first written,
+so the **serial** is the identity that matters; `local.nas.storage.dataDisks` addresses them by
+LUKS UUID for the same reason.
 
-All four report `health_ok = 1` at 32-35 °C. Re-read from the metrics store, no disk woken:
+| Device | Serial | Size | Model | Power-on | Realloc / Pending / Uncorrectable | UDMA CRC | Load cycles | Role |
+|---|---|---|---|---|---|---|---|---|
+| `sda` | `PBEHHBB250409022817` | 120 GB | Patriot Burst Elite (USB SSD) | n/a | n/a | n/a | n/a | root, Attic, write tier, read cache |
+| `sdb` | `S1G2G7X4` | 1 TB | ST1000VM002-1CT162 (CMR, 5900 rpm) | 17,853 h | 0 / 0 / 0 | 1 | 11,342 | **becoming `disk3`** |
+| `sdc` | `WFN0CDAX` | 4 TB | ST4000DM004 (**SMR**, 5425 rpm) | 10,939 h | 0 / 0 / 0 | **329** | 13,796 | parity (interim) |
+| `sdd` | `S5100F1Q` | 1 TB | ST1000VM002-1ET162 (CMR, 5900 rpm) | 723 h | 0 / 0 / 0 | 0 | 213 | `disk2` |
+| `sde` | `Z4Z9WYDV` | 2 TB | ST2000DM006 (CMR, 7200 rpm) | 12,217 h | 0 / 0 / 0 | 0 | 49,054 | `disk1` |
+
+All four HDDs report `PASSED` at 29-35 °C with **zero media degradation**: no reallocated, pending
+or offline-uncorrectable sectors on any of them. No drive warrants a retirement plan on health
+grounds, including the SMR one. Re-read from the metrics store rather than waking a disk:
 
 ```bash
 curl -s --get --data-urlencode 'match[]=drive:health_ok{instance="pi"}' \
@@ -84,34 +91,28 @@ curl -s --get --data-urlencode 'match[]=drive:health_ok{instance="pi"}' \
 Use `export`, not an instant query: these series are on a 5-minute cadence and instant-query
 lookback will miss them inside the gap.
 
-**`sdc`'s 329 CRC errors are a link fault, not the drive.** Its media is pristine — zero
-reallocated, pending and uncorrectable — and UDMA CRC counts link-layer failures between
-controller and drive, so the cable or connector is the suspect. The count was **also 329 twenty
-power-on hours earlier**, so it is not accruing: the fault is historic, or intermittent enough
-not to have recurred. Replace the SATA cable before trusting this disk with parity, then confirm
-the counter stays flat rather than assuming the swap fixed anything.
+**`sdc`'s 329 CRC errors are a link fault, not the drive, and they have stopped accruing.** Its
+media is pristine, and UDMA CRC counts link-layer failures between controller and drive, so the
+cable or connector is the suspect. The count was **also exactly 329 at 10,295 power-on hours**,
+644 hours earlier: a historic fault, not a live one. The normalised value has recovered from a
+worst of 107 back to 200, which agrees. Still replace the SATA cable before trusting this disk
+with parity long-term, then confirm the counter stays flat rather than assuming the swap fixed
+anything.
 
-`sdd`'s 49,038 load cycles are worth watching but not alarming: the ST2000DM006 is rated in the
-hundreds of thousands, and the spindown work already stopped exporters from waking the disks.
+`sde`'s 49,054 load cycles are worth watching but not alarming: the ST2000DM006 is rated in the
+hundreds of thousands, and the spindown work already stopped exporters from waking the disks. This
+is the figure previously recorded against `sdd`; it is the same physical drive, relettered.
 
-Controller: JMicron JMB585, 5 SATA ports, 3 used, 2 free. The SSD is on USB and therefore
+Ignore the raw `Seek_Error_Rate` figures. Seagate packs two counters into that field; the
+normalised values are the meaningful ones and are healthy.
+
+Controller: JMicron JMB585, 5 SATA ports, **4 used, 1 free**. The SSD is on USB and therefore
 costs no SATA port. Kernel has `BCACHE`, `DM_CACHE`, `DM_WRITECACHE`, `BTRFS_FS` and
 `FUSE_FS` available as modules.
 
-Notes from the SMART survey:
-
-- All three drives report `PASSED` with **zero media degradation**: no reallocated, pending
-  or offline-uncorrectable sectors anywhere. No drive warrants a retirement plan on health
-  grounds, including the SMR one.
-- `sdc`'s 329 UDMA CRC errors are SATA **link** errors (cable, connector or power), not
-  platter faults. The normalised value has recovered from a worst of 107 back to 200, which
-  suggests they accumulated earlier and stopped. Because `sdc` is the interim parity disk,
-  and parity is the most write-heavy role in the array, its cable is replaced and the counter
-  re-checked before any data is committed.
-- Ignore the raw `Seek_Error_Rate` figures. Seagate packs two counters into that field; the
-  normalised values are the meaningful ones and are healthy.
-
-Interim usable capacity: **3 TB** (data 2 TB plus 1 TB, parity 4 TB).
+Usable capacity: **3 TB** today (`disk1` 2 TB plus `disk2` 1 TB), rising to **4 TB** once `sdb`
+joins as `disk3`, against the same 4 TB parity. SnapRAID needs parity to be at least as large as
+the largest data disk, which 4 TB against 2 TB satisfies with room for one more upgrade.
 
 All required packages exist in the pinned nixpkgs for aarch64: `mergerfs-2.41.1`,
 `mergerfs-tools`, `snapraid-14.4`, `bcache-tools`, `clevis-22`, `tang-15`, `samba-4.23.8`,
