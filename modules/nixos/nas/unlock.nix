@@ -49,7 +49,8 @@ let
       unset key
 
       for m in ${mountTargets}; do
-        mountpoint -q "$m" || mount "$m" || true
+        mountpoint -q "$m" && continue
+        systemctl start "$(systemd-escape -p --suffix=mount "$m")" || mount "$m" || true
       done
       systemctl start "$(systemd-escape -p --suffix=mount ${cfg.dataRoot})" || true
       systemctl start ${ucfg.target} || true
@@ -70,16 +71,20 @@ let
     name = "nas-lock-local";
     runtimeInputs = [
       pkgs.cryptsetup
+      pkgs.util-linux
       pkgs.systemd
     ];
     text = ''
       systemctl stop ${ucfg.target} || true
 
       # luksClose cannot succeed while a branch is still mounted, and the pool
-      # holds every branch open, so it has to come down first.
+      # holds every branch open, so it has to come down first. Only stopping the
+      # .mount unit propagates to the PartOf= watchers; a bare umount leaves
+      # their fatrace descriptors holding the branch busy.
       systemctl stop "$(systemd-escape -p --suffix=mount ${cfg.dataRoot})" || true
       umount ${lib.escapeShellArg cfg.dataRoot} 2>/dev/null || true
       for m in ${mountTargets}; do
+        systemctl stop "$(systemd-escape -p --suffix=mount "$m")" || true
         mountpoint -q "$m" && umount "$m" || true
       done
 
