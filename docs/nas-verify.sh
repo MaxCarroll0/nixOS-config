@@ -23,12 +23,19 @@ mountpoint -q /srv/nas && echo "  pool: $(df -h /srv/nas | tail -1 | awk '{print
 echo
 echo "########## services"
 for u in nas-versions-watch-disk1 nas-versions-watch-disk2 nas-prefetch-disk1 \
-         nas-prefetch-disk2 samba-smbd nas-smb-passwords flight-recorder \
-         tailscale-identity nginx grafana; do
+         nas-prefetch-disk2 samba-smbd nginx grafana; do
   [ "$(systemctl is-active $u.service)" = active ] && ok "$u" || bad "$u inactive"
 done
-[ "$(systemctl --failed --no-legend | wc -l)" = 0 ] && ok "no failed units" \
-  || { systemctl --failed --no-legend | sed 's/^/    /'; bad "failed units present"; }
+
+# A completed oneshot without RemainAfterExit reads as inactive, so judge these
+# by their last result instead.
+for u in nas-smb-passwords flight-recorder tailscale-identity; do
+  [ "$(systemctl show -p Result --value $u.service)" = success ] \
+    && ok "$u ran" || bad "$u did not succeed"
+done
+
+[ "$(systemctl list-units --failed --all --no-legend | wc -l)" = 0 ] && ok "no failed units" \
+  || { systemctl list-units --failed --all --no-legend | sed 's/^/    /'; bad "failed units present"; }
 
 echo
 echo "########## retention"
@@ -78,13 +85,13 @@ CUR=$(readlink -f /run/current-system)
 D=$(nix-store -qR "$CUR" 2>/dev/null | grep 'grafana-dashboards-' | grep -v '\.drv$')
 t=0; g=0; u=0
 for dir in $D; do for f in "$dir"/*.json; do
-  t=$((t + $(grep -c -F '7d:1m' "$f")))
-  g=$((g + $(grep -c -F 'min_over_time(host:up' "$f")))
-  u=$((u + $(grep -c -F 'avg_over_time(host:up' "$f")))
+  t=$((t + $(grep -c -F 'host:uptime_seconds' "$f")))
+  g=$((g + $(grep -c -F 'host:up_observed_seconds' "$f")))
+  u=$((u + $(grep -c -F 'equivalent_power' "$f")))
 done; done
-[ "$t" -gt 0 ] && ok "uptime subquery step x$t" || bad "uptime step missing"
-[ "$g" -gt 0 ] && ok "downtime guard x$g"       || bad "downtime guard missing"
-[ "$u" -gt 0 ] && ok "energy up-fraction x$u"   || bad "up-fraction missing"
+[ "$t" -gt 0 ] && ok "uptime series x$t"       || bad "uptime series missing"
+[ "$g" -gt 0 ] && ok "observed-coverage x$g"   || bad "observed-coverage missing"
+[ "$u" -gt 0 ] && ok "equivalent power x$u"    || bad "equivalent power missing"
 
 echo
 echo "########## $pass passed, $fail failed"
