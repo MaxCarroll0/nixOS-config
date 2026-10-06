@@ -1458,6 +1458,37 @@ each death: ~300 MB free, zero swap, zero blocked processes, 2-4 running. A watc
 have left a trail of degraded samples over its 60s window; there is none. `throttled=0x0` and
 EXT5V reads 5.04 V at idle, which does not rule out a transient sag under load.
 
+**Correction, 2026-10-06: "it is not software" was never safe to conclude.** Every always-on host
+ran with `oops=panic` and `panic=10` (`modules/nixos/power.nix`), so a kernel Oops rebooted the box
+ten seconds later, before journald could flush the backtrace. A software crash and a power fault
+therefore produced *identical* evidence: a journal ending mid-activity with no shutdown sequence.
+The absence of a trail is explained by the reboot policy, not by the absence of a bug. `below`
+samples prove only that the machine was healthy ~5s earlier, which a NULL-pointer dereference does
+not contradict.
+
+This is no longer hypothetical. On 2026-10-06 at 19:58:30 the pi died the same way, and the
+surviving journal shows the cause outright:
+
+```
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000028
+FSC = 0x05: level 1 translation fault
+Internal error: Oops: 0000000096000005 [#1]  SMP
+```
+
+The journal stops there: the backtrace itself never reached disk, which is exactly the evidence
+`oops=panic` destroys. So at least one of these "hard resets" was a kernel bug, and the three
+August events cannot be attributed to power on the strength of the missing trail alone. The scrub
+correlation stands on its own, but it is weaker than section 18 originally claimed, because a scrub
+is also the heaviest *software* path (SnapRAID plus NILFS2 plus mergerfs plus the fanotify
+watchers), not only the heaviest electrical load.
+
+`local.power.oopsPanic` now exists for exactly this. It defaults to `true`, keeping the
+reboot-on-Oops behaviour an unattended server wants, and is set `false` on the pi while the crash
+is under investigation, which drops `oops=panic` and sets `kernel.panic_on_oops = 0` so the next
+Oops is survived and fully logged. The journal is persistent, so the trace lives across a reset.
+Re-enable it once the bug is identified.
+
+
 **The third reset happened while the full scrub was reading all three disks**, which is the
 heaviest current draw this hardware ever sees: a Pi 5 plus three HDDs through a SATA HAT. That
 correlation is the strongest evidence available and points at power delivery.
