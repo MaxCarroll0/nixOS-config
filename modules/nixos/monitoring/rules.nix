@@ -1388,6 +1388,14 @@ in
         summary = "No NAS branch is reporting. The array is locked or unmounted, so nothing is being versioned or backed up.";
       })
       (threshold {
+        uid = "nas-prefetch-thrashing";
+        title = "NAS read-ahead is keeping disks awake";
+        expr = "sum(rate(nas_prefetch_bytes_total[1h]))";
+        value = 5 * 1024 * 1024;
+        for' = "2h";
+        summary = "Read-ahead has averaged {{ $value | humanize }}B/s for two hours. It warms a folder on every open, so this defeats the 1h spindown and amplifies reads; raise local.nas.prefetch.cooldownSeconds or lower maxBytes.";
+      })
+      (threshold {
         uid = "nas-metrics-stale";
         title = "NAS checkpoint metrics stale";
         expr = "time() - max(nas_metrics_timestamp_seconds)";
