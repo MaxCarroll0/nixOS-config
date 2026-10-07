@@ -203,6 +203,11 @@ let
     + builtins.readFile ../scripts/browser-sync.sh;
   };
 
+  # Edits hosts/pi/default.nix in place, so it runs from a repo checkout, not on the NAS.
+  nas-user = pkgs.writeShellScriptBin "nas-user" ''
+    exec ${pkgs.python3}/bin/python3 ${../modules/nixos/nas/nas-user.py} "$@"
+  '';
+
   google-meet = pkgs.writeShellScriptBin "google-meet" ''
     exec /run/wrappers/bin/sg novpn -c '${chromium}/bin/chromium --ozone-platform=wayland --enable-features=WebRTCPipeWireCapturer --disable-features=Vulkan --no-first-run --app=https://meet.google.com'
   '';
@@ -216,12 +221,14 @@ in
     ./theme.nix
     ./hyprland.nix
     ./workspaces.nix
+    ./nas-alerts.nix
   ];
 
   fonts.fontconfig.enable = true;
 
   home.packages = [
     browser-sync
+    nas-user
     chromium
     curdWrapped
     curd-cf-refresh
