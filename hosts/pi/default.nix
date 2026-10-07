@@ -14,6 +14,7 @@
     ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/net-watchdog.nix
     ../../modules/nixos/service-priority.nix
+    ../../modules/nixos/flight-recorder.nix
     ../../modules/nixos/storage.nix
     ../../modules/nixos/nas/accounts.nix
     ../../modules/nixos/nas/samba.nix
@@ -271,6 +272,8 @@
   system.stateVersion = lib.mkForce "26.05";
 
   local.server.netWatchdog.enable = true;
+
+  local.flightRecorder.enable = true;
 
   local.storage.spinDownRotational = {
     enable = true;

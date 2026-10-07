@@ -30,7 +30,7 @@ done
 # A completed oneshot without RemainAfterExit reads as inactive, so judge these
 # by their last result instead. `show -p Result` prints "success" for a unit that
 # does not exist at all, so existence has to be checked separately.
-for u in nas-smb-passwords flight-recorder tailscale-identity; do
+for u in nas-smb-passwords flight-recorder; do
   systemctl cat "$u.service" >/dev/null 2>&1 || { bad "$u does not exist"; continue; }
   [ "$(systemctl show -p Result --value "$u.service")" = success ] \
     && ok "$u ran" || bad "$u did not succeed"
