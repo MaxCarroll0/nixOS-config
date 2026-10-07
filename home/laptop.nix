@@ -4,4 +4,6 @@
 
 {
   imports = [ ./common.nix ];
+
+  local.nasAlerts.enable = true;
 }

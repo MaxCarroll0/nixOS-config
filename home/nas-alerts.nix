@@ -60,8 +60,9 @@ in
 
     url = lib.mkOption {
       type = lib.types.str;
-      default = "http://observatory";
-      description = "Grafana base URL; identity comes from the tailnet, so no credentials are needed.";
+      # observatory resolves only on the pi itself; pi is in every host's networking.hosts.
+      default = "http://pi";
+      description = "nginx vhost in front of Grafana; it injects the identity header, so no credentials are needed.";
     };
 
     intervalSeconds = lib.mkOption {
