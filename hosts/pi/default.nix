@@ -228,10 +228,6 @@
           device = "/dev/disk/by-uuid/4627a0ca-4bbc-4ea1-954f-388f8415c94c";
           fsType = "nilfs2";
         };
-        disk3 = {
-          device = "/dev/disk/by-uuid/b1a560af-b549-4f77-a36c-3f4b74e7c67e";
-          fsType = "nilfs2";
-        };
       };
     };
     unlock = {
