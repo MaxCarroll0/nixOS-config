@@ -53,9 +53,29 @@ let
 
       for dev in ${lib.escapeShellArgs arrayDevices}; do
         [ -b "$dev" ] || continue
-        if ! smartctl -H "$dev" | grep -q "PASSED"; then
-          echo "refusing to sync: $dev is not reporting SMART PASSED" >&2
+        rc=0
+        out=$(smartctl -H -A "$dev") || rc=$?
+        case "$out" in
+          *"test result: PASSED"*) ;;
+          *) echo "refusing to sync: $dev does not report SMART PASSED" >&2; exit 1 ;;
+        esac
+
+        # smartctl exit bit 3 is DISK FAILING and bit 4 a pre-fail attribute past threshold.
+        # Bit 5 is a usage counter past threshold, which never falls again once tripped, so
+        # treating it as fatal would block parity for the remaining life of the drive.
+        if [ $((rc & 8)) -ne 0 ] || [ $((rc & 16)) -ne 0 ]; then
+          echo "refusing to sync: $dev reports a failing pre-fail attribute" >&2
           exit 1
+        fi
+
+        unresolved=$(printf '%s\n' "$out" | awk '($1 == "197" || $1 == "198") && $10 + 0 > 0 { print $2 "=" $10 }')
+        if [ -n "$unresolved" ]; then
+          echo "refusing to sync: $dev has unresolved media faults: $unresolved" >&2
+          exit 1
+        fi
+
+        if [ $((rc & 32)) -ne 0 ]; then
+          echo "note: $dev has a historic usage counter past threshold" >&2
         fi
       done
 
