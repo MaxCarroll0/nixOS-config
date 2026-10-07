@@ -74,14 +74,17 @@ LUKS UUID for the same reason.
 | Device | Serial | Size | Model | Power-on | Realloc / Pending / Uncorrectable | UDMA CRC | Load cycles | Role |
 |---|---|---|---|---|---|---|---|---|
 | `sda` | `PBEHHBB250409022817` | 120 GB | Patriot Burst Elite (USB SSD) | n/a | n/a | n/a | n/a | root, Attic, write tier, read cache |
-| `sdb` | `S1G2G7X4` | 1 TB | ST1000VM002-1CT162 (CMR, 5900 rpm) | 17,853 h | 0 / 0 / 0 | 1 | 11,342 | **becoming `disk3`** |
+| `sdb` | `S1G2G7X4` | 1 TB | ST1000VM002-1CT162 (CMR, 5900 rpm) | 17,864 h | 0 / 0 / 0 | 1 | 11,342 | `disk3` (see below) |
 | `sdc` | `WFN0CDAX` | 4 TB | ST4000DM004 (**SMR**, 5425 rpm) | 10,939 h | 0 / 0 / 0 | **329** | 13,796 | parity (interim) |
 | `sdd` | `S5100F1Q` | 1 TB | ST1000VM002-1ET162 (CMR, 5900 rpm) | 723 h | 0 / 0 / 0 | 0 | 213 | `disk2` |
 | `sde` | `Z4Z9WYDV` | 2 TB | ST2000DM006 (CMR, 7200 rpm) | 12,217 h | 0 / 0 / 0 | 0 | 49,054 | `disk1` |
 
-All four HDDs report `PASSED` at 29-35 °C with **zero media degradation**: no reallocated, pending
-or offline-uncorrectable sectors on any of them. No drive warrants a retirement plan on health
-grounds, including the SMR one. Re-read from the metrics store rather than waking a disk:
+All four HDDs report `PASSED` at 29-35 °C, and none has a reallocated, pending or
+offline-uncorrectable sector. No drive warrants a retirement plan on health grounds, including the
+SMR one. The three-column `Realloc / Pending / Uncorrectable` summary above is **not** a complete
+health statement, though: it misses lifetime counters like `184 End-to-End_Error` and
+`187 Reported_Uncorrect`, which is how `sdb` was first recorded here as clean when it is not.
+See "`sdb`'s SMART history" below. Re-read from the metrics store rather than waking a disk:
 
 ```bash
 curl -s --get --data-urlencode 'match[]=drive:health_ok{instance="pi"}' \
@@ -106,13 +109,33 @@ is the figure previously recorded against `sdd`; it is the same physical drive, 
 Ignore the raw `Seek_Error_Rate` figures. Seagate packs two counters into that field; the
 normalised values are the meaningful ones and are healthy.
 
+**`sdb`'s SMART history: one historic bad sector, not a cable and not a dying disk.** `sdb` trips
+`184 End-to-End_Error` as `FAILING_NOW` (value 097, threshold 099, raw 3) and reports
+`187 Reported_Uncorrect 12`. Neither is a live fault, and the distinction took real evidence:
+
+| evidence | reading |
+|---|---|
+| ATA error log: 8 `UNC`, 0 `ICRC`/`ABRT` | media, not the link. A bad cable produces `ICRC` aborts |
+| `199 UDMA_CRC_Error_Count` = 1 | the link is fine. Compare `sdc`'s 329 |
+| all retained errors at **10,188 h**, drive now at **17,864 h** | the event is 7,676 hours (320 days) old |
+| all five entries at the **same LBA 1790168** | one sector retried, not twelve separate faults |
+| Extended offline self-test `Completed without error` at 17,343 h and 17,355 h | the full surface read clean *after* the event |
+| `197`/`198` both 0 | nothing pending, the sector was recovered |
+| 787 GB read off it at 56 MB/s over four hours on 2026-10-06 | `ATA Error Count` still 12, all stamped 10,188 h: zero new errors |
+
+So the disk currently reads its entire surface without error. `184` and `187` are **lifetime
+counters that never fall once tripped**, which matters operationally: a guard keyed on them
+latches for the remaining life of the drive and reports nothing about its current state.
+
+`sdc`'s cable is still the one worth replacing: 329 CRC errors on the disk holding parity.
+
 Controller: JMicron JMB585, 5 SATA ports, **4 used, 1 free**. The SSD is on USB and therefore
 costs no SATA port. Kernel has `BCACHE`, `DM_CACHE`, `DM_WRITECACHE`, `BTRFS_FS` and
 `FUSE_FS` available as modules.
 
-Usable capacity: **3 TB** today (`disk1` 2 TB plus `disk2` 1 TB), rising to **4 TB** once `sdb`
-joins as `disk3`, against the same 4 TB parity. SnapRAID needs parity to be at least as large as
-the largest data disk, which 4 TB against 2 TB satisfies with room for one more upgrade.
+Usable capacity: **4 TB** (`disk1` 2 TB, `disk2` 1 TB, `disk3` 1 TB) against the same 4 TB parity,
+which the pool reports as 3.7 TiB. SnapRAID needs parity to be at least as large as the largest
+data disk, which 4 TB against 2 TB satisfies with room for one more upgrade.
 
 All required packages exist in the pinned nixpkgs for aarch64: `mergerfs-2.41.1`,
 `mergerfs-tools`, `snapraid-14.4`, `bcache-tools`, `clevis-22`, `tang-15`, `samba-4.23.8`,
@@ -1785,3 +1808,67 @@ what the suspend file is for. Until the bug is understood upstream, treat the Pr
 window as unsafe to refresh concurrently with a large ingest, restore or sync. Keep
 `oopsPanic = false` on the pi while this is open, because with the default the next occurrence is
 once again an unexplained reboot rather than a trace.
+
+## 23. The sync guard latched on a counter that can never fall
+
+Adding `disk3` on 2026-10-07 was blocked by `nas-snapraid-sync`:
+
+```
+refusing to sync: /dev/disk/by-uuid/b1a560af-... is not reporting SMART PASSED
+```
+
+The message was wrong on its face: that disk *does* report `PASSED`. The guard was
+
+```bash
+if ! smartctl -H "$dev" | grep -q "PASSED"; then
+```
+
+and `writeShellApplication` sets `pipefail`, so the pipeline fails whenever **`smartctl`** exits
+non-zero even though `grep` matched. `sdb` exits **32**, which is bit 5: a *usage* (`Old_age`)
+attribute at or below threshold. Not bit 3 (DISK FAILING) and not bit 4 (a pre-fail attribute),
+either of which would be a real reason to stop.
+
+The attribute was `184 End-to-End_Error`, and the key property is that **a lifetime counter never
+falls once tripped**. So the guard had latched permanently: every nightly sync would fail for the
+remaining life of the drive, parity would never advance, and the array would sit unprotected. That
+is section 20's outcome reached by the opposite route, and the only mercy is that this version
+fails loudly instead of exiting 0.
+
+The guard now distinguishes what is actionable from what is merely historic:
+
+- overall health must say `PASSED`
+- refuse on `smartctl` exit bit 3 (DISK FAILING) or bit 4 (pre-fail attribute past threshold)
+- refuse on any non-zero `197 Current_Pending_Sector` or `198 Offline_Uncorrectable`, the sectors
+  that are unresolved *right now*
+- a bit 5 usage counter prints a `note:` and does not stop the sync
+
+Verified in both directions before deploying, which is the only way this kind of change is worth
+anything: `Current_Pending_Sector=5` refuses, `Offline_Uncorrectable=2` refuses, a pre-fail
+attribute refuses, `FAILED!` refuses, and `sdb`'s historic-only profile is allowed with a note,
+while `sdc`/`sdd`/`sde` pass clean. The first attempt at that test used hand-written rows with
+eight fields instead of `smartctl -A`'s ten, so `$10` was empty and every case wrongly "passed" —
+worth remembering that a guard test can fail open just as silently as the guard itself.
+
+### `nas-lock` can need a second attempt
+
+With the Previous Versions window populated, the first `nas-lock` after heavy use reports
+
+```
+umount.nilfs2: /mnt/disks/disk1: target is busy
+not locked: 2 still mounted, 1 still open
+```
+
+and a plain retry succeeds. The cause is the ~50 `@GMT-*` checkpoint submounts: stopping
+`srv-nas.mount` races their teardown, so the pool is briefly still busy. Nothing holds it open
+afterwards (`lsof` on both the pool and the branch is empty), so **retry before investigating**.
+A tempting wrong answer here is the mount namespaces of sandboxed services (`ProtectSystem=strict`
+and friends), which do each hold a copy of these mounts; they are `shared` propagation, so an
+unmount propagates to them and they are not the cause.
+
+### Deploying a branch change leaves the pool over empty directories
+
+A `switch` that changes the mergerfs device string restarts `srv-nas.mount`. If the array is locked
+at that moment the unit starts anyway and mergerfs mounts over the bare, empty branch
+*directories*. The pool then looks healthy and is empty. Always finish a branch change with a full
+`nas-lock` and `nas-unlock` cycle so the branches are mounted before the pool is built on them;
+`nas-unlock` orders that correctly, a deploy does not.
