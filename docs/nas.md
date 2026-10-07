@@ -1666,19 +1666,30 @@ confirm that before promoting anything.
    a branch changes it, and a busy FUSE mount cannot be reloaded in place:
 
    ```bash
-   nas-lock && deploy-request --host pi switch && nas-unlock
+   nas-lock && deploy-request --host pi switch && nas-lock && nas-unlock
    ```
 
-5. **Sync parity, and do not reach for `--force-empty`.** A brand-new data name has no recorded
+   The second `nas-lock` is not a typo: the deploy restarts `srv-nas.mount` while the array is
+   locked, leaving mergerfs mounted over empty branch directories, so the pool has to come down
+   again before the real unlock. Expect the first `nas-lock` to need a retry (section 23).
+
+5. **Suspend checkpoint promotion first**, with `/run/nas-promote-suspended`. Mounting a NILFS2
+   checkpoint while the array is under heavy write load Oopses the kernel (section 22), and a sync
+   is exactly that load. The file lives in `/run`, so a reboot silently re-enables promotion:
+   re-create it after any restart that happens mid-job.
+
+6. **Sync parity, and do not reach for `--force-empty`.** A brand-new data name has no recorded
    files, so the guard does not fire; if it does fire, something is wrong with the *existing*
    branches and the override would overwrite parity with their absence. Confirm with
    `snapraid status` (new disk listed and empty) and `snapraid diff` (`removed=0`) before starting
-   `nas-snapraid-sync.service`.
+   `nas-snapraid-sync.service`. Read the SMART attributes of the new disk in full rather than only
+   reallocated/pending/uncorrectable: a tripped lifetime counter will stop the sync, and section 23
+   explains when that is worth respecting.
 
-6. **Check parity actually mounted** (`findmnt /mnt/parity`). Section 20 exists because it was
+7. **Check parity actually mounted** (`findmnt /mnt/parity`). Section 20 exists because it was
    not, and sync then exits 0 while doing nothing.
 
-Run step 5 attended and check `node_boot_unclean_total` afterwards: a sync reads every disk at
+Run step 6 attended and check `node_boot_unclean_total` afterwards: a sync reads every disk at
 once, the heaviest load this hardware sees, and section 18's power question is unsettled.
 
 ## 21. The lock said "locked" while the array was still open
