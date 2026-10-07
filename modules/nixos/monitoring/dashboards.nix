@@ -5230,6 +5230,35 @@ let
           }
         ];
       })
+      (ts {
+        title = "Read-ahead volume";
+        description = "Bytes warmed by nas-prefetch. Sustained traffic here defeats the 1h spindown.";
+        unit = "Bps";
+        w = 12;
+        h = 8;
+        targets = [
+          {
+            expr = "rate(nas_prefetch_bytes_total[30m])";
+            legendFormat = "{{branch}}";
+          }
+        ];
+      })
+      (ts {
+        title = "Read-ahead decisions";
+        description = "Skipped opens are the per-folder cooldown working; near-zero skips with steady warms means it is not engaging.";
+        w = 12;
+        h = 8;
+        targets = [
+          {
+            expr = "rate(nas_prefetch_files_total[30m])";
+            legendFormat = "{{branch}} warmed";
+          }
+          {
+            expr = "rate(nas_prefetch_skipped_total[30m])";
+            legendFormat = "{{branch}} skipped";
+          }
+        ];
+      })
     ];
   };
 in
