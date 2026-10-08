@@ -105,11 +105,15 @@ in
 
   # Both latch a wake as S3 is entered, resuming within milliseconds: serio0
   # raises IRQ 1 with no PS/2 keyboard attached, and the Promontory root hubs
-  # assert PME with every device unbound. usb1 is spared: the keyboard hangs off
-  # it, and disarming it is what stopped a keypress resuming the host.
+  # assert PME with every device unbound.
+  #
+  # Measured 2026-10-08: sparing usb1 so a keypress could resume the host put
+  # that straight back, suspending and exiting 4-5 s later every 11 minutes,
+  # which also dropped the Focusrite off the bus. A keypress cannot wake this
+  # board from S3; the power button, Wake-on-LAN and the RTC alarm can.
   local.power.idle.disableWakeSources = [
     "/sys/bus/serio/devices/serio0"
-    "/sys/bus/pci/devices/0000:02:00.0/usb2"
+    "/sys/bus/pci/devices/0000:02:00.0/usb*"
   ];
 
   system.autoUpgrade.enable = true;

@@ -243,19 +243,27 @@ let
       # halfway up and has to start again.
       sleep "''${1:-15}"
 
-      for pass in 1 2; do
-        cycled=0
-        for port in /sys/bus/usb/devices/*/*-port*; do
-          [ -w "$port/disable" ] || continue
-          [ "$(cat "$port/state" 2>/dev/null || true)" = "not attached" ] || continue
-          echo 1 > "$port/disable" || continue
-          echo 0 > "$port/disable" || true
-          cycled=$((cycled + 1))
-        done
-        [ "$cycled" -gt 0 ] || break
-        echo "pass $pass cycled $cycled empty ports"
-        sleep 5
+      empty=()
+      for port in /sys/bus/usb/devices/*/*-port*; do
+        [ -w "$port/disable" ] || continue
+        [ "$(cat "$port/state" 2>/dev/null || true)" = "not attached" ] || continue
+        empty+=("$port")
       done
+      [ ''${#empty[@]} -gt 0 ] || exit 0
+
+      # Cut every port first and settle once. Toggling one port straight back
+      # is not a power cycle the device ever sees -- measured 2026-10-08, 26
+      # ports cycled that way and the Focusrite stayed dark -- and settling
+      # each in turn would cost two seconds a port on every resume.
+      for port in "''${empty[@]}"; do
+        echo 1 > "$port/disable" || true
+      done
+      sleep 2
+      for port in "''${empty[@]}"; do
+        echo 0 > "$port/disable" || true
+      done
+
+      echo "power-cycled ''${#empty[@]} empty ports"
     '';
   };
 
