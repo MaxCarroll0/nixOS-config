@@ -105,15 +105,21 @@ in
 
   # Both latch a wake as S3 is entered, resuming within milliseconds: serio0
   # raises IRQ 1 with no PS/2 keyboard attached, and the Promontory root hubs
-  # assert PME with every device unbound.
+  # assert PME with every device unbound. usb1 is spared: the keyboard hangs off
+  # it, and disarming it is what stopped a keypress resuming the host.
   local.power.idle.disableWakeSources = [
     "/sys/bus/serio/devices/serio0"
-    "/sys/bus/pci/devices/0000:02:00.0/usb*"
+    "/sys/bus/pci/devices/0000:02:00.0/usb2"
   ];
 
   system.autoUpgrade.enable = true;
 
   local.power.wakeOnLan = {
     inherit (facts.desktopnew) interface mac;
+  };
+
+  local.power.monitors = {
+    followPower = true;
+    primary = "DP-1";
   };
 }

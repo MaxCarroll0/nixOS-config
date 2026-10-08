@@ -153,14 +153,44 @@ let
     '';
   };
 
+  # kscreen-doctor has to reach the Wayland session, which a root unit can only
+  # do by borrowing the seat user's bus.
+  sessionKscreen = pkgs.writeShellApplication {
+    name = "session-kscreen";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.kdePackages.libkscreen
+      pkgs.util-linux
+    ];
+    text = ''
+      session_uid="''${SUDO_UID:-1000}"
+      session_user="''${SUDO_USER:-max}"
+      runtime_dir="/run/user/$session_uid"
+      for socket in "$runtime_dir"/wayland-*; do
+        [ -S "$socket" ] || continue
+        exec runuser -u "$session_user" -- env \
+          XDG_RUNTIME_DIR="$runtime_dir" \
+          DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
+          WAYLAND_DISPLAY="$(basename "$socket")" \
+          kscreen-doctor "$@"
+      done
+      exit 0
+    '';
+  };
+
+  # PowerDevil goes on believing the output is on, so a blank driven from
+  # outside it is undone by nothing but whoever left this stamp behind.
+  forcedOff = "/run/dpms-forced-off";
+  parked = "/run/usb-idle-parked";
+  lastInput = "/run/usb-last-input";
+
   softPowerCommand =
     name: service: dpms:
     pkgs.writeShellApplication {
       inherit name;
       runtimeInputs = [
-        pkgs.kdePackages.libkscreen
+        pkgs.coreutils
         pkgs.systemd
-        pkgs.util-linux
       ];
       text = ''
         if [ "$(id -u)" -ne 0 ]; then
@@ -168,27 +198,12 @@ let
           exit 1
         fi
 
-        ${pkgs.systemd}/bin/systemctl start ${service}.service
-
-        session_uid="''${SUDO_UID:-1000}"
-        session_user="''${SUDO_USER:-max}"
-        runtime_dir="/run/user/$session_uid"
-        wayland_display=""
-        for socket in "$runtime_dir"/wayland-*; do
-          if [ -S "$socket" ]; then
-            wayland_display=$(basename "$socket")
-            break
-          fi
-        done
-        if [ -n "$wayland_display" ]; then
-          runuser -u "$session_user" -- env \
-            XDG_RUNTIME_DIR="$runtime_dir" \
-            DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
-            WAYLAND_DISPLAY="$wayland_display" \
-            kscreen-doctor --dpms ${dpms}
-        fi
+        systemctl start ${service}.service
+        ${lib.getExe sessionKscreen} --dpms ${dpms}
+        ${if dpms == "off" then "touch ${forcedOff}" else "rm -f ${forcedOff}"}
       '';
     };
+
   peripherals = pkgs.writeShellScript "usb-peripherals" ''
     for device in /sys/bus/usb/devices/*; do
       [ -w "$device/power/control" ] || continue
@@ -198,6 +213,213 @@ let
     done
     exit 0
   '';
+
+  # Matched by interface class as well as id, so swapping in a different audio
+  # interface or keyboard does not need the exclusion list editing.
+  neverSuspend = pkgs.writeShellScript "usb-never-suspend" (
+    lib.optionalString (cfg.idle.usb.neverSuspend != [ ]) ''
+      id="$(cat "$1/idVendor" 2>/dev/null || true):$(cat "$1/idProduct" 2>/dev/null || true)"
+      case "$id" in
+        ${lib.concatStringsSep "|" cfg.idle.usb.neverSuspend}) exit 0 ;;
+      esac
+    ''
+    + lib.optionalString (cfg.idle.usb.neverSuspendClasses != [ ]) ''
+      for interface in "$1"/*:*; do
+        case "$(cat "$interface/bInterfaceClass" 2>/dev/null || true)" in
+          ${lib.concatStringsSep "|" cfg.idle.usb.neverSuspendClasses}) exit 0 ;;
+        esac
+      done
+    ''
+    + "exit 1\n"
+  );
+
+  # A device the port never brought up stays invisible until it is replugged;
+  # cycling the port's power is that replug, without the walk to the machine.
+  resetEmptyPorts = pkgs.writeShellApplication {
+    name = "usb-reset-empty-ports";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      # Normal enumeration has to finish first, or a slow device gets cycled
+      # halfway up and has to start again.
+      sleep "''${1:-15}"
+
+      for pass in 1 2; do
+        cycled=0
+        for port in /sys/bus/usb/devices/*/*-port*; do
+          [ -w "$port/disable" ] || continue
+          [ "$(cat "$port/state" 2>/dev/null || true)" = "not attached" ] || continue
+          echo 1 > "$port/disable" || continue
+          echo 0 > "$port/disable" || true
+          cycled=$((cycled + 1))
+        done
+        [ "$cycled" -gt 0 ] || break
+        echo "pass $pass cycled $cycled empty ports"
+        sleep 5
+      done
+    '';
+  };
+
+  usbSuspendDelayMs = toString (cfg.idle.usb.suspendDelayMinutes * 60 * 1000);
+
+  # A monitor switched off at the panel keeps HPD asserted, so the connector
+  # stays "connected" and KWin goes on offering it as a place to put windows.
+  # Its DDC channel is the only thing that stops answering.
+  monitorPresence = pkgs.writeShellApplication {
+    name = "monitor-presence";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.ddcutil
+      pkgs.gawk
+    ];
+    text = ''
+      state=/run/monitor-presence
+      mkdir -p "$state"
+
+      declare -A live
+      order=()
+
+      for connector in /sys/class/drm/card*-*; do
+        [ -d "$connector" ] || continue
+        output=''${connector##*/}
+        output=''${output#card*-}
+        [ "$(cat "$connector/status" 2>/dev/null || true)" = connected ] || continue
+        order+=("$output")
+
+        bus=""
+        for candidate in "$connector"/ddc/i2c-dev/i2c-*; do
+          [ -d "$candidate" ] || continue
+          bus=''${candidate##*i2c-}
+          break
+        done
+
+        # x01 is DPM on; standby, suspend and off all report higher, and a dead
+        # channel reports nothing at all.
+        power=""
+        if [ -n "$bus" ]; then
+          power=$(ddcutil --bus "$bus" --terse getvcp D6 2>/dev/null | awk '{print $NF}' || true)
+        fi
+
+        if [ "$power" = x01 ]; then
+          live[$output]=yes
+          echo 0 > "$state/$output"
+        else
+          strikes=$(( $(cat "$state/$output" 2>/dev/null || echo 0) + 1 ))
+          echo "$strikes" > "$state/$output"
+          # DDC drops a reply on a link that is otherwise fine, so one silent
+          # poll must not pull an output out from under a window.
+          if [ "$strikes" -ge ${toString cfg.monitors.offStrikes} ]; then
+            live[$output]=no
+          else
+            live[$output]=yes
+          fi
+        fi
+      done
+
+      # No DDC anywhere means no evidence, not an empty desk.
+      any=no
+      for output in "''${order[@]}"; do
+        [ "''${live[$output]}" = yes ] && any=yes
+      done
+      [ "$any" = yes ] || exit 0
+
+      desired=""
+      for output in "''${order[@]}"; do
+        desired="$desired $output=''${live[$output]}"
+      done
+      if [ "$desired" = "$(cat "$state/applied" 2>/dev/null || true)" ]; then
+        exit 0
+      fi
+
+      args=()
+      for output in "''${order[@]}"; do
+        if [ "''${live[$output]}" = yes ]; then
+          args+=("output.$output.enable")
+        else
+          args+=("output.$output.disable")
+        fi
+      done
+
+      primary="${cfg.monitors.primary}"
+      if [ -z "$primary" ] || [ "''${live[$primary]:-no}" != yes ]; then
+        primary=""
+        for output in "''${order[@]}"; do
+          if [ "''${live[$output]}" = yes ]; then
+            primary="$output"
+            break
+          fi
+        done
+      fi
+      [ -n "$primary" ] && args+=("output.$primary.priority.1")
+
+      ${lib.getExe sessionKscreen} "''${args[@]}"
+      echo "$desired" > "$state/applied"
+    '';
+  };
+
+  # Switch events are skipped: an audio interface reporting a jack is not a
+  # user asking for their peripherals back.
+  inputWake = pkgs.writeShellApplication {
+    name = "input-wake";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.libinput
+      pkgs.systemd
+    ];
+    text = ''
+      # Without this the park clock would already read ten minutes old on a
+      # fresh boot, and the peripherals would go down before anyone touched them.
+      touch ${lastInput}
+
+      last=0
+      libinput debug-events --quiet --compress-motion-events | while read -r line; do
+        case "$line" in
+          *KEYBOARD_KEY* | *POINTER_* | *TOUCH_* | *TABLET_*) ;;
+          *) continue ;;
+        esac
+
+        # EPOCHSECONDS, not date: motion arrives hundreds of times a second and
+        # a fork each would cost more than the parking saves.
+        now=$EPOCHSECONDS
+        [ $((now - last)) -ge 5 ] || continue
+        last=$now
+        touch ${lastInput}
+
+        if [ -e ${parked} ] || [ -e ${forcedOff} ]; then
+          systemctl start wake-soft-hardware.service
+          rm -f ${parked}
+          if [ -e ${forcedOff} ]; then
+            ${lib.getExe sessionKscreen} --dpms on
+            rm -f ${forcedOff}
+          fi
+        fi
+      done
+    '';
+  };
+
+  usbIdlePark = pkgs.writeShellApplication {
+    name = "usb-idle-park";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.systemd
+    ];
+    text = ''
+      # Parking with no watcher running would strand the peripherals: nothing
+      # else turns them back on.
+      systemctl is-active --quiet input-wake.service || exit 0
+
+      if [ -e ${parked} ]; then
+        exit 0
+      fi
+
+      stamp=$(stat -c %Y ${lastInput} 2>/dev/null || echo 0)
+      if [ $(( $(date +%s) - stamp )) -lt ${toString (cfg.idle.usb.suspendDelayMinutes * 60)} ]; then
+        exit 0
+      fi
+
+      systemctl start suspend-soft-hardware.service
+      touch ${parked}
+    '';
+  };
 
   suspendSoft = softPowerCommand "suspend-soft" "suspend-soft-hardware" "off";
   wakeSoft = softPowerCommand "wake-soft" "wake-soft-hardware" "on";
@@ -578,6 +800,39 @@ in
       description = "USB vendor:product ids that must keep runtime power management off.";
     };
 
+    idle.usb.neverSuspendClasses = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ "01" ];
+      description = "USB interface classes, in hex, that must keep runtime power management off.";
+    };
+
+    idle.usb.suspendDelayMinutes = lib.mkOption {
+      type = lib.types.int;
+      default = 10;
+      description = "Minutes of inactivity before a USB device parks itself.";
+    };
+
+    idle.usb.resetEmptyPorts = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Power-cycle hub ports that report no device, to force re-enumeration.";
+    };
+
+    monitors.followPower = lib.mkEnableOption "dropping outputs whose monitor is switched off";
+
+    monitors.primary = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      example = "DP-1";
+      description = "Output that takes priority whenever it is switched on.";
+    };
+
+    monitors.offStrikes = lib.mkOption {
+      type = lib.types.int;
+      default = 3;
+      description = "Consecutive silent DDC polls before an output counts as switched off.";
+    };
+
     keepAwakePackage = lib.mkOption {
       type = lib.types.package;
       readOnly = true;
@@ -697,13 +952,22 @@ in
       # itself, so neither a keypress nor mouse movement reaches the session.
       services.udev.extraRules = ''
         ACTION=="add", SUBSYSTEM=="scsi_host", KERNEL=="host*", ATTR{link_power_management_policy}="med_power_with_dipm"
-        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="258a", ATTR{idProduct}=="1006", TEST=="power/control", ATTR{power/autosuspend_delay_ms}="300000", ATTR{power/control}="auto", ATTR{power/wakeup}="enabled"
-        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="1d57", ATTR{idProduct}=="ad17", TEST=="power/control", ATTR{power/autosuspend_delay_ms}="300000", ATTR{power/control}="auto", ATTR{power/wakeup}="enabled"
-        ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="1d6b", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"
-      '';
+        ACTION=="add|change", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", TEST=="power/control", ATTR{power/autosuspend_delay_ms}="${usbSuspendDelayMs}", ATTR{power/control}="auto"
+        ACTION=="add|change", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"
+      ''
+      # Later rules win, so the exceptions have to follow the blanket ones.
+      + lib.concatMapStrings (
+        id:
+        let
+          parts = lib.splitString ":" id;
+        in
+        ''
+          ACTION=="add|change", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="${lib.elemAt parts 0}", ATTR{idProduct}=="${lib.elemAt parts 1}", ATTR{power/control}="on"
+        ''
+      ) cfg.idle.usb.neverSuspend;
 
-      systemd.services.input-autosuspend = {
-        description = "Delay USB input autosuspend";
+      systemd.services.usb-autosuspend = {
+        description = "Re-pin USB runtime power management after powertop";
         after = [ "powertop.service" ];
         # powertop is itself ordered after multi-user.target, so pulling this in
         # from that target too made systemd drop the job to break the cycle.
@@ -711,22 +975,16 @@ in
         serviceConfig.Type = "oneshot";
         script = ''
           for device in /sys/bus/usb/devices/*; do
-            id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
-            if [ "$id" = 258a:1006 ] || [ "$id" = 1d57:ad17 ]; then
-              echo 300000 > "$device/power/autosuspend_delay_ms"
-              echo auto > "$device/power/control"
+            if [ -w "$device/power/wakeup" ]; then
               echo enabled > "$device/power/wakeup"
             fi
-            if [ "$id" = 1d6b:0002 ] || [ "$id" = 1d6b:0003 ]; then
-              echo enabled > "$device/power/wakeup"
+            [ -w "$device/power/control" ] || continue
+            if ${neverSuspend} "$device"; then
+              echo on > "$device/power/control"
+              continue
             fi
-            ${lib.optionalString (cfg.idle.usb.neverSuspend != [ ]) ''
-              case "$id" in
-                ${lib.concatStringsSep "|" cfg.idle.usb.neverSuspend})
-                  echo on > "$device/power/control"
-                  ;;
-              esac
-            ''}
+            echo ${usbSuspendDelayMs} > "$device/power/autosuspend_delay_ms"
+            echo auto > "$device/power/control"
           done
         '';
       };
@@ -736,6 +994,7 @@ in
         serviceConfig.Type = "oneshot";
         script = ''
           ${peripherals} | while read -r device; do
+            if ${neverSuspend} "$device"; then continue; fi
             echo 0 > "$device/power/autosuspend_delay_ms"
             echo auto > "$device/power/control"
           done
@@ -743,7 +1002,8 @@ in
           sleep 3
 
           ${peripherals} | while read -r device; do
-            echo 300000 > "$device/power/autosuspend_delay_ms"
+            if ${neverSuspend} "$device"; then continue; fi
+            echo ${usbSuspendDelayMs} > "$device/power/autosuspend_delay_ms"
           done
 
           for device in /sys/block/*; do
@@ -759,21 +1019,86 @@ in
         script = ''
           ${peripherals} | while read -r device; do
             echo on > "$device/power/control"
-            ${lib.optionalString (cfg.idle.usb.neverSuspend != [ ]) ''
-              id="$(cat "$device/idVendor" 2>/dev/null || true):$(cat "$device/idProduct" 2>/dev/null || true)"
-              case "$id" in
-                ${lib.concatStringsSep "|" cfg.idle.usb.neverSuspend}) continue ;;
-              esac
-            ''}
-            echo 300000 > "$device/power/autosuspend_delay_ms"
+            if ${neverSuspend} "$device"; then continue; fi
+            echo ${usbSuspendDelayMs} > "$device/power/autosuspend_delay_ms"
             echo auto > "$device/power/control"
           done
         '';
       };
 
+      systemd.services.usb-reset-empty-ports = lib.mkIf cfg.idle.usb.resetEmptyPorts {
+        description = "Re-enumerate USB ports that came up with no device";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "systemd-udevd.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = lib.getExe resetEmptyPorts;
+        };
+      };
+
+      systemd.services.input-wake = {
+        description = "Unpark peripherals on manual input";
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig = {
+          ExecStart = lib.getExe inputWake;
+          Restart = "always";
+          RestartSec = 5;
+        };
+      };
+
+      # The host can be idle and still ineligible for suspend: a long build or a
+      # live SSH session holds it awake, and the peripherals should park anyway.
+      systemd.services.usb-idle-park = {
+        description = "Park peripherals once manual input has stopped";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = lib.getExe usbIdlePark;
+        };
+      };
+      systemd.timers.usb-idle-park = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnBootSec = "1min";
+          OnUnitActiveSec = "1min";
+        };
+      };
+
       powerManagement.powerDownCommands = ''
         ${pkgs.systemd}/bin/systemctl start suspend-soft-hardware.service
+        ${pkgs.coreutils}/bin/touch ${parked}
       '';
+
+      powerManagement.resumeCommands = ''
+        ${pkgs.systemd}/bin/systemctl start wake-soft-hardware.service
+        ${lib.optionalString cfg.idle.usb.resetEmptyPorts "${lib.getExe resetEmptyPorts} 5 || true"}
+        ${pkgs.coreutils}/bin/rm -f ${parked} ${forcedOff}
+        ${pkgs.coreutils}/bin/touch ${lastInput}
+        # kde#523504 again: the greeter dies if the output is driven while it is
+        # still initialising, so let the session settle before asserting DPMS.
+        ${pkgs.coreutils}/bin/sleep 2
+        ${lib.getExe sessionKscreen} --dpms on
+      '';
+    })
+
+    (lib.mkIf cfg.monitors.followPower {
+      hardware.i2c.enable = true;
+
+      systemd.services.monitor-presence = {
+        description = "Drop outputs whose monitor is switched off";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = lib.getExe monitorPresence;
+        };
+      };
+      systemd.timers.monitor-presence = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnBootSec = "1min";
+          OnUnitActiveSec = "20s";
+        };
+      };
+
+      environment.systemPackages = [ pkgs.ddcutil ];
     })
 
     (lib.mkIf (cfg.idle.policy == "always-on") {
