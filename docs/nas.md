@@ -1944,3 +1944,36 @@ stayed parked across several selftest ticks. `modules/nixos/monitoring/smart.nix
 collectors gate on the same `$6 + $10` diskstats comparison and serve a cached reading for a drive
 that has not moved, and the health probe additionally passes `smartctl -n standby`, which returns
 without spinning the motor up.
+
+### The interval alone leaves a floor, so the walk is gated on real change
+
+Raising the interval was confirmed working: `sde` entered standby 17 minutes after becoming
+eligible, its first park in 39 hours, and all four disks were parked together for the first time
+since the `disk3` addition. But a 6 h timer still wakes the fullest disk four times a day whether
+or not anything changed, which is a floor of pointless spin-ups on an array that is idle for weeks
+at a time.
+
+`nas-index.service` now carries an `ExecCondition` that skips the walk when the pool has not
+changed. The signal is free: `nas-versions-watch-*` already records every write through fatrace
+into `/var/lib/nas-versions/<branch>.jsonl`, and that directory is on the SSD, so the check is a
+`stat` that never touches a spinning disk. The gate stores `%n %s %Y` for those files and compares
+against the stamp from the last successful index; `ExecStartPost` promotes the stamp only on
+success, so a failed index retries rather than silently marking itself done. An `ExecCondition`
+that exits non-zero skips the unit **cleanly**, so a skipped run does not appear as a failure.
+
+A `find -mmin -1440` clause forces a walk if the stamp is missing or older than 24 h. That bounds
+the blast radius of a gate bug: the worst case is one stale day and one extra wake, not an index
+that silently freezes forever.
+
+**Known limitation, stated rather than hidden.** `nas-index.py` takes `--data-root` and walks the
+whole pool, so it cannot be scoped to the branch that actually changed. A single small write to
+disk2 therefore still wakes disk1 on the next run. Fixing that means teaching the indexer to scan
+one branch, which is why the interval stays at 6 h rather than dropping to something responsive:
+with the gate, an idle array costs nothing at all, and an active array is the case where the disks
+were awake anyway.
+
+Tested before deploying, against the real script under `set -euo pipefail`: no stamp, events with
+no stamp, identical stamp (skips), grown events (runs), promoted stamp (skips), stamp older than
+24 h (runs), and watcher truncation shrinking the file (runs). The last matters because
+`cmp -s a b && exit 1` as a script's final command would exit 1 on *difference* under errexit,
+inverting the gate; the explicit trailing `exit 0` is what prevents that.

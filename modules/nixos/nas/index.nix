@@ -11,6 +11,24 @@ let
   cfg = config.local.nas;
   icfg = cfg.index;
 
+  watchStamp = "${icfg.stateDir}/watch.stamp";
+  watchPending = "${icfg.stateDir}/watch.pending";
+
+  changeGate = pkgs.writeShellApplication {
+    name = "nas-index-changed";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.findutils
+      pkgs.diffutils
+    ];
+    text = ''
+      stat -c '%n %s %Y' ${cfg.versions.stateDir}/*.jsonl > ${watchPending} 2>/dev/null || true
+      [ -n "$(find ${watchStamp} -mmin -1440 2>/dev/null)" ] || exit 0
+      cmp -s ${watchPending} ${watchStamp} && exit 1
+      exit 0
+    '';
+  };
+
   indexer = pkgs.writeShellApplication {
     name = "nas-index";
     runtimeInputs = [
@@ -91,6 +109,10 @@ in
           (builtins.dirOf icfg.metricsFile)
         ];
         ReadOnlyPaths = [ cfg.dataRoot ];
+      }
+      // lib.optionalAttrs cfg.versions.enable {
+        ExecCondition = lib.getExe changeGate;
+        ExecStartPost = "${pkgs.coreutils}/bin/mv ${watchPending} ${watchStamp}";
       };
     };
 
