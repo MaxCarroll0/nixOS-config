@@ -1,4 +1,4 @@
-# Steam with Proton, gamescope, GameMode and MangoHud.
+# Steam with Proton, Lutris with Wine, gamescope, GameMode and MangoHud.
 
 {
   config,
@@ -39,8 +39,13 @@ in
       gamescopeSession.enable = true;
       protontricks.enable = true;
       extraCompatPackages = [ pkgs.proton-ge-bin ];
-      # extraLibraries feeds multiPkgs, so MangoHud gets a 32-bit build too.
-      package = pkgs.steam.override { extraLibraries = p: [ p.mangohud ]; };
+      # extraLibraries feeds multiPkgs, so MangoHud gets a 32-bit build too, but
+      # it contributes only the library: the Vulkan loader finds no layer without
+      # the manifest that extraPkgs installs.
+      package = pkgs.steam.override {
+        extraLibraries = p: [ p.mangohud ];
+        extraPkgs = p: [ p.mangohud ];
+      };
     };
 
     programs.gamescope.capSysNice = true;
@@ -59,6 +64,9 @@ in
       steamNovpn
       steamVpn
       pkgs.protonup-qt
+      pkgs.lutris
+      pkgs.winetricks
+      pkgs.wineWow64Packages.stagingFull
     ];
   };
 }
