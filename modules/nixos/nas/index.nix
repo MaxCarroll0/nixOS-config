@@ -52,9 +52,11 @@ in
       description = "Longest edge of a generated thumbnail, in pixels.";
     };
 
+    # Each walk is block I/O on the fullest branch, which resets enforce-disk-idle's
+    # 3600s gate, so anything under an hour makes that disk structurally unparkable.
     interval = lib.mkOption {
       type = lib.types.str;
-      default = "15m";
+      default = "6h";
       description = "How often the index reconciles against the data tree.";
     };
 

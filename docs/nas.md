@@ -1883,3 +1883,64 @@ at that moment the unit starts anyway and mergerfs mounts over the bare, empty b
 *directories*. The pool then looks healthy and is empty. Always finish a branch change with a full
 `nas-lock` and `nas-unlock` cycle so the branches are mounted before the pool is built on them;
 `nas-unlock` orders that correctly, a deploy does not.
+
+## 24. The browse index made one disk structurally unparkable
+
+The array ran for 23 hours after the `disk3` sync with disk1 never spinning down once, while the
+other three disks parked normally. The question "why are the disks still spinning" had an answer
+that none of the obvious suspects covered.
+
+Spin-down is **entirely userspace**, which is the first thing to know and supersedes the
+`hdparm -S` note in section 14. A udev rule applies `hdparm -B <apm> -S 0`, *disabling* the
+drive's own firmware timer, and `enforce-disk-idle.timer` (every 60 s,
+`modules/nixos/storage.nix`) does the parking. It parks a disk only when **both** gates are clear:
+
+- `now - idle_since >= 3600`, where `idle_since` resets on any change to `$6 + $10` of
+  `/proc/diskstats` (sectors read plus sectors written)
+- `now - last_standby >= 3600`
+
+State lives in `/var/lib/disk-spindown/<dev>` as three numbers: `io idle_since last_standby`.
+
+The waker was `nas-index.service`, whose timer was `OnUnitActiveSec = 15m`. It walks the whole
+mergerfs pool to refresh the browse cache, thumbnails and per-user usage metrics. The effect was
+asymmetric because the data is:
+
+| branch | files | last parked |
+|---|---|---|
+| disk1 (`sde`) | 2827 | never, 39 h |
+| disk2 (`sdd`) | 1 | 46 min ago |
+| disk3 (`sdb`) | 1 | 26 min ago |
+| parity (`sdc`) | n/a | 18 min ago |
+
+A walk over 2827 files is real block I/O on disk1 and essentially nothing on the near-empty
+branches. So disk1's `idle_since` reset four times an hour and the 3600 s gate was **unreachable
+by construction** — not bad luck, but arithmetically impossible for as long as that timer ran.
+The branches with nothing to walk parked on schedule, which is exactly what made the fault look
+mysterious rather than systemic.
+
+The fix is `local.nas.index.interval = "6h"` (now the module default). A disk parks ~3660 s after
+each walk and stays parked for the rest of the cycle, so disk1 goes from 0% parked to ~83%.
+Staleness costs nothing that matters: `nas-versions-watch-*` sees every change live through
+fatrace, so versioning is unaffected and only the browse cache, thumbnails and the usage panel
+lag. A better design would trigger the index from the watcher instead of a timer, at which point
+the interval stops mattering at all.
+
+### Two wrong turns worth recording
+
+**Measuring writes, not reads.** The first hypothesis was NILFS2 `segctord` superblock writes. Write
+sectors were static across 140 s on all four disks, which disproved it, but the measurement never
+looked at *read* sectors and so missed the actual activity.
+
+**A four-minute window proves nothing against a fifteen-minute period.** A correlation run watching
+read sectors at 5 s granularity emitted no deltas at all and was briefly taken as "nothing is
+reading them". It had simply landed between two index runs. Any window used to rule out a periodic
+waker must exceed the longest candidate period.
+
+**The ATA blind spot is real but was not the cause.** `drive-selftest.timer` (5 m),
+`textfile-smart-health.timer` and `textfile-hwmon-drive-temperatures.timer` issue commands that
+can spin a disk up without registering in `/proc/diskstats`, so `enforce-disk-idle` cannot see
+them as activity. That was floated as the explanation, and the evidence contradicts it: `sdc`
+stayed parked across several selftest ticks. `modules/nixos/monitoring/smart.nix` is why: both
+collectors gate on the same `$6 + $10` diskstats comparison and serve a cached reading for a drive
+that has not moved, and the health probe additionally passes `smartctl -n standby`, which returns
+without spinning the motor up.
