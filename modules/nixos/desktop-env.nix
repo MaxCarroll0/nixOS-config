@@ -201,13 +201,8 @@ in
   services.desktopManager.plasma6.enable = true;
   services.displayManager.sddm.enable = true;
   services.displayManager.sddm.wayland.enable = true;
-  services.displayManager.autoLogin = {
-    enable = true;
-    user = "max";
-  };
-
-  # Autologin never hands PAM a password, so kwallet-pam can only fail and leave
-  # kwalletd prompting for the rest of the session.
+  # kwallet is disabled outright in home/common.nix, so kwallet-pam has nothing
+  # to unlock and only leaves kwalletd prompting for the rest of the session.
   security.pam.services.login.kwallet.enable = lib.mkForce false;
   security.pam.services.kde.kwallet.enable = lib.mkForce false;
 
