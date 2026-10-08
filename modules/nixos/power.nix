@@ -278,46 +278,41 @@ let
       declare -A live
       order=()
 
-      for connector in /sys/class/drm/card*-*; do
-        [ -d "$connector" ] || continue
-        output=''${connector##*/}
-        output=''${output#card*-}
-        [ "$(cat "$connector/status" 2>/dev/null || true)" = connected ] || continue
-        order+=("$output")
+      # ddcutil's own mapping, not the connector's ddc/ symlink: for
+      # DisplayPort those disagree, and the symlink is the wrong one.
+      valid=no
+      while IFS= read -r line; do
+        case "$line" in
+          "Display "*) valid=yes ;;
+          "Invalid display"*) valid=no ;;
+          *"DRM connector:"*)
+            output=$(echo "$line" | awk '{print $NF}')
+            output=''${output#card*-}
+            order+=("$output")
 
-        bus=""
-        for candidate in "$connector"/ddc/i2c-dev/i2c-*; do
-          [ -d "$candidate" ] || continue
-          bus=''${candidate##*i2c-}
-          break
-        done
+            if [ "$valid" = yes ]; then
+              live[$output]=yes
+              echo 0 > "$state/$output"
+            else
+              strikes=$(( $(cat "$state/$output" 2>/dev/null || echo 0) + 1 ))
+              echo "$strikes" > "$state/$output"
+              # DDC drops a reply on a link that is otherwise fine, so one
+              # silent poll must not pull an output out from under a window.
+              if [ "$strikes" -ge ${toString cfg.monitors.offStrikes} ]; then
+                live[$output]=no
+              else
+                live[$output]=yes
+              fi
+            fi
+            ;;
+        esac
+      # Scoped to ddcutil alone: exported, it reaches kscreen-doctor too and
+      # fontconfig complains about a cache directory it cannot write.
+      done < <(XDG_CACHE_HOME=/run/monitor-presence ddcutil detect --terse 2>/dev/null)
 
-        # x01 is DPM on; standby, suspend and off all report higher, and a dead
-        # channel reports nothing at all.
-        power=""
-        if [ -n "$bus" ]; then
-          power=$(ddcutil --bus "$bus" --terse getvcp D6 2>/dev/null | awk '{print $NF}' || true)
-        fi
-
-        if [ "$power" = x01 ]; then
-          live[$output]=yes
-          echo 0 > "$state/$output"
-        else
-          strikes=$(( $(cat "$state/$output" 2>/dev/null || echo 0) + 1 ))
-          echo "$strikes" > "$state/$output"
-          # DDC drops a reply on a link that is otherwise fine, so one silent
-          # poll must not pull an output out from under a window.
-          if [ "$strikes" -ge ${toString cfg.monitors.offStrikes} ]; then
-            live[$output]=no
-          else
-            live[$output]=yes
-          fi
-        fi
-      done
-
-      # No DDC anywhere means no evidence, not an empty desk.
+      # No monitor answering anywhere means no evidence, not an empty desk.
       any=no
-      for output in "''${order[@]}"; do
+      for output in ''${order[@]+"''${order[@]}"}; do
         [ "''${live[$output]}" = yes ] && any=yes
       done
       [ "$any" = yes ] || exit 0
@@ -351,6 +346,7 @@ let
       fi
       [ -n "$primary" ] && args+=("output.$primary.priority.1")
 
+      echo "applying:''${desired}"
       ${lib.getExe sessionKscreen} "''${args[@]}"
       echo "$desired" > "$state/applied"
     '';
