@@ -269,97 +269,6 @@ let
 
   usbSuspendDelayMs = toString (cfg.idle.usb.suspendDelayMinutes * 60 * 1000);
 
-  # A monitor switched off at the panel keeps HPD asserted, so the connector
-  # stays "connected" and KWin goes on offering it as a place to put windows.
-  # Its DDC channel is the only thing that stops answering.
-  monitorPresence = pkgs.writeShellApplication {
-    name = "monitor-presence";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.ddcutil
-      pkgs.gawk
-    ];
-    text = ''
-      state=/run/monitor-presence
-      mkdir -p "$state"
-
-      declare -A live
-      order=()
-
-      # ddcutil's own mapping, not the connector's ddc/ symlink: for
-      # DisplayPort those disagree, and the symlink is the wrong one.
-      valid=no
-      while IFS= read -r line; do
-        case "$line" in
-          "Display "*) valid=yes ;;
-          "Invalid display"*) valid=no ;;
-          *"DRM connector:"*)
-            output=$(echo "$line" | awk '{print $NF}')
-            output=''${output#card*-}
-            order+=("$output")
-
-            if [ "$valid" = yes ]; then
-              live[$output]=yes
-              echo 0 > "$state/$output"
-            else
-              strikes=$(( $(cat "$state/$output" 2>/dev/null || echo 0) + 1 ))
-              echo "$strikes" > "$state/$output"
-              # DDC drops a reply on a link that is otherwise fine, so one
-              # silent poll must not pull an output out from under a window.
-              if [ "$strikes" -ge ${toString cfg.monitors.offStrikes} ]; then
-                live[$output]=no
-              else
-                live[$output]=yes
-              fi
-            fi
-            ;;
-        esac
-      # Scoped to ddcutil alone: exported, it reaches kscreen-doctor too and
-      # fontconfig complains about a cache directory it cannot write.
-      done < <(XDG_CACHE_HOME=/run/monitor-presence ddcutil detect --terse 2>/dev/null)
-
-      # No monitor answering anywhere means no evidence, not an empty desk.
-      any=no
-      for output in ''${order[@]+"''${order[@]}"}; do
-        [ "''${live[$output]}" = yes ] && any=yes
-      done
-      [ "$any" = yes ] || exit 0
-
-      desired=""
-      for output in "''${order[@]}"; do
-        desired="$desired $output=''${live[$output]}"
-      done
-      if [ "$desired" = "$(cat "$state/applied" 2>/dev/null || true)" ]; then
-        exit 0
-      fi
-
-      args=()
-      for output in "''${order[@]}"; do
-        if [ "''${live[$output]}" = yes ]; then
-          args+=("output.$output.enable")
-        else
-          args+=("output.$output.disable")
-        fi
-      done
-
-      primary="${cfg.monitors.primary}"
-      if [ -z "$primary" ] || [ "''${live[$primary]:-no}" != yes ]; then
-        primary=""
-        for output in "''${order[@]}"; do
-          if [ "''${live[$output]}" = yes ]; then
-            primary="$output"
-            break
-          fi
-        done
-      fi
-      [ -n "$primary" ] && args+=("output.$primary.priority.1")
-
-      echo "applying:''${desired}"
-      ${lib.getExe sessionKscreen} "''${args[@]}"
-      echo "$desired" > "$state/applied"
-    '';
-  };
-
   # Switch events are skipped: an audio interface reporting a jack is not a
   # user asking for their peripherals back.
   inputWake = pkgs.writeShellApplication {
@@ -822,21 +731,6 @@ in
       description = "Power-cycle hub ports that report no device, to force re-enumeration.";
     };
 
-    monitors.followPower = lib.mkEnableOption "dropping outputs whose monitor is switched off";
-
-    monitors.primary = lib.mkOption {
-      type = lib.types.str;
-      default = "";
-      example = "DP-1";
-      description = "Output that takes priority whenever it is switched on.";
-    };
-
-    monitors.offStrikes = lib.mkOption {
-      type = lib.types.int;
-      default = 3;
-      description = "Consecutive silent DDC polls before an output counts as switched off.";
-    };
-
     keepAwakePackage = lib.mkOption {
       type = lib.types.package;
       readOnly = true;
@@ -1082,27 +976,6 @@ in
         ${pkgs.coreutils}/bin/sleep 2
         ${lib.getExe sessionKscreen} --dpms on
       '';
-    })
-
-    (lib.mkIf cfg.monitors.followPower {
-      hardware.i2c.enable = true;
-
-      systemd.services.monitor-presence = {
-        description = "Drop outputs whose monitor is switched off";
-        serviceConfig = {
-          Type = "oneshot";
-          ExecStart = lib.getExe monitorPresence;
-        };
-      };
-      systemd.timers.monitor-presence = {
-        wantedBy = [ "timers.target" ];
-        timerConfig = {
-          OnBootSec = "1min";
-          OnUnitActiveSec = "20s";
-        };
-      };
-
-      environment.systemPackages = [ pkgs.ddcutil ];
     })
 
     (lib.mkIf (cfg.idle.policy == "always-on") {

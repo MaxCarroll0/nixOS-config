@@ -121,9 +121,4 @@ in
   local.power.wakeOnLan = {
     inherit (facts.desktopnew) interface mac;
   };
-
-  local.power.monitors = {
-    followPower = true;
-    primary = "DP-1";
-  };
 }
