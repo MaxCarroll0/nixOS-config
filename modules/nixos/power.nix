@@ -968,6 +968,10 @@ in
 
       powerManagement.resumeCommands = ''
         ${pkgs.systemd}/bin/systemctl start wake-soft-hardware.service
+        # disableWakeSources disarms the root hubs on the way down and nothing
+        # used to arm them again, so a parked keyboard could not wake itself
+        # through them and a keypress never reached the session.
+        ${pkgs.systemd}/bin/systemctl start usb-autosuspend.service
         ${lib.optionalString cfg.idle.usb.resetEmptyPorts "${lib.getExe resetEmptyPorts} 5 || true"}
         ${pkgs.coreutils}/bin/rm -f ${parked} ${forcedOff}
         ${pkgs.coreutils}/bin/touch ${lastInput}
