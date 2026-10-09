@@ -103,6 +103,14 @@ in
     "046d:c08f"
   ];
 
+  # RESET_RESUME for the Focusrite: reset it on resume instead of restoring
+  # state it cannot restore. Measured 2026-10-09, once it has dropped off the
+  # bus nothing short of a replug brings it back -- a verified port disable
+  # toggle and a full xhci_hcd unbind/rebind both left it absent -- so the only
+  # thing left is to stop it dropping off in the first place. Untested through
+  # a suspend as of writing.
+  boot.kernelParams = [ "usbcore.quirks=1235:8202:b" ];
+
   # Both latch a wake as S3 is entered, resuming within milliseconds: serio0
   # raises IRQ 1 with no PS/2 keyboard attached, and the Promontory root hubs
   # assert PME with every device unbound.
