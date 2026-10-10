@@ -66,7 +66,8 @@ async def movements_for(mbid: str, fetcher: Fetcher) -> list[ContentItem]:
     for relation in payload.get("relations") or []:
         if relation.get("type") != "parts":
             continue
-        # "parts" points both ways; the children are the backward direction.
+        # A "parts" relation appears on both works. Asking about the parent, the
+        # forward direction is the one pointing down to its movements.
         if relation.get("direction") != "forward":
             continue
         child = relation.get("work") or {}
