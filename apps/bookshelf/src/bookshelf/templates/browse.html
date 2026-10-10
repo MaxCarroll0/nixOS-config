@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% set active = 'browse' %}
+{% import "_badges.html" as badges %}
+{% block title %}Browse · Bookshelf{% endblock %}
+
+{% block body %}
+<h1>Browse</h1>
+
+{% if facet %}
+<p class="note">
+  {{ facet }}: <strong>{{ value }}</strong> · <a href="/browse">show everything</a>
+</p>
+{% endif %}
+
+<div class="facets">
+{% for group, label in [('kind', 'Kind'), ('composer', 'Composer'), ('publisher', 'Publisher')] %}
+  {% set items = categories|selectattr('facet', 'equalto', group)|list %}
+  {% if items %}
+  <details {{ 'open' if group == 'kind' }}>
+    <summary>{{ label }} <span class="count">{{ items|length }}</span></summary>
+    <ul class="chips">
+    {% for item in items %}
+      <li><a href="/browse?facet={{ group }}&value={{ item.name|urlencode }}"
+             class="{{ 'on' if facet == group and value == item.name }}">
+        {{ item.name }} <span class="count">{{ item.copies }}</span></a></li>
+    {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+{% endfor %}
+</div>
+
+<h2>{{ rows|length }} cop{{ 'y' if rows|length == 1 else 'ies' }}</h2>
+<ul class="rows">
+{% for row in rows %}
+  <li>
+    <a href="/edition/{{ row.edition_id }}">
+      <span class="who">{{ row.composer or '—' }}</span>
+      <span class="what">{{ row.title }}</span>
+      <span class="meta">
+        {{ row.publisher or '' }}{% if row.cat_no_raw %} · {{ row.cat_no_raw }}{% endif %}
+        · {{ row.cover_type }} · {{ row.condition.replace('_', ' ') }}
+        {%- if row.shelf %} · {{ row.shelf }}{% endif %}
+      </span>
+    </a>
+    <span class="value">
+      {{ row.market_value|money(row.currency) }}
+      {{ badges.method(row.method, row.n_comps or 0) }}
+    </span>
+  </li>
+{% endfor %}
+</ul>
+{% endblock %}

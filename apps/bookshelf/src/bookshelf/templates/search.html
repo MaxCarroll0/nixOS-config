@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% set active = 'search' %}
+{% block title %}Search · Bookshelf{% endblock %}
+
+{% block body %}
+<form class="search" action="/search" method="get" id="live-search">
+  <input type="search" name="q" value="{{ query }}" inputmode="search" autocomplete="off"
+         autofocus placeholder="a piece, a composer, a publisher"
+         aria-label="Search the catalogue">
+  <button type="submit">Search</button>
+</form>
+<p class="hint">Searches works and individual movements, so a single piece finds the
+volume it is bound in.</p>
+
+<div id="results">
+{% include "_results.html" %}
+</div>
+{% endblock %}

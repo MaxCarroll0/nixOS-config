@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% set active = 'add' %}
+
+{% block title %}Add · Bookshelf{% endblock %}
+
+{% block body %}
+<form class="search" action="/lookup" method="get" id="lookup">
+  <input type="search" name="q" value="{{ query }}" inputmode="search" autocomplete="off"
+         autofocus placeholder="HN 1234 · BA05583 · durand 18371 · an ISBN · a title"
+         aria-label="Catalogue number, ISBN, or title">
+  <button type="submit">Find</button>
+</form>
+
+<p class="hint">
+  A catalogue number from Henle, Bärenreiter, Peters, Breitkopf, Schott or Boosey
+  usually resolves on its own. For publishers whose plate numbers libraries do not
+  index — Durand, Kalmus, Alfred — put the publisher in front of the number, or search
+  by composer and title.
+</p>
+
+<div id="candidates">
+{% if candidates is not none %}
+  {% include "_candidates.html" %}
+{% endif %}
+</div>
+{% endblock %}

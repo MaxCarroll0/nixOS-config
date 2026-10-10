@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Remove · Bookshelf{% endblock %}
+
+{% block body %}
+<h1>Remove this {{ removal.kind }}?</h1>
+
+<p class="note"><strong>{{ removal.label }}</strong></p>
+
+<p class="hint">
+{% if removal.kind == 'copy' %}
+  This removes the copy you own and its
+  {{ removal.valuations }} valuation snapshot{{ 's' if removal.valuations != 1 }}.
+  The edition record stays, unless this is the last copy of it — in which case that goes
+  too.
+{% else %}
+  This removes the edition and everything attached to it:
+  {{ removal.copies }} cop{{ 'y' if removal.copies == 1 else 'ies' }} owned,
+  {{ removal.contents }} contents entr{{ 'y' if removal.contents == 1 else 'ies' }},
+  and {{ removal.comps }} recorded used listing{{ 's' if removal.comps != 1 }}.
+  Composers and works shared with other editions are kept.
+{% endif %}
+  This cannot be undone from here. The nightly backup holds yesterday's state.
+</p>
+
+<form action="/delete/{{ kind }}/{{ target }}" method="post" class="copy danger">
+  <label class="check">
+    <input type="checkbox" name="confirm" value="yes" required>
+    Yes, remove it
+  </label>
+  <button type="submit">Remove</button>
+</form>
+
+<p><a href="{{ '/edition/' ~ target if kind == 'edition' else '/browse' }}">Cancel</a></p>
+{% endblock %}
