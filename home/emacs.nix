@@ -44,6 +44,7 @@ in
     # config.org documents the daemon as systemd-managed and restarts it with
     # `systemctl --user restart emacs.service`, which needs this unit to exist.
     services.emacs.enable = true;
+    services.emacs.startWithUserSession = "graphical";
 
     programs.emacs = {
       enable = true;

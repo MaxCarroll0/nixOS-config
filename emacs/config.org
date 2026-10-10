@@ -68,6 +68,7 @@ For a hard hang, run =systemctl --user kill --kill-whom=all --signal=KILL emacs.
   (desktop-save t)
   (desktop-load-locked-desktop 'check-pid)
   :init
+  (make-directory (locate-user-emacs-file "desktop/") t)
   (desktop-save-mode 1))
 
 (defun my/restart-emacs-from-profile ()
