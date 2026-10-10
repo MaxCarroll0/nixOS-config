@@ -290,6 +290,11 @@
     identityLogin = "MaxCarroll0@github";
     refresh.enable = true;
     backup.enable = true;
+    apiKeySecrets = {
+      BOOKSHELF_GOOGLE_BOOKS_KEY = "bookshelf-google-books-key";
+      BOOKSHELF_EBAY_CLIENT_ID = "bookshelf-ebay-client-id";
+      BOOKSHELF_EBAY_CLIENT_SECRET = "bookshelf-ebay-client-secret";
+    };
   };
 
   local.servicePriority = {
