@@ -52,8 +52,23 @@ async def find_work(title: str, composer: str | None, fetcher: Fetcher) -> str |
     return str(works[0]["id"]) if works else None
 
 
-async def movements_for(mbid: str, fetcher: Fetcher) -> list[ContentItem]:
-    """The movements of a work, from its ``part of`` child relations."""
+def _parts(payload: dict[str, Any], direction: str) -> list[dict[str, Any]]:
+    """The works a "parts" relation points at, in one direction.
+
+    A "parts" relation is recorded on both works. Seen from the parent it points forward
+    to each movement; seen from a movement it points backward to the parent.
+    """
+    out: list[dict[str, Any]] = []
+    for relation in payload.get("relations") or []:
+        if relation.get("type") != "parts" or relation.get("direction") != direction:
+            continue
+        work = relation.get("work") or {}
+        if work.get("title"):
+            out.append(work)
+    return out
+
+
+async def _work(mbid: str, fetcher: Fetcher) -> dict[str, Any]:
     body = await fetcher.get(
         f"{BASE}/work/{mbid}",
         provider="musicbrainz",
@@ -61,21 +76,28 @@ async def movements_for(mbid: str, fetcher: Fetcher) -> list[ContentItem]:
         interval=1.1,
     )
     payload: dict[str, Any] = json.loads(body or "{}")
+    return payload
 
-    titles: list[str] = []
-    for relation in payload.get("relations") or []:
-        if relation.get("type") != "parts":
-            continue
-        # A "parts" relation appears on both works. Asking about the parent, the
-        # forward direction is the one pointing down to its movements.
-        if relation.get("direction") != "forward":
-            continue
-        child = relation.get("work") or {}
-        title = child.get("title")
-        if title:
-            titles.append(str(title))
 
-    titles.sort(key=_sort_key)
+async def movements_for(mbid: str, fetcher: Fetcher) -> list[ContentItem]:
+    """The movements of a work, whichever end of the work we were handed.
+
+    A title search ranks movements alongside their parent -- searching Dvořák's Serenade
+    returns "…: I. Moderato" above the work itself -- so landing on a movement is the
+    common case, not the exception. When that happens the parent is one hop backwards,
+    and its forward relations are the movement list that was actually wanted.
+    """
+    payload = await _work(mbid, fetcher)
+
+    children = _parts(payload, "forward")
+    if not children:
+        parents = _parts(payload, "backward")
+        if not parents:
+            return []
+        payload = await _work(str(parents[0]["id"]), fetcher)
+        children = _parts(payload, "forward")
+
+    titles = sorted((str(child["title"]) for child in children), key=_sort_key)
     return [
         ContentItem(ordinal=index, label=title, work_title=title)
         for index, title in enumerate(titles, start=1)

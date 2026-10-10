@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,51 @@ if TYPE_CHECKING:
     from bookshelf.fetch import Fetcher
 
 __all__ = ["enrich_edition", "find_work", "movements_for", "works_for"]
+
+
+#: Key, opus and thematic-catalogue clauses, which libraries append to a title.
+_DECORATION = re.compile(
+    r"""\s*(?:
+        ,?\s*[A-H](?:is|es)?[-\s](?:Moll|Dur|minor|major)
+      | ,?\s*op(?:us)?\.?\s*\d+[a-z]?
+      | ,?\s*(?:KV|BWV|D|B|Hob\.?|HWV|RV)\s*[IVXLC]*:?\s*\d+
+      | ,?\s*(?:in|f\u00fcr)\s+[A-H](?:is|es)?\b
+    )\s*$""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def candidate_titles(title: str | None, uniform_title: str | None) -> list[str]:
+    """Title forms worth asking a recording database about, most promising first.
+
+    A library's uniform title is a filing heading rather than a name: Dvořák's wind
+    serenade is filed under the bare genre plural "Serenaden", which matches nothing
+    outside a library catalogue. The title as printed is the better query, and the
+    cataloguing decoration on it -- key, opus, scoring -- is worth stripping as a third
+    attempt, since a search engine scores a shorter query more generously.
+    """
+    forms: list[str] = []
+
+    def offer(value: str | None) -> None:
+        cleaned = re.sub(r"\s{2,}", " ", (value or "")).strip(" .,:;")
+        if cleaned and len(cleaned) > 2 and cleaned not in forms:
+            forms.append(cleaned)
+
+    offer(title)
+    offer(uniform_title)
+
+    if title:
+        # Strip the cataloguing decoration a clause at a time, since a title carries
+        # several: "Bläserserenade d-Moll Opus 44" -> "Bläserserenade".
+        bare = title
+        while True:
+            shorter = _DECORATION.sub("", bare).strip(" .,:;")
+            if shorter == bare or len(shorter) < 3:
+                break
+            bare = shorter
+        offer(bare)
+
+    return forms[:3]
 
 
 async def enrich_edition(
@@ -40,13 +86,14 @@ async def enrich_edition(
     )
     added = 0
     for work in works:
-        title = work["uniform_title"] or work["title"]
-        if not title:
-            continue
-        mbid = await find_work(title, work["composer"], fetcher)
-        if mbid is None:
-            continue
-        movements = await movements_for(mbid, fetcher)
+        movements = []
+        for title in candidate_titles(work["title"], work["uniform_title"]):
+            mbid = await find_work(title, work["composer"], fetcher)
+            if mbid is None:
+                continue
+            movements = await movements_for(mbid, fetcher)
+            if movements:
+                break
         if not movements:
             continue
 
