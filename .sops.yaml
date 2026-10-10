@@ -11,6 +11,13 @@ creation_rules:
       - *laptop
       - *desktopnew
       - *pi
+  - path_regex: secrets/bookshelf-tls-key\.pem$
+    key_groups:
+    - age:
+      - *primary
+      - *laptop
+      - *desktopnew
+      - *pi
   - path_regex: secrets/nas.yaml$
     key_groups:
     - age:

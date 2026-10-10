@@ -285,6 +285,12 @@ in
 
     grafana.enable = lib.mkEnableOption "Grafana with the provisioned dashboards";
 
+    grafana.anonymousViewer = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Let a request carrying no identity read the dashboards.";
+    };
+
     piFirmware.enable = lib.mkEnableOption "Raspberry Pi firmware and PMIC telemetry";
 
     # Linux 5.10 made these root-only over the PLATYPUS side channel; without
@@ -692,7 +698,11 @@ in
           check_for_plugin_updates = false;
         };
         settings.live.max_connections = 0;
-        settings."auth.anonymous".enabled = false;
+        settings."auth.anonymous" = {
+          enabled = cfg.grafana.anonymousViewer;
+          org_role = "Viewer";
+          hide_version = true;
+        };
         settings."auth.proxy" = {
           enabled = true;
           header_name = "Tailscale-User-Login";

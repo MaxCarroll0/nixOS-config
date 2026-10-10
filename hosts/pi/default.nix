@@ -47,6 +47,20 @@
     "books"
   ];
 
+  # Grafana trusts this header absolutely and auto-assigns Admin, so only the tailnet
+  # address may carry it. An empty value is both omitted by nginx and overwrites anything
+  # the client sent, which is what keeps a local-network request anonymous.
+  services.nginx.appendHttpConfig = ''
+    map $server_addr $grafana_user_login {
+      100.117.13.66 "MaxCarroll0@github";
+      default "";
+    }
+    map $server_addr $grafana_user_name {
+      100.117.13.66 "Max";
+      default "";
+    }
+  '';
+
   services.nginx = {
     enable = true;
     recommendedProxySettings = true;
@@ -62,13 +76,17 @@
           addr = "100.117.13.66";
           port = 80;
         }
+        {
+          addr = "192.168.200.81";
+          port = 80;
+        }
       ];
       locations."/" = {
         proxyPass = "http://127.0.0.1:3000";
         proxyWebsockets = true;
         extraConfig = ''
-          proxy_set_header Tailscale-User-Login "MaxCarroll0@github";
-          proxy_set_header Tailscale-User-Name "Max";
+          proxy_set_header Tailscale-User-Login $grafana_user_login;
+          proxy_set_header Tailscale-User-Name $grafana_user_name;
         '';
       };
     };
@@ -77,7 +95,18 @@
     after = [ "tailscaled.service" ];
     wants = [ "tailscaled.service" ];
   };
-  networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 80 ];
+  # end0 and wld0 can land on the same subnet, and an interface-scoped rule then stops
+  # matching reliably, so both are opened rather than whichever happens to be up.
+  networking.firewall.interfaces = {
+    tailscale0.allowedTCPPorts = [ 80 ];
+    wld0.allowedTCPPorts = [ 80 ];
+    end0.allowedTCPPorts = [ 80 ];
+  };
+
+  # Grafana was the only vhost on this address and so was nginx's default server for it;
+  # keep that now the catalogue shares the address, or a request with an unknown Host
+  # lands on the catalogue instead.
+  services.nginx.virtualHosts.observatory.default = true;
 
   swapDevices = lib.mkForce [
     {
@@ -114,6 +143,13 @@
     lanInterfaces = [
       "wld0"
       "end0"
+    ];
+    # Grafana and the catalogue answer on the local network as well, anonymously: the
+    # vhosts hand an identity to tailnet requests only, so admin stays on the tailnet.
+    allowLanTCPPorts = [
+      80
+      8080
+      8443
     ];
   };
 
@@ -161,6 +197,7 @@
     };
     piFirmware.enable = true;
     smart.enable = true;
+    grafana.anonymousViewer = true;
     smart.selfTest.enable = true;
     server.enable = true;
     grafana.enable = true;
@@ -290,6 +327,18 @@
     identityLogin = "MaxCarroll0@github";
     refresh.enable = true;
     backup.enable = true;
+    tls = {
+      enable = true;
+      certificate = ../../keys/bookshelf.crt;
+    };
+    lan = {
+      enable = true;
+      address = "192.168.200.81";
+      interfaces = [
+        "wld0"
+        "end0"
+      ];
+    };
     apiKeySecrets = {
       BOOKSHELF_GOOGLE_BOOKS_KEY = "bookshelf-google-books-key";
       BOOKSHELF_EBAY_CLIENT_ID = "bookshelf-ebay-client-id";

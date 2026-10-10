@@ -476,6 +476,8 @@ in
       };
     };
 
+    security.pki.certificates = [ (builtins.readFile ../../keys/home-ca.crt) ];
+
     networking.networkmanager.enable = true;
 
     networking.networkmanager.wifi.powersave = false;

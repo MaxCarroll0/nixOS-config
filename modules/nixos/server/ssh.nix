@@ -30,7 +30,7 @@ let
   reachableOffTailnet = lib.concatMap (
     interface:
     let
-      allowed = if lib.elem interface cfg.lanInterfaces then lanAllowed else [ ];
+      allowed = if lib.elem interface cfg.lanInterfaces then lanAllowed ++ cfg.allowLanTCPPorts else [ ];
     in
     map (port: "${interface}:${toString port}") (
       lib.filter (port: !(lib.elem port allowed)) (portsOn interface)
@@ -64,6 +64,12 @@ in
       type = lib.types.listOf lib.types.port;
       default = [ ];
       description = "TCP ports allowed on every interface. Empty keeps the host tailnet-only.";
+    };
+
+    allowLanTCPPorts = lib.mkOption {
+      type = lib.types.listOf lib.types.port;
+      default = [ ];
+      description = "TCP ports deliberately served to the local network as well as the tailnet.";
     };
 
     lanInterfaces = lib.mkOption {

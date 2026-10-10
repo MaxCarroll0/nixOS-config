@@ -111,6 +111,30 @@ let
   # sits under /var/lib/bookshelf. Paths have to be compared at a component boundary.
   under = parent: path: path == parent || lib.hasPrefix "${parent}/" path;
 
+  listenAddresses = [ cfg.tailnetAddress ] ++ lib.optional cfg.lan.enable cfg.lan.address;
+  listenInterfaces = [ cfg.interface ] ++ lib.optionals cfg.lan.enable cfg.lan.interfaces;
+
+  plainPorts = lib.unique [
+    80
+    cfg.tailnetPort
+  ];
+  # Deliberately not 443: the binary cache's vhost is on the wildcard address there, and
+  # an address-specific listener would shadow it, so a request for it would arrive at the
+  # catalogue instead.
+  tlsPorts = [ cfg.tls.port ];
+  listenPorts = plainPorts ++ lib.optionals cfg.tls.enable tlsPorts;
+
+  listeners = lib.concatMap (
+    addr:
+    map (port: { inherit addr port; }) plainPorts
+    ++ lib.optionals cfg.tls.enable (
+      map (port: {
+        inherit addr port;
+        ssl = true;
+      }) tlsPorts
+    )
+  ) listenAddresses;
+
   hardening = {
     CapabilityBoundingSet = [ "" ];
     AmbientCapabilities = [ "" ];
@@ -257,6 +281,52 @@ in
       description = "Tailscale login injected as the request identity, as the app trusts the header.";
     };
 
+    tls = {
+      enable = lib.mkEnableOption "serving the catalogue over HTTPS";
+
+      certificate = lib.mkOption {
+        type = lib.types.path;
+        description = "Certificate covering every name and address the catalogue answers on.";
+      };
+
+      keySecret = lib.mkOption {
+        type = lib.types.str;
+        default = "bookshelf-tls-key";
+        description = "sops secret holding the certificate's private key.";
+      };
+
+      # A phone resolves the node name and nothing else, and that name already belongs to
+      # another vhost on 443, so the catalogue needs a port of its own to be the only
+      # thing answering there.
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 8443;
+        description = "Extra HTTPS port, reachable by node name from a device with no hosts file.";
+      };
+    };
+
+    lan = {
+      enable = lib.mkEnableOption "serving the catalogue on the local network too";
+
+      address = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Local-network address to listen on, under the same name as the tailnet.";
+      };
+
+      interfaces = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = "Local interfaces to open the ports on.";
+      };
+
+      readOnly = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Refuse anything but GET from the local network, which has no identity.";
+      };
+    };
+
     apiKeySecrets = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
@@ -343,9 +413,18 @@ in
     ]
     ++ lib.optional cfg.backup.enable "d ${cfg.backup.workTree} 0700 ${cfg.user} ${cfg.user} - -";
 
-    sops.secrets = lib.genAttrs (lib.attrValues cfg.apiKeySecrets) (_: {
-      restartUnits = [ "bookshelf.service" ];
-    });
+    sops.secrets =
+      lib.genAttrs (lib.attrValues cfg.apiKeySecrets) (_: {
+        restartUnits = [ "bookshelf.service" ];
+      })
+      // lib.optionalAttrs cfg.tls.enable {
+        ${cfg.tls.keySecret} = {
+          sopsFile = ../../secrets/bookshelf-tls-key.pem;
+          format = "binary";
+          owner = "nginx";
+          restartUnits = [ "nginx.service" ];
+        };
+      };
 
     sops.templates = lib.optionalAttrs (cfg.apiKeySecrets != { }) {
       "bookshelf-env" = {
@@ -455,37 +534,43 @@ in
       };
     };
 
+    # Which address a request arrived on decides whether it carries an identity. An
+    # empty value is omitted by nginx *and* overwrites anything the client sent, so a
+    # machine on the local network cannot simply claim to be someone.
+    services.nginx.appendHttpConfig = ''
+      map $server_addr $bookshelf_identity {
+        ${cfg.tailnetAddress} "${cfg.identityLogin}";
+        default "";
+      }
+    '';
+
     services.nginx = {
       enable = true;
       recommendedProxySettings = true;
       virtualHosts.${cfg.hostname} = {
         serverAliases = cfg.serverAliases;
-        listen =
-          map
-            (port: {
-              addr = cfg.tailnetAddress;
-              inherit port;
-            })
-            (
-              lib.unique [
-                80
-                cfg.tailnetPort
-              ]
-            );
+        addSSL = cfg.tls.enable;
+        sslCertificate = lib.mkIf cfg.tls.enable cfg.tls.certificate;
+        sslCertificateKey = lib.mkIf cfg.tls.enable config.sops.secrets.${cfg.tls.keySecret}.path;
+        listen = listeners;
         locations."/" = {
           proxyPass = "http://127.0.0.1:${toString cfg.port}";
           extraConfig = ''
-            proxy_set_header Tailscale-User-Login "${cfg.identityLogin}";
+            proxy_set_header Tailscale-User-Login $bookshelf_identity;
             client_max_body_size 4m;
+          ''
+          + lib.optionalString cfg.lan.readOnly ''
+            if ($bookshelf_identity = "") {
+              limit_except GET HEAD { deny all; }
+            }
           '';
         };
       };
     };
 
-    networking.firewall.interfaces.${cfg.interface}.allowedTCPPorts = lib.unique [
-      80
-      cfg.tailnetPort
-    ];
+    networking.firewall.interfaces = lib.genAttrs listenInterfaces (_: {
+      allowedTCPPorts = listenPorts;
+    });
 
     environment.systemPackages = [
       cfg.package
@@ -496,6 +581,14 @@ in
       {
         assertion = cfg.tailnetAddress != "";
         message = "local.bookshelf.tailnetAddress must be this host's tailnet address; an empty listen address would expose the catalogue on every interface.";
+      }
+      {
+        assertion = !cfg.lan.enable || cfg.lan.address != "";
+        message = "local.bookshelf.lan.address must be this host's local-network address; without it the vhost would answer on every interface.";
+      }
+      {
+        assertion = !cfg.lan.enable || cfg.lan.interfaces != [ ];
+        message = "local.bookshelf.lan.interfaces must list the local interfaces to open, or the local network cannot reach it.";
       }
       {
         assertion = cfg.identityLogin != "";
