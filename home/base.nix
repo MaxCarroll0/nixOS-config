@@ -10,6 +10,7 @@
     enable = true;
     settings.user.name = "Max";
     settings.user.email = "mjvcarroll@gmail.com";
+    settings.alias.docs = "!git --git-dir=/home/max/.local/share/nix-config-docs.git";
     ignores = [
       "*~"
       "\\#*\\#"
@@ -92,12 +93,12 @@
   programs.gh = {
     enable = true;
     settings = {
-      git_protocol = "https";
+      git_protocol = "ssh";
       aliases.co = "pr checkout";
     };
 
     hosts."github.com" = {
-      git_protocol = "https";
+      git_protocol = "ssh";
       user = "MaxCarroll0";
       users.MaxCarroll0 = { };
     };
@@ -119,6 +120,11 @@
       set -o vi
       if [ -z "''${SSH_CONNECTION:-}" ] && [ "''${REBUILD_SSH_AGENT_SUDO:-0}" != 1 ]; then
         unset SSH_AUTH_SOCK
+      fi
+
+      # programs.gh renders hosts.yml read-only, so gh cannot store a token itself.
+      if [ -r /run/secrets/github-API ]; then
+        export GH_TOKEN="$(< /run/secrets/github-API)"
       fi
     '';
   };
