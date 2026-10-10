@@ -65,26 +65,12 @@ let
       pkgs.git
       pkgs.coreutils
       pkgs.openssh
-      pkgs.inetutils
     ];
     # A text dump, not the binary file: git stores a readable diff of what changed and
     # a few edits cost a few lines rather than a fresh copy of the whole database.
     text = ''
       repo=${cfg.backup.workTree}
       install -d -m 0700 "$repo"
-
-      ${lib.optionalString (cfg.backup.remote != null) ''
-        # Mint the deploy key on first run and print it, so the only manual step is
-        # pasting it into the repository's deploy keys. The private half never leaves
-        # this host.
-        if [ ! -f ${cfg.backup.identityFile} ]; then
-          install -d -m 0700 "$(dirname ${cfg.backup.identityFile})"
-          ssh-keygen -q -t ed25519 -N "" -C "bookshelf-backup@$(hostname)" \
-            -f ${cfg.backup.identityFile}
-          echo "a deploy key was generated; add it to ${cfg.backup.remote} with write access:" >&2
-          cat ${cfg.backup.identityFile}.pub >&2
-        fi
-      ''}
 
       if [ ! -d "$repo/.git" ]; then
         git -C "$repo" init -q -b main
@@ -105,13 +91,14 @@ let
       echo "committed: $rows lines changed"
 
       ${lib.optionalString (cfg.backup.remote != null) ''
-        if [ ! -r ${cfg.backup.identityFile} ]; then
-          echo "warning: no deploy key at ${cfg.backup.identityFile}; the commit is local only" >&2
+        key="$CREDENTIALS_DIRECTORY/ssh-key"
+        if [ ! -r "$key" ]; then
+          echo "warning: ${cfg.backup.identityFile} was not loadable; the commit is local only" >&2
           exit 0
         fi
         # A failed push must not fail the unit: the commit is already made and the next
         # run will carry it, so a flaky network costs nothing.
-        GIT_SSH_COMMAND="ssh -i ${cfg.backup.identityFile} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+        GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
           git -C "$repo" push -q "${cfg.backup.remote}" HEAD:${cfg.backup.branch} \
           || { echo "push failed; the commit is local and will go next time" >&2; exit 0; }
         echo "pushed to ${cfg.backup.remote}"
@@ -313,10 +300,12 @@ in
         description = "Branch to push the dump to.";
       };
 
+      # TODO: this is the host's own account key, so it can reach every repository
+      # the account can. Swap it for a deploy key scoped to the backup repository.
       identityFile = lib.mkOption {
         type = lib.types.str;
-        default = "/var/lib/bookshelf-backup/.ssh/id_ed25519";
-        description = "Deploy key the push authenticates with; scoped to that one repository.";
+        default = "/home/max/.ssh/id_ed25519";
+        description = "SSH key the push authenticates with.";
       };
 
       authorName = lib.mkOption {
@@ -442,6 +431,7 @@ in
       serviceConfig = hardening // {
         Type = "oneshot";
         ExecStart = lib.getExe backup;
+        LoadCredential = lib.mkIf (cfg.backup.remote != null) "ssh-key:${cfg.backup.identityFile}";
         User = cfg.user;
         Group = cfg.user;
         MemoryMax = "128M";
