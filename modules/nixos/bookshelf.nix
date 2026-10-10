@@ -4,6 +4,7 @@
   config,
   pkgs,
   lib,
+  inputs,
   ...
 }:
 
@@ -157,7 +158,7 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.callPackage ../../apps/bookshelf/package.nix { };
+      default = pkgs.callPackage "${inputs.bookshelf}/package.nix" { };
       description = "The catalogue application, built against this host's nixpkgs.";
     };
 

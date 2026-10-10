@@ -24,6 +24,11 @@
 
     emacs-overlay.url = "github:nix-community/emacs-overlay";
 
+    bookshelf = {
+      url = "git+ssh://git@github.com/MaxCarroll0/bookshelf?ref=main";
+      flake = false;
+    };
+
     curd = {
       url = "github:Wraient/curd";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -251,7 +256,7 @@
       packages.x86_64-linux = {
         deploy-rs = inputs.deploy-rs.packages.x86_64-linux.default;
 
-        bookshelf = (pkgsFor "x86_64-linux").callPackage ./apps/bookshelf/package.nix { };
+        bookshelf = (pkgsFor "x86_64-linux").callPackage "${inputs.bookshelf}/package.nix" { };
 
         installer-iso =
           (lib.nixosSystem {

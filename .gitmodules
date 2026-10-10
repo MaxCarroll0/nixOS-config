@@ -1,0 +1,3 @@
+[submodule "apps/bookshelf"]
+	path = apps/bookshelf
+	url = git@github.com:MaxCarroll0/bookshelf.git
