@@ -173,4 +173,15 @@
       Timeout=4
     '';
   };
+
+  # plasma-shutdown saves whatever is running and plasma-fallback-session-restore
+  # launches it again at login, which is how a browser and a terminal came back
+  # on their own. restorePreviousLogout is the default.
+  xdg.configFile."ksmserverrc" = {
+    force = true;
+    text = ''
+      [General]
+      loginMode=emptySession
+    '';
+  };
 }
