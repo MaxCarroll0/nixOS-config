@@ -1,0 +1,19 @@
+{% macro method(name, n) %}
+  {%- if name == 'comps' -%}
+    <span class="badge evidence" title="{{ n }} used listings for this edition">comps · {{ n }}</span>
+  {%- elif name == 'blended' -%}
+    <span class="badge partial" title="{{ n }} listing{{ 's' if n != 1 }}, blended with the model">blended · {{ n }}</span>
+  {%- elif name == 'modelled' -%}
+    <span class="badge modelled" title="No listings found; estimated from the model">modelled</span>
+  {%- elif name == 'manual' -%}
+    <span class="badge manual" title="Set by hand">by hand</span>
+  {%- else -%}
+    <span class="badge unknown" title="Not enough information to value this">no value</span>
+  {%- endif -%}
+{% endmacro %}
+
+{% macro band(lo, hi, cur) %}
+  {%- if lo is not none and hi is not none -%}
+    <span class="band">{{ lo|money(cur) }} – {{ hi|money(cur) }}</span>
+  {%- endif -%}
+{% endmacro %}

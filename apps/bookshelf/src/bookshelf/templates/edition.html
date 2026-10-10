@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% import "_badges.html" as badges %}
+{% block title %}{{ edition.title }} · Bookshelf{% endblock %}
+
+{% block body %}
+<article class="edition">
+  <h1>{{ edition.title }}</h1>
+  {% if edition.title_en and edition.title_en != edition.title %}
+  <p class="alt">{{ edition.title_en }}</p>
+  {% endif %}
+
+  <dl class="facts">
+    {% if edition.composer %}<dt>Composer</dt><dd>{{ edition.composer }}</dd>{% endif %}
+    {% if edition.publisher %}<dt>Publisher</dt><dd>{{ edition.publisher }}</dd>{% endif %}
+    {% if edition.cat_no_raw %}<dt>Catalogue no.</dt><dd>{{ edition.cat_no_raw }}</dd>{% endif %}
+    {% if edition.ismn %}<dt>ISMN</dt><dd>{{ edition.ismn }}</dd>{% endif %}
+    {% if edition.isbn13 %}<dt>ISBN</dt><dd>{{ edition.isbn13 }}</dd>{% endif %}
+    {% if edition.uniform_title %}<dt>Work</dt><dd>{{ edition.uniform_title }}
+      {%- if edition.catalogue_label %} · {{ edition.catalogue_label }}{% endif %}
+      {%- if edition.music_key %} · {{ edition.music_key }}{% endif %}</dd>{% endif %}
+    {% if edition.instrumentation %}<dt>Scoring</dt><dd>{{ edition.instrumentation }}</dd>{% endif %}
+    {% if edition.binding %}<dt>Binding</dt><dd>{{ edition.binding }}</dd>{% endif %}
+    {% if edition.edition_statement %}<dt>Edition</dt><dd>{{ edition.edition_statement }}</dd>{% endif %}
+    {% if edition.year %}<dt>Year</dt><dd>{{ edition.year }}</dd>{% endif %}
+    {% if edition.extent %}<dt>Extent</dt><dd>{{ edition.extent }}</dd>{% endif %}
+    {% if price_new %}
+    <dt>List price</dt>
+    <dd>{{ price_new.price|money(price_new.currency) }}
+        <span class="meta">{{ price_new.source }}, {{ price_new.observed_at[:10] }}</span></dd>
+    {% endif %}
+    <dt>Identified by</dt><dd>{{ edition.resolved_from }}</dd>
+  </dl>
+
+  {% if contents %}
+  <h2>Contents</h2>
+  <ol class="contents">
+  {% for item in contents %}
+    <li>{{ item.label }}
+      {%- if item.catalogue_label %} <span class="meta">{{ item.catalogue_label }}</span>{% endif %}
+      {%- if item.page_from %} <span class="meta">p. {{ item.page_from }}</span>{% endif %}
+    </li>
+  {% endfor %}
+  </ol>
+  {% endif %}
+
+  <h2>Cop{{ 'y' if copies|length == 1 else 'ies' }} owned</h2>
+  {% for copy in copies %}
+  <section class="copy-card">
+    <p>
+      <strong>{{ copy.cover_type }}</strong>, {{ copy.condition.replace('_', ' ') }}
+      {%- if copy.shelf %} · {{ copy.shelf }}{% endif %}
+      {%- if copy.acquired_on %} · acquired {{ copy.acquired_on }}{% endif %}
+    </p>
+    <table class="figures">
+      <tr>
+        <th>Cost</th>
+        <td>{{ copy.cost_basis|money(copy.currency) }}</td>
+        <td class="meta">{{ copy.cost_method or 'not known' }}</td>
+      </tr>
+      <tr>
+        <th>Market</th>
+        <td>{{ copy.market_value|money(copy.currency) }}</td>
+        <td>
+          {{ badges.method(copy.method, copy.n_comps or 0) }}
+          {{ badges.band(copy.market_lo, copy.market_hi, copy.currency) }}
+        </td>
+      </tr>
+    </table>
+    <form action="/copy/{{ copy.id }}/value" method="post" class="inline">
+      <label>Set value by hand
+        <input type="number" name="value" step="0.01" inputmode="decimal"
+               placeholder="{{ copy.market_value or '' }}">
+      </label>
+      <button type="submit">Save</button>
+    </form>
+    <p class="remove"><a href="/delete/copy/{{ copy.id }}">Remove this copy</a></p>
+  </section>
+  {% endfor %}
+
+  {% if comps %}
+  <h2>Used listings seen</h2>
+  <ul class="comps">
+  {% for comp in comps %}
+    <li>
+      {{ comp.price|money(comp.currency) }}
+      {%- if comp.shipping %} + {{ comp.shipping|money(comp.currency) }} post{% endif %}
+      <span class="meta">{{ comp.source }}
+        {%- if comp.condition %} · {{ comp.condition.replace('_', ' ') }}{% endif %}
+        · {{ comp.observed_at[:10] }}</span>
+      {% if comp.url %}<a href="{{ comp.url }}" rel="noreferrer noopener">listing</a>{% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% else %}
+  <p class="note">No used listings recorded yet, so any market figure above is the
+  model's. The refresh job looks for them nightly.</p>
+  {% endif %}
+  <p class="remove"><a href="/delete/edition/{{ edition.id }}">Remove this edition and all its copies</a></p>
+</article>
+{% endblock %}

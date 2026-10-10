@@ -1,0 +1,301 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<searchRetrieveResponse xmlns="http://www.loc.gov/zing/srw/"><version>1.1</version><numberOfRecords>3</numberOfRecords><records><record><recordSchema>MARC21-xml</recordSchema><recordPacking>xml</recordPacking><recordData><record xmlns="http://www.loc.gov/MARC21/slim" type="Bibliographic">
+    <leader>00000ncm a2200000 cc4500</leader>
+    <controlfield tag="001">350202532</controlfield>
+    <controlfield tag="003">DE-101</controlfield>
+    <controlfield tag="005">20171201234330.0</controlfield>
+    <controlfield tag="007">q|</controlfield>
+    <controlfield tag="008">860821s1985    gw |||||r|||||||||||ger  </controlfield>
+    <datafield tag="015" ind1=" " ind2=" ">
+      <subfield code="a">86,M10,0175</subfield>
+      <subfield code="2">dnb</subfield>
+    </datafield>
+    <datafield tag="016" ind1="7" ind2=" ">
+      <subfield code="2">DE-101</subfield>
+      <subfield code="a">350202532</subfield>
+    </datafield>
+    <datafield tag="016" ind1="7" ind2=" ">
+      <subfield code="2">DE-101c</subfield>
+      <subfield code="a">502745302</subfield>
+    </datafield>
+    <datafield tag="028" ind1="3" ind2="2">
+      <subfield code="a">BA 4501 : DM 65.00</subfield>
+    </datafield>
+    <datafield tag="035" ind1=" " ind2=" ">
+      <subfield code="a">(DE-599)DNB350202532</subfield>
+    </datafield>
+    <datafield tag="035" ind1=" " ind2=" ">
+      <subfield code="a">(OCoLC)724477788</subfield>
+    </datafield>
+    <datafield tag="040" ind1=" " ind2=" ">
+      <subfield code="a">1300</subfield>
+      <subfield code="b">ger</subfield>
+      <subfield code="c">DE-101</subfield>
+      <subfield code="d">9999</subfield>
+    </datafield>
+    <datafield tag="041" ind1=" " ind2=" ">
+      <subfield code="a">ger</subfield>
+    </datafield>
+    <datafield tag="044" ind1=" " ind2=" ">
+      <subfield code="c">XA-DE</subfield>
+    </datafield>
+    <datafield tag="082" ind1="7" ind2="4">
+      <subfield code="a">01a</subfield>
+      <subfield code="q">DE-101</subfield>
+      <subfield code="2">22sdnb</subfield>
+    </datafield>
+    <datafield tag="084" ind1=" " ind2=" ">
+      <subfield code="a">03a</subfield>
+      <subfield code="q">DE-101</subfield>
+      <subfield code="2">sdnb</subfield>
+    </datafield>
+    <datafield tag="100" ind1="1" ind2=" ">
+      <subfield code="0">(DE-588)118584596</subfield>
+      <subfield code="0">https://d-nb.info/gnd/118584596</subfield>
+      <subfield code="0">(DE-101)118584596</subfield>
+      <subfield code="a">Mozart, Wolfgang Amadeus</subfield>
+      <subfield code="d">1756-1791</subfield>
+      <subfield code="e">Komponist</subfield>
+      <subfield code="4">cmp</subfield>
+      <subfield code="2">gnd</subfield>
+    </datafield>
+    <datafield tag="245" ind1="1" ind2="0">
+      <subfield code="a">Neue Ausgabe sämtlicher Werke</subfield>
+      <subfield code="n">Ser. 9.</subfield>
+      <subfield code="p">Klaviermusik</subfield>
+      <subfield code="n">Werkgruppe 24.</subfield>
+      <subfield code="p">Werke für 2 Klaviere und Klavier zu vier Händen</subfield>
+      <subfield code="n">Abt. 1.</subfield>
+      <subfield code="p">Werke für 2 Klaviere / vorgelegt von Ernst Fritz Schmid</subfield>
+      <subfield code="c">Wolfgang Amadeus Mozart. In Verbindung mit den Mozartstädten Augsburg, Salzburg und Wien hrsg. von der Internat. Stiftung Mozarteum, Salzburg</subfield>
+    </datafield>
+    <datafield tag="250" ind1=" " ind2=" ">
+      <subfield code="a">[Spielpartitur], 2. durchges. Aufl.</subfield>
+    </datafield>
+    <datafield tag="264" ind1="3" ind2="1">
+      <subfield code="a">009,024,001</subfield>
+      <subfield code="c">c 1985</subfield>
+    </datafield>
+    <datafield tag="300" ind1=" " ind2=" ">
+      <subfield code="a">VII, 51 S. : Faks.</subfield>
+      <subfield code="c">33 cm</subfield>
+      <subfield code="e">Beil.</subfield>
+    </datafield>
+    <datafield tag="336" ind1=" " ind2=" ">
+      <subfield code="a">Noten</subfield>
+      <subfield code="b">ntm</subfield>
+      <subfield code="2">rdacontent</subfield>
+    </datafield>
+    <datafield tag="337" ind1=" " ind2=" ">
+      <subfield code="a">ohne Hilfsmittel zu benutzen</subfield>
+      <subfield code="b">n</subfield>
+      <subfield code="2">rdamedia</subfield>
+    </datafield>
+    <datafield tag="338" ind1=" " ind2=" ">
+      <subfield code="a">Band</subfield>
+      <subfield code="b">nc</subfield>
+      <subfield code="2">rdacarrier</subfield>
+    </datafield>
+    <datafield tag="500" ind1=" " ind2=" ">
+      <subfield code="a">Beil.: Larghetto u. Allegro in Es für 2 Klaviere, Fragm. vollendet von Maximilian Stadler, KV deest, 16 S., 33 cm.</subfield>
+    </datafield>
+    <datafield tag="505" ind1="8" ind2=" ">
+      <subfield code="a">Enth.: Fuge KV 426. Sonate KV 448. Grave und Presto KV Anh. 42. Sonatensatz KV Anh. 43. Allegro KV Anh. 44. Fuge KV Anh. 45.</subfield>
+    </datafield>
+    <datafield tag="700" ind1="1" ind2=" ">
+      <subfield code="0">(DE-588)124095739</subfield>
+      <subfield code="0">https://d-nb.info/gnd/124095739</subfield>
+      <subfield code="0">(DE-101)124095739</subfield>
+      <subfield code="a">Schmid, Ernst Fritz</subfield>
+      <subfield code="d">1904-1960</subfield>
+      <subfield code="e">Herausgeber</subfield>
+      <subfield code="4">edt</subfield>
+      <subfield code="2">gnd</subfield>
+    </datafield>
+    <datafield tag="773" ind1="0" ind2="8">
+      <subfield code="q">009,024,001</subfield>
+      <subfield code="w">(DE-101)351270523</subfield>
+    </datafield>
+    <datafield tag="850" ind1=" " ind2=" ">
+      <subfield code="a">DE-101a</subfield>
+    </datafield>
+    <datafield tag="889" ind1=" " ind2=" ">
+      <subfield code="w">(DE-101)350202524</subfield>
+    </datafield>
+    <datafield tag="925" ind1="r" ind2=" ">
+      <subfield code="a">rm</subfield>
+    </datafield>
+  </record></recordData><recordPosition>1</recordPosition></record><record><recordSchema>MARC21-xml</recordSchema><recordPacking>xml</recordPacking><recordData><record xmlns="http://www.loc.gov/MARC21/slim" type="Bibliographic">
+    <leader>00000ncm a22000008c 4500</leader>
+    <controlfield tag="001">1003556353</controlfield>
+    <controlfield tag="003">DE-101</controlfield>
+    <controlfield tag="005">20171202152917.0</controlfield>
+    <controlfield tag="007">q|</controlfield>
+    <controlfield tag="008">100616s1955    gw |||||r|||||||||||ger  </controlfield>
+    <datafield tag="016" ind1="7" ind2=" ">
+      <subfield code="2">DE-101</subfield>
+      <subfield code="a">1003556353</subfield>
+    </datafield>
+    <datafield tag="028" ind1="3" ind2="2">
+      <subfield code="a">BA 4501</subfield>
+    </datafield>
+    <datafield tag="035" ind1=" " ind2=" ">
+      <subfield code="a">(DE-599)DNB1003556353</subfield>
+    </datafield>
+    <datafield tag="040" ind1=" " ind2=" ">
+      <subfield code="a">1340</subfield>
+      <subfield code="b">ger</subfield>
+      <subfield code="c">DE-101</subfield>
+      <subfield code="d">9999</subfield>
+    </datafield>
+    <datafield tag="041" ind1=" " ind2=" ">
+      <subfield code="a">ger</subfield>
+    </datafield>
+    <datafield tag="044" ind1=" " ind2=" ">
+      <subfield code="c">XA-DE</subfield>
+    </datafield>
+    <datafield tag="082" ind1="7" ind2="4">
+      <subfield code="8">1\p</subfield>
+      <subfield code="a">780</subfield>
+      <subfield code="q">DE-101</subfield>
+      <subfield code="2">22sdnb</subfield>
+    </datafield>
+    <datafield tag="100" ind1="1" ind2=" ">
+      <subfield code="a">Mozart, Wolfgang Amadeus</subfield>
+      <subfield code="e">Komponist</subfield>
+      <subfield code="4">cmp</subfield>
+    </datafield>
+    <datafield tag="245" ind1="1" ind2="0">
+      <subfield code="a">Werke für 2 Klaviere</subfield>
+    </datafield>
+    <datafield tag="250" ind1=" " ind2=" ">
+      <subfield code="a">Kritischer Bericht</subfield>
+    </datafield>
+    <datafield tag="264" ind1=" " ind2="1">
+      <subfield code="a">Kassel [u.a.]</subfield>
+      <subfield code="b">Bärenreiter-Verlag</subfield>
+      <subfield code="c">1955</subfield>
+    </datafield>
+    <datafield tag="336" ind1=" " ind2=" ">
+      <subfield code="a">Noten</subfield>
+      <subfield code="b">ntm</subfield>
+      <subfield code="2">rdacontent</subfield>
+    </datafield>
+    <datafield tag="337" ind1=" " ind2=" ">
+      <subfield code="a">ohne Hilfsmittel zu benutzen</subfield>
+      <subfield code="b">n</subfield>
+      <subfield code="2">rdamedia</subfield>
+    </datafield>
+    <datafield tag="338" ind1=" " ind2=" ">
+      <subfield code="a">Band</subfield>
+      <subfield code="b">nc</subfield>
+      <subfield code="2">rdacarrier</subfield>
+    </datafield>
+    <datafield tag="490" ind1="1" ind2=" ">
+      <subfield code="a">Neue Ausgabe sämtlicher Werke / Wolfgang Amadeus Mozart</subfield>
+      <subfield code="v">Ser. 9, Werkgruppe 24, Abt. 1</subfield>
+    </datafield>
+    <datafield tag="700" ind1="1" ind2=" ">
+      <subfield code="a">Schmid, Ernst Fritz</subfield>
+      <subfield code="e">Mitwirkender</subfield>
+      <subfield code="4">ctb</subfield>
+    </datafield>
+    <datafield tag="850" ind1=" " ind2=" ">
+      <subfield code="a">DE-101a</subfield>
+    </datafield>
+    <datafield tag="883" ind1="1" ind2=" ">
+      <subfield code="8">1\p</subfield>
+      <subfield code="a">zzz</subfield>
+      <subfield code="d">20260226</subfield>
+      <subfield code="q">DE-101</subfield>
+      <subfield code="u">https://d-nb.info/provenance/plan#zzz</subfield>
+    </datafield>
+    <datafield tag="925" ind1="r" ind2=" ">
+      <subfield code="a">rm</subfield>
+    </datafield>
+  </record></recordData><recordPosition>2</recordPosition></record><record><recordSchema>MARC21-xml</recordSchema><recordPacking>xml</recordPacking><recordData><record xmlns="http://www.loc.gov/MARC21/slim" type="Bibliographic">
+    <leader>00000ncm a22000008c 4500</leader>
+    <controlfield tag="001">1003556256</controlfield>
+    <controlfield tag="003">DE-101</controlfield>
+    <controlfield tag="005">20171202152917.0</controlfield>
+    <controlfield tag="007">q|</controlfield>
+    <controlfield tag="008">100616s1955    gw |||||r|||||||||||ger  </controlfield>
+    <datafield tag="016" ind1="7" ind2=" ">
+      <subfield code="2">DE-101</subfield>
+      <subfield code="a">1003556256</subfield>
+    </datafield>
+    <datafield tag="028" ind1="3" ind2="2">
+      <subfield code="a">BA 4501</subfield>
+    </datafield>
+    <datafield tag="035" ind1=" " ind2=" ">
+      <subfield code="a">(DE-599)DNB1003556256</subfield>
+    </datafield>
+    <datafield tag="040" ind1=" " ind2=" ">
+      <subfield code="a">1340</subfield>
+      <subfield code="b">ger</subfield>
+      <subfield code="c">DE-101</subfield>
+      <subfield code="d">9999</subfield>
+    </datafield>
+    <datafield tag="041" ind1=" " ind2=" ">
+      <subfield code="a">ger</subfield>
+    </datafield>
+    <datafield tag="044" ind1=" " ind2=" ">
+      <subfield code="c">XA-DE</subfield>
+    </datafield>
+    <datafield tag="082" ind1="7" ind2="4">
+      <subfield code="8">1\p</subfield>
+      <subfield code="a">780</subfield>
+      <subfield code="q">DE-101</subfield>
+      <subfield code="2">22sdnb</subfield>
+    </datafield>
+    <datafield tag="100" ind1="1" ind2=" ">
+      <subfield code="a">Mozart, Wolfgang Amadeus</subfield>
+      <subfield code="e">Komponist</subfield>
+      <subfield code="4">cmp</subfield>
+    </datafield>
+    <datafield tag="245" ind1="1" ind2="0">
+      <subfield code="a">Werke für 2 Klaviere</subfield>
+    </datafield>
+    <datafield tag="264" ind1=" " ind2="1">
+      <subfield code="a">Kassel [u.a.]</subfield>
+      <subfield code="b">Bärenreiter-Verlag</subfield>
+      <subfield code="c">1955</subfield>
+    </datafield>
+    <datafield tag="336" ind1=" " ind2=" ">
+      <subfield code="a">Noten</subfield>
+      <subfield code="b">ntm</subfield>
+      <subfield code="2">rdacontent</subfield>
+    </datafield>
+    <datafield tag="337" ind1=" " ind2=" ">
+      <subfield code="a">ohne Hilfsmittel zu benutzen</subfield>
+      <subfield code="b">n</subfield>
+      <subfield code="2">rdamedia</subfield>
+    </datafield>
+    <datafield tag="338" ind1=" " ind2=" ">
+      <subfield code="a">Band</subfield>
+      <subfield code="b">nc</subfield>
+      <subfield code="2">rdacarrier</subfield>
+    </datafield>
+    <datafield tag="490" ind1="1" ind2=" ">
+      <subfield code="a">Neue Ausgabe sämtlicher Werke / Wolfgang Amadeus Mozart</subfield>
+      <subfield code="v">Ser. 9, Werkgruppe 24, Abt. 1</subfield>
+    </datafield>
+    <datafield tag="700" ind1="1" ind2=" ">
+      <subfield code="a">Schmid, Ernst Fritz</subfield>
+      <subfield code="e">Herausgeber</subfield>
+      <subfield code="4">edt</subfield>
+    </datafield>
+    <datafield tag="850" ind1=" " ind2=" ">
+      <subfield code="a">DE-101a</subfield>
+    </datafield>
+    <datafield tag="883" ind1="1" ind2=" ">
+      <subfield code="8">1\p</subfield>
+      <subfield code="a">zzz</subfield>
+      <subfield code="d">20260226</subfield>
+      <subfield code="q">DE-101</subfield>
+      <subfield code="u">https://d-nb.info/provenance/plan#zzz</subfield>
+    </datafield>
+    <datafield tag="925" ind1="r" ind2=" ">
+      <subfield code="a">rm</subfield>
+    </datafield>
+  </record></recordData><recordPosition>3</recordPosition></record></records><echoedSearchRetrieveRequest><version>1.1</version><query>NUM=BA 4501</query><xQuery xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/><maximumRecords>5</maximumRecords><recordSchema>MARC21-xml</recordSchema></echoedSearchRetrieveRequest></searchRetrieveResponse>

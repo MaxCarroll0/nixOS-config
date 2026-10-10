@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% set active = 'valuation' %}
+{% import "_badges.html" as badges %}
+{% block title %}Value · Bookshelf{% endblock %}
+
+{% block body %}
+<h1>Valuation</h1>
+
+<section class="tiles">
+  <div class="tile"><strong>{{ paid|money }}</strong><span>actually paid</span></div>
+  <div class="tile"><strong>{{ basis|money }}</strong><span>cost basis</span></div>
+  <div class="tile"><strong>{{ totals.total|money }}</strong><span>market value</span></div>
+  <div class="tile"><strong>{{ totals.lo|money }} – {{ totals.hi|money }}</strong><span>range</span></div>
+</section>
+
+<p class="note">
+  {{ totals.evidenced|money }} of the market figure
+  ({{ (totals.evidenced_share * 100)|round|int }}%) rests on actual listings or on a
+  value you set. The remainder is the model's estimate:
+  {{ totals.counts.modelled }} of {{ totals.n }} copies have no listings at all.
+  {%- if totals.n_unvalued %} {{ totals.n_unvalued }} could not be valued.{% endif %}
+</p>
+
+{% if fit %}
+<p class="note">
+  {% if fit.is_seed %}
+    The model is still on its starting assumptions — it needs more listings before a fit
+    beats them.
+  {% else %}
+    Model fitted {{ fit.fitted_at[:10] }} on {{ fit.n_obs }} listings, residual spread
+    {{ (fit.sigma * 100)|round|int }}%{% if fit.r_squared %}, R² {{ fit.r_squared|round(2) }}{% endif %}.
+  {% endif %}
+</p>
+{% endif %}
+
+<table class="ledger">
+  <thead>
+    <tr><th>Item</th><th>Cost</th><th>Market</th><th>Basis</th></tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td>
+        <a href="/edition/{{ row.edition_id }}">
+          {{ row.composer or '—' }} · {{ row.title }}
+        </a>
+        <span class="meta">{{ row.cover_type }} · {{ row.condition.replace('_', ' ') }}</span>
+      </td>
+      <td>{{ row.cost_basis|money(row.currency) }}</td>
+      <td>
+        {{ row.market_value|money(row.currency) }}
+        {{ badges.band(row.market_lo, row.market_hi, row.currency) }}
+      </td>
+      <td>{{ badges.method(row.method, row.n_comps or 0) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
