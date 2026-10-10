@@ -33,6 +33,7 @@
     ../../modules/nixos/build-client.nix
     ../../modules/nixos/pam-ssh-agent-sudo.nix
     ../../modules/nixos/browser-sync.nix
+    ../../modules/nixos/bookshelf.nix
   ];
 
   networking.hostName = "pi";
@@ -42,6 +43,8 @@
     "observatory"
     "grafana"
     "pi.grafana"
+    "bookshelf"
+    "books"
   ];
 
   services.nginx = {
@@ -281,6 +284,14 @@
     idleMinutes = 60;
   };
 
+  local.bookshelf = {
+    enable = true;
+    tailnetAddress = "100.117.13.66";
+    identityLogin = "MaxCarroll0@github";
+    refresh.enable = true;
+    backup.enable = true;
+  };
+
   local.servicePriority = {
     enable = true;
     swappiness = 150;
@@ -296,6 +307,7 @@
     throttle = {
       "victoriametrics.service" = "256M";
       "victoriametrics-history.service" = "128M";
+      "bookshelf.service" = "96M";
     };
   };
 

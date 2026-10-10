@@ -27,6 +27,8 @@
     "observatory"
     "grafana"
     "pi.grafana"
+    "bookshelf"
+    "books"
   ];
 
   local.atticClient = {

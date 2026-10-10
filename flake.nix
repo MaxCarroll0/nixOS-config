@@ -251,6 +251,8 @@
       packages.x86_64-linux = {
         deploy-rs = inputs.deploy-rs.packages.x86_64-linux.default;
 
+        bookshelf = (pkgsFor "x86_64-linux").callPackage ./apps/bookshelf/package.nix { };
+
         installer-iso =
           (lib.nixosSystem {
             system = "x86_64-linux";

@@ -45,6 +45,8 @@
     "observatory"
     "grafana"
     "pi.grafana"
+    "bookshelf"
+    "books"
   ];
 
   services.thermald.enable = true;
