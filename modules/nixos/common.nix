@@ -210,6 +210,16 @@ let
     '';
   };
 
+  # Every recipe addresses the flake with relative paths, so running one from
+  # elsewhere needs both the justfile and the working directory pointed at the clone.
+  nixConfig = pkgs.writeShellApplication {
+    name = "nix-config";
+    runtimeInputs = [ pkgs.just ];
+    text = ''
+      exec just --justfile ${flakePath}/justfile --working-directory ${flakePath} "$@"
+    '';
+  };
+
   projectClosureRetention = pkgs.writeShellApplication {
     name = "project-closure-retention";
     runtimeInputs = [
@@ -505,6 +515,7 @@ in
       rebuild
       activateDetached
       editSecrets
+      nixConfig
       projectClosureRetention
       pkgs.nix-sweep
       pkgs.git
