@@ -285,6 +285,12 @@ in
 
     grafana.enable = lib.mkEnableOption "Grafana with the provisioned dashboards";
 
+    grafana.domain = lib.mkOption {
+      type = lib.types.str;
+      default = "localhost";
+      description = "Name Grafana believes it is served as, which its redirects are built from.";
+    };
+
     grafana.anonymousViewer = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -683,6 +689,8 @@ in
         settings.server = {
           http_addr = "127.0.0.1";
           http_port = 3000;
+          domain = cfg.grafana.domain;
+          root_url = "%(protocol)s://%(domain)s/";
         };
         settings.dashboards.default_home_dashboard_path = "${dashboardDir "overview"}/home.json";
         settings.security.secret_key = "$__file{${config.sops.secrets."grafana-secret-key".path}}";

@@ -198,6 +198,7 @@
     piFirmware.enable = true;
     smart.enable = true;
     grafana.anonymousViewer = true;
+    grafana.domain = "pi";
     smart.selfTest.enable = true;
     server.enable = true;
     grafana.enable = true;
