@@ -419,7 +419,7 @@ in
       defaultSopsFormat = "yaml";
 
       secrets = {
-        github-API = { };
+        github-API.owner = "max";
         exercism-API.owner = "max";
         claude-swap-export = {
           sopsFile = ../../secrets/claude-swap.json;
