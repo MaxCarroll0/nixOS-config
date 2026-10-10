@@ -69,6 +69,23 @@
         "type": "github"
       }
     },
+    "bookshelf": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791650905,
+        "narHash": "sha256-zTTuBcFayFFslbrxMBwUsdVldLsMIodFfm9KwlWGsKU=",
+        "ref": "main",
+        "rev": "1457654a470e773a69443785056a103e53dd324e",
+        "revCount": 1,
+        "type": "git",
+        "url": "ssh://git@github.com/MaxCarroll0/bookshelf"
+      },
+      "original": {
+        "ref": "main",
+        "type": "git",
+        "url": "ssh://git@github.com/MaxCarroll0/bookshelf"
+      }
+    },
     "claude-code": {
       "inputs": {
         "nixpkgs": [
@@ -910,6 +927,7 @@
     "root": {
       "inputs": {
         "anipy-cli": "anipy-cli",
+        "bookshelf": "bookshelf",
         "claude-code": "claude-code",
         "codex-cli": "codex-cli",
         "curd": "curd",

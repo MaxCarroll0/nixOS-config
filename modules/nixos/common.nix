@@ -41,7 +41,7 @@ let
       git config --global --add safe.directory ${flakePath}
       git -C ${flakePath} fetch -q origin || verdict 1 fetch-failed "cannot reach origin"
 
-      if [ -n "$(git -C ${flakePath} status --porcelain)" ]; then
+      if [ -n "$(git -C ${flakePath} status --porcelain --ignore-submodules=dirty)" ]; then
         verdict 1 dirty-clone "the clone has uncommitted changes, which an upgrade would discard"
       fi
 
@@ -129,6 +129,12 @@ let
         mapfile -t untrackedFiles <<< "$untracked"
         echo "warning: untracked files, invisible to the flake:" >&2
         printf '  %s\n' "''${untrackedFiles[@]}" >&2
+      fi
+
+      moved=$(git -C "$flake" submodule status --recursive 2>/dev/null | sed -n 's/^+//p' || true)
+      if [ -n "$moved" ]; then
+        echo "warning: a submodule is not at its committed revision; the flake builds the locked input, not this:" >&2
+        printf '  %s\n' "$moved" >&2
       fi
 
       if [ -n "$target" ]; then

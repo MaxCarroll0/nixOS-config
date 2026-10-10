@@ -61,3 +61,16 @@ installer-iso:
 # Install onto a machine booted from that ISO, planting its sops host key.
 install host target:
     scripts/bootstrap-anywhere.sh {{host}} {{target}}
+
+# Shell for the catalogue app, with its scratch database.
+bookshelf-dev:
+    nix develop ./apps/bookshelf
+
+# Build the catalogue natively and run its tests.
+bookshelf-check:
+    nix build --no-link .#bookshelf
+
+# Push the app's commits and pin the new revision; commit the result yourself.
+bookshelf-release:
+    git -C apps/bookshelf push origin HEAD:main
+    nix flake update bookshelf
