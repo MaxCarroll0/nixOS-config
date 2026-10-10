@@ -47,9 +47,7 @@
     "books"
   ];
 
-  # Grafana trusts this header absolutely and auto-assigns Admin, so only the tailnet
-  # address may carry it. An empty value is both omitted by nginx and overwrites anything
-  # the client sent, which is what keeps a local-network request anonymous.
+  # auth.proxy auto-assigns Admin, and an empty value overwrites a client-sent header.
   services.nginx.appendHttpConfig = ''
     map $server_addr $grafana_user_login {
       100.117.13.66 "MaxCarroll0@github";
@@ -95,17 +93,14 @@
     after = [ "tailscaled.service" ];
     wants = [ "tailscaled.service" ];
   };
-  # end0 and wld0 can land on the same subnet, and an interface-scoped rule then stops
-  # matching reliably, so both are opened rather than whichever happens to be up.
+  # end0 and wld0 on one subnet break interface-scoped matching, so open both.
   networking.firewall.interfaces = {
     tailscale0.allowedTCPPorts = [ 80 ];
     wld0.allowedTCPPorts = [ 80 ];
     end0.allowedTCPPorts = [ 80 ];
   };
 
-  # Grafana was the only vhost on this address and so was nginx's default server for it;
-  # keep that now the catalogue shares the address, or a request with an unknown Host
-  # lands on the catalogue instead.
+  # First server block on an address is nginx's default; the catalogue now shares it.
   services.nginx.virtualHosts.observatory.default = true;
 
   swapDevices = lib.mkForce [
@@ -144,8 +139,6 @@
       "wld0"
       "end0"
     ];
-    # Grafana and the catalogue answer on the local network as well, anonymously: the
-    # vhosts hand an identity to tailnet requests only, so admin stays on the tailnet.
     allowLanTCPPorts = [
       80
       8080

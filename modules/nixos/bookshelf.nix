@@ -120,9 +120,7 @@ let
   ];
   tlsPorts = [ cfg.tls.port ];
 
-  # 443 is shared with the binary cache, whose vhost listens on the wildcard address.
-  # Binding 443 per-address would take precedence over that wildcard and swallow every
-  # request for the cache, so this one listener stays wildcard and server_name decides.
+  # The binary cache holds wildcard 443; a per-address listener would shadow it.
   sharedTlsListeners = lib.optionals cfg.tls.enable [
     {
       addr = "0.0.0.0";
@@ -310,9 +308,7 @@ in
         description = "sops secret holding the certificate's private key.";
       };
 
-      # A phone resolves the node name and nothing else, and that name already belongs to
-      # another vhost on 443, so the catalogue needs a port of its own to be the only
-      # thing answering there.
+      # The node name already belongs to another vhost on 443.
       port = lib.mkOption {
         type = lib.types.port;
         default = 8443;
@@ -549,9 +545,7 @@ in
       };
     };
 
-    # Which address a request arrived on decides whether it carries an identity. An
-    # empty value is omitted by nginx *and* overwrites anything the client sent, so a
-    # machine on the local network cannot simply claim to be someone.
+    # An empty value is omitted by nginx and overwrites a client-sent header.
     services.nginx.appendHttpConfig = ''
       map $server_addr $bookshelf_identity {
         ${cfg.tailnetAddress} "${cfg.identityLogin}";
