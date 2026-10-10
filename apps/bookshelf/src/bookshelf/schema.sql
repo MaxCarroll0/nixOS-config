@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS edition (
   music_key         TEXT,
   instrumentation   TEXT,
   gnd_work_id       TEXT,
+  description       TEXT,
+  subjects          TEXT,
   kind              TEXT NOT NULL DEFAULT 'score',
   resolved_from     TEXT NOT NULL DEFAULT 'manual',
   source_ref        TEXT,

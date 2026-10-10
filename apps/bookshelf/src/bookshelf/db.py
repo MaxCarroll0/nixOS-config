@@ -138,6 +138,8 @@ def index_edition(conn: sqlite3.Connection, edition_id: int) -> None:
         edition["uniform_title"],
         edition["catalogue_label"],
         edition["instrumentation"],
+        edition["subjects"],
+        edition["description"],
         edition["uniform_titles"],
     ]
     conn.execute(

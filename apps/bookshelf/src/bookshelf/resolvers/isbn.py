@@ -13,10 +13,12 @@ from typing import Any, Final
 
 import isbnlib
 
-from bookshelf.fetch import Fetcher
+from bookshelf.fetch import Fetcher, ProviderUnavailable
 from bookshelf.models import Candidate, Kind
 
 OPEN_LIBRARY: Final = "https://openlibrary.org/api/books"
+OPEN_LIBRARY_ISBN: Final = "https://openlibrary.org/isbn"
+OPEN_LIBRARY_BASE: Final = "https://openlibrary.org"
 GOOGLE_BOOKS: Final = "https://www.googleapis.com/books/v1/volumes"
 
 
@@ -74,6 +76,9 @@ class IsbnResolver:
         publishers = record.get("publishers") or []
         authors = record.get("authors") or []
         pages = record.get("number_of_pages")
+        subjects = [str(s["name"]) for s in (record.get("subjects") or []) if s.get("name")]
+
+        description = await self._description(isbn13, fetcher)
         return [
             Candidate(
                 source="openlibrary",
@@ -85,10 +90,42 @@ class IsbnResolver:
                 isbn13=isbn13,
                 year=_year(record.get("publish_date")),
                 pages=int(pages) if isinstance(pages, int) else None,
+                description=description,
+                subjects=subjects[:12],
                 kind=Kind.BOOK,
                 score=0.85,
             )
         ]
+
+    async def _description(self, isbn13: str, fetcher: Fetcher) -> str | None:
+        """Open Library keeps prose on the *work*, not the edition, so follow the link."""
+        try:
+            edition = json.loads(
+                await fetcher.get(
+                    f"{OPEN_LIBRARY_ISBN}/{isbn13}.json", provider="openlibrary", interval=1.0
+                )
+                or "{}"
+            )
+            works = edition.get("works") or []
+            if not works:
+                return None
+            key = str(works[0].get("key") or "")
+            if not key:
+                return None
+            work = json.loads(
+                await fetcher.get(
+                    f"{OPEN_LIBRARY_BASE}{key}.json", provider="openlibrary", interval=1.0
+                )
+                or "{}"
+            )
+        except ProviderUnavailable:
+            return None
+
+        # The field is sometimes a bare string and sometimes a typed-value object.
+        raw = work.get("description")
+        if isinstance(raw, dict):
+            raw = raw.get("value")
+        return str(raw).strip() if raw else None
 
     async def _google(self, isbn13: str, fetcher: Fetcher) -> list[Candidate]:
         from bookshelf.config import SETTINGS
@@ -105,6 +142,7 @@ class IsbnResolver:
         for item in payload.get("items") or []:
             info = item.get("volumeInfo") or {}
             authors = info.get("authors") or []
+            categories = [str(c) for c in (info.get("categories") or [])]
             out.append(
                 Candidate(
                     source="googlebooks",
@@ -117,6 +155,10 @@ class IsbnResolver:
                     isbn13=isbn13,
                     year=_year(info.get("publishedDate")),
                     pages=info.get("pageCount") if isinstance(info.get("pageCount"), int) else None,
+                    description=str(info["description"]).strip()
+                    if info.get("description")
+                    else None,
+                    subjects=categories[:12],
                     kind=Kind.BOOK,
                     score=0.8,
                 )

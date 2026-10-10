@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-from bookshelf import comps, db, store
+from bookshelf import comps, db, enrich, store
 from bookshelf.config import SETTINGS, Settings
 from bookshelf.fetch import Fetcher, ProviderUnavailable
 from bookshelf.models import CompObservation, Estimate, Method
@@ -31,6 +31,7 @@ class Report:
 
     editions_checked: int = 0
     comps_added: int = 0
+    movements_added: int = 0
     valuations_written: int = 0
     problems: list[str] = field(default_factory=list)
     fit: dict[str, Any] = field(default_factory=dict)
@@ -39,6 +40,7 @@ class Report:
         bits = [
             f"{self.editions_checked} editions",
             f"{self.comps_added} new comps",
+            f"{self.movements_added} movements",
             f"{self.valuations_written} valuations",
         ]
         if self.fit:
@@ -120,6 +122,42 @@ def _store_comps(
         )
         added += 1 if cursor.rowcount else 0
     return added
+
+
+async def enrich_contents(
+    conn: sqlite3.Connection,
+    fetcher: Fetcher,
+    report: Report,
+    *,
+    limit: int = 20,
+) -> None:
+    """Fill in movement lists for works that have none yet.
+
+    Capped per run because MusicBrainz asks for one request a second and there is no
+    hurry: a volume's movements do not change.
+    """
+    rows = db.all_rows(
+        conn,
+        """SELECT DISTINCT ec.edition_id
+           FROM edition_content ec
+           JOIN work w ON w.id = ec.work_id
+           JOIN copy c ON c.edition_id = ec.edition_id
+           WHERE w.mb_work_id IS NULL
+             AND NOT EXISTS (SELECT 1 FROM movement m WHERE m.work_id = w.id)
+           LIMIT ?""",
+        limit,
+    )
+
+    for row in rows:
+        try:
+            report.movements_added += await enrich.enrich_edition(
+                conn, int(row["edition_id"]), fetcher
+            )
+        except ProviderUnavailable as exc:
+            report.problems.append(str(exc))
+            # One refusal means the service is busy; the rest of the run would fare
+            # no better, and it will be retried tomorrow.
+            break
 
 
 async def cost_basis(
@@ -246,6 +284,7 @@ async def run(
         async with Fetcher(conn, settings) as fetcher:
             if not skip_comps:
                 await refresh_comps(conn, fetcher, report, settings=settings)
+                await enrich_contents(conn, fetcher, report)
 
             if not skip_fit:
                 # Imported here and nowhere else: this pulls in scipy, and the web

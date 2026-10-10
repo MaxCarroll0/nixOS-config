@@ -11,6 +11,7 @@ from bookshelf import db
 from bookshelf.models import (
     Candidate,
     Condition,
+    ContentItem,
     CoverType,
     Estimate,
     Kind,
@@ -65,6 +66,8 @@ def save_candidate(conn: sqlite3.Connection, candidate: Candidate) -> int:
         "music_key": candidate.music_key,
         "instrumentation": candidate.instrumentation,
         "gnd_work_id": candidate.gnd_work_id,
+        "description": candidate.description,
+        "subjects": ", ".join(candidate.subjects) or None,
         "kind": candidate.kind.value,
         "resolved_from": candidate.source,
         "source_ref": candidate.source_ref,
@@ -102,8 +105,24 @@ def save_candidate(conn: sqlite3.Connection, candidate: Candidate) -> int:
 
 
 def _save_contents(conn: sqlite3.Connection, edition_id: int, candidate: Candidate) -> None:
-    if not candidate.contents:
+    """Record what is inside an edition, as one work per piece.
+
+    An edition of a single work gets one entry rather than none, so that every edition
+    has a work to hang movements off and the two cases -- an anthology and a single
+    sonata -- are stored the same way.
+    """
+    contents = candidate.contents
+    if not contents and (candidate.uniform_title or candidate.title):
+        contents = [
+            ContentItem(
+                ordinal=1,
+                label=candidate.title,
+                work_title=candidate.uniform_title or candidate.title,
+            )
+        ]
+    if not contents:
         return
+
     already = db.scalar(
         conn, "SELECT COUNT(*) FROM edition_content WHERE edition_id = ?", edition_id
     )
@@ -111,7 +130,7 @@ def _save_contents(conn: sqlite3.Connection, edition_id: int, candidate: Candida
         return
 
     person_id = db.scalar(conn, "SELECT person_id FROM edition WHERE id = ?", edition_id)
-    for item in candidate.contents:
+    for item in contents:
         title = item.work_title or item.label
         work_id = db.scalar(
             conn,
@@ -121,7 +140,14 @@ def _save_contents(conn: sqlite3.Connection, edition_id: int, candidate: Candida
         )
         if work_id is None:
             work_id = db.insert(
-                conn, "work", person_id=person_id, title=title, uniform_title=item.work_title
+                conn,
+                "work",
+                person_id=person_id,
+                title=title,
+                uniform_title=item.work_title,
+                catalogue_label=candidate.catalogue_label if item.ordinal == 1 else None,
+                music_key=candidate.music_key if item.ordinal == 1 else None,
+                mb_work_id=None,
             )
         db.insert(
             conn,

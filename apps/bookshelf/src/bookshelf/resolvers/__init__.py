@@ -133,11 +133,14 @@ def _combine(one: Candidate, other: Candidate) -> Candidate:
             "pages",
             "extent",
             "edition_statement",
+            "description",
         )
         if getattr(richer, field) in (None, "") and getattr(poorer, field) not in (None, "")
     }
     if not richer.contents and poorer.contents:
         gaps["contents"] = poorer.contents
+    if not richer.subjects and poorer.subjects:
+        gaps["subjects"] = poorer.subjects
     # The better-scoring source stays the headline, but a confirmed match from a second
     # source is worth more than either alone.
     gaps["score"] = min(1.0, max(richer.score, poorer.score) + 0.03)

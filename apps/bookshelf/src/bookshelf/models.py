@@ -116,6 +116,11 @@ class Candidate(BaseModel):
     price_new: float | None = None
     price_currency: str | None = None
 
+    #: Publisher's or library's prose about the work; books have it, scores rarely do.
+    description: str | None = None
+    #: Subject headings, which make a serviceable automatic category.
+    subjects: list[str] = Field(default_factory=list)
+
     kind: Kind = Kind.SCORE
     contents: list[ContentItem] = Field(default_factory=list)
     score: Annotated[float, Field(ge=0.0, le=1.0)] = 0.5
