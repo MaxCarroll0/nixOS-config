@@ -118,22 +118,37 @@ let
     80
     cfg.tailnetPort
   ];
-  # Deliberately not 443: the binary cache's vhost is on the wildcard address there, and
-  # an address-specific listener would shadow it, so a request for it would arrive at the
-  # catalogue instead.
   tlsPorts = [ cfg.tls.port ];
+
+  # 443 is shared with the binary cache, whose vhost listens on the wildcard address.
+  # Binding 443 per-address would take precedence over that wildcard and swallow every
+  # request for the cache, so this one listener stays wildcard and server_name decides.
+  sharedTlsListeners = lib.optionals cfg.tls.enable [
+    {
+      addr = "0.0.0.0";
+      port = 443;
+      ssl = true;
+    }
+    {
+      addr = "[::0]";
+      port = 443;
+      ssl = true;
+    }
+  ];
   listenPorts = plainPorts ++ lib.optionals cfg.tls.enable tlsPorts;
 
-  listeners = lib.concatMap (
-    addr:
-    map (port: { inherit addr port; }) plainPorts
-    ++ lib.optionals cfg.tls.enable (
-      map (port: {
-        inherit addr port;
-        ssl = true;
-      }) tlsPorts
-    )
-  ) listenAddresses;
+  listeners =
+    lib.concatMap (
+      addr:
+      map (port: { inherit addr port; }) plainPorts
+      ++ lib.optionals cfg.tls.enable (
+        map (port: {
+          inherit addr port;
+          ssl = true;
+        }) tlsPorts
+      )
+    ) listenAddresses
+    ++ sharedTlsListeners;
 
   hardening = {
     CapabilityBoundingSet = [ "" ];
