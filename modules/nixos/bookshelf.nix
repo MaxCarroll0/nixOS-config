@@ -65,12 +65,26 @@ let
       pkgs.git
       pkgs.coreutils
       pkgs.openssh
+      pkgs.inetutils
     ];
     # A text dump, not the binary file: git stores a readable diff of what changed and
     # a few edits cost a few lines rather than a fresh copy of the whole database.
     text = ''
       repo=${cfg.backup.workTree}
       install -d -m 0700 "$repo"
+
+      ${lib.optionalString (cfg.backup.remote != null) ''
+        # Mint the deploy key on first run and print it, so the only manual step is
+        # pasting it into the repository's deploy keys. The private half never leaves
+        # this host.
+        if [ ! -f ${cfg.backup.identityFile} ]; then
+          install -d -m 0700 "$(dirname ${cfg.backup.identityFile})"
+          ssh-keygen -q -t ed25519 -N "" -C "bookshelf-backup@$(hostname)" \
+            -f ${cfg.backup.identityFile}
+          echo "a deploy key was generated; add it to ${cfg.backup.remote} with write access:" >&2
+          cat ${cfg.backup.identityFile}.pub >&2
+        fi
+      ''}
 
       if [ ! -d "$repo/.git" ]; then
         git -C "$repo" init -q -b main
@@ -91,14 +105,14 @@ let
       echo "committed: $rows lines changed"
 
       ${lib.optionalString (cfg.backup.remote != null) ''
-        if [ -z "''${BOOKSHELF_BACKUP_TOKEN:-}" ]; then
-          echo "warning: no push token; the commit is local only" >&2
+        if [ ! -r ${cfg.backup.identityFile} ]; then
+          echo "warning: no deploy key at ${cfg.backup.identityFile}; the commit is local only" >&2
           exit 0
         fi
-        # The token never reaches the store or the reflog: it is spliced in here and the
-        # remote is addressed by URL rather than being saved as one.
-        url="https://x-access-token:$BOOKSHELF_BACKUP_TOKEN@${cfg.backup.remote}"
-        git -C "$repo" push -q "$url" HEAD:${cfg.backup.branch} \
+        # A failed push must not fail the unit: the commit is already made and the next
+        # run will carry it, so a flaky network costs nothing.
+        GIT_SSH_COMMAND="ssh -i ${cfg.backup.identityFile} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+          git -C "$repo" push -q "${cfg.backup.remote}" HEAD:${cfg.backup.branch} \
           || { echo "push failed; the commit is local and will go next time" >&2; exit 0; }
         echo "pushed to ${cfg.backup.remote}"
       ''}
@@ -289,8 +303,8 @@ in
       remote = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        example = "github.com/MaxCarroll0/bookshelf-data.git";
-        description = "Host and path to push to, without a scheme; null keeps history local.";
+        example = "git@github.com:MaxCarroll0/bookshelf-data.git";
+        description = "SSH remote to push to; null keeps the history local to this host.";
       };
 
       branch = lib.mkOption {
@@ -299,10 +313,10 @@ in
         description = "Branch to push the dump to.";
       };
 
-      tokenSecret = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "sops secret holding the push token; null keeps history local.";
+      identityFile = lib.mkOption {
+        type = lib.types.str;
+        default = "/var/lib/bookshelf-backup/.ssh/id_ed25519";
+        description = "Deploy key the push authenticates with; scoped to that one repository.";
       };
 
       authorName = lib.mkOption {
@@ -339,32 +353,21 @@ in
     ]
     ++ lib.optional cfg.backup.enable "d ${cfg.backup.workTree} 0700 ${cfg.user} ${cfg.user} - -";
 
-    sops.secrets =
-      lib.genAttrs (lib.attrValues cfg.apiKeySecrets) (_: {
-        restartUnits = [ "bookshelf.service" ];
-      })
-      // lib.optionalAttrs (cfg.backup.tokenSecret != null) {
-        ${cfg.backup.tokenSecret}.owner = cfg.user;
-      };
+    sops.secrets = lib.genAttrs (lib.attrValues cfg.apiKeySecrets) (_: {
+      restartUnits = [ "bookshelf.service" ];
+    });
 
-    sops.templates =
-      lib.optionalAttrs (cfg.apiKeySecrets != { }) {
-        "bookshelf-env" = {
-          content = lib.concatStrings (
-            lib.mapAttrsToList (
-              variable: secret: "${variable}=${config.sops.placeholder.${secret}}\n"
-            ) cfg.apiKeySecrets
-          );
-          owner = cfg.user;
-          restartUnits = [ "bookshelf.service" ];
-        };
-      }
-      // lib.optionalAttrs (cfg.backup.tokenSecret != null) {
-        "bookshelf-backup-env" = {
-          content = "BOOKSHELF_BACKUP_TOKEN=${config.sops.placeholder.${cfg.backup.tokenSecret}}\n";
-          owner = cfg.user;
-        };
+    sops.templates = lib.optionalAttrs (cfg.apiKeySecrets != { }) {
+      "bookshelf-env" = {
+        content = lib.concatStrings (
+          lib.mapAttrsToList (
+            variable: secret: "${variable}=${config.sops.placeholder.${secret}}\n"
+          ) cfg.apiKeySecrets
+        );
+        owner = cfg.user;
+        restartUnits = [ "bookshelf.service" ];
       };
+    };
 
     systemd.services.bookshelf = {
       description = "Book and sheet-music catalogue";
@@ -439,9 +442,6 @@ in
       serviceConfig = hardening // {
         Type = "oneshot";
         ExecStart = lib.getExe backup;
-        EnvironmentFile = lib.mkIf (
-          cfg.backup.tokenSecret != null
-        ) config.sops.templates."bookshelf-backup-env".path;
         User = cfg.user;
         Group = cfg.user;
         MemoryMax = "128M";
@@ -523,8 +523,8 @@ in
         message = "local.bookshelf.backup.workTree must sit outside stateDir, or a backup would be dumped into the thing it is backing up.";
       }
       {
-        assertion = (cfg.backup.remote == null) == (cfg.backup.tokenSecret == null);
-        message = "local.bookshelf.backup needs a remote and a tokenSecret together; one without the other either cannot push or has nothing to push to.";
+        assertion = cfg.backup.remote == null || lib.hasPrefix "git@" cfg.backup.remote;
+        message = "local.bookshelf.backup.remote must be an SSH remote (git@host:owner/repo.git); the push authenticates with a deploy key, not a token.";
       }
       {
         assertion = !cfg.scrapers || cfg.refresh.enable;
