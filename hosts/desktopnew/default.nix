@@ -2,6 +2,7 @@
 
 {
   config,
+  lib,
   pkgs,
   pkgs-unstable,
   ...
@@ -66,9 +67,24 @@ in
     configFile = ./fan2go-full.yaml;
   };
 
-  environment.systemPackages = [ caseTemp ];
+  environment.systemPackages = [
+    caseTemp
+    # cec-ctl, to ask the HDMI panel whether it is actually on.
+    pkgs.v4l-utils
+  ];
   # arctic_fan_controller, for the 10-port USB fan controller, is new in 7.2.
   boot.kernelPackages = pkgs-unstable.linuxPackages_testing;
+
+  # The panel is indistinguishable off from on over HPD, DPMS, EDID, HDA ELD and
+  # DDC/CI -- all measured identical 2026-10-10. CEC is the only channel left,
+  # and CEC_CORE without MEDIA_CEC_SUPPORT builds the notifier but no /dev/cec*.
+  boot.kernelPatches = [
+    {
+      name = "media-cec-support";
+      patch = null;
+      structuredExtraConfig.MEDIA_CEC_SUPPORT = lib.kernel.yes;
+    }
+  ];
 
   boot.extraModulePackages = [ config.boot.kernelPackages.zenpower ];
   boot.kernelModules = [ "zenpower" ];
