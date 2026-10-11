@@ -68,6 +68,8 @@
         "pi.grafana"
         "pi"
         "pi.taild5b88a.ts.net"
+        "observatory.local"
+        "grafana.local"
       ];
       listen = [
         {
@@ -314,6 +316,11 @@
     apmLevel = 254;
     idleMinutes = 60;
   };
+
+  local.mdns.names = [
+    "observatory.local"
+    "grafana.local"
+  ];
 
   local.bookshelf = {
     enable = true;

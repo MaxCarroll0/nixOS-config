@@ -115,13 +115,6 @@ let
 
   mdnsNames = lib.optionals cfg.lan.enable cfg.lan.mdnsNames;
 
-  publishMdns = pkgs.writeShellScript "bookshelf-mdns" ''
-    ${lib.concatMapStringsSep "\n" (name: ''
-      ${pkgs.avahi}/bin/avahi-publish --address --no-reverse ${lib.escapeShellArg name} ${cfg.lan.address} &
-    '') mdnsNames}
-    wait -n
-  '';
-
   listenAddresses = [ cfg.tailnetAddress ] ++ lib.optional cfg.lan.enable cfg.lan.address;
   listenInterfaces = [ cfg.interface ] ++ lib.optionals cfg.lan.enable cfg.lan.interfaces;
 
@@ -201,6 +194,8 @@ let
 in
 
 {
+  imports = [ ./mdns-aliases.nix ];
+
   options.local.bookshelf = {
     enable = lib.mkEnableOption "the book and sheet-music catalogue";
 
@@ -547,30 +542,9 @@ in
       };
     };
 
-    services.avahi = lib.mkIf (mdnsNames != [ ]) {
-      enable = true;
-      nssmdns4 = true;
-      publish = {
-        enable = true;
-        addresses = true;
-        # avahi refuses an entry group from any client, address records included, while
-        # user-service publishing is off: "Failed to create entry group: Not permitted".
-        userServices = true;
-      };
-    };
-
-    systemd.services.bookshelf-mdns = lib.mkIf (mdnsNames != [ ]) {
-      description = "Publish the catalogue's names over mDNS";
-      after = [ "avahi-daemon.service" ];
-      wants = [ "avahi-daemon.service" ];
-      wantedBy = [ "multi-user.target" ];
-      serviceConfig = hardening // {
-        ExecStart = publishMdns;
-        Restart = "always";
-        RestartSec = "10s";
-        DynamicUser = true;
-        MemoryMax = "32M";
-      };
+    local.mdns = {
+      address = lib.mkDefault cfg.lan.address;
+      names = mdnsNames;
     };
 
     systemd.services.bookshelf-works = lib.mkIf cfg.works.enable {
