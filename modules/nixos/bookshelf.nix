@@ -113,6 +113,15 @@ let
   # sits under /var/lib/bookshelf. Paths have to be compared at a component boundary.
   under = parent: path: path == parent || lib.hasPrefix "${parent}/" path;
 
+  mdnsNames = lib.optionals cfg.lan.enable cfg.lan.mdnsNames;
+
+  publishMdns = pkgs.writeShellScript "bookshelf-mdns" ''
+    ${lib.concatMapStringsSep "\n" (name: ''
+      ${pkgs.avahi}/bin/avahi-publish --address --no-reverse ${lib.escapeShellArg name} ${cfg.lan.address} &
+    '') mdnsNames}
+    wait -n
+  '';
+
   listenAddresses = [ cfg.tailnetAddress ] ++ lib.optional cfg.lan.enable cfg.lan.address;
   listenInterfaces = [ cfg.interface ] ++ lib.optionals cfg.lan.enable cfg.lan.interfaces;
 
@@ -333,6 +342,15 @@ in
         description = "Local interfaces to open the ports on.";
       };
 
+      mdnsNames = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [
+          "bookshelf.local"
+          "books.local"
+        ];
+        description = "Names published over mDNS, for LAN devices with no Tailscale.";
+      };
+
       readOnly = lib.mkOption {
         type = lib.types.bool;
         default = false;
@@ -529,6 +547,29 @@ in
       };
     };
 
+    services.avahi = lib.mkIf (mdnsNames != [ ]) {
+      enable = true;
+      nssmdns4 = true;
+      publish = {
+        enable = true;
+        addresses = true;
+      };
+    };
+
+    systemd.services.bookshelf-mdns = lib.mkIf (mdnsNames != [ ]) {
+      description = "Publish the catalogue's names over mDNS";
+      after = [ "avahi-daemon.service" ];
+      wants = [ "avahi-daemon.service" ];
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig = hardening // {
+        ExecStart = publishMdns;
+        Restart = "always";
+        RestartSec = "10s";
+        DynamicUser = true;
+        MemoryMax = "32M";
+      };
+    };
+
     systemd.services.bookshelf-works = lib.mkIf cfg.works.enable {
       description = "Fill out one slice of the works tree";
       after = [
@@ -607,7 +648,7 @@ in
       enable = true;
       recommendedProxySettings = true;
       virtualHosts.${cfg.hostname} = {
-        serverAliases = cfg.serverAliases;
+        serverAliases = lib.unique (cfg.serverAliases ++ mdnsNames);
         addSSL = cfg.tls.enable;
         sslCertificate = lib.mkIf cfg.tls.enable cfg.tls.certificate;
         sslCertificateKey = lib.mkIf cfg.tls.enable config.sops.secrets.${cfg.tls.keySecret}.path;
