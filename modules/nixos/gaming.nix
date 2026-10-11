@@ -53,12 +53,14 @@ in
 
     # A game holds an idle inhibitor, never a sleep one, and a paused game drops
     # below the load threshold, so without this the idle watcher suspends it.
-    programs.gamemode.settings = lib.mkIf config.local.power.idle.autosuspend.keepAwake {
-      custom = {
-        start = "${lib.getExe config.local.power.keepAwakePackage} --take gamemode --why 'game running'";
-        end = "${lib.getExe config.local.power.keepAwakePackage} --release gamemode";
-      };
-    };
+    programs.gamemode.settings =
+      lib.mkIf ((config.local ? power) && config.local.power.idle.autosuspend.keepAwake)
+        {
+          custom = {
+            start = "${lib.getExe config.local.power.keepAwakePackage} --take gamemode --why 'game running'";
+            end = "${lib.getExe config.local.power.keepAwakePackage} --release gamemode";
+          };
+        };
 
     environment.systemPackages = [
       steamNovpn
