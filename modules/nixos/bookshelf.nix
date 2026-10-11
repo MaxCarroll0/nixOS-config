@@ -31,6 +31,8 @@ let
     #
     # The response cache and the full-text index are derived -- the first refetches, the
     # second is rebuilt by --reindex -- and both would dwarf the catalogue in a history.
+    # The search% pattern is what excludes them, shadow tables included, so every FTS
+    # table in schema.sql has to be named search-something or the dump will not restore.
     #
     # Not a read-only connection: opening a WAL database with mode=ro fails when no
     # writer holds the -shm file open, which is exactly the service-stopped case.
@@ -360,6 +362,22 @@ in
       };
     };
 
+    works = {
+      enable = lib.mkEnableOption "continuous filling out of the works tree";
+
+      interval = lib.mkOption {
+        type = lib.types.str;
+        default = "20m";
+        description = "How often one bounded slice of works enrichment runs.";
+      };
+
+      slice = lib.mkOption {
+        type = lib.types.int;
+        default = 20;
+        description = "Works asked about per run; MusicBrainz allows one request a second.";
+      };
+    };
+
     backup = {
       enable = lib.mkEnableOption "a daily commit of the catalogue to a git repository";
 
@@ -508,6 +526,36 @@ in
         OnCalendar = cfg.refresh.startAt;
         Persistent = true;
         RandomizedDelaySec = "20m";
+      };
+    };
+
+    systemd.services.bookshelf-works = lib.mkIf cfg.works.enable {
+      description = "Fill out one slice of the works tree";
+      after = [
+        "network-online.target"
+        "bookshelf.service"
+      ];
+      wants = [ "network-online.target" ];
+      inherit environment;
+      serviceConfig = hardening // {
+        Type = "oneshot";
+        ExecStart = "${lib.getExe cfg.package} --enrich-works --slice ${toString cfg.works.slice} --database ${cfg.databasePath}";
+        User = cfg.user;
+        Group = cfg.user;
+        MemoryMax = "192M";
+        WorkingDirectory = cfg.stateDir;
+        ReadWritePaths = [ cfg.stateDir ];
+        Nice = 19;
+        IOSchedulingClass = "idle";
+      };
+    };
+
+    systemd.timers.bookshelf-works = lib.mkIf cfg.works.enable {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "10m";
+        OnUnitInactiveSec = cfg.works.interval;
+        RandomizedDelaySec = "5m";
       };
     };
 
