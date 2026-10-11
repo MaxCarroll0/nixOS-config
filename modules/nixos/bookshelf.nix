@@ -553,6 +553,9 @@ in
       publish = {
         enable = true;
         addresses = true;
+        # avahi refuses an entry group from any client, address records included, while
+        # user-service publishing is off: "Failed to create entry group: Not permitted".
+        userServices = true;
       };
     };
 
