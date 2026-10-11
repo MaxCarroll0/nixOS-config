@@ -642,6 +642,12 @@ in
         ${cfg.tailnetAddress} "${cfg.identityLogin}";
         default "";
       }
+
+      map "$bookshelf_identity:$request_method" $bookshelf_denied {
+        "~^:(GET|HEAD)$" 0;
+        "~^:"            1;
+        default          0;
+      }
     '';
 
     services.nginx = {
@@ -660,8 +666,8 @@ in
             client_max_body_size 4m;
           ''
           + lib.optionalString cfg.lan.readOnly ''
-            if ($bookshelf_identity = "") {
-              limit_except GET HEAD { deny all; }
+            if ($bookshelf_denied) {
+              return 403;
             }
           '';
         };
