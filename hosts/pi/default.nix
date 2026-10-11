@@ -328,6 +328,7 @@
     };
     lan = {
       enable = true;
+      readOnly = true;
       address = "192.168.200.81";
       interfaces = [
         "wld0"
