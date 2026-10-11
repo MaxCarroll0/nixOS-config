@@ -552,8 +552,10 @@ in
 
     systemd.timers.bookshelf-works = lib.mkIf cfg.works.enable {
       wantedBy = [ "timers.target" ];
+      # Relative to the timer starting, not to boot: an activation arms the timer, and
+      # OnBootSec would fire the job immediately and colour the switch with its exit code.
       timerConfig = {
-        OnBootSec = "10m";
+        OnActiveSec = cfg.works.interval;
         OnUnitInactiveSec = cfg.works.interval;
         RandomizedDelaySec = "5m";
       };
