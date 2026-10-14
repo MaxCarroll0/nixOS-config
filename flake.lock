@@ -72,11 +72,11 @@
     "bookshelf": {
       "flake": false,
       "locked": {
-        "lastModified": 1792000664,
-        "narHash": "sha256-UzZ6Lzbox89yS3q5DZMRgO1Kn99PF1jz+2hnD1GMJ3c=",
+        "lastModified": 1792005195,
+        "narHash": "sha256-oI6xOf4P+YZ59otogiB3gFGp60hEbQ7pQ6NkjOiTkQs=",
         "ref": "main",
-        "rev": "53b39c7f892d45f78caff8efc81d98fe3bfe3b9e",
-        "revCount": 53,
+        "rev": "b483d2b4c57c874de9dc46c932ff6b2dd7763283",
+        "revCount": 54,
         "type": "git",
         "url": "ssh://git@github.com/MaxCarroll0/bookshelf"
       },
