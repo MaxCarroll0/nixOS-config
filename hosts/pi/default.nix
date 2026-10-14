@@ -329,6 +329,7 @@
     refresh.enable = true;
     works.enable = true;
     backup.enable = true;
+    solver.enable = true;
     tls = {
       enable = true;
       certificate = ../../keys/bookshelf.crt;

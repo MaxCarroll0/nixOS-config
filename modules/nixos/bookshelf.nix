@@ -17,6 +17,9 @@ let
     BOOKSHELF_RESOLVERS = lib.concatStringsSep "," cfg.resolvers;
     BOOKSHELF_COMPS_PROVIDERS = lib.concatStringsSep "," cfg.compsProviders;
     BOOKSHELF_SCRAPERS = if cfg.scrapers then "1" else "0";
+  }
+  // lib.optionalAttrs cfg.solver.enable {
+    BOOKSHELF_SOLVER_URL = "http://127.0.0.1:${toString cfg.solver.port}/v1";
   };
 
   dump = pkgs.writeShellApplication {
@@ -353,6 +356,22 @@ in
       };
     };
 
+    solver = {
+      enable = lib.mkEnableOption "a local FlareSolverr, which the shops behind a JS challenge need";
+
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 8191;
+        description = "Loopback port FlareSolverr answers on.";
+      };
+
+      memoryMax = lib.mkOption {
+        type = lib.types.str;
+        default = "1500M";
+        description = "Cap on the bundled browser, which is the largest thing the pi runs.";
+      };
+    };
+
     apiKeySecrets = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
@@ -508,6 +527,45 @@ in
         MemoryMax = cfg.memoryMax;
         WorkingDirectory = cfg.stateDir;
         ReadWritePaths = [ cfg.stateDir ];
+      };
+    };
+
+    systemd.services.flaresolverr = lib.mkIf cfg.solver.enable {
+      description = "FlareSolverr: clears a JS challenge for the retail resolvers";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      environment = {
+        HOST = "127.0.0.1";
+        PORT = toString cfg.solver.port;
+        LOG_LEVEL = "warning";
+        BROWSER_TIMEOUT = "60000";
+      };
+      serviceConfig = {
+        ExecStart = lib.getExe pkgs.flaresolverr;
+        DynamicUser = true;
+        StateDirectory = "flaresolverr";
+        WorkingDirectory = "/var/lib/flaresolverr";
+        Restart = "on-failure";
+        RestartSec = 10;
+        TimeoutStopSec = 20;
+        MemoryMax = cfg.solver.memoryMax;
+        # Chromium needs an unprivileged user namespace for its own sandbox, so the
+        # unit cannot take one away from it.
+        PrivateUsers = false;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+        NoNewPrivileges = false;
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectControlGroups = true;
+        RestrictAddressFamilies = [
+          "AF_INET"
+          "AF_INET6"
+          "AF_UNIX"
+          "AF_NETLINK"
+        ];
       };
     };
 
