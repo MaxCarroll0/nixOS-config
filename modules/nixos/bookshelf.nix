@@ -251,6 +251,7 @@ in
         "isbn"
         "freetext"
         "publisher"
+        "vendor"
       ];
       description = "Identification sources to try, in order.";
     };
@@ -540,6 +541,10 @@ in
         PORT = toString cfg.solver.port;
         LOG_LEVEL = "warning";
         BROWSER_TIMEOUT = "60000";
+        # The bundled browser writes a profile under $HOME, which is / without this.
+        HOME = "/var/lib/flaresolverr";
+        XDG_CONFIG_HOME = "/var/lib/flaresolverr/.config";
+        XDG_CACHE_HOME = "/var/lib/flaresolverr/.cache";
       };
       serviceConfig = {
         ExecStart = lib.getExe pkgs.flaresolverr;
