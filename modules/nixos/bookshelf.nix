@@ -574,6 +574,33 @@ in
       };
     };
 
+    systemd.services.bookshelf-prices = lib.mkIf cfg.refresh.enable {
+      description = "Ask the shops what each edition costs new";
+      after = [
+        "network-online.target"
+        "bookshelf.service"
+      ];
+      wants = [ "network-online.target" ];
+      inherit environment;
+      serviceConfig = hardening // {
+        Type = "oneshot";
+        ExecStart = "${lib.getExe cfg.package} --refresh-prices --database ${cfg.databasePath}";
+        EnvironmentFile = lib.mkIf (cfg.apiKeySecrets != { }) config.sops.templates."bookshelf-env".path;
+        User = cfg.user;
+        Group = cfg.user;
+        MemoryMax = cfg.refresh.memoryMax;
+        WorkingDirectory = cfg.stateDir;
+        ReadWritePaths = [ cfg.stateDir ];
+        Nice = 19;
+        IOSchedulingClass = "idle";
+      };
+    };
+
+    systemd.paths.bookshelf-refresh = lib.mkIf cfg.refresh.enable {
+      wantedBy = [ "paths.target" ];
+      pathConfig.PathExists = "${cfg.stateDir}/refresh.request";
+    };
+
     systemd.services.bookshelf-refresh = lib.mkIf cfg.refresh.enable {
       description = "Refresh catalogue prices and revalue";
       after = [
@@ -584,6 +611,7 @@ in
       inherit environment;
       serviceConfig = hardening // {
         Type = "oneshot";
+        ExecStartPre = "${pkgs.coreutils}/bin/rm -f ${cfg.stateDir}/refresh.request";
         ExecStart = "${lib.getExe cfg.package} --refresh --database ${cfg.databasePath}";
         EnvironmentFile = lib.mkIf (cfg.apiKeySecrets != { }) config.sops.templates."bookshelf-env".path;
         User = cfg.user;
@@ -596,7 +624,7 @@ in
       };
     };
 
-    systemd.timers.bookshelf-refresh = lib.mkIf cfg.refresh.enable {
+    systemd.timers.bookshelf-prices = lib.mkIf cfg.refresh.enable {
       wantedBy = [ "timers.target" ];
       timerConfig = {
         OnCalendar = cfg.refresh.startAt;
