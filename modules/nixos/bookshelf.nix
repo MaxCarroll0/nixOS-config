@@ -596,11 +596,6 @@ in
       };
     };
 
-    systemd.paths.bookshelf-refresh = lib.mkIf cfg.refresh.enable {
-      wantedBy = [ "paths.target" ];
-      pathConfig.PathExists = "${cfg.stateDir}/refresh.request";
-    };
-
     systemd.services.bookshelf-refresh = lib.mkIf cfg.refresh.enable {
       description = "Refresh catalogue prices and revalue";
       after = [
@@ -611,7 +606,6 @@ in
       inherit environment;
       serviceConfig = hardening // {
         Type = "oneshot";
-        ExecStartPre = "${pkgs.coreutils}/bin/rm -f ${cfg.stateDir}/refresh.request";
         ExecStart = "${lib.getExe cfg.package} --refresh --database ${cfg.databasePath}";
         EnvironmentFile = lib.mkIf (cfg.apiKeySecrets != { }) config.sops.templates."bookshelf-env".path;
         User = cfg.user;
