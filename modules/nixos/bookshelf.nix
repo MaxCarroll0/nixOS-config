@@ -368,8 +368,14 @@ in
 
       memoryMax = lib.mkOption {
         type = lib.types.str;
-        default = "1500M";
-        description = "Cap on the bundled browser, which is the largest thing the pi runs.";
+        default = "700M";
+        description = "Cap on the bundled browser; above half the pi's RAM it takes the host down.";
+      };
+
+      memoryHigh = lib.mkOption {
+        type = lib.types.str;
+        default = "550M";
+        description = "Throttle the browser here, so it is slowed rather than killed.";
       };
     };
 
@@ -555,6 +561,7 @@ in
         RestartSec = 10;
         TimeoutStopSec = 20;
         MemoryMax = cfg.solver.memoryMax;
+        MemoryHigh = cfg.solver.memoryHigh;
         # Chromium needs an unprivileged user namespace for its own sandbox, so the
         # unit cannot take one away from it.
         PrivateUsers = false;
