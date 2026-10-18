@@ -401,6 +401,22 @@ in
       };
     };
 
+    backfill = {
+      enable = lib.mkEnableOption "asking again about entries a source could not answer";
+
+      interval = lib.mkOption {
+        type = lib.types.str;
+        default = "2h";
+        description = "How often one small batch of queued entries is chased.";
+      };
+
+      slice = lib.mkOption {
+        type = lib.types.int;
+        default = 4;
+        description = "Entries chased per pass; the pi's memory sets this, not politeness.";
+      };
+    };
+
     works = {
       enable = lib.mkEnableOption "continuous filling out of the works tree";
 
@@ -637,6 +653,37 @@ in
     local.mdns = {
       address = lib.mkDefault cfg.lan.address;
       names = mdnsNames;
+    };
+
+    systemd.services.bookshelf-backfill = lib.mkIf cfg.backfill.enable {
+      description = "Ask again about the entries a source could not answer about";
+      after = [
+        "network-online.target"
+        "bookshelf.service"
+      ];
+      wants = [ "network-online.target" ];
+      inherit environment;
+      serviceConfig = hardening // {
+        Type = "oneshot";
+        ExecStart = "${lib.getExe cfg.package} --backfill --slice ${toString cfg.backfill.slice} --database ${cfg.databasePath}";
+        EnvironmentFile = lib.mkIf (cfg.apiKeySecrets != { }) config.sops.templates."bookshelf-env".path;
+        User = cfg.user;
+        Group = cfg.user;
+        MemoryMax = "192M";
+        WorkingDirectory = cfg.stateDir;
+        ReadWritePaths = [ cfg.stateDir ];
+        Nice = 19;
+        IOSchedulingClass = "idle";
+      };
+    };
+
+    systemd.timers.bookshelf-backfill = lib.mkIf cfg.backfill.enable {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnActiveSec = cfg.backfill.interval;
+        OnUnitInactiveSec = cfg.backfill.interval;
+        RandomizedDelaySec = "10m";
+      };
     };
 
     systemd.services.bookshelf-works = lib.mkIf cfg.works.enable {

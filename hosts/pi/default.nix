@@ -328,6 +328,7 @@
     identityLogin = "MaxCarroll0@github";
     refresh.enable = true;
     works.enable = true;
+    backfill.enable = true;
     backup.enable = true;
     solver.enable = true;
     tls = {
