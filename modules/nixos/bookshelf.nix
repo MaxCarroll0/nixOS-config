@@ -253,6 +253,7 @@ in
         "freetext"
         "publisher"
         "vendor"
+        "libraryhub"
       ];
       description = "Identification sources to try, in order.";
     };
