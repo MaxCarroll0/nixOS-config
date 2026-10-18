@@ -85,6 +85,7 @@ let
       fi
 
       ${lib.getExe dump} "$repo/bookshelf.sql"
+      ${lib.getExe cfg.package} --export "$repo/bookshelf.jsonl" --database ${cfg.databasePath}
 
       git -C "$repo" add -A
       if git -C "$repo" diff --cached --quiet; then
@@ -92,7 +93,7 @@ let
         exit 0
       fi
 
-      rows=$(git -C "$repo" diff --cached --numstat -- bookshelf.sql | cut -f1-2)
+      rows=$(git -C "$repo" diff --cached --numstat -- bookshelf.sql bookshelf.jsonl | cut -f1-2 | tr "\n" " ")
       git -C "$repo" commit -q -m "bookshelf: $(date -u +%Y-%m-%dT%H:%MZ) ($rows lines changed)"
       echo "committed: $rows lines changed"
 
