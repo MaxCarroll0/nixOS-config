@@ -434,6 +434,16 @@ in
       };
     };
 
+    audit = {
+      enable = lib.mkEnableOption "a daily report of rows breaking a rule the writes enforce";
+
+      startAt = lib.mkOption {
+        type = lib.types.str;
+        default = "*-*-* 03:40:00";
+        description = "When the audit runs; after the backup, so a finding is already saved.";
+      };
+    };
+
     backup = {
       enable = lib.mkEnableOption "a daily commit of the catalogue to a git repository";
 
@@ -716,6 +726,31 @@ in
         OnActiveSec = cfg.works.interval;
         OnUnitInactiveSec = cfg.works.interval;
         RandomizedDelaySec = "5m";
+      };
+    };
+
+    systemd.services.bookshelf-audit = lib.mkIf cfg.audit.enable {
+      description = "Report rows breaking a rule the writes enforce";
+      after = [ "bookshelf.service" ];
+      serviceConfig = hardening // {
+        Type = "oneshot";
+        ExecStart = "${lib.getExe cfg.package} --audit --database ${cfg.databasePath}";
+        User = cfg.user;
+        Group = cfg.user;
+        MemoryMax = "128M";
+        WorkingDirectory = cfg.stateDir;
+        ReadWritePaths = [ cfg.stateDir ];
+        Nice = 19;
+        IOSchedulingClass = "idle";
+      };
+    };
+
+    systemd.timers.bookshelf-audit = lib.mkIf cfg.audit.enable {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = cfg.audit.startAt;
+        Persistent = true;
+        RandomizedDelaySec = "10m";
       };
     };
 

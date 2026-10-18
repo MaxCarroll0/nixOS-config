@@ -329,7 +329,12 @@
     refresh.enable = true;
     works.enable = true;
     backfill.enable = true;
-    backup.enable = true;
+    audit.enable = true;
+    backup = {
+      enable = true;
+      remote = "git@github.com:MaxCarroll0/bookshelf.git";
+      branch = "catalogue-data";
+    };
     solver.enable = true;
     tls = {
       enable = true;
