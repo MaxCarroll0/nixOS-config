@@ -32,10 +32,13 @@ let
     # of a full dump: a CREATE TABLE spans several lines, so filtering by line leaves
     # half a statement behind and the result will not restore.
     #
-    # The response cache and the full-text index are derived -- the first refetches, the
-    # second is rebuilt by --reindex -- and both would dwarf the catalogue in a history.
-    # The search% pattern is what excludes them, shadow tables included, so every FTS
-    # table in schema.sql has to be named search-something or the dump will not restore.
+    # The response cache, the full-text index and the valuations are derived: the first
+    # refetches, the second is rebuilt by --reindex, the third by --revalue, and all three
+    # would dwarf the catalogue in a history. A value set by hand is not derived and is
+    # carried by bookshelf.jsonl instead, which is committed beside this.
+    # The search% pattern is what excludes the index, shadow tables included, so every
+    # FTS table in schema.sql has to be named search-something or the dump will not
+    # restore.
     #
     # Not a read-only connection: opening a WAL database with mode=ro fails when no
     # writer holds the -shm file open, which is exactly the service-stopped case.
@@ -50,7 +53,7 @@ let
           WHERE type = 'table'
             AND name NOT LIKE 'sqlite_%'
             AND name NOT LIKE 'search%'
-            AND name <> 'http_cache'
+            AND name NOT IN ('http_cache', 'valuation')
           ORDER BY name
         )")
 
@@ -438,6 +441,24 @@ in
         default = "Sun *-*-* 04:20:00";
         description = "When the model is refitted; weekly, as a week adds few listings.";
       };
+
+      revalueInterval = lib.mkOption {
+        type = lib.types.str;
+        default = "1h";
+        description = "How often the copies due a fresh valuation are recomputed.";
+      };
+
+      revalueSlice = lib.mkOption {
+        type = lib.types.int;
+        default = 64;
+        description = "Copies revalued per pass, which bounds one run rather than the week.";
+      };
+
+      revalueStaleDays = lib.mkOption {
+        type = lib.types.int;
+        default = 7;
+        description = "How old a valuation may get before it is recomputed with nothing new.";
+      };
     };
 
     backfill = {
@@ -736,16 +757,17 @@ in
       };
     };
 
-    # Reached by OnSuccess from the three jobs that change what a valuation rests on,
-    # rather than by a timer: revaluing when nothing new has arrived only rewrites every
-    # line of the git-tracked dump.
+    # Both a timer and OnSuccess from the three jobs that change what a valuation rests
+    # on. Each run takes the copies whose evidence has moved plus the oldest of the rest,
+    # bounded by a slice, so the shelf comes round inside revalueStaleDays without any
+    # one run touching all of it.
     systemd.services.bookshelf-revalue = lib.mkIf cfg.refresh.enable {
-      description = "Revalue every copy from the listings and coefficients on hand";
+      description = "Revalue the copies due one from the listings and coefficients on hand";
       after = [ "bookshelf.service" ];
       inherit environment;
       serviceConfig = hardening // {
         Type = "oneshot";
-        ExecStart = "${lib.getExe job} --revalue";
+        ExecStart = "${lib.getExe job} --revalue --slice ${toString cfg.refresh.revalueSlice} --stale-days ${toString cfg.refresh.revalueStaleDays}";
         User = cfg.user;
         Group = cfg.user;
         MemoryMax = "192M";
@@ -780,6 +802,15 @@ in
         OnCalendar = cfg.refresh.fitStartAt;
         Persistent = true;
         RandomizedDelaySec = "30m";
+      };
+    };
+
+    systemd.timers.bookshelf-revalue = lib.mkIf cfg.refresh.enable {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnActiveSec = cfg.refresh.revalueInterval;
+        OnUnitInactiveSec = cfg.refresh.revalueInterval;
+        RandomizedDelaySec = "5m";
       };
     };
 
