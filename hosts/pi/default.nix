@@ -327,6 +327,13 @@
     tailnetAddress = "100.117.13.66";
     identityLogin = "MaxCarroll0@github";
     refresh.enable = true;
+    compsProviders = [
+      "ebay"
+      "abebooks"
+      "worldofbooks"
+      "amazon"
+    ];
+    scrapers = true;
     works.enable = true;
     backfill.enable = true;
     audit.enable = true;

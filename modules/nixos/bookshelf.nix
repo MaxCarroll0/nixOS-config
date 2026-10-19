@@ -65,6 +65,25 @@ let
     '';
   };
 
+  # The harvest, the fit and the revaluation each want the whole box: the fit loads a
+  # scientific stack and the harvest shares the pi with a 700M browser. One lock keeps
+  # them end to end rather than concurrent, and a run that cannot get it waits for the
+  # next tick instead of failing.
+  job = pkgs.writeShellApplication {
+    name = "bookshelf-job";
+    runtimeInputs = [ pkgs.util-linux ];
+    text = ''
+      status=0
+      flock -E 75 -w 900 ${cfg.stateDir}/jobs.lock \
+        ${lib.getExe cfg.package} --database ${cfg.databasePath} "$@" || status=$?
+      if [ "$status" = 75 ]; then
+        echo "another catalogue job held the lock; leaving this run to the next tick" >&2
+        exit 0
+      fi
+      exit "$status"
+    '';
+  };
+
   backup = pkgs.writeShellApplication {
     name = "bookshelf-backup";
     runtimeInputs = [
@@ -401,6 +420,24 @@ in
         default = "384M";
         description = "Ceiling for the refresh, which loads a scientific stack the service does not.";
       };
+
+      usedInterval = lib.mkOption {
+        type = lib.types.str;
+        default = "4h";
+        description = "How often one slice of editions is asked for second-hand listings.";
+      };
+
+      usedSlice = lib.mkOption {
+        type = lib.types.int;
+        default = 40;
+        description = "Editions harvested per pass; AbeBooks throttles above about one every three seconds.";
+      };
+
+      fitStartAt = lib.mkOption {
+        type = lib.types.str;
+        default = "Sun *-*-* 04:20:00";
+        description = "When the model is refitted; weekly, as a week adds few listings.";
+      };
     };
 
     backfill = {
@@ -614,12 +651,14 @@ in
       after = [
         "network-online.target"
         "bookshelf.service"
-      ];
-      wants = [ "network-online.target" ];
+      ]
+      ++ lib.optional cfg.solver.enable "flaresolverr.service";
+      wants = [ "network-online.target" ] ++ lib.optional cfg.solver.enable "flaresolverr.service";
+      onSuccess = [ "bookshelf-revalue.service" ];
       inherit environment;
       serviceConfig = hardening // {
         Type = "oneshot";
-        ExecStart = "${lib.getExe cfg.package} --refresh-prices --database ${cfg.databasePath}";
+        ExecStart = "${lib.getExe job} --refresh-prices";
         EnvironmentFile = lib.mkIf (cfg.apiKeySecrets != { }) config.sops.templates."bookshelf-env".path;
         User = cfg.user;
         Group = cfg.user;
@@ -631,6 +670,8 @@ in
       };
     };
 
+    # Every phase in one run, which is what a rebuild of the whole picture needs and
+    # what no timer should ever ask of a 2 GB host. Started by hand, deliberately.
     systemd.services.bookshelf-refresh = lib.mkIf cfg.refresh.enable {
       description = "Refresh catalogue prices and revalue";
       after = [
@@ -641,11 +682,73 @@ in
       inherit environment;
       serviceConfig = hardening // {
         Type = "oneshot";
-        ExecStart = "${lib.getExe cfg.package} --refresh --database ${cfg.databasePath}";
+        ExecStart = "${lib.getExe job} --refresh";
         EnvironmentFile = lib.mkIf (cfg.apiKeySecrets != { }) config.sops.templates."bookshelf-env".path;
         User = cfg.user;
         Group = cfg.user;
         MemoryMax = cfg.refresh.memoryMax;
+        WorkingDirectory = cfg.stateDir;
+        ReadWritePaths = [ cfg.stateDir ];
+        Nice = 19;
+        IOSchedulingClass = "idle";
+      };
+    };
+
+    systemd.services.bookshelf-used = lib.mkIf cfg.refresh.enable {
+      description = "Harvest second-hand listings for one slice of the catalogue";
+      after = [
+        "network-online.target"
+        "bookshelf.service"
+      ]
+      ++ lib.optional cfg.solver.enable "flaresolverr.service";
+      wants = [ "network-online.target" ] ++ lib.optional cfg.solver.enable "flaresolverr.service";
+      onSuccess = [ "bookshelf-revalue.service" ];
+      inherit environment;
+      serviceConfig = hardening // {
+        Type = "oneshot";
+        ExecStart = "${lib.getExe job} --harvest-used --slice ${toString cfg.refresh.usedSlice}";
+        EnvironmentFile = lib.mkIf (cfg.apiKeySecrets != { }) config.sops.templates."bookshelf-env".path;
+        User = cfg.user;
+        Group = cfg.user;
+        MemoryMax = "192M";
+        WorkingDirectory = cfg.stateDir;
+        ReadWritePaths = [ cfg.stateDir ];
+        Nice = 19;
+        IOSchedulingClass = "idle";
+      };
+    };
+
+    systemd.services.bookshelf-fit = lib.mkIf cfg.refresh.enable {
+      description = "Refit the used-value model against the listings now recorded";
+      after = [ "bookshelf.service" ];
+      onSuccess = [ "bookshelf-revalue.service" ];
+      inherit environment;
+      serviceConfig = hardening // {
+        Type = "oneshot";
+        ExecStart = "${lib.getExe job} --fit-model";
+        User = cfg.user;
+        Group = cfg.user;
+        MemoryMax = cfg.refresh.memoryMax;
+        WorkingDirectory = cfg.stateDir;
+        ReadWritePaths = [ cfg.stateDir ];
+        Nice = 19;
+        IOSchedulingClass = "idle";
+      };
+    };
+
+    # Reached by OnSuccess from the three jobs that change what a valuation rests on,
+    # rather than by a timer: revaluing when nothing new has arrived only rewrites every
+    # line of the git-tracked dump.
+    systemd.services.bookshelf-revalue = lib.mkIf cfg.refresh.enable {
+      description = "Revalue every copy from the listings and coefficients on hand";
+      after = [ "bookshelf.service" ];
+      inherit environment;
+      serviceConfig = hardening // {
+        Type = "oneshot";
+        ExecStart = "${lib.getExe job} --revalue";
+        User = cfg.user;
+        Group = cfg.user;
+        MemoryMax = "192M";
         WorkingDirectory = cfg.stateDir;
         ReadWritePaths = [ cfg.stateDir ];
         Nice = 19;
@@ -659,6 +762,24 @@ in
         OnCalendar = cfg.refresh.startAt;
         Persistent = true;
         RandomizedDelaySec = "20m";
+      };
+    };
+
+    systemd.timers.bookshelf-used = lib.mkIf cfg.refresh.enable {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnActiveSec = cfg.refresh.usedInterval;
+        OnUnitInactiveSec = cfg.refresh.usedInterval;
+        RandomizedDelaySec = "20m";
+      };
+    };
+
+    systemd.timers.bookshelf-fit = lib.mkIf cfg.refresh.enable {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = cfg.refresh.fitStartAt;
+        Persistent = true;
+        RandomizedDelaySec = "30m";
       };
     };
 
