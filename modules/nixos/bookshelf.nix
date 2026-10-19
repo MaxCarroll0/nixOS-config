@@ -667,7 +667,12 @@ in
       };
     };
 
+    # A deploy must not restart a job that is mid-run: these are oneshots, so activation
+    # waits for the restarted unit to finish, and a harvest that takes an hour blows
+    # deploy-rs's confirmation timeout and earns a rollback. A running job keeps the code
+    # it started with and the next firing picks up the new one.
     systemd.services.bookshelf-prices = lib.mkIf cfg.refresh.enable {
+      restartIfChanged = false;
       description = "Ask the shops what each edition costs new";
       after = [
         "network-online.target"
@@ -693,7 +698,12 @@ in
 
     # Every phase in one run, which is what a rebuild of the whole picture needs and
     # what no timer should ever ask of a 2 GB host. Started by hand, deliberately.
+    # A deploy must not restart a job that is mid-run: these are oneshots, so activation
+    # waits for the restarted unit to finish, and a harvest that takes an hour blows
+    # deploy-rs's confirmation timeout and earns a rollback. A running job keeps the code
+    # it started with and the next firing picks up the new one.
     systemd.services.bookshelf-refresh = lib.mkIf cfg.refresh.enable {
+      restartIfChanged = false;
       description = "Refresh catalogue prices and revalue";
       after = [
         "network-online.target"
@@ -715,7 +725,12 @@ in
       };
     };
 
+    # A deploy must not restart a job that is mid-run: these are oneshots, so activation
+    # waits for the restarted unit to finish, and a harvest that takes an hour blows
+    # deploy-rs's confirmation timeout and earns a rollback. A running job keeps the code
+    # it started with and the next firing picks up the new one.
     systemd.services.bookshelf-used = lib.mkIf cfg.refresh.enable {
+      restartIfChanged = false;
       description = "Harvest second-hand listings for one slice of the catalogue";
       after = [
         "network-online.target"
@@ -739,7 +754,12 @@ in
       };
     };
 
+    # A deploy must not restart a job that is mid-run: these are oneshots, so activation
+    # waits for the restarted unit to finish, and a harvest that takes an hour blows
+    # deploy-rs's confirmation timeout and earns a rollback. A running job keeps the code
+    # it started with and the next firing picks up the new one.
     systemd.services.bookshelf-fit = lib.mkIf cfg.refresh.enable {
+      restartIfChanged = false;
       description = "Refit the used-value model against the listings now recorded";
       after = [ "bookshelf.service" ];
       onSuccess = [ "bookshelf-revalue.service" ];
@@ -761,7 +781,12 @@ in
     # on. Each run takes the copies whose evidence has moved plus the oldest of the rest,
     # bounded by a slice, so the shelf comes round inside revalueStaleDays without any
     # one run touching all of it.
+    # A deploy must not restart a job that is mid-run: these are oneshots, so activation
+    # waits for the restarted unit to finish, and a harvest that takes an hour blows
+    # deploy-rs's confirmation timeout and earns a rollback. A running job keeps the code
+    # it started with and the next firing picks up the new one.
     systemd.services.bookshelf-revalue = lib.mkIf cfg.refresh.enable {
+      restartIfChanged = false;
       description = "Revalue the copies due one from the listings and coefficients on hand";
       after = [ "bookshelf.service" ];
       inherit environment;
@@ -819,7 +844,12 @@ in
       names = mdnsNames;
     };
 
+    # A deploy must not restart a job that is mid-run: these are oneshots, so activation
+    # waits for the restarted unit to finish, and a harvest that takes an hour blows
+    # deploy-rs's confirmation timeout and earns a rollback. A running job keeps the code
+    # it started with and the next firing picks up the new one.
     systemd.services.bookshelf-backfill = lib.mkIf cfg.backfill.enable {
+      restartIfChanged = false;
       description = "Ask again about the entries a source could not answer about";
       after = [
         "network-online.target"
@@ -850,7 +880,12 @@ in
       };
     };
 
+    # A deploy must not restart a job that is mid-run: these are oneshots, so activation
+    # waits for the restarted unit to finish, and a harvest that takes an hour blows
+    # deploy-rs's confirmation timeout and earns a rollback. A running job keeps the code
+    # it started with and the next firing picks up the new one.
     systemd.services.bookshelf-works = lib.mkIf cfg.works.enable {
+      restartIfChanged = false;
       description = "Fill out one slice of the works tree";
       after = [
         "network-online.target"
@@ -882,7 +917,12 @@ in
       };
     };
 
+    # A deploy must not restart a job that is mid-run: these are oneshots, so activation
+    # waits for the restarted unit to finish, and a harvest that takes an hour blows
+    # deploy-rs's confirmation timeout and earns a rollback. A running job keeps the code
+    # it started with and the next firing picks up the new one.
     systemd.services.bookshelf-audit = lib.mkIf cfg.audit.enable {
+      restartIfChanged = false;
       description = "Report rows breaking a rule the writes enforce";
       after = [ "bookshelf.service" ];
       serviceConfig = hardening // {
@@ -907,7 +947,12 @@ in
       };
     };
 
+    # A deploy must not restart a job that is mid-run: these are oneshots, so activation
+    # waits for the restarted unit to finish, and a harvest that takes an hour blows
+    # deploy-rs's confirmation timeout and earns a rollback. A running job keeps the code
+    # it started with and the next firing picks up the new one.
     systemd.services.bookshelf-backup = lib.mkIf cfg.backup.enable {
+      restartIfChanged = false;
       description = "Commit the catalogue to its backup repository";
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
