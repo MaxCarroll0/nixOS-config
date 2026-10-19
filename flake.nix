@@ -241,8 +241,12 @@
         sudo = "sudo activate-detached";
         magicRollback = true;
         autoRollback = true;
-        confirmTimeout = 120;
-        activationTimeout = 300;
+        # The pi's activation restarts local-fs.target, which waits on the NAS LUKS
+        # devices; while the array is parked that wait alone ran past a 120s window and
+        # failed two deploys that were otherwise fine. Rollback still arms, it just has
+        # room to finish first.
+        confirmTimeout = 420;
+        activationTimeout = 900;
 
         nodes = {
           laptop = mkNode "laptop" "100.112.109.20" false;
