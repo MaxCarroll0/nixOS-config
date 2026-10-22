@@ -275,6 +275,7 @@ in
 
 {
   imports = [
+    ./dev-build.nix
     ./peer-transport.nix
     ./nix-observer.nix
     ./unclean-boot.nix
