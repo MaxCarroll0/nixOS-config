@@ -463,8 +463,8 @@ def spawns_interactive_shell(command, argv):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--command", required=True)
-    parser.add_argument("--real", required=True)
+    parser.add_argument("--observed-command", dest="command", required=True)
+    parser.add_argument("--observed-real", dest="real", required=True)
     options, forwarded = parser.parse_known_args()
     observer = Observer(options.command, forwarded)
     interactive = spawns_interactive_shell(options.command, forwarded)

@@ -42,7 +42,7 @@ let
         export NIX_OBSERVER_NOM=${lib.getExe pkgs.nix-output-monitor}
         export NIX_OBSERVER_REAL_NIX=${config.nix.package}/bin/nix
         export NIX_OBSERVER_REAL_NIX_STORE=${config.nix.package}/bin/nix-store
-        exec ${lib.getExe observer} --command ${lib.escapeShellArg name} --real ${lib.escapeShellArg binary} "$@"
+        exec ${lib.getExe observer} --observed-command ${lib.escapeShellArg name} --observed-real ${lib.escapeShellArg binary} "$@"
       '';
     };
   observedNix = observedWrapper "nix" "${config.nix.package}/bin/nix";
