@@ -9,6 +9,8 @@
 
 let
   flakePath = "/home/max/.config/nix";
+  # root has no SSH identity of its own; reuse max's, which the origin remote accepts.
+  gitSshCommand = "${pkgs.openssh}/bin/ssh -i /home/max/.ssh/id_ed25519 -o UserKnownHostsFile=/home/max/.ssh/known_hosts";
   cfg = config.local.users;
   wakePeers = lib.attrNames (config.local.wake.peers or { });
 
@@ -444,6 +446,7 @@ in
 
     # An upgrade must never move a host backwards. ExecCondition, not preStart:
     # a non-zero condition skips the unit cleanly instead of marking it failed.
+    systemd.services.nixos-upgrade.environment.GIT_SSH_COMMAND = gitSshCommand;
     systemd.services.nixos-upgrade.serviceConfig.ExecCondition = lib.getExe upgradeAllowed;
 
     systemd.services.nixos-upgrade.preStart = /* bash */ ''
