@@ -104,6 +104,14 @@
     unitConfig.RequiresMountsFor = lib.mkForce [ ];
   };
 
+  swapDevices = lib.mkForce [
+    {
+      device = "/swapfile";
+      size = 12 * 1024;
+      randomEncryption.enable = true;
+    }
+  ];
+
   services.earlyoom = {
     freeMemThreshold = 15;
     freeSwapThreshold = 25;
