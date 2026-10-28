@@ -286,21 +286,15 @@ Phase 2 does not begin until Phase 1 is boring.
 
 ### Status
 
-Steps 1, 2, 4, 5 and the Emacs half of 7 are built. Everything is **inert**: `local.wm.enable`
-defaults to
-false, so no package reaches PATH, and the generated `hyprland.conf` is only read if Hyprland
-is started. Plasma is untouched, and `xdg.portal.enable = lib.mkForce false` is preserved so
-xdg-desktop-portal-kde keeps working.
-
-Deliberately deferred, because the dependency is not installed and binding to a missing binary
-is worse than an absent binding:
+Steps 1, 2, 3, 4, 5 and the Emacs half of 7 are built. **The laptop runs Hyprland as its only
+desktop** (`local.wm.enable = true`, `local.desktop.plasma.enable = false`). Step 3 is
+**Caelestia** (`home/caelestia.nix`): bar, launcher, notifications, lock and idle, screenshots,
+with `hyprpolkitagent` for polkit and the GTK portal for file choosers. The desktops keep
+Plasma, and `xdg.portal.enable = lib.mkForce false` stays in home-manager so their KDE portal
+keeps working.
 
 | Deferred | Why | Lands with |
 |---|---|---|
-| KDE replacement (step 3) | still the live session | when you switch |
-| Bar, launcher (`SUPER SPC`) | no bar chosen or installed | step 3 |
-| Grab submap (`SUPER g`) | grim/slurp not installed | step 3 |
-| Lock binding | no locker installed | step 3 |
 | ghostty | not installed; kitty used for the terminal and escape-hatch bindings | step 8 |
 
 Verified on a **live headless Hyprland 0.56** instance (`WLR_BACKENDS=headless`, no DRM, no

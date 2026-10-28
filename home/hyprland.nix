@@ -75,7 +75,7 @@ let
     )}
     })
 
-    hl.env("QT_QPA_PLATFORMTHEME", "kde")
+    hl.env("QT_QPA_PLATFORMTHEME", "gtk3")
 
     hl.on("hyprland.start", function()
         hl.exec_cmd("hyprctl setcursor " .. vars.cursorTheme .. " " .. vars.cursorSize)

@@ -1,6 +1,7 @@
-# Graphical session: Plasma, Hyprland, audio, printing, Chromium.
+# Graphical session: Hyprland, optional Plasma, audio, printing, Chromium.
 
 {
+  config,
   lib,
   pkgs,
   pkgs-unstable,
@@ -12,6 +13,7 @@ let
   askpass = lib.getExe pkgs.kdePackages.ksshaskpass;
   sshAdd = lib.getExe' pkgs.openssh "ssh-add";
   sshAgent = lib.getExe' pkgs.openssh "ssh-agent";
+  plasma = config.local.desktop.plasma.enable;
 
   # KDE askpass keeps sudo passwords out of the invoking terminal.
   sudoRequest = pkgs.writeShellApplication {
@@ -134,83 +136,107 @@ let
 in
 
 {
-  programs.firejail.enable = true;
-
-  users.users.max.packages = [ pkgs.kdePackages.kate ];
-
-  environment.systemPackages = [
-    deployRequest
-    sudoGrant
-    sudoGranted
-    sudoRequest
-  ]
-  ++ (with pkgs; [
-    chromium
-    vscode
-    wayland-utils
-    wl-clipboard
-  ]);
-
-  services.printing.enable = true;
-
-  services.logind.settings.Login.HandleLidSwitch = "ignore";
-
-  security.rtkit.enable = true;
-  services.pipewire = {
-    enable = true;
-    alsa.enable = true;
-    alsa.support32Bit = true;
-    pulse.enable = true;
+  options.local.desktop.plasma.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = true;
+    description = "Whether to install the Plasma desktop alongside Hyprland.";
   };
 
-  # Discord's Krisp suppression is Windows/macOS only, so denoise in PipeWire.
-  services.pipewire.extraConfig.pipewire."99-rnnoise-source" = {
-    "context.modules" = [
-      {
-        name = "libpipewire-module-filter-chain";
-        args = {
-          "node.description" = "Noise Suppressed Microphone";
-          "media.name" = "Noise Suppressed Microphone";
-          "filter.graph".nodes = [
-            {
-              type = "ladspa";
-              name = "rnnoise";
-              plugin = "${pkgs.rnnoise-plugin}/lib/ladspa/librnnoise_ladspa.so";
-              label = "noise_suppressor_mono";
-              control = {
-                "VAD Threshold (%)" = 50.0;
-                "VAD Grace Period (ms)" = 200;
+  config = lib.mkMerge [
+    {
+      programs.firejail.enable = true;
+
+      users.users.max.packages = [ pkgs.kdePackages.kate ];
+
+      environment.systemPackages = [
+        deployRequest
+        sudoGrant
+        sudoGranted
+        sudoRequest
+      ]
+      ++ (with pkgs; [
+        chromium
+        vscode
+        wayland-utils
+        wl-clipboard
+      ]);
+
+      services.printing.enable = true;
+
+      services.logind.settings.Login.HandleLidSwitch = "ignore";
+
+      security.rtkit.enable = true;
+      services.pipewire = {
+        enable = true;
+        alsa.enable = true;
+        alsa.support32Bit = true;
+        pulse.enable = true;
+      };
+
+      # Discord's Krisp suppression is Windows/macOS only, so denoise in PipeWire.
+      services.pipewire.extraConfig.pipewire."99-rnnoise-source" = {
+        "context.modules" = [
+          {
+            name = "libpipewire-module-filter-chain";
+            args = {
+              "node.description" = "Noise Suppressed Microphone";
+              "media.name" = "Noise Suppressed Microphone";
+              "filter.graph".nodes = [
+                {
+                  type = "ladspa";
+                  name = "rnnoise";
+                  plugin = "${pkgs.rnnoise-plugin}/lib/ladspa/librnnoise_ladspa.so";
+                  label = "noise_suppressor_mono";
+                  control = {
+                    "VAD Threshold (%)" = 50.0;
+                    "VAD Grace Period (ms)" = 200;
+                  };
+                }
+              ];
+              "capture.props" = {
+                "node.name" = "capture.rnnoise_source";
+                "node.passive" = true;
+                "audio.rate" = 48000;
               };
-            }
-          ];
-          "capture.props" = {
-            "node.name" = "capture.rnnoise_source";
-            "node.passive" = true;
-            "audio.rate" = 48000;
-          };
-          "playback.props" = {
-            "node.name" = "rnnoise_source";
-            "media.class" = "Audio/Source";
-            "audio.rate" = 48000;
-          };
-        };
-      }
-    ];
-  };
+              "playback.props" = {
+                "node.name" = "rnnoise_source";
+                "media.class" = "Audio/Source";
+                "audio.rate" = 48000;
+              };
+            };
+          }
+        ];
+      };
 
-  services.desktopManager.plasma6.enable = true;
-  services.displayManager.sddm.enable = true;
-  services.displayManager.sddm.wayland.enable = true;
-  # kwallet is disabled outright in home/common.nix, so kwallet-pam has nothing
-  # to unlock and only leaves kwalletd prompting for the rest of the session.
-  security.pam.services.login.kwallet.enable = lib.mkForce false;
-  security.pam.services.kde.kwallet.enable = lib.mkForce false;
+      services.desktopManager.plasma6.enable = plasma;
+      services.displayManager.sddm.enable = true;
+      services.displayManager.sddm.wayland.enable = true;
+      # kwallet is disabled outright in home/common.nix, so kwallet-pam has nothing
+      # to unlock and only leaves kwalletd prompting for the rest of the session.
+      security.pam.services = lib.mkIf plasma {
+        login.kwallet.enable = lib.mkForce false;
+        kde.kwallet.enable = lib.mkForce false;
+      };
 
-  services.xserver.xkb.layout = "gb";
-  services.xserver.xkb.options = "caps:escape";
-  hardware.keyboard.qmk.enable = true;
+      services.xserver.xkb.layout = "gb";
+      services.xserver.xkb.options = "caps:escape";
+      hardware.keyboard.qmk.enable = true;
 
-  programs.hyprland.enable = true;
-  programs.hyprland.withUWSM = true;
-  programs.hyprland.package = inputs.hyprland.packages."${pkgs.stdenv.hostPlatform.system}".hyprland;
+      programs.hyprland.enable = true;
+      programs.hyprland.withUWSM = true;
+      programs.hyprland.package = inputs.hyprland.packages."${pkgs.stdenv.hostPlatform.system}".hyprland;
+    }
+
+    (lib.mkIf (!plasma) {
+      xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
+      services.displayManager.defaultSession = "hyprland-uwsm";
+      services.logind.settings.Login.HandleLidSwitch = lib.mkForce "suspend";
+      users.users.max.packages = with pkgs.kdePackages; [
+        dolphin
+        okular
+        ark
+        gwenview
+      ];
+    })
+  ];
 }

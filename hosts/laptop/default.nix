@@ -28,6 +28,7 @@
   networking.hostName = "laptop";
 
   local.gaming.enable = true;
+  local.desktop.plasma.enable = false;
 
   local.nas.unlock.client = true;
   local.atticClient = {
@@ -119,7 +120,7 @@
       "--prefer"
       "^chromium$"
       "--avoid"
-      "^(sshd?|systemd|kwin_wayland|Hyprland|plasmashell)$"
+      "^(sshd?|systemd|Hyprland|quickshell|emacs)$"
     ];
   };
 

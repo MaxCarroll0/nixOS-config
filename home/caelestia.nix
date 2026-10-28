@@ -89,9 +89,16 @@ in
       };
     };
 
+    home.pointerCursor = {
+      package = pkgs.bibata-cursors;
+      name = "Bibata-Modern-Classic";
+      size = 24;
+      gtk.enable = true;
+    };
+
     local.wm.caelestia.vars = {
-      cursorTheme = "breeze_cursors";
-      cursorSize = 24;
+      cursorTheme = config.home.pointerCursor.name;
+      cursorSize = config.home.pointerCursor.size;
     };
 
     xdg.configFile = lib.listToAttrs (
