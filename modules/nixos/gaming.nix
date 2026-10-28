@@ -1,4 +1,4 @@
-# Steam with Proton, Lutris with Wine, gamescope, GameMode and MangoHud.
+# Steam with Proton, Heroic for Epic, Lutris with Wine, gamescope, GameMode and MangoHud.
 
 {
   config,
@@ -13,17 +13,19 @@ let
   steamPkg = config.programs.steam.package;
 
   # sg -c takes a single command string, so argv has to be requoted into it.
-  novpn = name: ''
+  novpn = program: ''
     args=""
     if [ "$#" -gt 0 ]; then
       printf -v args ' %q' "$@"
     fi
-    exec /run/wrappers/bin/sg novpn -c "${steamPkg}/bin/${name}$args"
+    exec /run/wrappers/bin/sg novpn -c "${program}$args"
   '';
 
   # hiPrio so this shadows the package's own bin/steam, which the desktop entry,
   # the steam:// handlers and the gamescope session all resolve off PATH.
-  steamNovpn = lib.hiPrio (pkgs.writeShellScriptBin "steam" (novpn "steam"));
+  steamNovpn = lib.hiPrio (pkgs.writeShellScriptBin "steam" (novpn "${steamPkg}/bin/steam"));
+
+  heroicNovpn = lib.hiPrio (pkgs.writeShellScriptBin "heroic" (novpn (lib.getExe pkgs.heroic)));
 
   steamVpn = pkgs.writeShellScriptBin "steam-vpn" ''
     exec ${steamPkg}/bin/steam "$@"
@@ -65,6 +67,8 @@ in
     environment.systemPackages = [
       steamNovpn
       steamVpn
+      pkgs.heroic
+      heroicNovpn
       pkgs.protonup-qt
       pkgs.lutris
       pkgs.winetricks
