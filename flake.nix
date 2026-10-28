@@ -22,6 +22,15 @@
       inputs.hyprland.follows = "hyprland";
     };
 
+    caelestia-shell = {
+      url = "github:caelestia-dots/shell";
+      inputs.nixpkgs.follows = "nixpkgs-unstable";
+    };
+    caelestia-dots = {
+      url = "github:caelestia-dots/caelestia";
+      flake = false;
+    };
+
     emacs-overlay.url = "github:nix-community/emacs-overlay";
 
     bookshelf = {
@@ -180,6 +189,7 @@
             claude-code = inputs.claude-code.packages.${system}.default;
             codex-cli = inputs.codex-cli.packages.${system}.default;
             anipySrc = inputs.anipy-cli;
+            inherit inputs;
           };
         };
 

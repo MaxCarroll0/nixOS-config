@@ -77,7 +77,8 @@ in
         OnStartupSec = cfg.watchdogInterval;
         OnUnitInactiveSec = cfg.watchdogInterval;
       };
-      Install.WantedBy = [ "timers.target" ];
+      Unit.PartOf = [ "hyprland-session.target" ];
+      Install.WantedBy = [ "hyprland-session.target" ];
     };
   };
 }

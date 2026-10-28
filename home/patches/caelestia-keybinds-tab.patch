@@ -1,0 +1,55 @@
+diff --git a/daemons/Shortcuts.qml b/daemons/Shortcuts.qml
+index adc4e4c..6b6fe6e 100644
+--- a/daemons/Shortcuts.qml
++++ b/daemons/Shortcuts.qml
+@@ -47,6 +47,20 @@ Scope {
+         }
+     }
+ 
++    CustomShortcut {
++        name: "keybinds"
++        description: "Toggle the keybind reference"
++        onPressed: {
++            if (root.hasFullscreen)
++                return;
++            const screenState = ShellState.forActive();
++            const tab = [Config.dashboard.showDashboard, Config.dashboard.showMedia, Config.dashboard.showPerformance, Config.dashboard.showWeather].filter(Boolean).length;
++            const showing = screenState.dashboard && screenState.dashboardTab === tab;
++            screenState.dashboardTab = tab;
++            screenState.dashboard = !showing;
++        }
++    }
++
+     // qmllint disable unresolved-type
+     CustomShortcut {
+         // qmllint enable unresolved-type
+diff --git a/modules/dashboard/Content.qml b/modules/dashboard/Content.qml
+index a10edce..e3cc406 100644
+--- a/modules/dashboard/Content.qml
++++ b/modules/dashboard/Content.qml
+@@ -40,6 +40,12 @@ Item {
+                 iconName: "cloud",
+                 text: Tr.tr("Weather"),
+                 enabled: Config.dashboard.showWeather
++            },
++            {
++                component: keybindsComponent,
++                iconName: "keyboard",
++                text: Tr.tr("Keybinds"),
++                enabled: true
+             }
+         ];
+         return allTabs.filter(tab => tab.enabled);
+@@ -181,6 +187,12 @@ Item {
+                 WeatherTab {}
+             }
+ 
++            Component {
++                id: keybindsComponent
++
++                KeybindsTab {}
++            }
++
+             Behavior on contentX {
+                 Anim {}
+             }

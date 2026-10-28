@@ -6,4 +6,5 @@
   imports = [ ./common.nix ];
 
   local.nasAlerts.enable = true;
+  local.wm.enable = true;
 }

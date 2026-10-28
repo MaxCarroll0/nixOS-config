@@ -1,4 +1,4 @@
-# Hyprland session: core scrolling layout, palette-driven decoration, generated keybinds.
+# Hyprland session: Caelestia's look over the core scrolling layout, generated keybinds.
 
 {
   config,
@@ -8,14 +8,6 @@
 
 let
   cfg = config.local.wm;
-  c = config.local.theme.active;
-
-  rgb = v: "rgb(${lib.removePrefix "#" v})";
-  rgba = alpha: v: "rgba(${lib.removePrefix "#" v}${alpha})";
-
-  light = c.polarity == "light";
-
-  emacsMatch = "class:^(emacs)$";
 
   luaStr = s: "\"" + lib.escape [ "\\" "\"" ] s + "\"";
   luaVal =
@@ -26,13 +18,10 @@ let
       toString v
     else
       luaStr (toString v);
+  luaTable =
+    attrs: "{ ${lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k} = ${luaVal v}") attrs)} }";
 
   hyprSettings = {
-    "general.gaps_in" = 0;
-    "general.gaps_out" = 40;
-    "general.border_size" = 3;
-    "general.col.active_border" = rgb c."border-active";
-    "general.col.inactive_border" = rgb c."border-inactive";
     "general.layout" = "scrolling";
     "general.allow_tearing" = false;
 
@@ -42,164 +31,55 @@ let
     "scrolling.fullscreen_on_one_column" = true;
     "scrolling.follow_focus" = true;
 
-    "decoration.rounding" = 7;
-    "decoration.inactive_opacity" = 0.99;
-    "decoration.blur.enabled" = true;
-    "decoration.blur.size" = 1;
-    "decoration.blur.passes" = 2;
-    "decoration.blur.vibrancy" = 0.1696;
-    "decoration.shadow.enabled" = light;
-    "decoration.shadow.range" = 7;
-    "decoration.shadow.render_power" = 9;
-    "decoration.shadow.color" = rgba "aa" c."fg-faint";
-
     "input.kb_layout" = "gb";
     "input.kb_options" = "caps:escape";
     "input.follow_mouse" = 0;
-
-    "misc.disable_hyprland_logo" = true;
-    "misc.force_default_wallpaper" = 0;
-    "misc.background_color" = rgb c.bg;
   };
-
-  curves = {
-    easeOutQuint = [
-      0.23
-      1
-      0.32
-      1
-    ];
-    almostLinear = [
-      0.5
-      0.5
-      0.75
-      1.0
-    ];
-    quick = [
-      0.15
-      0
-      0.1
-      1
-    ];
-    fakeElastic = [
-      0.68
-      (-0.1)
-      0.265
-      1
-    ];
-    xfcBezier = [
-      0.1
-      0.9
-      0.1
-      1.03
-    ];
-  };
-
-  animations = [
-    {
-      leaf = "windows";
-      speed = 4.79;
-      bezier = "easeOutQuint";
-    }
-    {
-      leaf = "windowsIn";
-      speed = 4;
-      bezier = "easeOutQuint";
-      style = "slide bottom";
-    }
-    {
-      leaf = "windowsOut";
-      speed = 8;
-      bezier = "easeOutQuint";
-      style = "slide top";
-    }
-    {
-      leaf = "windowsMove";
-      speed = 3;
-      bezier = "fakeElastic";
-      style = "slide";
-    }
-    {
-      leaf = "border";
-      speed = 1.39;
-      bezier = "easeOutQuint";
-    }
-    {
-      leaf = "fade";
-      speed = 3.03;
-      bezier = "quick";
-    }
-    {
-      leaf = "layers";
-      speed = 3.81;
-      bezier = "easeOutQuint";
-    }
-    {
-      leaf = "layersIn";
-      speed = 4;
-      bezier = "easeOutQuint";
-      style = "fade";
-    }
-    {
-      leaf = "layersOut";
-      speed = 1.5;
-      bezier = "almostLinear";
-      style = "fade";
-    }
-    {
-      leaf = "workspaces";
-      speed = 4;
-      bezier = "xfcBezier";
-    }
-  ];
-
-  windowRules = [
-    [
-      "noshadow"
-      emacsMatch
-    ]
-    [
-      "bordersize 0"
-      emacsMatch
-    ]
-    [
-      "rounding 0"
-      emacsMatch
-    ]
-  ];
-
-  curveLine =
-    name: p:
-    "hl.curve(${luaStr name}, { type = \"bezier\", points = { "
-    + "{${toString (lib.elemAt p 0)}, ${toString (lib.elemAt p 1)}}, "
-    + "{${toString (lib.elemAt p 2)}, ${toString (lib.elemAt p 3)}} } })";
-
-  animationLine =
-    a:
-    "hl.animation({ leaf = ${luaStr a.leaf}, enabled = true, speed = ${toString a.speed}"
-    + ", bezier = ${luaStr a.bezier}"
-    + (if a ? style then ", style = ${luaStr a.style}" else "")
-    + " })";
-
-  monitorLua = ''
-    hl.monitor({ output = "", scale = 1 })
-  '';
 
   settingsLua = ''
-    ${monitorLua}
+    hl.monitor({ output = "", scale = 1 })
+
+    local home = os.getenv("HOME")
+    local hypr = home .. "/.config/hypr"
+    package.path = package.path .. ";" .. home .. "/.config/caelestia/?.lua"
+
+    local function seed(src, dst)
+        local existing = io.open(dst)
+        if existing then
+            existing:close()
+            return
+        end
+        local input = io.open(src, "r")
+        if not input then return end
+        local out = io.open(dst, "w")
+        if out then
+            out:write(input:read("*a"))
+            out:close()
+        end
+        input:close()
+    end
+    seed(hypr .. "/scheme/default.lua", hypr .. "/scheme/current.lua")
+
+    local vars = require("variables")
+    for k, v in pairs(${luaTable cfg.caelestia.vars}) do vars[k] = v end
+    local userVarsOk, userVars = pcall(require, "hypr-vars")
+    if userVarsOk and type(userVars) == "table" then
+        for k, v in pairs(userVars) do vars[k] = v end
+    end
+
+    ${lib.concatMapStringsSep "\n" (m: "require(${luaStr "hyprland.${m}"})") cfg.caelestia.hyprModules}
+
     hl.config({
     ${lib.concatStringsSep ",\n" (
       lib.mapAttrsToList (k: v: "  [${luaStr k}] = ${luaVal v}") hyprSettings
     )}
     })
 
-    ${lib.concatStringsSep "\n" (lib.mapAttrsToList curveLine curves)}
+    hl.env("QT_QPA_PLATFORMTHEME", "kde")
 
-    ${lib.concatStringsSep "\n" (map animationLine animations)}
-
-    ${lib.concatStringsSep "\n" (
-      map (r: "hl.window_rule({ ${luaStr (lib.elemAt r 0)}, ${luaStr (lib.elemAt r 1)} })") windowRules
-    )}
+    hl.on("hyprland.start", function()
+        hl.exec_cmd("hyprctl setcursor " .. vars.cursorTheme .. " " .. vars.cursorSize)
+    end)
   '';
 
   dirs = {
@@ -209,6 +89,13 @@ let
     l = "r";
   };
 
+  dirNames = {
+    l = "left";
+    d = "down";
+    u = "up";
+    r = "right";
+  };
+
   focusKeys = lib.mapAttrs' (
     key: dir:
     lib.nameValuePair "focus-${dir}" {
@@ -216,7 +103,7 @@ let
       owner = "bridge";
       elisp = "wm-focus-${dir}";
       dispatch = "hl.dsp.focus({ direction = ${luaStr dir} })";
-      desc = "focus ${dir}, crossing into Emacs splits";
+      desc = "focus ${dirNames.${dir}}, crossing into Emacs splits";
     }
   ) dirs;
 
@@ -227,7 +114,7 @@ let
       mods = "SUPER SHIFT";
       owner = "hyprland";
       dispatch = "hl.dsp.window.move({ direction = ${luaStr dir} })";
-      desc = "move window ${dir}";
+      desc = "move window ${dirNames.${dir}}";
     }
   ) dirs;
 
@@ -270,6 +157,53 @@ let
   top = hyprKey "SUPER";
   escape = hyprKey "SUPER CTRL ALT";
 
+  shell = name: "hl.dsp.global(${luaStr "caelestia:${name}"})";
+  shellKey =
+    mods: key: name: desc:
+    hyprKey mods key (shell name) desc;
+  lockedKey =
+    mods: key: dispatch: desc:
+    hyprKey mods key dispatch desc // { flags = [ "locked" ]; };
+
+  wpctl = args: "hl.dsp.exec_cmd(${luaStr "wpctl ${args}"})";
+
+  mediaKeys = {
+    media-play = lockedKey "" "XF86AudioPlay" (shell "mediaToggle") "play or pause media";
+    media-pause = lockedKey "" "XF86AudioPause" (shell "mediaToggle") "play or pause media";
+    media-next = lockedKey "" "XF86AudioNext" (shell "mediaNext") "next track";
+    media-prev = lockedKey "" "XF86AudioPrev" (shell "mediaPrev") "previous track";
+    media-stop = lockedKey "" "XF86AudioStop" (shell "mediaStop") "stop media";
+    volume-up =
+      lockedKey "" "XF86AudioRaiseVolume"
+        (wpctl "set-mute @DEFAULT_AUDIO_SINK@ 0; wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 10%+")
+        "volume up"
+      // {
+        flags = [
+          "locked"
+          "repeating"
+        ];
+      };
+    volume-down =
+      lockedKey "" "XF86AudioLowerVolume"
+        (wpctl "set-mute @DEFAULT_AUDIO_SINK@ 0; wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%-")
+        "volume down"
+      // {
+        flags = [
+          "locked"
+          "repeating"
+        ];
+      };
+    volume-mute = lockedKey "" "XF86AudioMute" (wpctl "set-mute @DEFAULT_AUDIO_SINK@ toggle") "mute";
+    mic-mute =
+      lockedKey "" "XF86AudioMicMute" (wpctl "set-mute @DEFAULT_AUDIO_SOURCE@ toggle")
+        "mute microphone";
+    brightness-up = lockedKey "" "XF86MonBrightnessUp" (shell "brightnessUp") "brightness up";
+    brightness-down = lockedKey "" "XF86MonBrightnessDown" (shell "brightnessDown") "brightness down";
+    screenshot-output =
+      lockedKey "" "Print" "hl.dsp.exec_cmd(\"caelestia screenshot\")"
+        "screenshot output";
+  };
+
   emacsKey = mods: key: elisp: desc: {
     inherit
       mods
@@ -285,7 +219,7 @@ in
     ./wm-keys.nix
     ./wm-bridge.nix
     ./quickshell.nix
-    ./wm-idle.nix
+    ./caelestia.nix
   ];
 
   config = {
@@ -295,6 +229,7 @@ in
       focusKeys
       // moveKeys
       // workspaceKeys
+      // mediaKeys
       // {
         workspace-last = top "Tab" "hl.dsp.focus({ workspace = \"previous\" })" "last workspace" // {
           mark = true;
@@ -336,8 +271,12 @@ in
           dispatch = "hl.dsp.exec_cmd(\"kitty\")";
           desc = "terminal at the focused window's cwd";
         };
-        launcher = top "space" "hl.dsp.exec_cmd(\"rofi -show drun\")" "application launcher";
-        cheatsheet = top "slash" "hl.dsp.exec_cmd(\"${cfg.cheatsheetCommand}\")" "show all keybinds";
+        launcher = shellKey "SUPER" "space" "launcher" "application launcher";
+        keybinds = shellKey "SUPER" "slash" "keybinds" "keybind reference";
+        dashboard = shellKey "SUPER" "d" "dashboard" "dashboard";
+        sidebar = shellKey "SUPER" "n" "sidebar" "notifications and quick settings";
+        session-menu = shellKey "CTRL ALT" "Delete" "session" "session menu";
+        clear-notifications = lockedKey "CTRL ALT" "c" (shell "clearNotifs") "clear notifications";
         close-window = top "q" "hl.dsp.window.close()" "close window";
         full-width = top "f" "hl.dsp.window.fullscreen(1)" "toggle full width";
         escape-emacs-restart =
@@ -353,6 +292,7 @@ in
       window = {
         key = "w";
         desc = "window and column";
+        sticky = true;
         keys = {
           win-left = sub "h" "hl.dsp.window.move({ direction = \"l\" })" "move left in the strip";
           win-right = sub "l" "hl.dsp.window.move({ direction = \"r\" })" "move right in the strip";
@@ -373,12 +313,26 @@ in
         key = "s";
         desc = "session and system";
         keys = {
+          ses-lock = sub "l" (shell "lock") "lock";
           ses-emacs-restart =
             sub "r" "hl.dsp.exec_cmd(\"systemctl --user restart emacs.service\")"
               "restart the Emacs daemon";
+          ses-shell-restart =
+            sub "c" "hl.dsp.exec_cmd(\"systemctl --user restart caelestia.service\")"
+              "restart the shell";
           ses-reload = subShift "r" "hl.dsp.exec_cmd(\"hyprctl reload\")" "reload Hyprland config";
           ses-suspend = sub "s" "hl.dsp.exec_cmd(\"systemctl suspend\")" "suspend";
           ses-exit = sub "q" "hl.dsp.exit()" "log out";
+        };
+      };
+
+      grab = {
+        key = "g";
+        desc = "grab";
+        keys = {
+          grab-region = sub "r" (shell "screenshot") "screenshot region or window";
+          grab-frozen = sub "f" (shell "screenshotFreeze") "screenshot region of a frozen screen";
+          grab-output = sub "o" "hl.dsp.exec_cmd(\"caelestia screenshot\")" "screenshot output";
         };
       };
 
@@ -411,12 +365,14 @@ in
 
     wayland.windowManager.hyprland = {
       enable = true;
+      package = null;
+      portalPackage = null;
       configType = "lua";
       settings = { };
       extraConfig = ''
         ${settingsLua}
         dofile("${cfg.bindsFile}")
-        pcall(dofile, "${config.local.theme.hyprLua}")
+        pcall(require, "hypr-user")
       '';
     };
 
