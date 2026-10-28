@@ -34,6 +34,7 @@
     ../../modules/nixos/pam-ssh-agent-sudo.nix
     ../../modules/nixos/browser-sync.nix
     ../../modules/nixos/bookshelf.nix
+    ./satisfactory.nix
   ];
 
   networking.hostName = "pi";

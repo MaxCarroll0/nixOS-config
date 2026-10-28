@@ -45,6 +45,7 @@ in
   imports = [
     ./hardware.nix
     ../desktop-common.nix
+    ./satisfactory.nix
   ];
 
   networking.hostName = "desktopnew";

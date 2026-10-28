@@ -938,7 +938,29 @@
         "nixos-raspberrypi": "nixos-raspberrypi",
         "nixpkgs": "nixpkgs_6",
         "nixpkgs-unstable": "nixpkgs-unstable",
+        "satisfactory": "satisfactory",
         "sops-nix": "sops-nix"
+      }
+    },
+    "satisfactory": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1793152605,
+        "narHash": "sha256-Rr84pchGVU8SUA+leLfXZZfkIDdljQ6bWZ+f0VYeQIs=",
+        "ref": "main",
+        "rev": "b58d4600556d50e0705bdb3fa028065cdc601db7",
+        "revCount": 1,
+        "type": "git",
+        "url": "ssh://git@github.com/MaxCarroll0/SatisfactoryServer"
+      },
+      "original": {
+        "ref": "main",
+        "type": "git",
+        "url": "ssh://git@github.com/MaxCarroll0/SatisfactoryServer"
       }
     },
     "sops-nix": {
