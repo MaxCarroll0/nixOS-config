@@ -16,9 +16,9 @@ let
   shell =
     (inputs.caelestia-shell.packages.${system}.with-cli.override { inherit hyprland; }).overrideAttrs
       (old: {
-        patches = (old.patches or [ ]) ++ [ ./patches/caelestia-keybinds-tab.patch ];
+        patches = (old.patches or [ ]) ++ [ ./patches/caelestia-wm.patch ];
         postPatch = (old.postPatch or "") + ''
-          cp ${../quickshell/caelestia/KeybindsTab.qml} modules/dashboard/KeybindsTab.qml
+          cp -r --no-preserve=mode ${../quickshell/caelestia}/. .
         '';
       });
 

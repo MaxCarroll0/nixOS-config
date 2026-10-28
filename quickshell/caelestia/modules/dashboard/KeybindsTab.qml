@@ -2,41 +2,13 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Layouts
-import Quickshell
-import Quickshell.Io
 import Caelestia.Config
 import qs.components
 import qs.services
+import qs.modules.whichkey
 
 Item {
     id: root
-
-    property var keymap: ({})
-
-    readonly property var keyNames: ({
-            comma: ",",
-            period: ".",
-            slash: "/",
-            equal: "=",
-            minus: "-",
-            space: "SPC",
-            Return: "RET",
-            Tab: "TAB",
-            Delete: "<delete>",
-            escape: "ESC"
-        })
-    readonly property var modifierOrder: [["CTRL", "C-"], ["ALT", "M-"], ["SUPER", "s-"]]
-
-    function emacsChord(mods: string, key: string): string {
-        const held = mods.split(" ").filter(m => m.length > 0);
-        const shifted = held.includes("SHIFT");
-        const letter = /^[a-z]$/.test(key);
-        const prefix = modifierOrder.filter(([name]) => held.includes(name)).map(([, emacs]) => emacs).join("");
-        const name = keyNames[key] ?? key;
-        if (shifted && letter)
-            return prefix + name.toUpperCase();
-        return prefix + (shifted ? "S-" : "") + name;
-    }
 
     function entries(keys: var): var {
         const digitRuns = {};
@@ -45,13 +17,12 @@ Item {
             const k = keys[name];
             if (k.key.startsWith("XF86") || k.key === "Print")
                 continue;
-            const digit = /^[1-9]$/.test(k.key) && k.desc.endsWith(" " + k.key);
-            if (digit) {
+            if (/^[1-9]$/.test(k.key) && k.desc.endsWith(" " + k.key)) {
                 const desc = k.desc.slice(0, -1) + "N";
                 const id = k.mods + "|" + desc;
                 if (!digitRuns[id]) {
                     digitRuns[id] = {
-                        chord: emacsChord(k.mods, "1..9"),
+                        chord: WmState.chord(k.mods, "1..9"),
                         desc: desc
                     };
                     out.push(digitRuns[id]);
@@ -59,21 +30,28 @@ Item {
                 continue;
             }
             out.push({
-                chord: emacsChord(k.mods, k.key),
+                chord: WmState.chord(k.mods, k.key),
                 desc: k.desc
             });
         }
         return out.sort((a, b) => a.desc.localeCompare(b.desc));
     }
 
+    readonly property var keymap: WmState.keymap
     readonly property var globalEntries: entries(keymap.root ?? {})
     readonly property var submapColumns: {
         const maps = keymap.submaps ?? {};
         const sections = Object.keys(maps).map(name => ({
                     title: maps[name].desc,
-                    prefix: emacsChord(maps[name].mods, maps[name].key),
+                    prefix: `${WmState.chord(maps[name].mods, maps[name].key)} · ${maps[name].key}`,
                     rows: entries(maps[name].keys ?? {})
-                })).sort((a, b) => b.rows.length - a.rows.length);
+                }));
+        sections.push({
+            title: "keypad",
+            prefix: "N SPC",
+            rows: entries(keymap.keypad ?? {})
+        });
+        sections.sort((a, b) => b.rows.length - a.rows.length);
         const columns = [[], []];
         const heights = [0, 0];
         for (const section of sections) {
@@ -87,19 +65,6 @@ Item {
     implicitWidth: layout.implicitWidth
     implicitHeight: layout.implicitHeight
 
-    FileView {
-        path: `${Quickshell.env("HOME")}/.config/wm/help.json`
-        watchChanges: true
-        onFileChanged: reload()
-        onLoaded: {
-            try {
-                root.keymap = JSON.parse(text());
-            } catch (e) {
-                root.keymap = {};
-            }
-        }
-    }
-
     RowLayout {
         id: layout
 
@@ -109,6 +74,7 @@ Item {
         Section {
             Layout.alignment: Qt.AlignTop
             title: "Global"
+            note: "tap s- for NORMAL (N): the same keys without s-, w s g m p prefixes, SPC keypad, ESC or i back"
             columns: 2
             rows: root.globalEntries
         }
@@ -145,6 +111,7 @@ Item {
 
         property string title
         property string prefix
+        property string note
         property var rows: []
         property int columns: 1
 
@@ -178,7 +145,18 @@ Item {
                 }
             }
 
+            StyledText {
+                Layout.maximumWidth: grid.implicitWidth
+                visible: section.note.length > 0
+                text: section.note
+                font: Tokens.font.label.small
+                color: Colours.palette.m3outline
+                wrapMode: Text.WordWrap
+            }
+
             GridLayout {
+                id: grid
+
                 columns: section.columns
                 rowSpacing: Tokens.spacing.extraSmall
                 columnSpacing: Tokens.spacing.large
@@ -194,7 +172,7 @@ Item {
                         spacing: Tokens.spacing.small
 
                         Item {
-                            Layout.preferredWidth: 116
+                            Layout.preferredWidth: 128
                             implicitHeight: cap.implicitHeight
 
                             KeyCap {
@@ -214,27 +192,6 @@ Item {
                     }
                 }
             }
-        }
-    }
-
-    component KeyCap: StyledRect {
-        id: cap
-
-        property alias text: label.text
-        property bool prominent
-
-        implicitWidth: Math.max(label.implicitWidth + Tokens.padding.small * 2, implicitHeight)
-        implicitHeight: label.implicitHeight + Tokens.padding.extraSmall * 2
-
-        radius: Tokens.rounding.small
-        color: prominent ? Colours.palette.m3primaryContainer : Colours.tPalette.m3surfaceContainerHigh
-
-        StyledText {
-            id: label
-
-            anchors.centerIn: parent
-            font: Tokens.font.mono.small
-            color: cap.prominent ? Colours.palette.m3onPrimaryContainer : Colours.palette.m3onSurface
         }
     }
 }

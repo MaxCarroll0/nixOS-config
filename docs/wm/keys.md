@@ -11,12 +11,27 @@ Keyboard context: gb layout, `caps:escape` already set in `modules/nixos/desktop
 
 ## 1. Structure
 
-Flat `SUPER` chords for the hot path, Emacs-style prefix submaps for the long tail. The split
-is by frequency, not by category: anything pressed hundreds of times a day gets a single chord
-and no modal state, everything else gets a discoverable prefix.
+The WM keymap behaves like meow with which-key. There are two ways to reach every command, and
+both are generated from the same attrset in `home/hyprland.nix`:
 
-Hyprland `submap`s are modal prefix keymaps — the direct analogue of `C-x` in Emacs. Entering
-one raises a which-key panel (see §4) and any unbound key exits it.
+- **Chords, from anywhere:** flat `SUPER` chords for the hot path, plus `SUPER` + a letter for
+  each prefix map. These work in apps and in NORMAL alike.
+- **NORMAL state, like meow normal:** tapping `SUPER` alone (or `s-ESC`) enters a sticky
+  `normal` submap, shown as an `N` pill under the bar's logo. Inside it, every plain
+  `SUPER`/`SUPER SHIFT` chord also works with `SUPER` dropped (`h`, `H`, `1`, `q` ...), the
+  prefix maps open on their bare letter (`w s g m p`), and `SPC` opens the **keypad**: a leader
+  holding the prefix maps plus a few keypad-only bindings (`SPC SPC` launcher, `SPC /` reference).
+  `ESC`, `i` or another `SUPER` tap goes back to the apps. Unbound keys are swallowed, as in meow.
+
+Hyprland `submap`s are the prefix maps, the direct analogue of `C-x` in Emacs. A prefix map runs
+one command and exits, back to wherever it was entered from (the apps or NORMAL), unless it is
+`sticky` (the window map, so moves repeat). Global binds are inactive inside a submap, so the
+generator copies the global chords into `normal` and emits every prefix map twice: `NAME` for
+the chord route and `normal:NAME` for the NORMAL route.
+
+A binding marked `insert` hands the keyboard to an application (launcher, eshell, consult, ace,
+project prompts). From NORMAL it returns to the apps after running, the way meow commands drop
+into insert state; which-key marks these with ↩.
 
 ## 2. Flat hot path
 
@@ -103,20 +118,21 @@ than polish.
 - **Emacs:** `which-key-mode`, which is **built into Emacs 30+** — the config runs 30.2, so no
   new package is needed. Rendered as a child frame (tier 2) to match the WM panel visually.
   `meow-cheatsheet` already exists on `SPC ?`.
-- **Hyprland:** entering a submap raises a layer-shell which-key panel, drawn by **quickshell**,
-  which is the session's single shell layer — the same process will own the bar, launcher,
-  notifications, the ace overlay and the kill-ring picker, so everything shares one style and
-  one data source. Built once, used many times.
-- **Bar indicator:** the active submap is shown persistently, so it is impossible to be in a
-  mode without knowing.
+- **Hyprland:** entering the keypad or a prefix map raises a which-key panel drawn inside the
+  **Caelestia** shell (`quickshell/caelestia/modules/whichkey/`), on the overlay layer with no
+  keyboard focus, in Caelestia's colours and fonts. It shows a breadcrumb (`NORMAL` `SPC`
+  `w`), `+prefix` entries, and ↩ on `insert` bindings.
+- **Bar indicator:** an `N` pill under the bar's logo while in NORMAL or anything entered from it,
+  so it is impossible to be in a mode without knowing.
+- **Reference:** the dashboard's Keybinds tab (`s-/`, or `SPC /` in NORMAL) lists everything in
+  Emacs key notation.
 
-Both are **built** (`quickshell/shell.qml`). The panel appears after a ~400 ms idle delay, so a
-fast chord never flashes it, matching `which-key-idle-delay`. quickshell learns the active
-submap by reading Hyprland's event socket (`submap>>NAME` on entry, `submap>>` on reset) rather
-than the bindings pushing to it, so the keymap generator stays ignorant of the UI and the two
-cannot desynchronise. Rows come from the generated `~/.config/wm/help.json` and colours from
-`~/.local/state/theme/palette.json`, both watched for changes: adding a binding or switching
-scheme needs no QML edit and no restart.
+All three are **built**. The panel appears after a ~400 ms idle delay, so a fast chord never
+flashes it, matching `which-key-idle-delay`; once visible it follows deeper prefixes without
+waiting again. Caelestia learns the active submap from Hyprland's `submap` event (`WmState`
+singleton) rather than the bindings pushing to it, so the keymap generator stays ignorant of the
+UI and the two cannot desynchronise. Rows come from the `modes` in the generated
+`~/.config/wm/help.json`, watched for changes.
 - **Generated from the same attrset as the bindings**, so a panel can never describe a keymap
   that no longer exists.
 

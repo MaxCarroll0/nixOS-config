@@ -23,6 +23,19 @@ index adc4e4c..6b6fe6e 100644
      // qmllint disable unresolved-type
      CustomShortcut {
          // qmllint enable unresolved-type
+diff --git a/modules/bar/Bar.qml b/modules/bar/Bar.qml
+index 3399f1d..ad8d545 100644
+--- a/modules/bar/Bar.qml
++++ b/modules/bar/Bar.qml
+@@ -122,7 +122,7 @@ ColumnLayout {
+             DelegateChoice {
+                 roleValue: "logo"
+                 delegate: EntryWrapper {
+-                    OsIcon {
++                    WmMode {
+                         objectName: "taskbarLogo"
+                     }
+                 }
 diff --git a/modules/dashboard/Content.qml b/modules/dashboard/Content.qml
 index a10edce..e3cc406 100644
 --- a/modules/dashboard/Content.qml
@@ -53,3 +66,23 @@ index a10edce..e3cc406 100644
              Behavior on contentX {
                  Anim {}
              }
+diff --git a/shell.qml b/shell.qml
+index 60cb877..cba04f3 100644
+--- a/shell.qml
++++ b/shell.qml
+@@ -12,6 +12,7 @@ import qs.modules.areapicker
+ import qs.modules.background
+ import qs.modules.drawers
+ import qs.modules.lock
++import qs.modules.whichkey
+ import qs.daemons
+ 
+ ShellRoot {
+@@ -44,6 +45,7 @@ ShellRoot {
+     Background {}
+     Drawers {}
+     AreaPicker {}
++    WhichKey {}
+     Lock {
+         id: lock
+     }

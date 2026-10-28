@@ -213,12 +213,13 @@ let
       ;
     owner = "emacs";
   };
+
+  typing = b: b // { insert = true; };
 in
 {
   imports = [
     ./wm-keys.nix
     ./wm-bridge.nix
-    ./quickshell.nix
     ./caelestia.nix
   ];
 
@@ -241,6 +242,7 @@ in
           dispatch = "hl.dsp.window.cycle_next()";
           desc = "jump to any window or Emacs split";
           mark = true;
+          insert = true;
         };
         ace-swap = {
           key = "o";
@@ -249,11 +251,13 @@ in
           elisp = "wm-ace-swap";
           dispatch = "hl.dsp.window.swap({ direction = \"r\" })";
           desc = "swap with a chosen window";
+          insert = true;
         };
         switch-buffer = emacsKey "SUPER" "b" "wm-switch-buffer" "switch buffer, window or browser tab" // {
           mark = true;
+          insert = true;
         };
-        kill-ring = emacsKey "SUPER" "y" "wm-kill-ring" "yank from the Emacs kill ring";
+        kill-ring = typing (emacsKey "SUPER" "y" "wm-kill-ring" "yank from the Emacs kill ring");
         mark-pop = emacsKey "SUPER" "comma" "wm-mark-pop" "pop the unified mark ring";
         mark-unpop = emacsKey "SUPER" "period" "wm-mark-unpop" "unpop the unified mark ring";
         eshell-here = {
@@ -262,6 +266,7 @@ in
           elisp = "wm-eshell-here";
           dispatch = "hl.dsp.exec_cmd(\"kitty\")";
           desc = "eshell at the focused window's cwd";
+          insert = true;
         };
         term-here = {
           key = "Return";
@@ -270,23 +275,34 @@ in
           elisp = "wm-term-here";
           dispatch = "hl.dsp.exec_cmd(\"kitty\")";
           desc = "terminal at the focused window's cwd";
+          insert = true;
         };
-        launcher = shellKey "SUPER" "space" "launcher" "application launcher";
+        launcher = typing (shellKey "SUPER" "space" "launcher" "application launcher");
         keybinds = shellKey "SUPER" "slash" "keybinds" "keybind reference";
         dashboard = shellKey "SUPER" "d" "dashboard" "dashboard";
         sidebar = shellKey "SUPER" "n" "sidebar" "notifications and quick settings";
-        session-menu = shellKey "CTRL ALT" "Delete" "session" "session menu";
+        session-menu = typing (shellKey "CTRL ALT" "Delete" "session" "session menu");
         clear-notifications = lockedKey "CTRL ALT" "c" (shell "clearNotifs") "clear notifications";
         close-window = top "q" "hl.dsp.window.close()" "close window";
         full-width = top "f" "hl.dsp.window.fullscreen(1)" "toggle full width";
         escape-emacs-restart =
           escape "r" "hl.dsp.exec_cmd(\"systemctl --user restart emacs.service\")"
             "restart the Emacs daemon";
-        escape-terminal = escape "e" "hl.dsp.exec_cmd(\"kitty\")" "terminal not depending on Emacs";
+        escape-terminal = typing (
+          escape "e" "hl.dsp.exec_cmd(\"kitty\")" "terminal not depending on Emacs"
+        );
         escape-panic =
           escape "p" "hl.dsp.exec_cmd(\"${cfg.panicCommand}\")"
             "make bridge keys dispatch directly";
       };
+
+    local.wm.keypad = {
+      kp-launcher = typing (hyprKey "" "space" (shell "launcher") "application launcher");
+      kp-keybinds = hyprKey "" "slash" (shell "keybinds") "keybind reference";
+      kp-dashboard = hyprKey "" "d" (shell "dashboard") "dashboard";
+      kp-sidebar = hyprKey "" "n" (shell "sidebar") "notifications and quick settings";
+      kp-session = typing (hyprKey "" "x" (shell "session") "session menu");
+    };
 
     local.wm.submaps = {
       window = {
@@ -355,10 +371,10 @@ in
         key = "p";
         desc = "project";
         keys = {
-          prj-switch = emacsKey "" "p" "wm-project-switch" "switch project";
-          prj-eshell = emacsKey "" "e" "wm-project-eshell" "eshell in project root";
-          prj-dired = emacsKey "" "d" "wm-project-dired" "dired in project root";
-          prj-magit = emacsKey "" "g" "wm-project-magit" "magit status";
+          prj-switch = typing (emacsKey "" "p" "wm-project-switch" "switch project");
+          prj-eshell = typing (emacsKey "" "e" "wm-project-eshell" "eshell in project root");
+          prj-dired = typing (emacsKey "" "d" "wm-project-dired" "dired in project root");
+          prj-magit = typing (emacsKey "" "g" "wm-project-magit" "magit status");
         };
       };
     };

@@ -48,6 +48,11 @@ let
         default = false;
         description = "Whether this binding pushes the unified mark ring.";
       };
+      insert = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Whether the binding hands the keyboard to an application, leaving NORMAL.";
+      };
       flags = lib.mkOption {
         type = lib.types.listOf (
           lib.types.enum [
@@ -99,7 +104,7 @@ let
   '';
 
   bridgeEntries = lib.filterAttrs (_: b: b.owner == "bridge") (
-    cfg.keys // lib.concatMapAttrs (_: s: s.keys) cfg.submaps
+    cfg.keys // cfg.keypad // lib.concatMapAttrs (_: s: s.keys) cfg.submaps
   );
 
   wmDispatch = pkgs.writeShellScriptBin "wm-dispatch" ''
@@ -166,33 +171,193 @@ let
 
   bindLine = b: bindWith (bindTarget b) b;
 
-  oneShotLine =
-    b: bindWith "function() hl.dispatch(hl.dsp.submap(\"reset\")); hl.dispatch(${bindTarget b}) end" b;
+  submapTo = name: "hl.dsp.submap(${luaStr name})";
+
+  oneShotTo =
+    exit: b: bindWith "function() hl.dispatch(${submapTo exit}); hl.dispatch(${bindTarget b}) end" b;
 
   named = attrs: lib.mapAttrsToList (name: b: b // { inherit name; }) attrs;
 
-  submapBlock = name: s: ''
-    hl.define_submap(${luaStr name}, function()
+  modsOf = b: lib.filter (s: s != "") (lib.splitString " " b.mods);
+  withoutSuper = b: b // { mods = lib.concatStringsSep " " (lib.remove "SUPER" (modsOf b)); };
+  chordId = b: "${lib.concatStringsSep " " (modsOf b)}|${b.key}";
+
+  plainSuper =
+    b:
+    let
+      m = modsOf b;
+    in
+    lib.elem "SUPER" m && !(lib.elem "CTRL" m) && !(lib.elem "ALT" m);
+
+  normalReserved = [
+    "|escape"
+    "|i"
+    "|space"
+  ]
+  ++ lib.mapAttrsToList (_: s: chordId (withoutSuper s)) cfg.submaps;
+
+  normalBare = lib.filter (b: !(lib.elem (chordId b) normalReserved)) (
+    map withoutSuper (lib.filter plainSuper (named cfg.keys))
+  );
+
+  inNormal = name: "normal:${name}";
+  exitFor = context: if context == "normal" then "normal" else "reset";
+  nameIn = context: name: if context == "normal" then inNormal name else name;
+
+  entryLine =
+    s: target:
+    bindWith (submapTo target) {
+      inherit (s) mods key desc;
+      flags = [ ];
+    };
+
+  closeLines = exit: ''
+    hl.bind("escape", ${submapTo exit})
+      hl.bind("catchall", ${submapTo exit})
+  '';
+
+  normalLine = b: if b.insert then oneShotTo "reset" b else bindLine b;
+
+  prefixLine =
+    context: s: b:
+    if context == "normal" && b.insert then
+      oneShotTo "reset" b
+    else if s.sticky then
+      bindLine b
+    else
+      oneShotTo (exitFor context) b;
+
+  prefixBlock = context: name: s: ''
+    hl.define_submap(${luaStr (nameIn context name)}, function()
+    ${lib.concatStringsSep "\n" (map (b: "  " + prefixLine context s b) (named s.keys))}
+      ${closeLines (exitFor context)}
+    end)
+  '';
+
+  toApps = desc: extra: "${submapTo "reset"}, { description = ${luaStr desc}${extra} }";
+
+  normalBlock = ''
+    hl.define_submap("normal", function()
+    ${lib.concatStringsSep "\n" (map (b: "  " + normalLine b) (named cfg.keys))}
     ${lib.concatStringsSep "\n" (
-      map (b: "  " + (if s.sticky then bindLine b else oneShotLine b)) (named s.keys)
+      lib.mapAttrsToList (name: s: "  " + entryLine s (inNormal name)) cfg.submaps
     )}
-      hl.bind("escape", hl.dsp.submap("reset"))
-      hl.bind("catchall", hl.dsp.submap("reset"))
+    ${lib.concatStringsSep "\n" (map (b: "  " + normalLine b) normalBare)}
+    ${lib.concatStringsSep "\n" (
+      lib.mapAttrsToList (name: s: "  " + entryLine (withoutSuper s) (inNormal name)) cfg.submaps
+    )}
+      hl.bind("space", ${submapTo "normal:keypad"}, { description = "keypad" })
+      hl.bind("escape", ${toApps "back to apps" ""})
+      hl.bind("i", ${toApps "back to apps" ""})
+      hl.bind("SUPER+Super_L", ${toApps "back to apps" ", release = true"})
+      hl.bind("SUPER+escape", ${toApps "back to apps" ""})
+      hl.bind("catchall", hl.dsp.no_op())
+    end)
+  '';
+
+  keypadBlock = ''
+    hl.define_submap("normal:keypad", function()
+    ${lib.concatStringsSep "\n" (
+      lib.mapAttrsToList (name: s: "  " + entryLine (withoutSuper s) (inNormal name)) cfg.submaps
+    )}
+    ${lib.concatStringsSep "\n" (
+      map (b: "  " + oneShotTo (if b.insert then "reset" else "normal") b) (named cfg.keypad)
+    )}
+      ${closeLines "normal"}
     end)
   '';
 
   bindsLua = pkgs.writeText "binds.lua" ''
     ${lib.concatStringsSep "\n" (map bindLine (named cfg.keys))}
 
-    ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (
-        name: s:
-        "hl.bind(${luaStr (keySpec s)}, hl.dsp.submap(${luaStr name}), { description = ${luaStr s.desc} })"
-      ) cfg.submaps
-    )}
+    ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: s: entryLine s name) cfg.submaps)}
 
-    ${lib.concatStringsSep "\n" (lib.mapAttrsToList submapBlock cfg.submaps)}
+    hl.bind("SUPER+Super_L", ${submapTo "normal"}, { description = "NORMAL state", release = true })
+    hl.bind("SUPER+escape", ${submapTo "normal"}, { description = "NORMAL state" })
+
+    ${lib.concatStringsSep "\n" (lib.mapAttrsToList (prefixBlock "global") cfg.submaps)}
+    ${lib.concatStringsSep "\n" (lib.mapAttrsToList (prefixBlock "normal") cfg.submaps)}
+    ${normalBlock}
+    ${keypadBlock}
   '';
+
+  entryOf = b: {
+    inherit (b)
+      mods
+      key
+      desc
+      insert
+      ;
+    prefix = false;
+  };
+  prefixEntryOf = s: {
+    inherit (withoutSuper s) mods key desc;
+    prefix = true;
+    insert = false;
+  };
+  normalLabel = {
+    label = "NORMAL";
+  };
+  keypadKey = {
+    mods = "";
+    key = "space";
+  };
+
+  modes =
+    lib.mapAttrs (_: s: {
+      title = s.desc;
+      inherit (s) sticky;
+      path = [ { inherit (s) mods key; } ];
+      entries = map entryOf (lib.attrValues s.keys);
+    }) cfg.submaps
+    // lib.mapAttrs' (
+      name: s:
+      lib.nameValuePair (inNormal name) {
+        title = s.desc;
+        inherit (s) sticky;
+        path = [
+          normalLabel
+          { inherit (withoutSuper s) mods key; }
+        ];
+        entries = map entryOf (lib.attrValues s.keys);
+      }
+    ) cfg.submaps
+    // {
+      normal = {
+        title = "NORMAL";
+        sticky = true;
+        path = [ normalLabel ];
+        entries =
+          map entryOf normalBare
+          ++ map prefixEntryOf (lib.attrValues cfg.submaps)
+          ++ [
+            (
+              keypadKey
+              // {
+                desc = "keypad";
+                prefix = true;
+                insert = false;
+              }
+            )
+            {
+              mods = "";
+              key = "escape";
+              desc = "back to apps";
+              prefix = false;
+              insert = true;
+            }
+          ];
+      };
+      "normal:keypad" = {
+        title = "keypad";
+        sticky = false;
+        path = [
+          normalLabel
+          keypadKey
+        ];
+        entries = map prefixEntryOf (lib.attrValues cfg.submaps) ++ map entryOf (lib.attrValues cfg.keypad);
+      };
+    };
 
   helpData = {
     root = lib.mapAttrs (_: b: {
@@ -216,6 +381,16 @@ let
           ;
       }) s.keys;
     }) cfg.submaps;
+    keypad = lib.mapAttrs (_: b: {
+      inherit (b)
+        mods
+        key
+        desc
+        owner
+        mark
+        ;
+    }) cfg.keypad;
+    inherit modes;
   };
 
   toElisp =
@@ -259,7 +434,25 @@ let
   ++ lib.mapAttrsToList (name: s: {
     label = "submap ${name}";
     keys = s.keys;
-  }) cfg.submaps;
+  }) cfg.submaps
+  ++ [
+    {
+      label = "keypad";
+      keys = cfg.keypad;
+    }
+  ];
+
+  prefixChords = lib.mapAttrs (_: withoutSuper) cfg.submaps;
+  chordOnlyMaps = [
+    {
+      label = "keypad with its prefixes";
+      keys = cfg.keypad // prefixChords;
+    }
+    {
+      label = "global with its prefixes";
+      keys = cfg.keys // cfg.submaps;
+    }
+  ];
 
   chordsOf = keys: lib.mapAttrsToList (_: b: "${b.mods}, ${b.key}") keys;
   dupesIn =
@@ -268,7 +461,7 @@ let
       c = chordsOf keys;
     in
     lib.unique (lib.filter (k: lib.count (x: x == k) c > 1) c);
-  mapsWithDupes = lib.filter (m: dupesIn m.keys != [ ]) allMaps;
+  mapsWithDupes = lib.filter (m: dupesIn m.keys != [ ]) (allMaps ++ chordOnlyMaps);
 
   everyBinding = lib.concatMap (m: named m.keys) allMaps;
   allNames = map (b: b.name) everyBinding;
@@ -298,7 +491,13 @@ in
     submaps = lib.mkOption {
       type = lib.types.attrsOf submapType;
       default = { };
-      description = "Prefix submaps and their bindings.";
+      description = "Prefix submaps, entered by chord, by bare key in NORMAL, and from the keypad.";
+    };
+
+    keypad = lib.mkOption {
+      type = lib.types.attrsOf bindingType;
+      default = { };
+      description = "Keypad bindings reached with SPC in NORMAL, alongside the prefix submaps.";
     };
 
     panicCommand = lib.mkOption {
