@@ -39,6 +39,7 @@
 
   networking.hostName = "pi";
   boot.kernelParams = [ "psi=1" ];
+  boot.kernel.sysctl."net.ipv4.ip_nonlocal_bind" = 1;
   boot.kernelModules = [ "drivetemp" ];
   networking.hosts."100.117.13.66" = [
     "observatory"
