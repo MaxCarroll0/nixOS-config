@@ -30,6 +30,7 @@ in
   local.satisfactory.backupStore = {
     enable = true;
     address = facts.pi.tailscale;
+    dataDir = "${config.local.nas.dataRoot}/backups/restic";
     htpasswdFile = config.sops.secrets.satisfactory-restic-htpasswd.path;
   };
 }
