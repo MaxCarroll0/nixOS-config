@@ -39,6 +39,7 @@ let
     "input.kb_layout" = "gb";
     "input.kb_options" = "caps:none";
     "input.follow_mouse" = 0;
+    "input.focus_on_close" = 0;
   };
 
   settingsLua = ''
