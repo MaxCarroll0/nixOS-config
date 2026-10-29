@@ -25,7 +25,8 @@ Singleton {
             Return: "RET",
             Tab: "TAB",
             Delete: "<delete>",
-            escape: "ESC"
+            escape: "ESC",
+            "code:66": "Caps"
         })
     readonly property var modifierOrder: [["CTRL", "C-"], ["ALT", "M-"], ["SUPER", "s-"]]
 

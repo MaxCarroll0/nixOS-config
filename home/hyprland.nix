@@ -32,7 +32,7 @@ let
     "scrolling.follow_focus" = true;
 
     "input.kb_layout" = "gb";
-    "input.kb_options" = "caps:escape";
+    "input.kb_options" = "caps:none";
     "input.follow_mouse" = 0;
   };
 
@@ -76,6 +76,21 @@ let
     })
 
     hl.env("QT_QPA_PLATFORMTHEME", "gtk3")
+
+    local function row_of(window)
+        return window and type(window.layout) == "table" and window.layout.index_in_column
+    end
+
+    function wm_move_keeping_row(direction)
+        local row = row_of(hl.get_active_window())
+        hl.dispatch(hl.dsp.window.move({ direction = direction }))
+        if not row then return end
+        for _ = 1, 16 do
+            local now = row_of(hl.get_active_window())
+            if not now or now <= row then return end
+            hl.dispatch(hl.dsp.window.move({ direction = "u" }))
+        end
+    end
 
     hl.on("hyprland.start", function()
         hl.exec_cmd("hyprctl setcursor " .. vars.cursorTheme .. " " .. vars.cursorSize)
@@ -284,7 +299,7 @@ in
         session-menu = typing (shellKey "CTRL ALT" "Delete" "session" "session menu");
         clear-notifications = lockedKey "CTRL ALT" "c" (shell "clearNotifs") "clear notifications";
         close-window = top "q" "hl.dsp.window.close()" "close window";
-        full-width = top "f" "hl.dsp.window.fullscreen(1)" "toggle full width";
+        full-width = top "f" "hl.dsp.window.fullscreen({ mode = \"maximized\" })" "toggle full width";
         escape-emacs-restart =
           escape "r" "hl.dsp.exec_cmd(\"systemctl --user restart emacs.service\")"
             "restart the Emacs daemon";
@@ -310,16 +325,22 @@ in
         desc = "window and column";
         sticky = true;
         keys = {
-          win-left = sub "h" "hl.dsp.window.move({ direction = \"l\" })" "move left in the strip";
-          win-right = sub "l" "hl.dsp.window.move({ direction = \"r\" })" "move right in the strip";
+          win-left = sub "h" "function() wm_move_keeping_row(\"l\") end" "move left";
+          win-right = sub "l" "function() wm_move_keeping_row(\"r\") end" "move right";
           win-up = sub "k" "hl.dsp.window.move({ direction = \"u\" })" "move up within the column";
           win-down = sub "j" "hl.dsp.window.move({ direction = \"d\" })" "move down within the column";
           win-wider = sub "equal" "hl.dsp.layout(\"colresize +conf\")" "next column width preset";
           win-narrower = sub "minus" "hl.dsp.layout(\"colresize -conf\")" "previous column width preset";
-          win-fit = sub "f" "hl.dsp.layout(\"fit active\")" "fit the active column";
+          win-fit = sub "a" "hl.dsp.layout(\"fit active\")" "fit the active column";
+          win-fill =
+            sub "f"
+              "function() hl.dispatch(hl.dsp.layout(\"promote\")); hl.dispatch(hl.dsp.layout(\"colresize 1\")) end"
+              "fill";
           win-fit-visible = sub "v" "hl.dsp.layout(\"fit visible\")" "fit all visible columns";
           win-promote = sub "p" "hl.dsp.layout(\"promote\")" "promote window to its own column";
           win-expel = sub "e" "hl.dsp.layout(\"expel\")" "expel window from the column";
+          win-fill-row = sub "r" "hl.dsp.layout(\"colresize 1\")" "fill row";
+          win-fill-column = sub "c" "hl.dsp.layout(\"promote\")" "fill column";
           win-float = sub "t" "hl.dsp.window.float()" "toggle floating";
           win-close = sub "d" "hl.dsp.window.close()" "close window";
         };

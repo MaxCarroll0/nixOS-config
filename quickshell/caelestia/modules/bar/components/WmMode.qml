@@ -16,24 +16,20 @@ ColumnLayout {
     StyledRect {
         Layout.alignment: Qt.AlignHCenter
         implicitWidth: Tokens.sizes.bar.innerWidth
-        implicitHeight: WmState.normal ? label.implicitHeight + Tokens.padding.small * 2 : 0
-        visible: implicitHeight > 0
-        clip: true
+        implicitHeight: label.implicitHeight + Tokens.padding.small * 2
 
         radius: Tokens.rounding.full
-        color: Colours.palette.m3primary
+        color: WmState.normal ? Colours.palette.m3onSurface : Colours.palette.m3surfaceContainerHigh
+        border.width: WmState.normal ? 2 : 1
+        border.color: Colours.palette.m3outlineVariant
 
         StyledText {
             id: label
 
             anchors.centerIn: parent
-            text: "N"
+            text: WmState.normal ? "N" : "I"
             font: Tokens.font.mono.builders.small.weight(Font.Bold).build()
-            color: Colours.palette.m3onPrimary
-        }
-
-        Behavior on implicitHeight {
-            Anim {}
+            color: WmState.normal ? Colours.palette.m3surface : Colours.palette.m3onSurfaceVariant
         }
     }
 }

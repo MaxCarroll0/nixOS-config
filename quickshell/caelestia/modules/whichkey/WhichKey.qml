@@ -13,16 +13,17 @@ Scope {
     id: root
 
     property bool shown
-    readonly property int rowsPerColumn: 8
+    property var shownMode: null
+    readonly property int rowsPerColumn: Math.max(8, Math.ceil(entries.length / 4))
 
-    readonly property var entries: (WmState.mode?.entries ?? []).map(e => ({
+    readonly property var entries: (root.shownMode?.entries ?? []).map(e => ({
                 chord: WmState.chord(e.mods, e.key),
                 desc: e.desc,
                 prefix: e.prefix,
                 insert: e.insert
             })).sort((a, b) => a.chord.localeCompare(b.chord))
 
-    readonly property var path: (WmState.mode?.path ?? []).map(p => p.label ?? WmState.chord(p.mods, p.key))
+    readonly property var path: (root.shownMode?.path ?? []).map(p => p.label ?? WmState.chord(p.mods, p.key))
 
     Timer {
         id: delay
@@ -35,6 +36,8 @@ Scope {
         target: WmState
 
         function onSubmapChanged(): void {
+            if (WmState.prefixActive)
+                root.shownMode = WmState.mode;
             if (!WmState.prefixActive) {
                 delay.stop();
                 root.shown = false;
@@ -97,7 +100,7 @@ Scope {
 
                     StyledText {
                         Layout.leftMargin: Tokens.spacing.small
-                        text: WmState.mode?.title ?? ""
+                        text: root.shownMode?.title ?? ""
                         font: Tokens.font.title.small
                         color: Colours.palette.m3primary
                     }
@@ -108,7 +111,7 @@ Scope {
 
                     StyledText {
                         Layout.leftMargin: Tokens.spacing.large
-                        text: WmState.mode?.sticky ? "ESC to leave" : "ESC to cancel"
+                        text: root.shownMode?.sticky ? "i to insert" : "BKSP back  ESC cancel"
                         font: Tokens.font.label.small
                         color: Colours.palette.m3outline
                     }

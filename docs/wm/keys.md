@@ -6,7 +6,7 @@ Emacs one) and they must not drift apart. This document is the spec that
 Emacs `keys.el`, and both which-key panels from one source, so the help can never disagree with
 the actual bindings.
 
-Keyboard context: gb layout, `caps:escape` already set in `modules/nixos/desktop-env.nix`.
+Keyboard context: gb layout. Under Hyprland, Caps Lock is `caps:none` and bound by keycode as the NORMAL leader.
 `SUPER` is the WM modifier throughout and is never used by Emacs, so no key is contested.
 
 ## 1. Structure
@@ -16,12 +16,16 @@ both are generated from the same attrset in `home/hyprland.nix`:
 
 - **Chords, from anywhere:** flat `SUPER` chords for the hot path, plus `SUPER` + a letter for
   each prefix map. These work in apps and in NORMAL alike.
-- **NORMAL state, like meow normal:** tapping `SUPER` alone (or `s-ESC`) enters a sticky
-  `normal` submap, shown as an `N` pill under the bar's logo. Inside it, every plain
+- **NORMAL state, like meow normal:** Caps Lock (or `s-ESC`) enters a sticky `normal` submap.
+  The bar always shows the mode (`I` or `N`), and NORMAL lightens the shell frame and thickens
+  window borders. Caps Lock on a focused Emacs is first offered to Emacs, which leaves insert
+  state if it is in one and otherwise hands back NORMAL; a fullscreen window just gets `Escape`,
+  and going fullscreen leaves NORMAL. Inside it, every plain
   `SUPER`/`SUPER SHIFT` chord also works with `SUPER` dropped (`h`, `H`, `1`, `q` ...), the
   prefix maps open on their bare letter (`w s g m p`), and `SPC` opens the **keypad**: a leader
   holding the prefix maps plus a few keypad-only bindings (`SPC SPC` launcher, `SPC /` reference).
-  `ESC`, `i` or another `SUPER` tap goes back to the apps. Unbound keys are swallowed, as in meow.
+  `i` or `ESC` goes back to the apps; Caps Lock inside a prefix map returns to NORMAL. Unbound keys are swallowed, as in meow; mouse
+  input passes through, and `BKSP` steps out of a prefix map.
 
 Hyprland `submap`s are the prefix maps, the direct analogue of `C-x` in Emacs. A prefix map runs
 one command and exits, back to wherever it was entered from (the apps or NORMAL), unless it is

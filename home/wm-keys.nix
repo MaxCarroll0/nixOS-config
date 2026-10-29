@@ -213,6 +213,8 @@ let
 
   closeLines = exit: ''
     hl.bind("escape", ${submapTo exit})
+      hl.bind("BackSpace", ${submapTo exit})
+      hl.bind(${luaStr leaderKey}, ${submapTo "normal"})
       hl.bind("catchall", ${submapTo exit})
   '';
 
@@ -234,6 +236,64 @@ let
     end)
   '';
 
+  leaderKey = "code:66";
+
+  mouseInputs = map (b: "mouse:${toString b}") (lib.range 272 276) ++ [
+    "mouse_up"
+    "mouse_down"
+    "mouse_left"
+    "mouse_right"
+  ];
+
+  leaderLua = ''
+    local wm_border = hl.get_config("general.border_size") or 1
+    wm_leader_pending = false
+
+    function wm_leader_ack(enter_normal)
+      wm_leader_pending = false
+      if enter_normal then
+        return hl.dsp.submap("normal")
+      end
+      return hl.dsp.no_op()
+    end
+
+    local function wm_leader()
+      local window = hl.get_active_window()
+      if window and window.fullscreen >= 2 then
+        hl.dispatch(hl.dsp.send_shortcut({ mods = "", key = "Escape" }))
+      elseif window and window.class == "emacs" then
+        wm_leader_pending = true
+        hl.dispatch(hl.dsp.send_shortcut({ mods = "SUPER", key = "F12" }))
+        hl.timer(function()
+          if wm_leader_pending then
+            wm_leader_pending = false
+            hl.dispatch(hl.dsp.submap("normal"))
+          end
+        end, { timeout = 150, type = "oneshot" })
+      else
+        hl.dispatch(hl.dsp.submap("normal"))
+      end
+    end
+
+    local function in_apps(name)
+      return name == nil or name == "" or name == "default" or name == "reset"
+    end
+
+    hl.on("keybinds.submap", function(name)
+      hl.config({ ["general.border_size"] = in_apps(name) and wm_border or wm_border + 2 })
+    end)
+
+    local function insert_when_fullscreen()
+      local window = hl.get_active_window()
+      if window and window.fullscreen >= 2 and not in_apps(hl.get_current_submap()) then
+        hl.dispatch(hl.dsp.submap("reset"))
+      end
+    end
+
+    hl.on("window.fullscreen", insert_when_fullscreen)
+    hl.on("window.active", insert_when_fullscreen)
+  '';
+
   toApps = desc: extra: "${submapTo "reset"}, { description = ${luaStr desc}${extra} }";
 
   normalBlock = ''
@@ -249,8 +309,11 @@ let
       hl.bind("space", ${submapTo "normal:keypad"}, { description = "keypad" })
       hl.bind("escape", ${toApps "back to apps" ""})
       hl.bind("i", ${toApps "back to apps" ""})
-      hl.bind("SUPER+Super_L", ${toApps "back to apps" ", release = true"})
+      hl.bind(${luaStr leaderKey}, hl.dsp.no_op(), { description = "stay in NORMAL" })
       hl.bind("SUPER+escape", ${toApps "back to apps" ""})
+    ${lib.concatMapStringsSep "\n" (
+      m: "  hl.bind(${luaStr m}, hl.dsp.no_op(), { non_consuming = true })"
+    ) mouseInputs}
       hl.bind("catchall", hl.dsp.no_op())
     end)
   '';
@@ -272,7 +335,8 @@ let
 
     ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: s: entryLine s name) cfg.submaps)}
 
-    hl.bind("SUPER+Super_L", ${submapTo "normal"}, { description = "NORMAL state", release = true })
+    ${leaderLua}
+    hl.bind(${luaStr leaderKey}, wm_leader, { description = "NORMAL state" })
     hl.bind("SUPER+escape", ${submapTo "normal"}, { description = "NORMAL state" })
 
     ${lib.concatStringsSep "\n" (lib.mapAttrsToList (prefixBlock "global") cfg.submaps)}
@@ -281,17 +345,24 @@ let
     ${keypadBlock}
   '';
 
+  shortName =
+    name:
+    lib.foldl' (n: p: lib.removePrefix p n) name [
+      "kp-"
+      "win-"
+      "mon-"
+      "prj-"
+      "ses-"
+      "grab-"
+    ];
   entryOf = b: {
-    inherit (b)
-      mods
-      key
-      desc
-      insert
-      ;
+    inherit (b) mods key insert;
+    desc = shortName b.name;
     prefix = false;
   };
   prefixEntryOf = s: {
-    inherit (withoutSuper s) mods key desc;
+    inherit (withoutSuper s) mods key;
+    desc = s.name;
     prefix = true;
     insert = false;
   };
@@ -304,22 +375,22 @@ let
   };
 
   modes =
-    lib.mapAttrs (_: s: {
-      title = s.desc;
+    lib.mapAttrs (name: s: {
+      title = name;
       inherit (s) sticky;
       path = [ { inherit (s) mods key; } ];
-      entries = map entryOf (lib.attrValues s.keys);
+      entries = map entryOf (named s.keys);
     }) cfg.submaps
     // lib.mapAttrs' (
       name: s:
       lib.nameValuePair (inNormal name) {
-        title = s.desc;
+        title = name;
         inherit (s) sticky;
         path = [
           normalLabel
           { inherit (withoutSuper s) mods key; }
         ];
-        entries = map entryOf (lib.attrValues s.keys);
+        entries = map entryOf (named s.keys);
       }
     ) cfg.submaps
     // {
@@ -329,7 +400,7 @@ let
         path = [ normalLabel ];
         entries =
           map entryOf normalBare
-          ++ map prefixEntryOf (lib.attrValues cfg.submaps)
+          ++ map prefixEntryOf (named cfg.submaps)
           ++ [
             (
               keypadKey
@@ -341,8 +412,8 @@ let
             )
             {
               mods = "";
-              key = "escape";
-              desc = "back to apps";
+              key = "i";
+              desc = "insert";
               prefix = false;
               insert = true;
             }
@@ -355,40 +426,41 @@ let
           normalLabel
           keypadKey
         ];
-        entries = map prefixEntryOf (lib.attrValues cfg.submaps) ++ map entryOf (lib.attrValues cfg.keypad);
+        entries = map prefixEntryOf (named cfg.submaps) ++ map entryOf (named cfg.keypad);
       };
     };
 
   helpData = {
-    root = lib.mapAttrs (_: b: {
+    root = lib.mapAttrs (name: b: {
       inherit (b)
         mods
         key
-        desc
         owner
         mark
         ;
+      desc = shortName name;
     }) cfg.keys;
-    submaps = lib.mapAttrs (_: s: {
-      inherit (s) mods key desc;
-      keys = lib.mapAttrs (_: b: {
+    submaps = lib.mapAttrs (sname: s: {
+      inherit (s) mods key;
+      desc = sname;
+      keys = lib.mapAttrs (name: b: {
         inherit (b)
           mods
           key
-          desc
           owner
           mark
           ;
+        desc = shortName name;
       }) s.keys;
     }) cfg.submaps;
-    keypad = lib.mapAttrs (_: b: {
+    keypad = lib.mapAttrs (name: b: {
       inherit (b)
         mods
         key
-        desc
         owner
         mark
         ;
+      desc = shortName name;
     }) cfg.keypad;
     inherit modes;
   };
@@ -558,5 +630,6 @@ in
 
     xdg.configFile."emacs/wm-keys.el".source = keysEl;
     xdg.configFile."wm/help.json".source = helpJson;
+    systemd.user.services.caelestia.Unit.X-Restart-Triggers = [ "${helpJson}" ];
   };
 }

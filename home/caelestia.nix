@@ -89,6 +89,15 @@ in
       };
     };
 
+    # Caelestia's Auto resolves en_GB's imperial measurement system to Fahrenheit.
+    home.activation.caelestiaUnits = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+      f="${config.xdg.configHome}/caelestia/shell.json"
+      mkdir -p "$(dirname "$f")"
+      [ -s "$f" ] || echo '{}' > "$f"
+      ${lib.getExe pkgs.jq} '.services.weatherUnits //= "Celsius" | .services.clockFormat //= "TwentyFourHour"' "$f" > "$f.tmp"
+      mv "$f.tmp" "$f"
+    '';
+
     home.pointerCursor = {
       package = pkgs.bibata-cursors;
       name = "Bibata-Modern-Classic";
