@@ -7,6 +7,7 @@ local wm = {
     backend = require("wm.scrolling"),
     selection = {},
     clipboard = nil,
+    marks = { back = {}, forward = {} },
     saved = {},
     widths = { 0.333, 0.5, 0.667, 1.0 },
     min_width = 0.05,
@@ -375,32 +376,37 @@ end
 
 local function move_horizontal(m, set, step)
     local n = #m.columns
-    local result, moving = {}, {}
-    for c = 0, n + 1 do result[c] = { windows = {}, width = m.columns[c] and m.columns[c].width or 0.5 } end
+    local slots, moving = {}, {}
+    for s = 0, 2 * n + 2 do slots[s] = { windows = {}, width = 0.5 } end
     for c, column in ipairs(m.columns) do
-        local only_targets = true
+        slots[2 * c].width = column.width
+        local shared = false
         for _, address in ipairs(column.windows) do
-            if not set[address] then only_targets = false end
+            if not set[address] then shared = true end
         end
         for r, address in ipairs(column.windows) do
-            if set[address] then
-                local dest = c + step
-                if (dest < 1 or dest > n) and only_targets then dest = c end
-                if dest ~= c and (dest < 1 or dest > n) then result[dest].width = column.width end
-                moving[#moving + 1] = { address = address, dest = dest, row = r }
+            if not set[address] then
+                table.insert(slots[2 * c].windows, address)
             else
-                table.insert(result[c].windows, address)
+                local dest = 2 * c
+                if shared then
+                    dest = 2 * c + step
+                    slots[dest].width = column.width
+                elseif c + step >= 1 and c + step <= n then
+                    dest = 2 * (c + step)
+                end
+                moving[#moving + 1] = { address = address, dest = dest, row = r }
             end
         end
     end
     table.sort(moving, function(a, b) return a.row < b.row end)
     for _, entry in ipairs(moving) do
-        local column = result[entry.dest].windows
+        local column = slots[entry.dest].windows
         table.insert(column, math.min(entry.row, #column + 1), entry.address)
     end
     local columns = {}
-    for c = 0, n + 1 do
-        if #result[c].windows > 0 then columns[#columns + 1] = result[c] end
+    for s = 0, 2 * n + 2 do
+        if #slots[s].windows > 0 then columns[#columns + 1] = slots[s] end
     end
     m.columns = columns
 end
@@ -747,6 +753,40 @@ function wm.undo()
     undo.undo(wm.backend)
     wm.publish()
 end
+
+local function mapped_window(address)
+    for _, window in ipairs(hl.get_windows()) do
+        if window.address == address and window.mapped then return window end
+    end
+end
+
+function wm.mark_push()
+    local here = hl.get_active_window()
+    if not here then return end
+    local back = wm.marks.back
+    if back[#back] ~= here.address then back[#back + 1] = here.address end
+    wm.marks.forward = {}
+end
+
+local function step_mark(from, to, elisp)
+    local here = hl.get_active_window()
+    while #from > 0 do
+        local address = table.remove(from)
+        local target = (not here or address ~= here.address) and mapped_window(address)
+        if target then
+            if here then to[#to + 1] = here.address end
+            focus(target)
+            return
+        end
+    end
+    if here and here.class == "emacs" then
+        hl.dispatch(hl.dsp.exec_cmd("timeout 1 emacsclient --eval '(" .. elisp .. ")'"))
+    end
+end
+
+function wm.mark_pop() step_mark(wm.marks.back, wm.marks.forward, "wm-mark-pop") end
+
+function wm.mark_unpop() step_mark(wm.marks.forward, wm.marks.back, "wm-mark-unpop") end
 
 hl.on("window.open", function(window)
     undo.claim(window, wm.backend)

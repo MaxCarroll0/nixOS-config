@@ -1,8 +1,8 @@
--- Undo history: snapshots of every workspace model, relaunching windows that have gone.
+-- Undo ring: snapshots of every workspace model, relaunching windows that have gone.
 
 local model = require("wm.model")
 
-local M = { stack = {}, commands = {}, pending = {}, limit = 64 }
+local M = { stack = {}, cursor = nil, commands = {}, pending = {}, limit = 64 }
 
 local function quote(arg)
     return "'" .. arg:gsub("'", "'\\''") .. "'"
@@ -59,12 +59,19 @@ function M.snapshot()
     return s
 end
 
-function M.checkpoint()
-    local s = M.snapshot()
+local function record(s)
     local top = M.stack[#M.stack]
     if top and top.key == s.key then return end
     M.stack[#M.stack + 1] = s
-    if #M.stack > M.limit then table.remove(M.stack, 1) end
+    if #M.stack > M.limit then
+        table.remove(M.stack, 1)
+        if M.cursor then M.cursor = M.cursor - 1 end
+    end
+end
+
+function M.checkpoint()
+    M.cursor = nil
+    record(M.snapshot())
 end
 
 local function rename(old, new)
@@ -114,12 +121,14 @@ local function restore(s, backend)
 end
 
 function M.undo(backend)
-    local now = M.snapshot().key
-    local s
-    repeat
-        s = table.remove(M.stack)
-    until not s or s.key ~= now
-    if s then restore(s, backend) end
+    local now = M.snapshot()
+    M.cursor = M.cursor or #M.stack + 1
+    record(now)
+    local i = M.cursor - 1
+    while i >= 1 and M.stack[i].key == now.key do i = i - 1 end
+    if i < 1 then return end
+    M.cursor = i
+    restore(M.stack[i], backend)
 end
 
 function M.claim(window, backend)

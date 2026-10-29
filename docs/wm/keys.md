@@ -50,8 +50,8 @@ into insert state; which-key marks these with ↩.
 | `SUPER SHIFT o` | ace: add or remove a labelled window from the selection | Hyprland |
 | `SUPER b` | switch buffer, window or Chromium tab (one `consult-buffer`) | Emacs |
 | `SUPER y` | kill-ring picker; types the selection into the focused window | bridge |
-| `SUPER ,` | pop the unified mark ring (back) | bridge |
-| `SUPER .` | unpop the mark ring (forward) | bridge |
+| `SUPER [` | pop the unified mark ring (back) | Hyprland |
+| `SUPER ]` | unpop the mark ring (forward) | Hyprland |
 | `SUPER Return` | eshell at the focused window's cwd (`/proc/PID/cwd`) | bridge |
 | `SUPER SHIFT Return` | ghostty at the focused window's cwd | bridge |
 | `SUPER SPC` | application launcher | Hyprland |
@@ -78,8 +78,8 @@ when the window is also focused.
 | `S-Tab` | SELECT state: hjkl move within the selection, `ESC` clears it |
 | `o` / `O` | ace jump / ace select, labelling each Emacs split separately |
 | `t` / `T` | rotate the targets clockwise / anticlockwise |
-| `H/J/K/L` | move the targets, keeping their shape up to the strip edges |
-| `u` | undo the last command, reopening closed apps in their slot |
+| `H/J/K/L` | move the targets, keeping their shape up to the strip edges; `H`/`L` first break a window out into a new column, and a second press joins the next one |
+| `u` | undo, reopening closed apps in their slot; undos are recorded too, so after any other command `u` redoes them |
 | `z` | scroll the focused column to the left edge without changing the layout |
 | `-` / `=` | narrower / wider column (`=` continues past full width) |
 | `S--` / `S-=` | shorter / taller row |
@@ -101,7 +101,7 @@ Entered with a `SUPER` chord, exited with `Escape` or any unbound key.
 
 | Key | Action |
 |---|---|
-| `h` / `l` | move this window left/right in the strip |
+| `h` / `l` | move this window left/right: a new column first, then into the next one |
 | `j` / `k` | move this window within its column stack |
 | `s` | stack a new window into this column |
 | `w` | cycle column width through presets (0.333, 0.5, 0.667, 1.0) |
@@ -221,9 +221,9 @@ already solved this: **jumps push, motion does not** — the same distinction as
 | `SUPER b` buffer/tab switch | mouse click focus |
 | `SUPER p p` project switch | |
 
-Entries are `(buffer . point)` or `(hyprland-window . address)`. `C-x C-SPC` in Emacs and
-`SUPER ,` at the WM level pop the same ring, and popping does either `goto-char` or
-`hyprctl dispatch focuswindow`.
+A push records the focused window. `[` focuses the newest recorded window that is still open and
+is not the focused one, and `]` retraces those pops. Once the window ring is empty, `[` and `]`
+in a focused Emacs fall through to its global mark ring (`wm-mark-pop`, `wm-mark-unpop`).
 
 ## 7. Ownership
 

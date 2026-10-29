@@ -171,16 +171,26 @@ let
   keySpec =
     b: lib.concatStringsSep "+" (lib.filter (s: s != "") (lib.splitString " " b.mods) ++ [ b.key ]);
 
-  bindTarget =
+  ownTarget =
     b:
-    if b.owner == "hyprland" && b.checkpoint then
-      "function() wm.checkpoint(); wm.run(${b.dispatch}) end"
-    else if b.owner == "hyprland" then
+    if b.owner == "hyprland" then
       b.dispatch
     else if b.owner == "emacs" then
       luaExec "${emacsCall}/bin/wm-emacs ${b.elisp}"
     else
       luaExec "${wmDispatch}/bin/wm-dispatch ${b.name}";
+
+  bindTarget =
+    b:
+    let
+      before =
+        lib.optional b.mark "wm.mark_push()"
+        ++ lib.optional (b.owner == "hyprland" && b.checkpoint) "wm.checkpoint()";
+    in
+    if before == [ ] then
+      ownTarget b
+    else
+      "function() ${lib.concatStringsSep "; " before}; wm.run(${ownTarget b}) end";
 
   bindWith =
     target: b:
