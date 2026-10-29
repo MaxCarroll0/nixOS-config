@@ -1,6 +1,6 @@
 # ThinkPad: workstation only, offloads builds to the desktop.
 
-{ lib, ... }:
+{ lib, pkgs, ... }:
 
 {
   imports = [
@@ -112,6 +112,20 @@
       randomEncryption.enable = true;
     }
   ];
+  # The stock unit rewrites a resized swapfile with dd, outlasting the swap device's 90s timeout.
+  systemd.services.mkswap-swapfile.preStart = ''
+    if [[ "$(stat -c %s /swapfile 2>/dev/null || echo 0)" != "$((12 * 1024 * 1024 * 1024))" ]]; then
+      rm -f /swapfile
+      ${pkgs.util-linux}/bin/fallocate -l 12GiB /swapfile
+      chmod 600 /swapfile
+    fi
+  '';
+
+  networking.networkmanager.logLevel = "INFO";
+
+  # The BIOS's FAN0._FST method raises an ACPI error on every read, so the fan has no readable speed.
+  local.monitoring.exporter.hwmonChipExclude = "pnp0c0b";
+  boot.consoleLogLevel = 3;
 
   services.earlyoom = {
     freeMemThreshold = 15;

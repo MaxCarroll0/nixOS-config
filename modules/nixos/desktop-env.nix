@@ -15,6 +15,18 @@ let
   sshAgent = lib.getExe' pkgs.openssh "ssh-agent";
   plasma = config.local.desktop.plasma.enable;
 
+  # uwsm otherwise waits up to 60s for graphical.target, which sits behind the VPN bootstrap.
+  hyprlandSession =
+    (pkgs.writeTextDir "share/wayland-sessions/hyprland-nowait.desktop" ''
+      [Desktop Entry]
+      Name=Hyprland
+      Comment=Hyprland under uwsm, started without waiting for graphical.target
+      Exec=uwsm start -g -1 -e -D Hyprland hyprland.desktop
+      Type=Application
+      DesktopNames=Hyprland
+    '').overrideAttrs
+      { passthru.providedSessions = [ "hyprland-nowait" ]; };
+
   # KDE askpass keeps sudo passwords out of the invoking terminal.
   sudoRequest = pkgs.writeShellApplication {
     name = "sudo-request";
@@ -229,8 +241,13 @@ in
 
     (lib.mkIf (!plasma) {
       xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
-      services.displayManager.defaultSession = "hyprland-uwsm";
+      services.displayManager.sessionPackages = [ hyprlandSession ];
+      services.displayManager.defaultSession = "hyprland-nowait";
+      services.displayManager.sddm.theme = "catppuccin-mocha-mauve";
+      environment.systemPackages = [ pkgs.catppuccin-sddm ];
       services.logind.settings.Login.HandleLidSwitch = lib.mkForce "suspend";
+      services.upower.enable = true;
+      services.power-profiles-daemon.enable = true;
       users.users.max.packages = with pkgs.kdePackages; [
         dolphin
         okular
