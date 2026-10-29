@@ -129,9 +129,9 @@ function M.claim(window, backend)
             return M.claim(window, backend)
         end
         if window.class == p.class then
-            table.remove(M.pending, i)
             local address = window.address
             rename(p.address, address)
+            table.remove(M.pending, i)
             hl.timer(function()
                 local live = windows_by_address()[address]
                 if not live then return end
