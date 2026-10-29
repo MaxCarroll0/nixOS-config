@@ -1,5 +1,26 @@
 {
   "nodes": {
+    "NixVirt": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1748140003,
+        "narHash": "sha256-DNBZmuk1YRM2PmwbHzVdXumRjCUzQkMarg4iI/37rOQ=",
+        "owner": "AshleyYakeley",
+        "repo": "NixVirt",
+        "rev": "5dfe108fd859b122f9a96981cb6bc12297653d6c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "AshleyYakeley",
+        "ref": "v0.6.0",
+        "repo": "NixVirt",
+        "type": "github"
+      }
+    },
     "anipy-cli": {
       "inputs": {
         "nixpkgs": "nixpkgs",
@@ -1029,6 +1050,7 @@
     },
     "root": {
       "inputs": {
+        "NixVirt": "NixVirt",
         "anipy-cli": "anipy-cli",
         "bookshelf": "bookshelf",
         "caelestia-dots": "caelestia-dots",

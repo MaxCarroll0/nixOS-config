@@ -46,6 +46,7 @@ in
     ./hardware.nix
     ../desktop-common.nix
     ./satisfactory.nix
+    ../../modules/nixos/vm-host.nix
   ];
 
   networking.hostName = "desktopnew";

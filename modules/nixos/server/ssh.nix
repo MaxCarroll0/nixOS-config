@@ -23,9 +23,10 @@ let
     in
     rules.allowedTCPPorts ++ rules.allowedUDPPorts;
 
-  offTailnet = lib.filter (interface: interface != cfg.interface && interface != "lo") (
-    lib.attrNames config.networking.firewall.interfaces
-  );
+  offTailnet = lib.filter (
+    interface:
+    interface != cfg.interface && interface != "lo" && !(lib.elem interface cfg.hostOnlyInterfaces)
+  ) (lib.attrNames config.networking.firewall.interfaces);
 
   reachableOffTailnet = lib.concatMap (
     interface:
@@ -70,6 +71,12 @@ in
       type = lib.types.listOf lib.types.port;
       default = [ ];
       description = "TCP ports deliberately served to the local network as well as the tailnet.";
+    };
+
+    hostOnlyInterfaces = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Host-only bridges with no LAN route, exempt from the tailnet-only port check.";
     };
 
     lanInterfaces = lib.mkOption {
