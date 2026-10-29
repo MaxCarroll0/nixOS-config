@@ -286,9 +286,7 @@ let
 
     local function wm_leader()
       local window = hl.get_active_window()
-      if window and window.fullscreen >= 2 then
-        hl.dispatch(hl.dsp.send_shortcut({ mods = "", key = "Escape" }))
-      elseif window and window.class == "emacs" then
+      if window and window.class == "emacs" then
         wm_leader_pending = true
         hl.dispatch(hl.dsp.send_shortcut({ mods = "SUPER", key = "F12" }))
         hl.timer(function()

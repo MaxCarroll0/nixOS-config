@@ -377,25 +377,27 @@ end
 local function move_horizontal(m, set, step)
     local n = #m.columns
     local slots, moving = {}, {}
-    for s = 0, 2 * n + 2 do slots[s] = { windows = {}, width = 0.5 } end
+    for s = 0, 2 * n + 2 do slots[s] = { windows = {}, width = 0 } end
+    for c, column in ipairs(m.columns) do slots[2 * c].width = column.width end
+    local function in_range(c) return c >= 1 and c <= n end
     for c, column in ipairs(m.columns) do
-        slots[2 * c].width = column.width
-        local shared = false
+        local shared, moves = false, false
         for _, address in ipairs(column.windows) do
-            if not set[address] then shared = true end
+            if set[address] then moves = true else shared = true end
+        end
+        local dest = 2 * c
+        if moves and shared then
+            dest = 2 * c + step
+            slots[2 * c].width = column.width / 2
+            slots[dest].width = column.width / 2
+        elseif moves and in_range(c + step) then
+            dest = 2 * (c + step)
         end
         for r, address in ipairs(column.windows) do
-            if not set[address] then
-                table.insert(slots[2 * c].windows, address)
-            else
-                local dest = 2 * c
-                if shared then
-                    dest = 2 * c + step
-                    slots[dest].width = column.width
-                elseif c + step >= 1 and c + step <= n then
-                    dest = 2 * (c + step)
-                end
+            if set[address] then
                 moving[#moving + 1] = { address = address, dest = dest, row = r }
+            else
+                table.insert(slots[2 * c].windows, address)
             end
         end
     end
@@ -471,6 +473,20 @@ function wm.align_left()
     if offset == 0 then return end
     hl.dispatch(hl.dsp.layout(string.format("move %d", -offset)))
     focus(window)
+end
+
+local function shift_view(pixels)
+    if pixels == 0 then return end
+    local follow = hl.get_config("scrolling.follow_focus")
+    hl.config({ scrolling = { follow_focus = false } })
+    hl.dispatch(hl.dsp.layout(string.format("move %d", -pixels)))
+    hl.config({ scrolling = { follow_focus = follow } })
+end
+
+wm.pan_fraction = 0.1
+
+function wm.pan(direction)
+    shift_view(direction * math.floor(hl.get_active_monitor().width * wm.pan_fraction))
 end
 
 local scrolling = false
@@ -633,7 +649,7 @@ function wm.close()
     if #list == 0 then hl.dispatch(hl.dsp.window.close()) end
 end
 
-local ace_letters = "asdfghjklqwertyuiopzxcvbnm"
+local ace_letters = "asdfghjklqwertyuipzxcvbnm"
 local ace = nil
 
 local function on_screen(window, monitor)
@@ -748,10 +764,21 @@ hl.define_submap("ace", function()
         hl.bind(key, function() wm.ace_key(key) end, { description = "ace " .. key })
     end
     hl.bind("escape", function() wm.ace_cancel() end, { description = "cancel ace" })
+    hl.bind("o", function() wm.ace_cancel() end, { description = "cancel ace" })
 end)
 
+local windowed = {}
+
+local function remember_widths()
+    for address, window in pairs(model.live(workspace())) do
+        if window.fullscreen == 0 then windowed[address] = { width = window.layout.column.width, x = window.at.x } end
+    end
+end
+
 function wm.checkpoint()
-    if not wm.backend.applying then undo.checkpoint() end
+    if wm.backend.applying then return end
+    undo.checkpoint()
+    remember_widths()
 end
 
 function wm.undo()
@@ -804,7 +831,26 @@ hl.on("window.minimize", function(window, minimized)
     end
 end)
 
+hl.timer(remember_widths, { timeout = 500, type = "repeat" })
+
+hl.on("window.fullscreen", function(window)
+    if not window or window.fullscreen ~= 0 or wm.backend.applying then return end
+    local saved = windowed[window.address]
+    if not saved or type(window.layout) ~= "table" or not window.layout.column then return end
+    if math.abs(window.layout.column.width - saved.width) > 0.001 then
+        local active = hl.get_active_window()
+        focus(window)
+        hl.dispatch(hl.dsp.layout(string.format("colresize %.4f", saved.width)))
+        if active and active.address ~= window.address then focus(active) end
+    end
+    hl.timer(function()
+        local now = model.live(workspace())[window.address]
+        if now and now.fullscreen == 0 then shift_view(math.floor(now.at.x - saved.x + 0.5)) end
+    end, { timeout = 50, type = "oneshot" })
+end)
+
 hl.on("window.destroy", function(window)
+    if window and window.address then windowed[window.address] = nil end
     if window and window.address and wm.selection[window.address] then wm.selection[window.address] = nil end
 end)
 
