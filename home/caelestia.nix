@@ -153,6 +153,15 @@ in
       fi
     '';
 
+    home.packages = [ pkgs.imv ];
+
+    xdg.mimeApps.defaultApplications = lib.genAttrs [
+      "image/png"
+      "image/jpeg"
+      "image/webp"
+      "image/gif"
+    ] (_: "imv-dir.desktop");
+
     home.pointerCursor = {
       package = pkgs.bibata-cursors;
       name = "Bibata-Modern-Classic";
@@ -170,7 +179,8 @@ in
     );
 
     # A shell that dies holding the session lock leaves Hyprland showing its crashed-lock screen.
-    systemd.user.services.caelestia.Service.ExecStopPost = "${pkgs.bash}/bin/sh -c '[ \"\$SERVICE_RESULT\" = success ] || ${pkgs.systemd}/bin/systemd-run --user --collect --quiet --unit=caelestia-fallback-lock ${lib.getExe fallbackLock} || true'";
+    systemd.user.services.caelestia.Service.ExecStopPost =
+      "${pkgs.bash}/bin/sh -c '[ \"\$SERVICE_RESULT\" = success ] || ${pkgs.systemd}/bin/systemd-run --user --collect --quiet --unit=caelestia-fallback-lock ${lib.getExe fallbackLock} || true'";
 
     systemd.user.paths.caelestia-chromium-theme = {
       Unit.Description = "Watch the Caelestia scheme for Chromium";
