@@ -314,8 +314,12 @@ in
           insert = true;
         };
         kill-ring = typing (emacsKey "SUPER" "y" "wm-kill-ring" "yank from the Emacs kill ring");
-        mark-pop = emacsKey "SUPER" "bracketleft" "wm-mark-pop" "pop the unified mark ring";
-        mark-unpop = emacsKey "SUPER" "bracketright" "wm-mark-unpop" "unpop the unified mark ring";
+        mark-pop = top "bracketleft" (wmCall "mark_pop()") "pop the unified mark ring" // {
+          checkpoint = false;
+        };
+        mark-unpop = top "bracketright" (wmCall "mark_unpop()") "unpop the unified mark ring" // {
+          checkpoint = false;
+        };
         eshell-here = {
           key = "Return";
           owner = "bridge";
@@ -451,7 +455,9 @@ in
         key = "period";
         desc = "project";
         keys = {
-          prj-switch = typing (emacsKey "" "p" "wm-project-switch" "switch project");
+          prj-switch = typing (emacsKey "" "p" "wm-project-switch" "switch project") // {
+            mark = true;
+          };
           prj-eshell = typing (emacsKey "" "e" "wm-project-eshell" "eshell in project root");
           prj-dired = typing (emacsKey "" "d" "wm-project-dired" "dired in project root");
           prj-magit = typing (emacsKey "" "g" "wm-project-magit" "magit status");
