@@ -79,7 +79,7 @@ when the window is also focused.
 | `S-Tab` | SELECT state: hjkl move within the selection, `ESC` clears it |
 | `o` / `O` | ace jump / ace select, labelling each Emacs split separately; `o` again or `ESC` cancels |
 | `t` / `T` | rotate the targets clockwise / anticlockwise |
-| `H/J/K/L` | move the targets, keeping their shape up to the strip edges; `H`/`L` first split a window out of its column, the two halves sharing its width, and a second press joins it into the next column, which keeps its width |
+| `H/J/K/L` | move the targets, keeping their shape up to the strip edges; `H`/`L` split a window out of its column into half its width; a lone window shares the next column, the column behind widening into the gap, or joins it outright when the strip neither scrolls nor has a column behind |
 | `u` | undo, reopening closed apps in their slot; undos are recorded too, so after any other command `u` redoes them |
 | `z` | scroll the focused column to the left edge without changing the layout |
 | `C-h` / `C-l` | scroll the view a tenth of the screen left / right, free of columns; `z` snaps back |
