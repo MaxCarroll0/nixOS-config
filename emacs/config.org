@@ -658,6 +658,30 @@ versions, which reach other applications, come later with the bridge.
 
 #+end_src
 
+** Caps Lock leader
+
+Hyprland forwards Caps Lock to a focused Emacs as =s-<f12>=: insert state runs whatever =<escape>= is bound to, anything else hands the key back to the window manager's NORMAL state. Hyprland enters NORMAL itself if no answer comes within 150ms.
+
+#+begin_src emacs-lisp
+
+(defun wm-leader-ack (enter-normal)
+  "Answer Hyprland's leader probe, entering its NORMAL state when ENTER-NORMAL."
+  (call-process "hyprctl" nil 0 nil "dispatch"
+                (format "wm_leader_ack(%s)" (if enter-normal "true" "false"))))
+
+(defun wm-leader ()
+  "Leave insert state like ESC, otherwise enter the window manager's NORMAL state."
+  (interactive)
+  (if (bound-and-true-p meow-insert-mode)
+      (progn
+        (wm-leader-ack nil)
+        (call-interactively (key-binding [escape])))
+    (wm-leader-ack t)))
+
+(keymap-global-set "s-<f12>" #'wm-leader)
+
+#+end_src
+
 Popping the global mark records where it jumped from, so the jump can be retraced. This is the
 Emacs-only half of the unified ring; window entries join it once the bridge exists.
 
@@ -819,6 +843,8 @@ Pure-elisp terminal, with =eat-eshell-mode= upgrading eshell visual commands. Me
 
   (define-key eat-semi-char-mode-map (kbd "<escape>") #'meow-insert-exit)
   (define-key eat-eshell-semi-char-mode-map (kbd "<escape>") #'meow-insert-exit)
+  (define-key eat-semi-char-mode-map (kbd "s-<f12>") #'wm-leader)
+  (define-key eat-eshell-semi-char-mode-map (kbd "s-<f12>") #'wm-leader)
 
   (defun my/eat-redraw-on-resize (window)
     "Force a full repaint of the eat program in WINDOW."
@@ -5154,11 +5180,19 @@ Org fragments render automatically, while the fragment at point remains editable
 #+end_src
 
 *** Xenops
-Reveal code upon cursor entry.
+Reveal code upon cursor entry. Only enabled in graphical frames: xenops refuses to start without a window system, which is the state of every buffer the daemon restores at startup, and its refusal aborts the daemon, so desktop restore must not re-enable it either.
 #+begin_src emacs-lisp
+    (defun my/xenops-when-graphical ()
+      "Enable `xenops-mode' only when the buffer is shown in a graphical frame."
+      (when (display-graphic-p)
+        (xenops-mode 1)))
+
+    (with-eval-after-load 'desktop
+      (add-to-list 'desktop-minor-mode-table '(xenops-mode nil)))
+
     (use-package xenops
       :ensure t
-      :hook (LaTeX-mode . xenops-mode)
+      :hook (LaTeX-mode . my/xenops-when-graphical)
       :config
       (setq xenops-reveal-on-entry t))             ; Reveal LaTeX source on cursor
 #+end_src
