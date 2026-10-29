@@ -1,6 +1,6 @@
 # Automatic encrypted NAS mount through the shared LAN-first peer transport.
 
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, utils, ... }:
 
 let
   cfg = config.local.nasClient;
@@ -69,6 +69,11 @@ in
         "x-systemd.requires=peer-forward-nas.service"
         "_netdev"
       ];
+    };
+
+    systemd.units."${utils.escapeSystemdPath cfg.mountPoint}.mount" = {
+      overrideStrategy = "asDropin";
+      text = "[Unit]\nConditionPathExists=${cfg.credentialsFile}\n";
     };
   };
 }
