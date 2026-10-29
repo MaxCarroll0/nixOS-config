@@ -66,6 +66,9 @@ let
     '';
   };
   onTailnet = lib.filterAttrs (_: f: f ? tailscale) facts;
+  tailnetNames = lib.mapAttrs (_: f: f.tailscale or f.tailnetAddress) (
+    lib.filterAttrs (_: f: f ? tailscale || f ? tailnetAddress) facts
+  );
   wakeable = lib.filterAttrs (name: f: name != selfName && f ? mac) facts;
 
   rebuild = pkgs.writeShellApplication {
@@ -302,10 +305,13 @@ in
   config = {
     # Proton owns resolv.conf and Tailscale DNS is deliberately disabled, while
     # Tailscale Serve still requires the node's MagicDNS host name.
-    networking.hosts.${facts.pi.tailscale} = [
-      "pi"
-      "pi.taild5b88a.ts.net"
-    ];
+    networking.hosts = lib.mapAttrs' (
+      name: address:
+      lib.nameValuePair address [
+        name
+        "${name}.taild5b88a.ts.net"
+      ]
+    ) tailnetNames;
 
     local.peerTransport = {
       enable = true;
