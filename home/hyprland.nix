@@ -385,6 +385,14 @@ in
       // grouped "shell" {
         keybinds = shellKey "SUPER" "slash" "keybinds" "keybind reference";
         dashboard = shellKey "SUPER" "d" "dashboard" "dashboard";
+        peek = hyprKey "SUPER" "v" (wmCall "peek()") "peek at the wallpaper, again to return" // {
+          checkpoint = false;
+        };
+        next-wallpaper =
+          hyprKey "SUPER SHIFT" "v" "hl.dsp.exec_cmd(\"wallpaper-theme next\")" "next wallpaper"
+          // {
+            checkpoint = false;
+          };
         sidebar = shellKey "SUPER" "n" "sidebar" "notifications and quick settings";
         clear-notifications = lockedKey "CTRL ALT" "c" (shell "clearNotifs") "clear notifications";
       }
@@ -410,6 +418,9 @@ in
       // grouped "shell" {
         kp-keybinds = hyprKey "" "slash" (shell "keybinds") "keybind reference";
         kp-dashboard = hyprKey "" "d" (shell "dashboard") "dashboard";
+        kp-peek = hyprKey "" "b" (wmCall "peek()") "peek at the wallpaper, again to return" // {
+          checkpoint = false;
+        };
         kp-sidebar = hyprKey "" "n" (shell "sidebar") "notifications and quick settings";
       }
       // grouped "edit" {

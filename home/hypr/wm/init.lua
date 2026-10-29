@@ -913,6 +913,109 @@ end
 
 hl.on("window.close", refocus_after_close)
 
+wm.peek_ms = 450
+
+local function without_animations(fn)
+    local animated = hl.get_config("animations.enabled")
+    hl.config({ ["animations.enabled"] = false })
+    local ok, err = pcall(fn)
+    hl.config({ ["animations.enabled"] = animated })
+    if not ok then hl.notification.create({ text = "wm: " .. tostring(err), timeout = 5000 }) end
+end
+
+local function exits(saved, monitor)
+    local mx, my = monitor.x + monitor.width / 2, monitor.y + monitor.height / 2
+    for _, s in ipairs(saved) do
+        local dx, dy = s.x + s.w / 2 - mx, s.y + s.h / 2 - my
+        s.natural = (math.abs(dx) < 1 and math.abs(dy) < 1) and -math.pi / 2 or math.atan(dy, dx)
+    end
+    local order = { table.unpack(saved) }
+    table.sort(order, function(a, b) return a.natural < b.natural end)
+    local step = 2 * math.pi / #order
+    local sin, cos = 0, 0
+    for i, s in ipairs(order) do
+        sin = sin + math.sin(s.natural - (i - 1) * step)
+        cos = cos + math.cos(s.natural - (i - 1) * step)
+    end
+    local base = math.atan(sin, cos)
+    local reach = monitor.width + monitor.height
+    local targets = {}
+    for i, s in ipairs(order) do
+        local angle = base + (i - 1) * step
+        targets[s.address] = { x = math.floor(s.x + math.cos(angle) * reach), y = math.floor(s.y + math.sin(angle) * reach) }
+    end
+    return targets
+end
+
+local function unpeek()
+    local state = wm.peeked
+    wm.peeked = nil
+    for _, s in ipairs(state.windows) do
+        local window = hl.get_window("address:" .. s.address)
+        if window then hl.dispatch(hl.dsp.window.move({ x = s.x, y = s.y, window = window })) end
+    end
+    hl.timer(function()
+        without_animations(function()
+            for _, s in ipairs(state.windows) do
+                local window = hl.get_window("address:" .. s.address)
+                if window and not s.floating then hl.dispatch(hl.dsp.window.float({ action = "disable", window = window })) end
+            end
+        end)
+        wm.backend.apply(state.ws, state.model)
+        after_layout(function()
+            without_animations(function()
+                local anchor = state.model.focus and state.x[state.model.focus]
+                local now = anchor and model.live(state.ws)[state.model.focus]
+                if now then shift_view(math.floor(now.at.x - anchor + 0.5)) end
+                for _, s in ipairs(state.windows) do
+                    local window = hl.get_window("address:" .. s.address)
+                    if window and s.fullscreen ~= 0 then
+                        hl.dispatch(hl.dsp.window.fullscreen_state({ internal = s.fullscreen, client = s.client, window = window }))
+                    end
+                end
+                if state.active then focus(hl.get_window("address:" .. state.active)) end
+            end)
+            hold_scroll()
+        end)
+    end, { timeout = wm.peek_ms, type = "oneshot" })
+end
+
+function wm.peek()
+    if wm.peeked then return unpeek() end
+    local ws = workspace()
+    local active = hl.get_active_window()
+    local state = { ws = ws, model = model.read(ws), active = active and active.address, windows = {}, x = {} }
+    for _, window in ipairs(hl.get_workspace_windows(ws)) do
+        if window.mapped then
+            state.windows[#state.windows + 1] = {
+                address = window.address,
+                x = window.at.x,
+                y = window.at.y,
+                w = window.size.x,
+                h = window.size.y,
+                floating = window.floating,
+                fullscreen = window.fullscreen,
+                client = window.fullscreen_client,
+            }
+            state.x[window.address] = window.at.x
+        end
+    end
+    if #state.windows == 0 then return end
+    without_animations(function()
+        for _, s in ipairs(state.windows) do
+            local window = hl.get_window("address:" .. s.address)
+            if s.fullscreen ~= 0 then hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 0, client = 0, window = window })) end
+            if not s.floating then hl.dispatch(hl.dsp.window.float({ action = "enable", window = window })) end
+            hl.dispatch(hl.dsp.window.resize({ x = s.w, y = s.h, window = window }))
+            hl.dispatch(hl.dsp.window.move({ x = s.x, y = s.y, window = window }))
+        end
+    end)
+    for address, target in pairs(exits(state.windows, hl.get_active_monitor())) do
+        hl.dispatch(hl.dsp.window.move({ x = target.x, y = target.y, window = hl.get_window("address:" .. address) }))
+    end
+    wm.peeked = state
+end
+
 hl.on("window.destroy", function(window)
     refocus_after_close(window)
     if window and window.address then before_fullscreen[window.address] = nil end
