@@ -50,6 +50,10 @@ in
       };
     };
 
+    systemd.user.tmpfiles.rules = [
+      "L+ %h/.config/heroic/tools/proton/GE-Proton - - - - ${pkgs.proton-ge-bin.steamcompattool}"
+    ];
+
     programs.gamescope.capSysNice = true;
     programs.gamemode.enable = true;
 
