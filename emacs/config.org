@@ -608,6 +608,66 @@ means Emacs itself has to show which frame is focused. The internal border carri
 
 #+end_src
 
+** Ace across splits
+
+Hyprland's ace jump labels each Emacs split separately. Every frame learns its Hyprland address
+from =hyprctl= the first time it gains focus, and Hyprland reads the split positions back over
+=emacsclient=.
+
+#+begin_src emacs-lisp
+
+(defun wm-learn-frame-address ()
+  "Record the Hyprland address of the focused frame, once."
+  (when-let* ((frame (seq-find #'frame-focus-state (frame-list)))
+              ((not (frame-parameter frame 'wm-address))))
+    (make-process
+     :name "wm-address"
+     :command '("hyprctl" "activewindow" "-j")
+     :buffer (generate-new-buffer " *wm-address*")
+     :noquery t
+     :sentinel
+     (lambda (proc _event)
+       (unless (process-live-p proc)
+         (let ((window (with-current-buffer (process-buffer proc)
+                         (goto-char (point-min))
+                         (ignore-errors (json-parse-buffer :object-type 'alist)))))
+           (kill-buffer (process-buffer proc))
+           (when (and window
+                      (frame-live-p frame)
+                      (frame-focus-state frame)
+                      (string-equal-ignore-case (alist-get 'class window "") "emacs"))
+             (set-frame-parameter frame 'wm-address (alist-get 'address window)))))))))
+
+(add-function :after after-focus-change-function #'wm-learn-frame-address)
+
+(defun wm-frame-windows (frame)
+  "FRAME's live windows in a stable order."
+  (window-list frame 'nomini (frame-first-window frame)))
+
+(defun wm-ace-layout ()
+  "Lines of \"ADDRESS INDEX X Y\" for every split of every addressed frame."
+  (mapconcat
+   (lambda (frame)
+     (let ((address (frame-parameter frame 'wm-address)))
+       (mapconcat (lambda (window)
+                    (format "%s %d %d %d" address
+                            (seq-position (wm-frame-windows frame) window)
+                            (window-pixel-left window) (window-pixel-top window)))
+                  (wm-frame-windows frame) "\n")))
+   (seq-filter (lambda (frame) (frame-parameter frame 'wm-address)) (frame-list))
+   "\n"))
+
+(defun wm-ace-select (address index)
+  "Select split INDEX of the frame at Hyprland ADDRESS."
+  (when-let* ((frame (seq-find (lambda (f) (equal (frame-parameter f 'wm-address) address))
+                               (frame-list)))
+              (window (nth index (wm-frame-windows frame))))
+    (select-frame frame)
+    (select-window window)
+    t))
+
+#+end_src
+
 ** Transient buffers
 
 Buffers anchored to a point in another buffer stay inside Emacs rather than becoming tiled
