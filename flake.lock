@@ -1079,11 +1079,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1793282196,
-        "narHash": "sha256-jtwvp7BwzXQaRrPkODIJnABsZQ6P/og1RiFrdhiMSnQ=",
+        "lastModified": 1793283157,
+        "narHash": "sha256-WrrxnpANEvNsJHKbQ9G1dU8PBEFoq0L+JmihiYaslJc=",
         "ref": "main",
-        "rev": "a21b1185db3a2c9759c09694637b273ad6d22af8",
-        "revCount": 4,
+        "rev": "19b90292529d0a219c4712dbb5d054bc647dbe19",
+        "revCount": 5,
         "type": "git",
         "url": "ssh://git@github.com/MaxCarroll0/SatisfactoryServer"
       },
