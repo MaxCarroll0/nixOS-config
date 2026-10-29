@@ -336,11 +336,12 @@ let
         echo '# HELP tailscale_peer_last_handshake_seconds Unix time of the last wireguard handshake.'
         echo '# TYPE tailscale_peer_last_handshake_seconds gauge'
 
-        jq -r '.Peer[] | [.HostName, .OS, .Relay, (.Online|tostring),
-                          (if .CurAddr == "" then "0" else "1" end),
-                          (.RxBytes|tostring), (.TxBytes|tostring),
-                          (.LastHandshake // "")] | @tsv' <<<"$status" \
-        | while IFS=$'\t' read -r peer os relay online direct rx tx handshake; do
+        jq -r '.Peer[] | select(.ShareeNode != true)
+               | [.HostName, .OS, .Relay, (.Online|tostring),
+                  (if .CurAddr == "" then "0" else "1" end),
+                  (.RxBytes|tostring), (.TxBytes|tostring),
+                  (.LastHandshake // "")] | join("\u001f")' <<<"$status" \
+        | while IFS=$'\x1f' read -r peer os relay online direct rx tx handshake; do
             labels="peer=\"$peer\",peer_os=\"$os\",relay=\"$relay\""
             printf 'tailscale_peer_rx_bytes_total{%s} %s\n' "$labels" "$rx"
             printf 'tailscale_peer_tx_bytes_total{%s} %s\n' "$labels" "$tx"
