@@ -374,49 +374,22 @@ local function move_vertical(m, set, down)
     end
 end
 
-local sharing = {}
-
-local function move_horizontal(m, set, step, shares)
+local function move_horizontal(m, set, step)
     local n = #m.columns
-    local slots, moving, sharing_now = {}, {}, {}
+    local slots, moving = {}, {}
     for s = 0, 2 * n + 2 do slots[s] = { windows = {}, width = 0 } end
-    local total = 0
-    for c, column in ipairs(m.columns) do
-        slots[2 * c].width = column.width
-        total = total + column.width
-    end
-    local function in_range(c) return c >= 1 and c <= n end
+    for c, column in ipairs(m.columns) do slots[2 * c].width = column.width end
     for c, column in ipairs(m.columns) do
         local shared, moves = false, false
         for _, address in ipairs(column.windows) do
             if set[address] then moves = true else shared = true end
         end
         local dest = 2 * c
-        local ahead, behind = c + step, c - step
         if moves and shared then
             dest = 2 * c + step
-            slots[2 * c].width = column.width / 2
-            slots[dest].width = column.width / 2
-        elseif moves and in_range(ahead) then
-            local partner = m.columns[ahead].windows[1]
-            local share = shares[column.windows[1]]
-            local joining = share and share.step == step and share.partner == partner
-                and math.abs(column.width - slots[2 * ahead].width) < 0.01
-            local scrolls = total - column.width >= 1 - 0.001
-            local pool = slots[2 * ahead].width
-            if not in_range(behind) then pool = math.min(2.0, pool + column.width) end
-            local unchanged = not in_range(behind) and math.abs(pool / 2 - column.width) < 0.01
-            if joining or unchanged or not (in_range(behind) or scrolls) then
-                dest = 2 * ahead
-                slots[dest].width = math.min(1.0, slots[dest].width + column.width)
-            else
-                if in_range(behind) then
-                    slots[2 * behind].width = math.min(1.0, slots[2 * behind].width + column.width)
-                end
-                slots[2 * ahead].width = pool / 2
-                slots[2 * c].width = pool / 2
-                sharing_now[column.windows[1]] = { partner = partner, step = step }
-            end
+            slots[dest].width = column.width
+        elseif moves and c + step >= 1 and c + step <= n then
+            dest = 2 * (c + step)
         end
         for r, address in ipairs(column.windows) do
             if set[address] then
@@ -436,7 +409,6 @@ local function move_horizontal(m, set, step, shares)
         if #slots[s].windows > 0 then columns[#columns + 1] = slots[s] end
     end
     m.columns = columns
-    return sharing_now
 end
 
 function wm.move(direction)
@@ -447,7 +419,7 @@ function wm.move(direction)
     if direction == "u" or direction == "d" then
         move_vertical(m, set, direction == "d")
     else
-        sharing = move_horizontal(m, set, direction == "r" and 1 or -1, sharing)
+        move_horizontal(m, set, direction == "r" and 1 or -1)
     end
     apply(ws, m)
 end
