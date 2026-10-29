@@ -170,10 +170,10 @@ index d9a0728..5aee2bc 100644
          }
  
 diff --git a/modules/dashboard/Content.qml b/modules/dashboard/Content.qml
-index a10edce..e3cc406 100644
+index a10edce..5592758 100644
 --- a/modules/dashboard/Content.qml
 +++ b/modules/dashboard/Content.qml
-@@ -40,6 +40,12 @@ Item {
+@@ -40,6 +40,18 @@ Item {
                  iconName: "cloud",
                  text: Tr.tr("Weather"),
                  enabled: Config.dashboard.showWeather
@@ -183,10 +183,16 @@ index a10edce..e3cc406 100644
 +                iconName: "keyboard",
 +                text: Tr.tr("Keybinds"),
 +                enabled: true
++            },
++            {
++                component: wallpapersComponent,
++                iconName: "wallpaper",
++                text: Tr.tr("Wallpapers"),
++                enabled: true
              }
          ];
          return allTabs.filter(tab => tab.enabled);
-@@ -181,6 +187,12 @@ Item {
+@@ -181,6 +193,18 @@ Item {
                  WeatherTab {}
              }
  
@@ -194,6 +200,12 @@ index a10edce..e3cc406 100644
 +                id: keybindsComponent
 +
 +                KeybindsTab {}
++            }
++
++            Component {
++                id: wallpapersComponent
++
++                WallpapersTab {}
 +            }
 +
              Behavior on contentX {
@@ -273,7 +285,7 @@ index 1b8740e..73b07cc 100644
  
      function search(search: string): var {
 diff --git a/modules/lock/Lock.qml b/modules/lock/Lock.qml
-index f852cb7..0ea6452 100644
+index f852cb7..2b298b2 100644
 --- a/modules/lock/Lock.qml
 +++ b/modules/lock/Lock.qml
 @@ -7,13 +7,28 @@ import Quickshell.Wayland
@@ -519,6 +531,25 @@ index dd9b68e..7872579 100644
      }
  
      onMonitorsChanged: {
+diff --git a/services/Wallpapers.qml b/services/Wallpapers.qml
+index 9a8bdac..a968782 100644
+--- a/services/Wallpapers.qml
++++ b/services/Wallpapers.qml
+@@ -30,12 +30,12 @@ Searcher {
+     }
+ 
+     function setRandom(): void {
+-        Quickshell.execDetached(["caelestia", "wallpaper", "-r", ...smartArg]);
++        Quickshell.execDetached(["wallpaper-theme", "next"]);
+     }
+ 
+     function setWallpaper(path: string): void {
+         actualCurrent = path;
+-        Quickshell.execDetached(["caelestia", "wallpaper", "-f", path, ...smartArg]);
++        Quickshell.execDetached(["wallpaper-theme", "set", path]);
+     }
+ 
+     function preview(path: string): void {
 diff --git a/shell.qml b/shell.qml
 index 60cb877..0a96014 100644
 --- a/shell.qml

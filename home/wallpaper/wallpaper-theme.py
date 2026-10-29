@@ -446,6 +446,26 @@ def cmd_next(_):
     apply(random.choice(choices), mode)
 
 
+def cmd_set(args):
+    path = Path(args.image).expanduser().resolve()
+    if not path.is_file():
+        sys.exit(f"wallpaper-theme: no such image {path}")
+    apply(path, mode_at(datetime.now().astimezone()))
+
+
+def cmd_classes(_):
+    state = read_state()
+    print(
+        json.dumps(
+            {
+                "mode": mode_at(datetime.now().astimezone()),
+                "current": state.get("wallpaper"),
+                "wallpapers": [{"path": str(p), "class": classify(p)} for p in wallpapers()],
+            }
+        )
+    )
+
+
 def cmd_sync(_):
     state = read_state()
     mode = mode_at(datetime.now().astimezone())
@@ -476,6 +496,10 @@ def main():
     sub.add_parser("next").set_defaults(func=cmd_next)
     sub.add_parser("sync").set_defaults(func=cmd_sync)
     sub.add_parser("list").set_defaults(func=cmd_list)
+    sub.add_parser("classes").set_defaults(func=cmd_classes)
+    chosen = sub.add_parser("set")
+    chosen.add_argument("image")
+    chosen.set_defaults(func=cmd_set)
     mode = sub.add_parser("mode")
     mode.add_argument("--now")
     mode.set_defaults(func=cmd_mode)
