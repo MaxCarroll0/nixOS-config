@@ -245,26 +245,18 @@ let
     media-next = lockedKey "" "XF86AudioNext" (shell "mediaNext") "next track";
     media-prev = lockedKey "" "XF86AudioPrev" (shell "mediaPrev") "previous track";
     media-stop = lockedKey "" "XF86AudioStop" (shell "mediaStop") "stop media";
-    volume-up =
-      lockedKey "" "XF86AudioRaiseVolume"
-        (wpctl "set-mute @DEFAULT_AUDIO_SINK@ 0; wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 10%+")
-        "volume up"
-      // {
-        flags = [
-          "locked"
-          "repeating"
-        ];
-      };
-    volume-down =
-      lockedKey "" "XF86AudioLowerVolume"
-        (wpctl "set-mute @DEFAULT_AUDIO_SINK@ 0; wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%-")
-        "volume down"
-      // {
-        flags = [
-          "locked"
-          "repeating"
-        ];
-      };
+    volume-up = lockedKey "" "XF86AudioRaiseVolume" (shell "volumeUp") "volume up" // {
+      flags = [
+        "locked"
+        "repeating"
+      ];
+    };
+    volume-down = lockedKey "" "XF86AudioLowerVolume" (shell "volumeDown") "volume down" // {
+      flags = [
+        "locked"
+        "repeating"
+      ];
+    };
     volume-mute = lockedKey "" "XF86AudioMute" (wpctl "set-mute @DEFAULT_AUDIO_SINK@ toggle") "mute";
     mic-mute =
       lockedKey "" "XF86AudioMicMute" (wpctl "set-mute @DEFAULT_AUDIO_SOURCE@ toggle")
@@ -366,6 +358,9 @@ in
         select-column = hyprKey "SUPER SHIFT" "x" (wmCall "select_column()") "select the column";
         select-toggle = top "Tab" (wmCall "toggle_select()") "add or remove from the selection";
         select-mode = hyprKey "SUPER SHIFT" "Tab" (wmCall "select_mode()") "SELECT state";
+        align = top "z" (wmCall "align_left()") "scroll the focused column to the left edge" // {
+          checkpoint = false;
+        };
         rotate = top "t" (wmCall "rotate(true)") "rotate clockwise";
         rotate-back = hyprKey "SUPER SHIFT" "t" (wmCall "rotate(false)") "rotate anticlockwise";
         undo = top "u" (wmCall "undo()") "undo" // {

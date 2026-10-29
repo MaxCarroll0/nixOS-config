@@ -1,3 +1,24 @@
+diff --git a/components/controls/FilledSlider.qml b/components/controls/FilledSlider.qml
+index 5dd8b64..a293922 100644
+--- a/components/controls/FilledSlider.qml
++++ b/components/controls/FilledSlider.qml
+@@ -11,6 +11,7 @@ Slider {
+     required property string icon
+     property real oldValue
+     property bool initialized
++    property real shown: value
+ 
+     orientation: Qt.Vertical
+ 
+@@ -69,7 +70,7 @@ Slider {
+ 
+                 anchors.centerIn: parent
+                 anchors.verticalCenterOffset: 1
+-                text: moving ? Math.round(root.value * 100) : root.icon
++                text: moving ? Math.round(root.shown * 100) : root.icon
+                 color: Colours.palette.m3inverseOnSurface
+                 font: moving ? Tokens.font.body.small : Tokens.font.icon.medium
+ 
 diff --git a/daemons/Shortcuts.qml b/daemons/Shortcuts.qml
 index adc4e4c..6b6fe6e 100644
 --- a/daemons/Shortcuts.qml
@@ -24,9 +45,21 @@ index adc4e4c..6b6fe6e 100644
      CustomShortcut {
          // qmllint enable unresolved-type
 diff --git a/modules/bar/Bar.qml b/modules/bar/Bar.qml
-index 3399f1d..ad8d545 100644
+index 3399f1d..4c2048a 100644
 --- a/modules/bar/Bar.qml
 +++ b/modules/bar/Bar.qml
+@@ -95,9 +95,9 @@ ColumnLayout {
+             // Brightness scroll on bottom half
+             const monitor = Brightness.getMonitorForScreen(screen);
+             if (angleDelta.y > 0)
+-                monitor.setBrightness(monitor.brightness + GlobalConfig.services.brightnessIncrement);
++                monitor.setBrightness(Math.max(monitor.brightness * 1.25, monitor.brightness + 0.01));
+             else if (angleDelta.y < 0)
+-                monitor.setBrightness(monitor.brightness - GlobalConfig.services.brightnessIncrement);
++                monitor.setBrightness(Math.max(0.01, Math.min(monitor.brightness / 1.25, monitor.brightness - 0.01)));
+         }
+     }
+ 
 @@ -122,7 +122,7 @@ ColumnLayout {
              DelegateChoice {
                  roleValue: "logo"
@@ -36,6 +69,106 @@ index 3399f1d..ad8d545 100644
                          objectName: "taskbarLogo"
                      }
                  }
+diff --git a/modules/bar/components/workspaces/Workspaces.qml b/modules/bar/components/workspaces/Workspaces.qml
+index 7605fa9..1378fd6 100644
+--- a/modules/bar/components/workspaces/Workspaces.qml
++++ b/modules/bar/components/workspaces/Workspaces.qml
+@@ -53,6 +53,14 @@ ClipRect {
+         return Math.floor((activeWsId - 1) / shown) * shown;
+     }
+ 
++    readonly property var occupiedIds: Hypr.workspaces.values.filter(w => w.id > 0 && w.toplevels.values.length > 0).map(w => w.id)
++    readonly property int firstShown: Config.bar.workspaces.showUnoccupied ? groupOffset + 1 : (wsIds[0] ?? activeWsId)
++    readonly property int lastShown: Config.bar.workspaces.showUnoccupied ? groupOffset + shown : (wsIds[wsIds.length - 1] ?? activeWsId)
++    readonly property bool occupiedAbove: occupiedIds.some(id => id < firstShown)
++    readonly property bool occupiedBelow: occupiedIds.some(id => id > lastShown)
++    readonly property bool moreAbove: Config.bar.workspaces.showUnoccupied ? groupOffset > 0 : occupiedAbove
++    readonly property bool moreBelow: Config.bar.workspaces.showUnoccupied || occupiedBelow
++
+     property real blur: onSpecial ? 1 : 0
+ 
+     function workspaceIndex(id: int): int {
+@@ -66,13 +74,17 @@ ClipRect {
+     }
+ 
+     implicitWidth: Tokens.sizes.bar.innerWidth
+-    implicitHeight: workspaces.layoutHeight + workspaces.anchors.margins * 2
++    implicitHeight: workspaces.layoutHeight + workspaces.anchors.margins * 2 + aboveCue.height + belowCue.height
+ 
+     color: Colours.tPalette.m3surfaceContainer
+     radius: Tokens.rounding.full
+ 
+     Item {
+-        anchors.fill: parent
++        anchors.left: parent.left
++        anchors.right: parent.right
++        anchors.top: parent.top
++        anchors.topMargin: aboveCue.height
++        implicitHeight: workspaces.layoutHeight + workspaces.anchors.margins * 2
+         scale: root.onSpecial ? 0.8 : 1
+         opacity: root.onSpecial ? 0.5 : 1
+         visible: !root.fullscreen
+@@ -193,6 +205,45 @@ ClipRect {
+         }
+     }
+ 
++    component ScrollCue: MaterialIcon {
++        required property bool more
++        required property bool occupied
++
++        anchors.horizontalCenter: parent.horizontalCenter
++        height: more ? implicitHeight : 0
++        opacity: more ? (occupied ? 1 : 0.45) : 0
++        font: Tokens.font.icon.small
++        color: occupied ? Colours.palette.m3primary : Colours.palette.m3onSurfaceVariant
++
++        Behavior on opacity {
++            Anim {
++                type: Anim.DefaultEffects
++            }
++        }
++
++        Behavior on height {
++            Anim {}
++        }
++    }
++
++    ScrollCue {
++        id: aboveCue
++
++        anchors.top: parent.top
++        text: "keyboard_arrow_up"
++        more: root.moreAbove
++        occupied: root.occupiedAbove
++    }
++
++    ScrollCue {
++        id: belowCue
++
++        anchors.bottom: parent.bottom
++        text: "keyboard_arrow_down"
++        more: root.moreBelow
++        occupied: root.occupiedBelow
++    }
++
+     Loader {
+         id: specialWs
+ 
+diff --git a/modules/bar/popouts/AudioPopout.qml b/modules/bar/popouts/AudioPopout.qml
+index d9a0728..5aee2bc 100644
+--- a/modules/bar/popouts/AudioPopout.qml
++++ b/modules/bar/popouts/AudioPopout.qml
+@@ -97,8 +97,8 @@ Item {
+                 anchors.right: parent.right
+                 implicitHeight: parent.implicitHeight
+ 
+-                value: Audio.volume
+-                onInteraction: value => Audio.setVolume(value)
++                value: SliderCurve.position(Audio.volume, 1)
++                onInteraction: value => Audio.setVolume(SliderCurve.level(value, 1))
+             }
+         }
+ 
 diff --git a/modules/dashboard/Content.qml b/modules/dashboard/Content.qml
 index a10edce..e3cc406 100644
 --- a/modules/dashboard/Content.qml
@@ -66,6 +199,251 @@ index a10edce..e3cc406 100644
              Behavior on contentX {
                  Anim {}
              }
+diff --git a/modules/dashboard/WeatherTab.qml b/modules/dashboard/WeatherTab.qml
+index 20420c4..6b694a2 100644
+--- a/modules/dashboard/WeatherTab.qml
++++ b/modules/dashboard/WeatherTab.qml
+@@ -36,7 +36,7 @@ Item {
+                 }
+ 
+                 StyledText {
+-                    text: Tr.formatDateTime(new Date(), "dddd, MMMM d")
++                    text: Tr.formatDateTime(new Date(), "dddd d MMMM")
+                     font: Tokens.font.body.small
+                     color: Colours.palette.m3onSurfaceVariant
+                 }
+@@ -176,7 +176,7 @@ Item {
+                         StyledText {
+                             Layout.topMargin: -Tokens.spacing.extraSmall
+                             Layout.alignment: Qt.AlignHCenter
+-                            text: Tr.formatDateTime(new Date(forecastItem.modelData.date), "MMM d")
++                            text: Tr.formatDateTime(new Date(forecastItem.modelData.date), "d MMM")
+                             font: Tokens.font.body.small
+                             opacity: 0.7
+                             color: Colours.palette.m3onSurfaceVariant
+diff --git a/modules/drawers/ContentWindow.qml b/modules/drawers/ContentWindow.qml
+index 9f82df2..0993fda 100644
+--- a/modules/drawers/ContentWindow.qml
++++ b/modules/drawers/ContentWindow.qml
+@@ -42,7 +42,11 @@ StyledWindow {
+     readonly property real shadowOpacity: 0.7 * (1 - fsTransitionProg)
+     readonly property real borderLayoutThickness: hasFullscreen ? 0 : contentItem.Config.border.thickness
+ 
+-    property color surfaceColour: Colours.tPalette.m3surface
++    property color surfaceColour: WmState.normal ? Colours.tPalette.m3surfaceContainerHighest : Colours.tPalette.m3surface
++
++    Behavior on surfaceColour {
++        CAnim {}
++    }
+ 
+     readonly property int dragMaskPadding: {
+         if (focusGrab.active || panels.popouts.isDetached)
+diff --git a/modules/launcher/Content.qml b/modules/launcher/Content.qml
+index f5058f0..cb87c31 100644
+--- a/modules/launcher/Content.qml
++++ b/modules/launcher/Content.qml
+@@ -113,6 +113,8 @@ Item {
+             function onLauncherChanged(): void {
+                 if (!root.screenState.launcher)
+                     search.text = "";
++                else
++                    search.forceActiveFocus();
+             }
+ 
+             function onSessionChanged(): void {
+diff --git a/modules/nexus/pages/AudioPage.qml b/modules/nexus/pages/AudioPage.qml
+index f53d072..6c3333e 100644
+--- a/modules/nexus/pages/AudioPage.qml
++++ b/modules/nexus/pages/AudioPage.qml
+@@ -24,10 +24,10 @@ PageBase {
+             first: true
+             icon: Icons.getVolumeIcon(Audio.volume, Audio.muted)
+             label: Tr.trCtx("Output", "audio output")
+-            valueLabel: Strings.percentOne(value)
+-            value: Audio.volume
++            valueLabel: Strings.percentOne(Audio.volume)
++            value: SliderCurve.position(Audio.volume, 1)
+             enabled: !Audio.muted
+-            onMoved: v => Audio.setVolume(v)
++            onMoved: v => Audio.setVolume(SliderCurve.level(v, 1))
+         }
+ 
+         ToggleRow {
+@@ -51,10 +51,10 @@ PageBase {
+             first: true
+             icon: Icons.getMicVolumeIcon(Audio.sourceVolume, Audio.sourceMuted)
+             label: Tr.trCtx("Input", "audio input")
+-            valueLabel: Strings.percentOne(value)
+-            value: Audio.sourceVolume
++            valueLabel: Strings.percentOne(Audio.sourceVolume)
++            value: SliderCurve.position(Audio.sourceVolume, 1)
+             enabled: !Audio.sourceMuted
+-            onMoved: v => Audio.setSourceVolume(v)
++            onMoved: v => Audio.setSourceVolume(SliderCurve.level(v, 1))
+         }
+ 
+         ToggleRow {
+diff --git a/modules/nexus/pages/audio/AppVolumes.qml b/modules/nexus/pages/audio/AppVolumes.qml
+index fb4bc9d..09ca45a 100644
+--- a/modules/nexus/pages/audio/AppVolumes.qml
++++ b/modules/nexus/pages/audio/AppVolumes.qml
+@@ -61,10 +61,10 @@ PageBase {
+ 
+                 icon: Icons.getVolumeIcon(stream.modelData?.audio?.volume ?? 0, stream.modelData?.audio?.muted ?? false)
+                 label: Audio.getStreamName(stream.modelData)
+-                valueLabel: Strings.percentOne(value)
+-                value: stream.modelData?.audio?.volume ?? 0
++                valueLabel: Strings.percentOne(stream.modelData?.audio?.volume ?? 0)
++                value: SliderCurve.position(stream.modelData?.audio?.volume ?? 0, 1)
+                 enabled: !stream.modelData?.audio?.muted
+-                onMoved: v => Audio.setStreamVolume(stream.modelData, v)
++                onMoved: v => Audio.setStreamVolume(stream.modelData, SliderCurve.level(v, 1))
+             }
+         }
+     }
+diff --git a/modules/osd/Content.qml b/modules/osd/Content.qml
+index 52c1fc5..740d76d 100644
+--- a/modules/osd/Content.qml
++++ b/modules/osd/Content.qml
+@@ -46,10 +46,11 @@ Item {
+             FilledSlider {
+                 anchors.fill: parent
+ 
+-                icon: Icons.getVolumeIcon(value, root.muted)
+-                value: root.volume
++                icon: Icons.getVolumeIcon(root.volume, root.muted)
++                shown: root.volume
++                value: SliderCurve.position(root.volume, to)
+                 to: GlobalConfig.services.maxVolume
+-                onMoved: Audio.setVolume(value)
++                onMoved: Audio.setVolume(SliderCurve.level(value, to))
+             }
+         }
+ 
+@@ -71,10 +72,11 @@ Item {
+                 FilledSlider {
+                     anchors.fill: parent
+ 
+-                    icon: Icons.getMicVolumeIcon(value, root.sourceMuted)
+-                    value: root.sourceVolume
++                    icon: Icons.getMicVolumeIcon(root.sourceVolume, root.sourceMuted)
++                    shown: root.sourceVolume
++                    value: SliderCurve.position(root.sourceVolume, to)
+                     to: GlobalConfig.services.maxVolume
+-                    onMoved: Audio.setSourceVolume(value)
++                    onMoved: Audio.setSourceVolume(SliderCurve.level(value, to))
+                 }
+             }
+         }
+@@ -89,9 +91,9 @@ Item {
+                     if (!monitor)
+                         return;
+                     if (event.angleDelta.y > 0)
+-                        monitor.setBrightness(monitor.brightness + GlobalConfig.services.brightnessIncrement);
++                        monitor.setBrightness(Math.max(monitor.brightness * 1.25, monitor.brightness + 0.01));
+                     else if (event.angleDelta.y < 0)
+-                        monitor.setBrightness(monitor.brightness - GlobalConfig.services.brightnessIncrement);
++                        monitor.setBrightness(Math.max(0.01, Math.min(monitor.brightness / 1.25, monitor.brightness - 0.01)));
+                 }
+ 
+                 implicitWidth: Tokens.sizes.osd.sliderWidth
+@@ -100,9 +102,10 @@ Item {
+                 FilledSlider {
+                     anchors.fill: parent
+ 
+-                    icon: `brightness_${(Math.round(value * 6) + 1)}`
+-                    value: root.brightness
+-                    onMoved: root.monitor?.setBrightness(value)
++                    icon: `brightness_${(Math.round(root.brightness * 6) + 1)}`
++                    shown: root.brightness
++                    value: SliderCurve.position(root.brightness, 1)
++                    onMoved: root.monitor?.setBrightness(SliderCurve.level(value, 1))
+                 }
+             }
+         }
+diff --git a/services/Audio.qml b/services/Audio.qml
+index c83d80a..e733c9c 100644
+--- a/services/Audio.qml
++++ b/services/Audio.qml
+@@ -8,6 +8,7 @@ import Caelestia
+ import Caelestia.Config
+ import Caelestia.I18n
+ import Caelestia.Services
++import qs.components.misc
+ 
+ Singleton {
+     id: root
+@@ -39,11 +40,11 @@ Singleton {
+     }
+ 
+     function incrementVolume(amount: real): void {
+-        setVolume(volume + (amount || GlobalConfig.services.audioIncrement));
++        setVolume(amount ? volume + amount : Math.max(volume * 1.25, volume + 0.01));
+     }
+ 
+     function decrementVolume(amount: real): void {
+-        setVolume(volume - (amount || GlobalConfig.services.audioIncrement));
++        setVolume(amount ? volume - amount : Math.min(volume / 1.25, volume - 0.01));
+     }
+ 
+     function setSourceVolume(newVolume: real): void {
+@@ -54,11 +55,11 @@ Singleton {
+     }
+ 
+     function incrementSourceVolume(amount: real): void {
+-        setSourceVolume(sourceVolume + (amount || GlobalConfig.services.audioIncrement));
++        setSourceVolume(amount ? sourceVolume + amount : Math.max(sourceVolume * 1.25, sourceVolume + 0.01));
+     }
+ 
+     function decrementSourceVolume(amount: real): void {
+-        setSourceVolume(sourceVolume - (amount || GlobalConfig.services.audioIncrement));
++        setSourceVolume(amount ? sourceVolume - amount : Math.min(sourceVolume / 1.25, sourceVolume - 0.01));
+     }
+ 
+     function setAudioSink(newSink: PwNode): void {
+@@ -183,6 +184,22 @@ Singleton {
+         id: beatTracker
+     }
+ 
++    // qmllint disable unresolved-type
++    CustomShortcut {
++        // qmllint enable unresolved-type
++        name: "volumeUp"
++        description: "Increase volume"
++        onPressed: root.incrementVolume()
++    }
++
++    // qmllint disable unresolved-type
++    CustomShortcut {
++        // qmllint enable unresolved-type
++        name: "volumeDown"
++        description: "Decrease volume"
++        onPressed: root.decrementVolume()
++    }
++
+     IpcHandler {
+         function cycleOutput(): void {
+             root.cycleNextAudioOutput();
+diff --git a/services/Brightness.qml b/services/Brightness.qml
+index dd9b68e..7872579 100644
+--- a/services/Brightness.qml
++++ b/services/Brightness.qml
+@@ -51,13 +51,13 @@ Singleton {
+     function increaseBrightness(): void {
+         const monitor = getMonitor("active");
+         if (monitor)
+-            monitor.setBrightness(monitor.brightness + GlobalConfig.services.brightnessIncrement);
++            monitor.setBrightness(Math.max(monitor.brightness * 1.25, monitor.brightness + 0.01));
+     }
+ 
+     function decreaseBrightness(): void {
+         const monitor = getMonitor("active");
+         if (monitor)
+-            monitor.setBrightness(monitor.brightness - GlobalConfig.services.brightnessIncrement);
++            monitor.setBrightness(Math.max(0.01, Math.min(monitor.brightness / 1.25, monitor.brightness - 0.01)));
+     }
+ 
+     onMonitorsChanged: {
 diff --git a/shell.qml b/shell.qml
 index 60cb877..cba04f3 100644
 --- a/shell.qml
@@ -86,67 +464,3 @@ index 60cb877..cba04f3 100644
      Lock {
          id: lock
      }
---- a/modules/dashboard/WeatherTab.qml
-+++ b/modules/dashboard/WeatherTab.qml
-@@ -36,7 +36,7 @@
-                 }
- 
-                 StyledText {
--                    text: Tr.formatDateTime(new Date(), "dddd, MMMM d")
-+                    text: Tr.formatDateTime(new Date(), "dddd d MMMM")
-                     font: Tokens.font.body.small
-                     color: Colours.palette.m3onSurfaceVariant
-                 }
-@@ -176,7 +176,7 @@
-                         StyledText {
-                             Layout.topMargin: -Tokens.spacing.extraSmall
-                             Layout.alignment: Qt.AlignHCenter
--                            text: Tr.formatDateTime(new Date(forecastItem.modelData.date), "MMM d")
-+                            text: Tr.formatDateTime(new Date(forecastItem.modelData.date), "d MMM")
-                             font: Tokens.font.body.small
-                             opacity: 0.7
-                             color: Colours.palette.m3onSurfaceVariant
---- a/services/Brightness.qml
-+++ b/services/Brightness.qml
-@@ -51,13 +51,13 @@
-     function increaseBrightness(): void {
-         const monitor = getMonitor("active");
-         if (monitor)
--            monitor.setBrightness(monitor.brightness + GlobalConfig.services.brightnessIncrement);
-+            monitor.setBrightness(Math.max(monitor.brightness * 1.25, monitor.brightness + 0.01));
-     }
- 
-     function decreaseBrightness(): void {
-         const monitor = getMonitor("active");
-         if (monitor)
--            monitor.setBrightness(monitor.brightness - GlobalConfig.services.brightnessIncrement);
-+            monitor.setBrightness(Math.max(0.01, Math.min(monitor.brightness / 1.25, monitor.brightness - 0.01)));
-     }
- 
-     onMonitorsChanged: {
---- a/modules/drawers/ContentWindow.qml
-+++ b/modules/drawers/ContentWindow.qml
-@@ -42,7 +42,11 @@
-     readonly property real shadowOpacity: 0.7 * (1 - fsTransitionProg)
-     readonly property real borderLayoutThickness: hasFullscreen ? 0 : contentItem.Config.border.thickness
- 
--    property color surfaceColour: Colours.tPalette.m3surface
-+    property color surfaceColour: WmState.normal ? Colours.tPalette.m3surfaceContainerHighest : Colours.tPalette.m3surface
-+
-+    Behavior on surfaceColour {
-+        CAnim {}
-+    }
- 
-     readonly property int dragMaskPadding: {
-         if (focusGrab.active || panels.popouts.isDetached)
---- a/modules/launcher/Content.qml
-+++ b/modules/launcher/Content.qml
-@@ -113,6 +113,8 @@
-             function onLauncherChanged(): void {
-                 if (!root.screenState.launcher)
-                     search.text = "";
-+                else
-+                    search.forceActiveFocus();
-             }
- 
-             function onSessionChanged(): void {

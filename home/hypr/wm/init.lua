@@ -461,6 +461,18 @@ local function step_focus(direction)
     end
 end
 
+function wm.align_left()
+    local window = hl.get_active_window()
+    if not window or window.floating then return end
+    local monitor = hl.get_active_monitor()
+    local edge = monitor.x + monitor.reserved.left + hl.get_config("general.gaps_out").left
+        + hl.get_config("general.gaps_in").left + hl.get_config("general.border_size")
+    local offset = math.floor(window.at.x - edge + 0.5)
+    if offset == 0 then return end
+    hl.dispatch(hl.dsp.layout(string.format("move %d", -offset)))
+    focus(window)
+end
+
 local scrolling = false
 function wm.scroll(direction)
     if scrolling then return end
