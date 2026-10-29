@@ -238,15 +238,6 @@ index 9f82df2..0993fda 100644
  
      readonly property int dragMaskPadding: {
          if (focusGrab.active || panels.popouts.isDetached)
-@@ -68,7 +72,7 @@ StyledWindow {
-     name: "drawers"
-     WlrLayershell.exclusionMode: ExclusionMode.Ignore
-     WlrLayershell.layer: (fsTransitionProg > 0 && contentItem.Config.general.showOverFullscreen) || (hasSpecialWorkspace && hasFullscreenOnNormalWs) ? WlrLayer.Overlay : WlrLayer.Top
--    WlrLayershell.keyboardFocus: screenState.launcher || screenState.session ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
-+    WlrLayershell.keyboardFocus: screenState.launcher || screenState.session ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
- 
-     mask: hasFullscreen ? emptyRegion : regions
- 
 diff --git a/modules/launcher/Content.qml b/modules/launcher/Content.qml
 index f5058f0..cb87c31 100644
 --- a/modules/launcher/Content.qml
