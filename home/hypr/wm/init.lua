@@ -14,12 +14,6 @@ local wm = {
 }
 _G.wm = wm
 
-local selection_colour = "rgb(9e648e)"
-do
-    local ok, scheme = pcall(dofile, os.getenv("HOME") .. "/.config/hypr/scheme/current.lua")
-    if ok and type(scheme) == "table" and scheme.tertiary then selection_colour = "rgb(" .. scheme.tertiary .. ")" end
-end
-
 local function workspace()
     return hl.get_active_workspace().id
 end
@@ -76,14 +70,14 @@ end
 function wm.publish()
     local list = {}
     for address in pairs(wm.selection) do list[#list + 1] = address end
-    hl.dispatch(hl.dsp.event("wm>>" .. json({ selection = list, mode = hl.get_current_submap() })))
+    local state = { selection = list, mode = hl.get_current_submap(), ace = wm.ace_labels or {} }
+    hl.dispatch(hl.dsp.event("wm>>" .. json(state)))
 end
 
 local function paint(address, on)
     local window = hl.get_window("address:" .. address)
     if not window then return end
-    local value = on and selection_colour or "unset"
-    hl.dispatch(hl.dsp.window.set_prop({ prop = "inactive_border_color", value = value, window = window }))
+    hl.dispatch(hl.dsp.window.set_prop({ prop = "border_size", value = on and "0" or "unset", window = window }))
     hl.dispatch(hl.dsp.window.tag({ tag = (on and "+" or "-") .. "wmsel", window = window }))
 end
 
@@ -627,6 +621,115 @@ function wm.close()
     end
     if #list == 0 then hl.dispatch(hl.dsp.window.close()) end
 end
+
+local ace_letters = "asdfghjklqwertyuiopzxcvbnm"
+local ace = nil
+
+local function on_screen(window, monitor)
+    return window.mapped and not window.hidden
+        and window.at.x < monitor.x + monitor.width and window.at.x + window.size.x > monitor.x
+        and window.at.y < monitor.y + monitor.height and window.at.y + window.size.y > monitor.y
+end
+
+local function emacs_splits()
+    local pipe = io.popen("timeout 0.3 emacsclient --eval '(wm-ace-layout)' 2>/dev/null")
+    if not pipe then return {} end
+    local text = pipe:read("a") or ""
+    pipe:close()
+    local frames = {}
+    for address, index, x, y in text:gmatch("(0x%x+) (%d+) (%-?%d+) (%-?%d+)") do
+        frames[address] = frames[address] or {}
+        table.insert(frames[address], { index = tonumber(index), x = tonumber(x), y = tonumber(y) })
+    end
+    return frames
+end
+
+local function ace_targets()
+    local windows = {}
+    local emacs = false
+    for _, monitor in ipairs(hl.get_monitors()) do
+        if monitor.active_workspace then
+            for _, window in ipairs(hl.get_workspace_windows(monitor.active_workspace.id)) do
+                if on_screen(window, monitor) then
+                    windows[#windows + 1] = window
+                    emacs = emacs or window.class:lower() == "emacs"
+                end
+            end
+        end
+    end
+    table.sort(windows, function(a, b)
+        if a.at.x ~= b.at.x then return a.at.x < b.at.x end
+        return a.at.y < b.at.y
+    end)
+    local splits = emacs and emacs_splits() or {}
+    local targets = {}
+    for _, window in ipairs(windows) do
+        local inner = splits[window.address]
+        if inner and #inner > 1 then
+            for _, split in ipairs(inner) do
+                targets[#targets + 1] = { address = window.address, split = split.index,
+                    x = window.at.x + split.x, y = window.at.y + split.y }
+            end
+        else
+            targets[#targets + 1] = { address = window.address, x = window.at.x, y = window.at.y }
+        end
+    end
+    return targets
+end
+
+local function ace_finish(to)
+    ace = nil
+    wm.ace_labels = nil
+    hl.dispatch(hl.dsp.submap(to))
+    wm.publish()
+end
+
+function wm.ace(mode)
+    local targets = ace_targets()
+    if #targets == 0 then return end
+    local by_key, labels = {}, {}
+    for i, target in ipairs(targets) do
+        local key = ace_letters:sub(i, i)
+        if key == "" then break end
+        by_key[key] = target
+        labels[#labels + 1] = { key = key, x = target.x, y = target.y }
+    end
+    local from = hl.get_current_submap()
+    ace = { mode = mode, targets = by_key, from = from ~= "" and from or "reset" }
+    wm.ace_labels = labels
+    hl.dispatch(hl.dsp.submap("ace"))
+    wm.publish()
+end
+
+function wm.ace_key(key)
+    if not ace then return end
+    local target = ace.targets[key]
+    if not target then return end
+    local window = hl.get_window("address:" .. target.address)
+    if not window then return ace_finish(ace.from) end
+    if ace.mode == "select" then
+        set_selected(target.address, not wm.selection[target.address])
+        return ace_finish("select")
+    end
+    local from = ace.from
+    focus(window)
+    if target.split then
+        hl.dispatch(hl.dsp.exec_cmd(string.format("emacsclient --eval '(wm-ace-select \"%s\" %d)'",
+            target.address, target.split)))
+    end
+    ace_finish(from)
+end
+
+function wm.ace_cancel()
+    if ace then ace_finish(ace.from) end
+end
+
+hl.define_submap("ace", function()
+    for key in ace_letters:gmatch(".") do
+        hl.bind(key, function() wm.ace_key(key) end, { description = "ace " .. key })
+    end
+    hl.bind("escape", function() wm.ace_cancel() end, { description = "cancel ace" })
+end)
 
 function wm.checkpoint()
     if not wm.backend.applying then undo.checkpoint() end

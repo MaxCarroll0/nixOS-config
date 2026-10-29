@@ -515,22 +515,24 @@ index dd9b68e..7872579 100644
  
      onMonitorsChanged: {
 diff --git a/shell.qml b/shell.qml
-index 60cb877..cba04f3 100644
+index 60cb877..0a96014 100644
 --- a/shell.qml
 +++ b/shell.qml
-@@ -12,6 +12,7 @@ import qs.modules.areapicker
+@@ -12,6 +12,8 @@ import qs.modules.areapicker
  import qs.modules.background
  import qs.modules.drawers
  import qs.modules.lock
 +import qs.modules.whichkey
++import qs.modules.wmoverlay
  import qs.daemons
  
  ShellRoot {
-@@ -44,6 +45,7 @@ ShellRoot {
+@@ -44,6 +46,8 @@ ShellRoot {
      Background {}
      Drawers {}
      AreaPicker {}
 +    WhichKey {}
++    WmOverlay {}
      Lock {
          id: lock
      }

@@ -10,6 +10,8 @@ Singleton {
 
     property string submap: ""
     property var keymap: ({})
+    property var selection: []
+    property var aceLabels: []
 
     readonly property bool normal: submap === "normal" || submap.startsWith("normal:")
     readonly property bool select: submap === "select"
@@ -31,6 +33,14 @@ Singleton {
         })
     readonly property var modifierOrder: [["CTRL", "C-"], ["ALT", "M-"], ["SUPER", "s-"]]
 
+    function receive(payload: string): void {
+        try {
+            const state = JSON.parse(payload);
+            selection = state.selection ?? [];
+            aceLabels = state.ace ?? [];
+        } catch (e) {}
+    }
+
     function chord(mods: string, key: string): string {
         const held = mods.split(" ").filter(m => m.length > 0);
         const shifted = held.includes("SHIFT");
@@ -48,6 +58,8 @@ Singleton {
         function onRawEvent(event: HyprlandEvent): void {
             if (event.name === "submap")
                 root.submap = event.data;
+            else if (event.name === "custom" && event.data.startsWith("wm>>"))
+                root.receive(event.data.slice(4));
         }
     }
 

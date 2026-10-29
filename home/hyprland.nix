@@ -302,23 +302,12 @@ in
         workspace-last = top "grave" "hl.dsp.focus({ workspace = \"previous\" })" "last workspace" // {
           mark = true;
         };
-        ace = {
-          key = "o";
-          owner = "bridge";
-          elisp = "wm-ace";
-          dispatch = "hl.dsp.window.cycle_next()";
-          desc = "jump to any window or Emacs split";
+        ace = top "o" (wmCall "ace(\"jump\")") "jump to any window or Emacs split" // {
+          checkpoint = false;
           mark = true;
-          insert = true;
         };
-        ace-swap = {
-          key = "o";
-          mods = "SUPER SHIFT";
-          owner = "bridge";
-          elisp = "wm-ace-swap";
-          dispatch = "hl.dsp.window.swap({ direction = \"r\" })";
-          desc = "swap with a chosen window";
-          insert = true;
+        ace-select = hyprKey "SUPER SHIFT" "o" (wmCall "ace(\"select\")") "select any window by label" // {
+          checkpoint = false;
         };
         switch-buffer = emacsKey "SUPER" "b" "wm-switch-buffer" "switch buffer, window or browser tab" // {
           mark = true;
