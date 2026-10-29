@@ -3,11 +3,16 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }:
 
 let
   cfg = config.local.wm;
+
+  suspendUnlessPlaying = pkgs.writeShellScript "suspend-unless-playing" ''
+    ${pkgs.playerctl}/bin/playerctl --all-players status 2>/dev/null | grep -qx Playing || systemctl suspend
+  '';
 
   luaStr = s: "\"" + lib.escape [ "\\" "\"" ] s + "\"";
   luaVal =
@@ -412,7 +417,8 @@ in
         hl.bind("switch:on:Lid Switch", function()
           hl.dispatch(${shell "lock"})
           hl.dispatch(hl.dsp.dpms({ action = "disable", monitor = "eDP-1" }))
-        end, { locked = true, description = "lid closed: lock, panel off" })
+          hl.dispatch(hl.dsp.exec_cmd("${suspendUnlessPlaying}"))
+        end, { locked = true, description = "lid closed: lock, panel off, suspend unless playing" })
         hl.bind("switch:off:Lid Switch", hl.dsp.dpms({ action = "enable", monitor = "eDP-1" }), { locked = true, description = "lid opened: panel on" })
         pcall(require, "hypr-user")
       '';
