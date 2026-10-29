@@ -34,6 +34,26 @@ let
     "gestures"
   ];
 
+  schemeFile = "${config.xdg.stateHome}/caelestia/scheme.json";
+
+  chromiumTheme = pkgs.writeShellApplication {
+    name = "caelestia-chromium-theme";
+    runtimeInputs = [
+      pkgs.jq
+      pkgs.procps
+    ];
+    text = ''
+      policy="${config.xdg.stateHome}/caelestia/chromium-policy.json"
+      [ -s "${schemeFile}" ] || exit 0
+      jq -c '{BrowserThemeColor: ("#" + .colours.surface), BrowserColorScheme: (if .mode == "light" then "light" else "dark" end)}' \
+        "${schemeFile}" > "$policy.tmp"
+      mv "$policy.tmp" "$policy"
+      if pgrep -x -u "$(id -u)" chromium > /dev/null; then
+        ${pkgs.chromium}/bin/chromium --refresh-platform-policy --no-startup-window || true
+      fi
+    '';
+  };
+
   hyprFiles = [
     "variables.lua"
     "utils/functions.lua"
@@ -113,6 +133,21 @@ in
     xdg.configFile = lib.listToAttrs (
       map (f: lib.nameValuePair "hypr/${f}" { source = "${inputs.caelestia-dots}/hypr/${f}"; }) hyprFiles
     );
+
+    systemd.user.paths.caelestia-chromium-theme = {
+      Unit.Description = "Watch the Caelestia scheme for Chromium";
+      Path.PathChanged = schemeFile;
+      Install.WantedBy = [ "default.target" ];
+    };
+
+    systemd.user.services.caelestia-chromium-theme = {
+      Unit.Description = "Theme Chromium from the Caelestia scheme";
+      Service = {
+        Type = "oneshot";
+        ExecStart = lib.getExe chromiumTheme;
+      };
+      Install.WantedBy = [ "default.target" ];
+    };
 
     systemd.user.services.hyprpolkitagent = {
       Unit = {

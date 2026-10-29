@@ -173,6 +173,9 @@ in
         wl-clipboard
       ]);
 
+      environment.etc."chromium/policies/managed/caelestia.json".source =
+        "${config.users.users.max.home}/.local/state/caelestia/chromium-policy.json";
+
       services.printing.enable = true;
 
       services.logind.settings.Login.HandleLidSwitch = "ignore";
