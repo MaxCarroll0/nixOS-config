@@ -23,6 +23,7 @@ in
       wakeName = "desktopnew";
       sshPort = 2222;
     };
+    minecraft.enable = true;
     sshKeyFile = config.sops.secrets.satisfactory-remote-key.path;
     wakePackage = config.local.wake.package;
   };

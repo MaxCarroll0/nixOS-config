@@ -149,6 +149,7 @@ let
 
   idlePauseMinutes = 15;
   lastActive = "/run/${domainName}-last-active";
+  idleStatus = "/run/${domainName}-idle.json";
 
   virsh = "virsh -c qemu:///system";
 
@@ -157,14 +158,28 @@ let
     runtimeInputs = [
       config.virtualisation.libvirtd.package
       pkgs.coreutils
+      pkgs.jq
     ];
     text = ''
       now=$(date +%s)
-      if [ "$(${virsh} domstate ${domainName})" != running ] || ${lib.getExe guestHasSshSession} || [ ! -e ${lastActive} ]; then
-        echo "$now" > ${lastActive}
-        exit 0
+      running=false
+      loggedIn=false
+      if [ "$(${virsh} domstate ${domainName})" = running ]; then
+        running=true
+        if ${lib.getExe guestHasSshSession}; then
+          loggedIn=true
+        fi
       fi
-      if [ $(( now - $(cat ${lastActive}) )) -ge ${toString (idlePauseMinutes * 60)} ]; then
+      if [ "$running" = false ] || [ "$loggedIn" = true ] || [ ! -e ${lastActive} ]; then
+        echo "$now" > ${lastActive}
+      fi
+      pausesAt=$(( $(cat ${lastActive}) + ${toString (idlePauseMinutes * 60)} ))
+      jq -cn --argjson loggedIn "$loggedIn" --argjson running "$running" --argjson pausesAt "$pausesAt" \
+        --argjson updated "$now" --argjson idleAfter ${toString (idlePauseMinutes * 60)} \
+        '{loggedIn:$loggedIn,updated:$updated,idleAfter:$idleAfter,pausesAt:(if $running and ($loggedIn|not) then $pausesAt else null end)}' \
+        > ${idleStatus}.tmp
+      mv ${idleStatus}.tmp ${idleStatus}
+      if [ "$running" = true ] && [ "$loggedIn" = false ] && [ "$now" -ge "$pausesAt" ]; then
         ${virsh} suspend ${domainName}
       fi
     '';
@@ -198,6 +213,64 @@ let
     runtimeInputs = [ config.virtualisation.libvirtd.package ];
     text = ''
       [ "$(${virsh} domstate ${domainName} 2>/dev/null)" = running ]
+    '';
+  };
+
+  remoteUser = "minecraft-remote";
+  statusPort = 7782;
+
+  control = pkgs.writeShellApplication {
+    name = "${domainName}-control";
+    runtimeInputs = [
+      config.virtualisation.libvirtd.package
+      pkgs.jq
+    ];
+    text = ''
+      state() { ${virsh} domstate ${domainName} 2>/dev/null || echo unknown; }
+      status_json() {
+        local current idle='{}'
+        current=$(state)
+        if [ "$current" = running ] && [ -r ${idleStatus} ]; then
+          idle=$(cat ${idleStatus})
+        fi
+        jq -cn --arg state "$current" --argjson idle "$idle" '{state:$state} + $idle'
+      }
+
+      case "''${1:-}" in
+        remote)
+          case "''${SSH_ORIGINAL_COMMAND:-}" in
+            start)
+              ${lib.getExe resume} >&2
+              echo '{"ok":true}'
+              ;;
+            stop)
+              if [ "$(state)" = paused ]; then
+                ${virsh} resume ${domainName} >/dev/null
+              fi
+              ${virsh} shutdown ${domainName} >&2
+              echo '{"ok":true}'
+              ;;
+            status) status_json ;;
+            *)
+              echo "usage: start | stop | status" >&2
+              exit 2
+              ;;
+          esac
+          ;;
+        status-http)
+          while IFS= read -r -t 2 line; do
+            line=''${line%$'\r'}
+            [ -z "$line" ] && break
+          done
+          body=$(status_json)
+          printf 'HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \
+            "''${#body}" "$body"
+          ;;
+        *)
+          echo "usage: ${domainName}-control remote | status-http" >&2
+          exit 2
+          ;;
+      esac
     '';
   };
 in
@@ -296,6 +369,37 @@ in
     DynamicUser = lib.mkForce false;
     User = "vm-wake";
   };
+
+  users.users.${remoteUser} = {
+    isSystemUser = true;
+    group = remoteUser;
+    extraGroups = [ "libvirtd" ];
+    useDefaultShell = true;
+    openssh.authorizedKeys.keys = [
+      ''restrict,command="${lib.getExe control} remote" ${builtins.readFile ../../keys/satisfactory-remote.pub}''
+    ];
+  };
+  users.groups.${remoteUser} = { };
+
+  local.server.ssh.allowUsers = [ remoteUser ];
+
+  systemd.sockets."${domainName}-status" = {
+    wantedBy = [ "sockets.target" ];
+    listenStreams = [ (toString statusPort) ];
+    socketConfig.Accept = true;
+  };
+  systemd.services."${domainName}-status@" = {
+    serviceConfig = {
+      ExecStart = "${lib.getExe control} status-http";
+      StandardInput = "socket";
+      StandardOutput = "socket";
+      StandardError = "journal";
+      User = remoteUser;
+      RuntimeMaxSec = 10;
+    };
+  };
+
+  networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ statusPort ];
 
   services.autosuspend.checks.FriendVmRunning = {
     class = "ExternalCommand";
