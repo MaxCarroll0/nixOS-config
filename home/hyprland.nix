@@ -27,7 +27,7 @@ let
     attrs: "{ ${lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k} = ${luaVal v}") attrs)} }";
 
   hyprSettings = {
-    "general.layout" = "scrolling";
+    "general.layout" = "lua:strip";
     "general.allow_tearing" = false;
 
     "scrolling.column_width" = 0.5;

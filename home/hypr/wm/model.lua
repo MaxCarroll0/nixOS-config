@@ -2,8 +2,14 @@
 
 local M = {}
 
+function M.slot(window)
+    local layout = window.layout
+    if type(layout) ~= "table" or not layout.column then return nil end
+    return { column = layout.column.index, row = layout.index_in_column, width = layout.column.width }
+end
+
 local function tiled(window)
-    return window.mapped and not window.floating and type(window.layout) == "table" and window.layout.column
+    return window.mapped and not window.floating and M.slot(window)
 end
 
 function M.live(ws)
@@ -17,12 +23,13 @@ end
 function M.read(ws)
     local columns, order = {}, {}
     for _, window in pairs(M.live(ws)) do
-        local index = window.layout.column.index
+        local slot = M.slot(window)
+        local index = slot.column
         if not columns[index] then
-            columns[index] = { rows = {}, width = window.layout.column.width }
+            columns[index] = { rows = {}, width = slot.width }
             order[#order + 1] = index
         end
-        table.insert(columns[index].rows, { row = window.layout.index_in_column, address = window.address })
+        table.insert(columns[index].rows, { row = slot.row, address = window.address })
     end
     table.sort(order)
     local m = { columns = {} }

@@ -4,7 +4,7 @@ local model = require("wm.model")
 local undo = require("wm.undo")
 
 local wm = {
-    backend = require("wm.scrolling"),
+    backend = require("wm.strip"),
     selection = {},
     clipboard = nil,
     saved = {},
@@ -580,7 +580,7 @@ function wm.resize_column(delta)
     local list, active = column_windows(workspace())
     local exhausted = false
     for _, window in ipairs(list) do
-        local width = window.layout.column.width
+        local width = model.slot(window).width
         local target
         if delta == "+" or delta == "-" then
             target = next_preset(width, delta == "+")
@@ -590,7 +590,7 @@ function wm.resize_column(delta)
         end
         if target then
             focus(window)
-            hl.dispatch(hl.dsp.layout(string.format("colresize %.4f", math.min(target, 1.0))))
+            hl.dispatch(hl.dsp.layout(string.format("colresize %.4f", math.min(target, wm.backend.max_width or 1.0))))
         else
             exhausted = true
         end
@@ -601,6 +601,11 @@ end
 
 function wm.resize_row(fraction)
     local list, active = column_windows(workspace())
+    if wm.backend.resize_row then
+        for _, window in ipairs(list) do wm.backend.resize_row(workspace(), window.address, fraction) end
+        hl.dispatch(hl.dsp.layout("recalc"))
+        return
+    end
     local monitor = hl.get_active_monitor()
     for _, window in ipairs(list) do
         focus(window)
