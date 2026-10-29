@@ -8,6 +8,7 @@
     ../../modules/nixos/common.nix
     ../../modules/nixos/wifi.nix
     ../../modules/nixos/wake.nix
+    ../../modules/nixos/wake-endpoint.nix
     ../../modules/nixos/power.nix
     ../../modules/nixos/monitoring
     ../../modules/nixos/server/ssh.nix
@@ -134,6 +135,7 @@
   };
 
   local.wake.peers.desktopnew.timeoutSeconds = 120;
+  local.wakeEndpoint.peer = "desktopnew";
 
   local.server.ssh = {
     enable = true;
