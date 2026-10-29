@@ -28,7 +28,7 @@ let
       caelestia-cli = cli;
     }).overrideAttrs
       (old: {
-        patches = (old.patches or [ ]) ++ [ ./patches/caelestia-wm.patch ];
+        patches = (old.patches or [ ]) ++ [ ./patches/caelestia-wm.patch ] ++ cfg.caelestia.patches;
         postPatch = (old.postPatch or "") + ''
           cp -r --no-preserve=mode ${../quickshell/caelestia}/. .
         '';
@@ -121,6 +121,11 @@ in
       );
       default = { };
       description = "Overrides of Caelestia's Hyprland variables.lua.";
+    };
+    patches = lib.mkOption {
+      type = lib.types.listOf lib.types.path;
+      default = [ ];
+      description = "Extra patches for this host's Caelestia shell.";
     };
   };
 

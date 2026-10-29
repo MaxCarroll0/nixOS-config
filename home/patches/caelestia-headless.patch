@@ -1,0 +1,19 @@
+--- a/modules/session/Content.qml
++++ b/modules/session/Content.qml
+@@ -82,6 +82,16 @@
+         command: Config.session.commands.reboot
+ 
+         KeyNavigation.up: hibernate
++        KeyNavigation.down: headless
++    }
++
++    SessionButton {
++        id: headless
++
++        icon: "dns"
++        command: ["systemctl", "--user", "start", "--no-block", "desktop-headless.service"]
++
++        KeyNavigation.up: reboot
+     }
+ 
+     component SessionButton: IconButton {

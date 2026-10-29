@@ -1,11 +1,35 @@
 # Home for the AMD desktop.
 
-{ lib, ... }:
+{ lib, pkgs, ... }:
 
+let
+  headless = pkgs.writeShellApplication {
+    name = "desktop-headless";
+    runtimeInputs = [
+      pkgs.systemd
+      pkgs.uwsm
+    ];
+    text = ''
+      systemctl --user stop 'app-*.scope'
+      systemctl --user reset-failed 'app-*.scope' || true
+      uwsm stop
+    '';
+  };
+in
 {
   imports = [ ./common.nix ];
 
   local.wm.enable = true;
+
+  local.wm.caelestia.patches = [ ./patches/caelestia-headless.patch ];
+
+  systemd.user.services.desktop-headless = {
+    Unit.Description = "Close every graphical app and end the Hyprland session";
+    Service = {
+      Type = "oneshot";
+      ExecStart = lib.getExe headless;
+    };
+  };
 
   wayland.windowManager.hyprland.extraConfig = lib.mkAfter ''
     hl.monitor({ output = "HDMI-A-1", disabled = true })
