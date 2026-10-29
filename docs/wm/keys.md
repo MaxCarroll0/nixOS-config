@@ -91,7 +91,11 @@ when the window is also focused.
 
 The mouse wheel moves focus like hjkl in NORMAL, horizontally too, and an app's minimise
 button cuts its window. In the window map, `r`, `c` and `f` fill the row, column or screen and
-toggle back to the previous size.
+toggle back to the previous size. A lone column opens at half width and resizes like any other;
+a lone window fills its column, so row resizing needs a second window in it.
+
+The dashboard's keybinds page lists every binding once, under its group. Boxed keys are NORMAL
+keys with no prefix; the rest show their full chord.
 )
 ## 3. Submaps
 
