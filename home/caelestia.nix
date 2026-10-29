@@ -13,8 +13,17 @@ let
   system = pkgs.stdenv.hostPlatform.system;
   hyprland = inputs.hyprland.packages.${system}.hyprland;
 
+  cli = inputs.caelestia-shell.inputs.caelestia-cli.packages.${system}.default.overrideAttrs (old: {
+    postInstall = (old.postInstall or "") + "\n" + ''
+      ln -s ${config.local.wallpaper.schemeRoot} "$(find $out -path '*/caelestia/data/schemes' -type d)/wallpaper"
+    '';
+  });
+
   shell =
-    (inputs.caelestia-shell.packages.${system}.with-cli.override { inherit hyprland; }).overrideAttrs
+    (inputs.caelestia-shell.packages.${system}.with-cli.override {
+      inherit hyprland;
+      caelestia-cli = cli;
+    }).overrideAttrs
       (old: {
         patches = (old.patches or [ ]) ++ [ ./patches/caelestia-wm.patch ];
         postPatch = (old.postPatch or "") + ''
@@ -118,6 +127,7 @@ in
       systemd.target = "hyprland-session.target";
       cli = {
         enable = true;
+        package = cli;
         settings.theme = lib.genAttrs [
           "enableGtk"
           "enableQt"

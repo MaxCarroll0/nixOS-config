@@ -177,6 +177,12 @@ in
       readOnly = true;
       description = "Runtime palette file that theme-apply reads.";
     };
+
+    applyCommand = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      description = "theme-apply executable, for tools that write the palette themselves.";
+    };
   };
 
   config = {
@@ -198,6 +204,7 @@ in
     local.theme.active = cfg.schemes.${cfg.scheme} or gruvboxLightHard;
     local.theme.palettePath = palettePath;
     local.theme.hyprLua = hyprLuaPath;
+    local.theme.applyCommand = lib.getExe themeApply;
 
     home.packages = [
       themeApply

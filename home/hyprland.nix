@@ -289,6 +289,7 @@ in
     ./wm-keys.nix
     ./wm-bridge.nix
     ./caelestia.nix
+    ./wallpaper.nix
   ];
 
   config = {

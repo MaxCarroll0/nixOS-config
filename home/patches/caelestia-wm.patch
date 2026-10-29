@@ -276,7 +276,7 @@ diff --git a/modules/lock/Lock.qml b/modules/lock/Lock.qml
 index f852cb7..0ea6452 100644
 --- a/modules/lock/Lock.qml
 +++ b/modules/lock/Lock.qml
-@@ -7,13 +7,23 @@ import Quickshell.Wayland
+@@ -7,13 +7,28 @@ import Quickshell.Wayland
  import qs.components.misc
  
  Scope {
@@ -294,13 +294,18 @@ index f852cb7..0ea6452 100644
 +        onLockedChanged: {
 +            if (root.quitting)
 +                return;
-+            Quickshell.execDetached(locked ? ["sh", "-c", `echo 1 > "${root.heldFlag}"`] : ["rm", "-f", root.heldFlag]);
++            if (locked) {
++                Quickshell.execDetached(["sh", "-c", `echo 1 > "${root.heldFlag}"`]);
++            } else {
++                Quickshell.execDetached(["rm", "-f", root.heldFlag]);
++                Quickshell.execDetached(["wallpaper-theme", "next"]);
++            }
 +        }
 +
          LockSurface {
              lock: lock
              pam: pam
-@@ -26,6 +36,20 @@ Scope {
+@@ -26,6 +41,20 @@ Scope {
          lock: lock
      }
  
