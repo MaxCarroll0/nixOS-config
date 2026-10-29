@@ -906,7 +906,50 @@ hl.on("window.fullscreen", function(window)
     end)
 end)
 
+local recent, closing = {}, {}
+
+local function forget(address)
+    for i = #recent, 1, -1 do
+        if recent[i] == address then table.remove(recent, i) end
+    end
+end
+
+hl.on("window.active", function(window)
+    if not window or not window.address or closing[window.address] then return end
+    forget(window.address)
+    table.insert(recent, 1, window.address)
+    while #recent > 32 do table.remove(recent) end
+end)
+
+local function refocus_after_close(window)
+    if not window or not window.address or closing[window.address] then return end
+    local was_active = recent[1] == window.address or recent[2] == window.address
+    closing[window.address] = true
+    local after = {}
+    local seen = false
+    for _, address in ipairs(recent) do
+        if seen then table.insert(after, address) end
+        if address == window.address then seen = true end
+    end
+    forget(window.address)
+    if not was_active then return end
+    hl.timer(function()
+        closing[window.address] = nil
+        for _, address in ipairs(after) do
+            local candidate = hl.get_window("address:" .. address)
+            if candidate and candidate.workspace and window.workspace
+                and candidate.workspace.id == window.workspace.id then
+                focus(candidate)
+                return
+            end
+        end
+    end, { timeout = 30, type = "oneshot" })
+end
+
+hl.on("window.close", refocus_after_close)
+
 hl.on("window.destroy", function(window)
+    refocus_after_close(window)
     if window and window.address then before_fullscreen[window.address] = nil end
     if window and window.address and wm.selection[window.address] then wm.selection[window.address] = nil end
 end)
