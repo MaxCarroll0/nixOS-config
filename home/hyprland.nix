@@ -33,7 +33,7 @@ let
     "scrolling.column_width" = 0.5;
     "scrolling.explicit_column_widths" = "0.333, 0.5, 0.667, 1.0";
     "scrolling.focus_fit_method" = 1;
-    "scrolling.fullscreen_on_one_column" = true;
+    "scrolling.fullscreen_on_one_column" = false;
     "scrolling.follow_focus" = true;
 
     "input.kb_layout" = "gb";
@@ -279,6 +279,8 @@ let
   };
 
   typing = b: b // { insert = true; };
+
+  grouped = group: lib.mapAttrs (_: b: b // { inherit group; });
 in
 {
   imports = [
@@ -293,33 +295,62 @@ in
     xdg.configFile."hypr/wm".source = ./hypr/wm;
 
     local.wm.keys =
-      focusKeys
-      // moveKeys
-      // resizeKeys
-      // workspaceKeys
-      // mediaKeys
-      // {
-        workspace-last = top "grave" "hl.dsp.focus({ workspace = \"previous\" })" "last workspace" // {
-          mark = true;
-        };
-        ace = top "o" (wmCall "ace(\"jump\")") "jump to any window or Emacs split" // {
+      grouped "focus" (
+        focusKeys
+        // lib.filterAttrs (name: _: lib.hasPrefix "workspace-" name) workspaceKeys
+        // {
+          workspace-last = top "grave" "hl.dsp.focus({ workspace = \"previous\" })" "last workspace" // {
+            mark = true;
+          };
+          ace = top "o" (wmCall "ace(\"jump\")") "jump to any window or Emacs split" // {
+            checkpoint = false;
+            mark = true;
+          };
+          switch-buffer = emacsKey "SUPER" "b" "wm-switch-buffer" "switch buffer, window or browser tab" // {
+            mark = true;
+            insert = true;
+          };
+          mark-pop = top "bracketleft" (wmCall "mark_pop()") "pop the unified mark ring" // {
+            checkpoint = false;
+          };
+          mark-unpop = top "bracketright" (wmCall "mark_unpop()") "unpop the unified mark ring" // {
+            checkpoint = false;
+          };
+          align = top "z" (wmCall "align_left()") "scroll the focused column to the left edge" // {
+            checkpoint = false;
+          };
+        }
+      )
+      // grouped "move" (moveKeys // lib.filterAttrs (name: _: lib.hasPrefix "send-" name) workspaceKeys)
+      // grouped "size" (
+        resizeKeys
+        // {
+          full-width = top "f" "hl.dsp.window.fullscreen({ mode = \"maximized\" })" "toggle full width";
+        }
+      )
+      // grouped "media" mediaKeys
+      // grouped "edit" {
+        cut = top "s" (wmCall "cut()") "cut to the edge, remembered for paste";
+        paste = top "p" (wmCall "paste()") "paste below the focused window";
+        replace = top "r" (wmCall "replace()") "paste over the focused window";
+        evict = top "q" (wmCall "evict()") "evict to the nearer edge";
+        rotate = top "t" (wmCall "rotate(true)") "rotate clockwise";
+        rotate-back = hyprKey "SUPER SHIFT" "t" (wmCall "rotate(false)") "rotate anticlockwise";
+        undo = top "u" (wmCall "undo()") "undo" // {
           checkpoint = false;
-          mark = true;
         };
+      }
+      // grouped "select" {
+        select-row = top "x" (wmCall "select_row()") "select the row";
+        select-column = hyprKey "SUPER SHIFT" "x" (wmCall "select_column()") "select the column";
+        select-toggle = top "Tab" (wmCall "toggle_select()") "add or remove from the selection";
+        select-mode = hyprKey "SUPER SHIFT" "Tab" (wmCall "select_mode()") "SELECT state";
         ace-select = hyprKey "SUPER SHIFT" "o" (wmCall "ace(\"select\")") "select any window by label" // {
           checkpoint = false;
         };
-        switch-buffer = emacsKey "SUPER" "b" "wm-switch-buffer" "switch buffer, window or browser tab" // {
-          mark = true;
-          insert = true;
-        };
+      }
+      // grouped "launch" {
         kill-ring = typing (emacsKey "SUPER" "y" "wm-kill-ring" "yank from the Emacs kill ring");
-        mark-pop = top "bracketleft" (wmCall "mark_pop()") "pop the unified mark ring" // {
-          checkpoint = false;
-        };
-        mark-unpop = top "bracketright" (wmCall "mark_unpop()") "unpop the unified mark ring" // {
-          checkpoint = false;
-        };
         eshell-here = {
           key = "Return";
           owner = "bridge";
@@ -338,28 +369,17 @@ in
           insert = true;
         };
         launcher = typing (shellKey "SUPER" "space" "launcher" "application launcher");
+      }
+      // grouped "shell" {
         keybinds = shellKey "SUPER" "slash" "keybinds" "keybind reference";
         dashboard = shellKey "SUPER" "d" "dashboard" "dashboard";
         sidebar = shellKey "SUPER" "n" "sidebar" "notifications and quick settings";
-        session-menu = typing (shellKey "CTRL ALT" "Delete" "session" "session menu");
         clear-notifications = lockedKey "CTRL ALT" "c" (shell "clearNotifs") "clear notifications";
-        cut = top "s" (wmCall "cut()") "cut to the edge, remembered for paste";
-        paste = top "p" (wmCall "paste()") "paste below the focused window";
-        replace = top "r" (wmCall "replace()") "paste over the focused window";
-        evict = top "q" (wmCall "evict()") "evict to the nearer edge";
-        select-row = top "x" (wmCall "select_row()") "select the row";
-        select-column = hyprKey "SUPER SHIFT" "x" (wmCall "select_column()") "select the column";
-        select-toggle = top "Tab" (wmCall "toggle_select()") "add or remove from the selection";
-        select-mode = hyprKey "SUPER SHIFT" "Tab" (wmCall "select_mode()") "SELECT state";
-        align = top "z" (wmCall "align_left()") "scroll the focused column to the left edge" // {
-          checkpoint = false;
-        };
-        rotate = top "t" (wmCall "rotate(true)") "rotate clockwise";
-        rotate-back = hyprKey "SUPER SHIFT" "t" (wmCall "rotate(false)") "rotate anticlockwise";
-        undo = top "u" (wmCall "undo()") "undo" // {
-          checkpoint = false;
-        };
-        full-width = top "f" "hl.dsp.window.fullscreen({ mode = \"maximized\" })" "toggle full width";
+      }
+      // grouped "session" {
+        session-menu = typing (shellKey "CTRL ALT" "Delete" "session" "session menu");
+      }
+      // grouped "escape" {
         escape-emacs-restart =
           escape "r" "hl.dsp.exec_cmd(\"systemctl --user restart emacs.service\")"
             "restart the Emacs daemon";
@@ -371,18 +391,23 @@ in
             "make bridge keys dispatch directly";
       };
 
-    local.wm.keypad = {
-      kp-launcher = typing (hyprKey "" "space" (shell "launcher") "application launcher");
-      kp-keybinds = hyprKey "" "slash" (shell "keybinds") "keybind reference";
-      kp-dashboard = hyprKey "" "d" (shell "dashboard") "dashboard";
-      kp-sidebar = hyprKey "" "n" (shell "sidebar") "notifications and quick settings";
-      kp-close = sub "0" (wmCall "close()") "close window or selection" // {
-        prefix = [
-          "x"
-          "5"
-        ];
+    local.wm.keypad =
+      grouped "launch" {
+        kp-launcher = typing (hyprKey "" "space" (shell "launcher") "application launcher");
+      }
+      // grouped "shell" {
+        kp-keybinds = hyprKey "" "slash" (shell "keybinds") "keybind reference";
+        kp-dashboard = hyprKey "" "d" (shell "dashboard") "dashboard";
+        kp-sidebar = hyprKey "" "n" (shell "sidebar") "notifications and quick settings";
+      }
+      // grouped "edit" {
+        kp-close = sub "0" (wmCall "close()") "close window or selection" // {
+          prefix = [
+            "x"
+            "5"
+          ];
+        };
       };
-    };
 
     local.wm.select = selectFocusKeys;
 
@@ -392,16 +417,18 @@ in
         desc = "window and column";
         sticky = true;
         keys =
-          windowFocusKeys
-          // windowMoveKeys
-          // {
-            win-wider = sub "equal" (wmCall "resize_column(\"+\")") "wider column";
-            win-narrower = sub "minus" (wmCall "resize_column(\"-\")") "narrower column";
+          grouped "focus" windowFocusKeys
+          // grouped "move" windowMoveKeys
+          // grouped "size" {
+            win-column-wider = sub "equal" (wmCall "resize_column(\"+\")") "wider column";
+            win-column-narrower = sub "minus" (wmCall "resize_column(\"-\")") "narrower column";
             win-fit = sub "a" "hl.dsp.layout(\"fit active\")" "fit the active column";
             win-fit-visible = sub "v" "hl.dsp.layout(\"fit visible\")" "fit all visible columns";
             win-fill = sub "f" (wmCall "fill()") "fill, again to restore";
             win-fill-row = sub "r" (wmCall "fill_row()") "fill row, again to restore";
             win-fill-column = sub "c" (wmCall "fill_column()") "fill column, again to restore";
+          }
+          // grouped "edit" {
             win-float = sub "t" "hl.dsp.window.float()" "toggle floating";
             win-close = sub "d" (wmCall "close()") "close window or selection";
           };
@@ -411,7 +438,7 @@ in
         key = "s";
         desc = "session and system";
         keypadOnly = true;
-        keys = {
+        keys = grouped "session" {
           ses-menu = typing (sub "x" (shell "session") "session menu");
           ses-lock = sub "l" (shell "lock") "lock";
           ses-emacs-restart =
@@ -429,39 +456,45 @@ in
       grab = {
         key = "g";
         desc = "grab";
-        keys = {
-          grab-region = sub "r" (shell "screenshot") "screenshot region or window";
-          grab-frozen = sub "f" (shell "screenshotFreeze") "screenshot region of a frozen screen";
-          grab-output = sub "o" "hl.dsp.exec_cmd(\"caelestia screenshot\")" "screenshot output";
+        keys = grouped "shell" {
+          grab-screenshot-region = sub "r" (shell "screenshot") "screenshot region or window";
+          grab-screenshot-frozen = sub "f" (shell "screenshotFreeze") "screenshot region of a frozen screen";
+          grab-screenshot-output = sub "o" "hl.dsp.exec_cmd(\"caelestia screenshot\")" "screenshot output";
         };
       };
 
       monitor = {
         key = "m";
         desc = "monitor";
-        keys = {
-          mon-left = sub "h" "hl.dsp.focus({ monitor = \"l\" })" "focus monitor left";
-          mon-right = sub "l" "hl.dsp.focus({ monitor = \"r\" })" "focus monitor right";
-          mon-send-left =
-            subShift "h" "hl.dsp.window.move({ monitor = \"l\" })"
-              "send window to monitor left";
-          mon-send-right =
-            subShift "l" "hl.dsp.window.move({ monitor = \"r\" })"
-              "send window to monitor right";
-        };
+        keys =
+          grouped "focus" {
+            mon-monitor-l = sub "h" "hl.dsp.focus({ monitor = \"l\" })" "focus monitor left";
+            mon-monitor-r = sub "l" "hl.dsp.focus({ monitor = \"r\" })" "focus monitor right";
+          }
+          // grouped "move" {
+            mon-send-monitor-l =
+              subShift "h" "hl.dsp.window.move({ monitor = \"l\" })"
+                "send window to monitor left";
+            mon-send-monitor-r =
+              subShift "l" "hl.dsp.window.move({ monitor = \"r\" })"
+                "send window to monitor right";
+          };
       };
 
       project = {
         key = "period";
         desc = "project";
-        keys = {
-          prj-switch = typing (emacsKey "" "p" "wm-project-switch" "switch project") // {
-            mark = true;
+        keys =
+          grouped "focus" {
+            prj-project-switch = typing (emacsKey "" "p" "wm-project-switch" "switch project") // {
+              mark = true;
+            };
+          }
+          // grouped "launch" {
+            prj-project-eshell = typing (emacsKey "" "e" "wm-project-eshell" "eshell in project root");
+            prj-project-dired = typing (emacsKey "" "d" "wm-project-dired" "dired in project root");
+            prj-project-magit = typing (emacsKey "" "g" "wm-project-magit" "magit status");
           };
-          prj-eshell = typing (emacsKey "" "e" "wm-project-eshell" "eshell in project root");
-          prj-dired = typing (emacsKey "" "d" "wm-project-dired" "dired in project root");
-          prj-magit = typing (emacsKey "" "g" "wm-project-magit" "magit status");
-        };
       };
     };
 

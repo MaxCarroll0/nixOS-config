@@ -74,6 +74,11 @@ let
         default = true;
         description = "Whether a hyprland binding records an undo checkpoint first.";
       };
+      group = lib.mkOption {
+        type = lib.types.str;
+        default = "other";
+        description = "Section of the keybind reference this binding is listed under.";
+      };
     };
   };
 
@@ -555,11 +560,12 @@ let
         key
         owner
         mark
+        group
         ;
       desc = shortName name;
     }) cfg.keys;
     submaps = lib.mapAttrs (sname: s: {
-      inherit (s) mods key;
+      inherit (s) mods key keypadOnly;
       desc = sname;
       keys = lib.mapAttrs (name: b: {
         inherit (b)
@@ -567,6 +573,7 @@ let
           key
           owner
           mark
+          group
           ;
         desc = shortName name;
       }) s.keys;
@@ -577,6 +584,8 @@ let
         key
         owner
         mark
+        group
+        prefix
         ;
       desc = shortName name;
     }) cfg.keypad;
