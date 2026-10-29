@@ -374,11 +374,17 @@ local function move_vertical(m, set, down)
     end
 end
 
-local function move_horizontal(m, set, step)
+local sharing = {}
+
+local function move_horizontal(m, set, step, shares)
     local n = #m.columns
-    local slots, moving = {}, {}
+    local slots, moving, sharing_now = {}, {}, {}
     for s = 0, 2 * n + 2 do slots[s] = { windows = {}, width = 0 } end
-    for c, column in ipairs(m.columns) do slots[2 * c].width = column.width end
+    local total = 0
+    for c, column in ipairs(m.columns) do
+        slots[2 * c].width = column.width
+        total = total + column.width
+    end
     local function in_range(c) return c >= 1 and c <= n end
     for c, column in ipairs(m.columns) do
         local shared, moves = false, false
@@ -386,12 +392,31 @@ local function move_horizontal(m, set, step)
             if set[address] then moves = true else shared = true end
         end
         local dest = 2 * c
+        local ahead, behind = c + step, c - step
         if moves and shared then
             dest = 2 * c + step
             slots[2 * c].width = column.width / 2
             slots[dest].width = column.width / 2
-        elseif moves and in_range(c + step) then
-            dest = 2 * (c + step)
+        elseif moves and in_range(ahead) then
+            local partner = m.columns[ahead].windows[1]
+            local share = shares[column.windows[1]]
+            local joining = share and share.step == step and share.partner == partner
+                and math.abs(column.width - slots[2 * ahead].width) < 0.01
+            local scrolls = total - column.width >= 1 - 0.001
+            local pool = slots[2 * ahead].width
+            if not in_range(behind) then pool = math.min(2.0, pool + column.width) end
+            local unchanged = not in_range(behind) and math.abs(pool / 2 - column.width) < 0.01
+            if joining or unchanged or not (in_range(behind) or scrolls) then
+                dest = 2 * ahead
+                slots[dest].width = math.min(1.0, slots[dest].width + column.width)
+            else
+                if in_range(behind) then
+                    slots[2 * behind].width = math.min(1.0, slots[2 * behind].width + column.width)
+                end
+                slots[2 * ahead].width = pool / 2
+                slots[2 * c].width = pool / 2
+                sharing_now[column.windows[1]] = { partner = partner, step = step }
+            end
         end
         for r, address in ipairs(column.windows) do
             if set[address] then
@@ -411,6 +436,7 @@ local function move_horizontal(m, set, step)
         if #slots[s].windows > 0 then columns[#columns + 1] = slots[s] end
     end
     m.columns = columns
+    return sharing_now
 end
 
 function wm.move(direction)
@@ -421,7 +447,7 @@ function wm.move(direction)
     if direction == "u" or direction == "d" then
         move_vertical(m, set, direction == "d")
     else
-        move_horizontal(m, set, direction == "r" and 1 or -1)
+        sharing = move_horizontal(m, set, direction == "r" and 1 or -1, sharing)
     end
     apply(ws, m)
 end
@@ -477,9 +503,11 @@ end
 
 local function shift_view(pixels)
     if pixels == 0 then return end
+    local active = hl.get_active_window()
     local follow = hl.get_config("scrolling.follow_focus")
     hl.config({ scrolling = { follow_focus = false } })
     hl.dispatch(hl.dsp.layout(string.format("move %d", -pixels)))
+    focus(active)
     hl.config({ scrolling = { follow_focus = follow } })
 end
 
@@ -833,6 +861,18 @@ end)
 
 hl.timer(remember_layout, { timeout = 500, type = "repeat" })
 
+local function hold_scroll(ws)
+    hl.dispatch(hl.dsp.layout("inhibit_scroll 1"))
+    local function release()
+        if workspace() == ws then
+            hl.dispatch(hl.dsp.layout("inhibit_scroll 0"))
+        else
+            hl.timer(release, { timeout = 200, type = "oneshot" })
+        end
+    end
+    hl.timer(release, { timeout = 500, type = "oneshot" })
+end
+
 local function after_layout(fn)
     hl.timer(fn, { timeout = 50, type = "oneshot" })
 end
@@ -856,6 +896,7 @@ hl.on("window.fullscreen", function(window)
         after_layout(function()
             local now = model.live(saved.ws)[window.address]
             if now and now.fullscreen == 0 then shift_view(math.floor(now.at.x - saved.x[window.address] + 0.5)) end
+            hold_scroll(saved.ws)
         end)
     end)
 end)
