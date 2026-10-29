@@ -7,6 +7,10 @@
 
   local.wm.enable = true;
 
+  xdg.configFile."hypr/hypr-user.lua".text = ''
+    hl.config({ cursor = { no_hardware_cursors = 1 } })
+  '';
+
   programs.btop = {
     enable = true;
     settings = {
