@@ -19,8 +19,8 @@ both are generated from the same attrset in `home/hyprland.nix`:
 - **NORMAL state, like meow normal:** Caps Lock (or `s-ESC`) enters a sticky `normal` submap.
   The bar always shows the mode (`I` or `N`), and NORMAL lightens the shell frame and thickens
   window borders. Caps Lock on a focused Emacs is first offered to Emacs, which leaves insert
-  state if it is in one and otherwise hands back NORMAL; a fullscreen window just gets `Escape`,
-  and going fullscreen leaves NORMAL. Inside it, every plain
+  state if it is in one and otherwise hands back NORMAL. Going fullscreen leaves NORMAL, and
+  Caps `F` toggles it back. Inside it, every plain
   `SUPER`/`SUPER SHIFT` chord also works with `SUPER` dropped (`h`, `H`, `1`, `q` ...), the
   prefix maps open on their bare letter (`w s g m p`), and `SPC` opens the **keypad**: a leader
   holding the prefix maps plus a few keypad-only bindings (`SPC SPC` launcher, `SPC /` reference).
@@ -29,7 +29,7 @@ both are generated from the same attrset in `home/hyprland.nix`:
 
 Hyprland `submap`s are the prefix maps, the direct analogue of `C-x` in Emacs. A prefix map runs
 one command and exits, back to wherever it was entered from (the apps or NORMAL), unless it is
-`sticky` (the window map, so moves repeat). Global binds are inactive inside a submap, so the
+`sticky` (NORMAL and SELECT). Global binds are inactive inside a submap, so the
 generator copies the global chords into `normal` and emits every prefix map twice: `NAME` for
 the chord route and `normal:NAME` for the NORMAL route.
 
@@ -56,7 +56,8 @@ into insert state; which-key marks these with ↩.
 | `SUPER SHIFT Return` | ghostty at the focused window's cwd | bridge |
 | `SUPER SPC` | application launcher | Hyprland |
 | `SUPER q` | close focused window | Hyprland |
-| `SUPER f` | toggle column full width | Hyprland |
+| `SUPER f` | fill the screen, again to restore | Hyprland |
+| `SUPER SHIFT f` | toggle real fullscreen (`F` in NORMAL) | Hyprland |
 
 `SUPER h/j/k/l` deliberately does **not** push the mark ring. See §6.
 
@@ -76,18 +77,19 @@ when the window is also focused.
 | `x` / `X` | select the row / the column |
 | `Tab` | add or remove the focused window from the selection |
 | `S-Tab` | SELECT state: hjkl move within the selection, `ESC` clears it |
-| `o` / `O` | ace jump / ace select, labelling each Emacs split separately |
+| `o` / `O` | ace jump / ace select, labelling each Emacs split separately; `o` again or `ESC` cancels |
 | `t` / `T` | rotate the targets clockwise / anticlockwise |
-| `H/J/K/L` | move the targets, keeping their shape up to the strip edges; `H`/`L` first break a window out into a new column, and a second press joins the next one |
+| `H/J/K/L` | move the targets, keeping their shape up to the strip edges; `H`/`L` first split a window out of its column, the two halves sharing its width, and a second press joins it into the next column, which keeps its width |
 | `u` | undo, reopening closed apps in their slot; undos are recorded too, so after any other command `u` redoes them |
 | `z` | scroll the focused column to the left edge without changing the layout |
+| `C-h` / `C-l` | scroll the view a tenth of the screen left / right, free of columns; `z` snaps back |
 | `-` / `=` | narrower / wider column (`=` continues past full width) |
 | `S--` / `S-=` | shorter / taller row |
 | `C--` / `C-=` | finer column steps; `C-S--` / `C-S-=` for rows |
 | `` ` `` | last workspace |
 | `[` / `]` | pop / unpop the mark ring |
 | `.` | project map |
-| `SPC x 5 0` | close the targets |
+| `SPC x c` | close the targets |
 
 The mouse wheel moves focus like hjkl in NORMAL, horizontally too, and an app's minimise
 button cuts its window. In the window map, `r`, `c` and `f` fill the row, column or screen and

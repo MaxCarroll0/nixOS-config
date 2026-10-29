@@ -320,13 +320,22 @@ in
           align = top "z" (wmCall "align_left()") "scroll the focused column to the left edge" // {
             checkpoint = false;
           };
+          pan-left = hyprKey "SUPER CTRL" "h" (wmCall "pan(-1)") "scroll the view left, free of columns" // {
+            checkpoint = false;
+          };
+          pan-right = hyprKey "SUPER CTRL" "l" (wmCall "pan(1)") "scroll the view right, free of columns" // {
+            checkpoint = false;
+          };
         }
       )
       // grouped "move" (moveKeys // lib.filterAttrs (name: _: lib.hasPrefix "send-" name) workspaceKeys)
       // grouped "size" (
         resizeKeys
         // {
-          full-width = top "f" "hl.dsp.window.fullscreen({ mode = \"maximized\" })" "toggle full width";
+          fill = top "f" (wmCall "fill()") "fill, again to restore";
+          fullscreen =
+            hyprKey "SUPER SHIFT" "f" "hl.dsp.window.fullscreen({ mode = \"fullscreen\" })"
+              "toggle fullscreen";
         }
       )
       // grouped "media" mediaKeys
@@ -402,11 +411,8 @@ in
         kp-sidebar = hyprKey "" "n" (shell "sidebar") "notifications and quick settings";
       }
       // grouped "edit" {
-        kp-close = sub "0" (wmCall "close()") "close window or selection" // {
-          prefix = [
-            "x"
-            "5"
-          ];
+        kp-close = sub "c" (wmCall "close()") "close window or selection" // {
+          prefix = [ "x" ];
         };
       };
 
@@ -416,7 +422,6 @@ in
       window = {
         key = "w";
         desc = "window and column";
-        sticky = true;
         keys =
           grouped "focus" windowFocusKeys
           // grouped "move" windowMoveKeys
