@@ -833,17 +833,15 @@ end)
 
 hl.timer(remember_layout, { timeout = 500, type = "repeat" })
 
-local function hold_scroll(ws)
+local function release_scroll() hl.dispatch(hl.dsp.layout("inhibit_scroll 0")) end
+
+local function hold_scroll()
     hl.dispatch(hl.dsp.layout("inhibit_scroll 1"))
-    local function release()
-        if workspace() == ws then
-            hl.dispatch(hl.dsp.layout("inhibit_scroll 0"))
-        else
-            hl.timer(release, { timeout = 200, type = "oneshot" })
-        end
-    end
-    hl.timer(release, { timeout = 500, type = "oneshot" })
+    hl.timer(release_scroll, { timeout = 500, type = "oneshot" })
 end
+
+release_scroll()
+hl.on("workspace.active", release_scroll)
 
 local function after_layout(fn)
     hl.timer(fn, { timeout = 50, type = "oneshot" })
@@ -868,7 +866,7 @@ hl.on("window.fullscreen", function(window)
         after_layout(function()
             local now = model.live(saved.ws)[window.address]
             if now and now.fullscreen == 0 then shift_view(math.floor(now.at.x - saved.x[window.address] + 0.5)) end
-            hold_scroll(saved.ws)
+            hold_scroll()
         end)
     end)
 end)
