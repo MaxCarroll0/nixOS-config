@@ -307,7 +307,7 @@ let
                   print f[2], name
                 }
               }' \
-          | sort -n | head -n "$pool" | cut -d' ' -f2 | shuf
+          | sort -n | awk -v pool="$pool" 'NR <= pool { print $2 }' | shuf
       )"
 
       if [ -z "$candidates" ]; then
