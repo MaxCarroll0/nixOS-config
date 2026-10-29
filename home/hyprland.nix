@@ -11,6 +11,7 @@ let
   cfg = config.local.wm;
 
   suspendUnlessPlaying = pkgs.writeShellScript "suspend-unless-playing" ''
+    ${lib.getExe config.programs.caelestia.cli.package} shell idleInhibitor isEnabled 2>/dev/null | grep -qx true && exit 0
     ${pkgs.playerctl}/bin/playerctl --all-players status 2>/dev/null | grep -qx Playing || systemctl suspend
   '';
 
@@ -517,7 +518,7 @@ in
           hl.dispatch(${shell "lock"})
           hl.dispatch(hl.dsp.dpms({ action = "disable", monitor = "eDP-1" }))
           hl.dispatch(hl.dsp.exec_cmd("${suspendUnlessPlaying}"))
-        end, { locked = true, description = "lid closed: lock, panel off, suspend unless playing" })
+        end, { locked = true, description = "lid closed: lock, panel off, suspend unless playing or kept awake" })
         hl.bind("switch:off:Lid Switch", hl.dsp.dpms({ action = "enable", monitor = "eDP-1" }), { locked = true, description = "lid opened: panel on" })
         pcall(require, "hypr-user")
       '';
