@@ -144,6 +144,15 @@ in
       mv "$f.tmp" "$f"
     '';
 
+    # Chromium rewrites Preferences from memory on exit, and vertical tabs have no policy.
+    home.activation.chromiumVerticalTabs = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+      f="${config.xdg.configHome}/chromium/Default/Preferences"
+      if [ -s "$f" ] && ! ${pkgs.procps}/bin/pgrep -x -u "$(id -u)" chromium > /dev/null; then
+        ${lib.getExe pkgs.jq} -c '.vertical_tabs.enabled = true' "$f" > "$f.tmp"
+        mv "$f.tmp" "$f"
+      fi
+    '';
+
     home.pointerCursor = {
       package = pkgs.bibata-cursors;
       name = "Bibata-Modern-Classic";
