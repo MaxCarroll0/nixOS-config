@@ -11,16 +11,22 @@ ColumnLayout {
         {
             key: "normal",
             label: "N",
+            fill: "m3onSurface",
+            ink: "m3surface",
             request: `function() wm.leave_select("normal") end`
         },
         {
             key: "insert",
             label: "I",
+            fill: "m3onSurface",
+            ink: "m3surface",
             request: `function() wm.leave_select("reset") end`
         },
         {
             key: "select",
             label: "S",
+            fill: "m3tertiary",
+            ink: "m3onTertiary",
             request: `function() if hl.get_current_submap() ~= "select" then wm.select_mode() end end`
         }
     ]
@@ -59,7 +65,7 @@ ColumnLayout {
                 visible: implicitHeight > 0
 
                 radius: Tokens.rounding.full
-                color: active ? Colours.palette.m3onSurface : press.containsMouse ? Colours.palette.m3surfaceContainerHighest : Colours.palette.m3surfaceContainerHigh
+                color: active ? Colours.palette[modelData.fill] : press.containsMouse ? Colours.palette.m3surfaceContainerHighest : Colours.palette.m3surfaceContainerHigh
                 border.width: active ? 2 : 1
                 border.color: Colours.palette.m3outlineVariant
 
@@ -69,7 +75,7 @@ ColumnLayout {
                     anchors.centerIn: parent
                     text: pill.modelData.label
                     font: Tokens.font.mono.builders.small.weight(Font.Bold).build()
-                    color: pill.active ? Colours.palette.m3surface : Colours.palette.m3onSurfaceVariant
+                    color: pill.active ? Colours.palette[pill.modelData.ink] : Colours.palette.m3onSurfaceVariant
                 }
 
                 MouseArea {

@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Shapes
 import Quickshell
 import Quickshell.Hyprland
+import Quickshell.Io
 import Quickshell.Wayland
 import Caelestia.Config
 import qs.components
@@ -13,18 +14,8 @@ Scope {
     id: root
 
     readonly property bool active: WmState.selection.length > 0 || WmState.aceLabels.length > 0
-    property var boxes: []
-
-    function refresh(): void {
-        const wanted = WmState.selection;
-        boxes = Hyprland.toplevels.values.filter(t => wanted.includes(`0x${t.address}`) && t.lastIpcObject?.at).map(t => ({
-                    address: `0x${t.address}`,
-                    x: t.lastIpcObject.at[0],
-                    y: t.lastIpcObject.at[1],
-                    w: t.lastIpcObject.size[0],
-                    h: t.lastIpcObject.size[1]
-                }));
-    }
+    readonly property var boxes: Hyprland.toplevels.values.filter(t => WmState.selection.includes(`0x${t.address}`))
+    property int rounding: 0
 
     function request(): void {
         Hyprland.refreshToplevels();
@@ -48,26 +39,23 @@ Scope {
         }
     }
 
-    Connections {
-        target: Hyprland.toplevels
-
-        function onValuesChanged(): void {
-            root.refresh();
+    Process {
+        running: true
+        command: ["hyprctl", "getoption", "decoration:rounding", "-j"]
+        stdout: StdioCollector {
+            onStreamFinished: root.rounding = JSON.parse(text).int ?? 0
         }
     }
 
     Timer {
         id: settle
 
-        interval: 400
-        onTriggered: {
-            Hyprland.refreshToplevels();
-            root.refresh();
-        }
+        interval: 120
+        onTriggered: Hyprland.refreshToplevels()
     }
 
     Timer {
-        interval: 500
+        interval: 250
         repeat: true
         running: WmState.selection.length > 0
         onTriggered: root.request()
@@ -101,13 +89,15 @@ Scope {
                     id: outline
 
                     required property var modelData
+                    readonly property var ipc: modelData.lastIpcObject
                     readonly property real inset: -4
-                    readonly property bool focused: `0x${Hyprland.activeToplevel?.address}` === modelData.address
+                    readonly property bool focused: Hyprland.activeToplevel?.address === modelData.address
 
-                    x: modelData.x - win.modelData.x + inset
-                    y: modelData.y - win.modelData.y + inset
-                    width: modelData.w - inset * 2
-                    height: modelData.h - inset * 2
+                    visible: ipc?.at !== undefined
+                    x: (ipc?.at?.[0] ?? 0) - win.modelData.x + inset
+                    y: (ipc?.at?.[1] ?? 0) - win.modelData.y + inset
+                    width: (ipc?.size?.[0] ?? 0) - inset * 2
+                    height: (ipc?.size?.[1] ?? 0) - inset * 2
                     preferredRendererType: Shape.CurveRenderer
 
                     ShapePath {
@@ -118,23 +108,10 @@ Scope {
                         capStyle: ShapePath.RoundCap
                         fillColor: "transparent"
 
-                        startX: 0
-                        startY: 0
-                        PathLine {
-                            x: outline.width
-                            y: 0
-                        }
-                        PathLine {
-                            x: outline.width
-                            y: outline.height
-                        }
-                        PathLine {
-                            x: 0
-                            y: outline.height
-                        }
-                        PathLine {
-                            x: 0
-                            y: 0
+                        PathRectangle {
+                            width: outline.width
+                            height: outline.height
+                            radius: root.rounding > 0 ? root.rounding - outline.inset : 0
                         }
                     }
                 }
