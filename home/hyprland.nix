@@ -409,6 +409,11 @@ in
       extraConfig = ''
         ${settingsLua}
         dofile("${cfg.bindsFile}")
+        hl.bind("switch:on:Lid Switch", function()
+          hl.dispatch(${shell "lock"})
+          hl.dispatch(hl.dsp.dpms({ action = "disable", monitor = "eDP-1" }))
+        end, { locked = true, description = "lid closed: lock, panel off" })
+        hl.bind("switch:off:Lid Switch", hl.dsp.dpms({ action = "enable", monitor = "eDP-1" }), { locked = true, description = "lid opened: panel on" })
         pcall(require, "hypr-user")
       '';
     };

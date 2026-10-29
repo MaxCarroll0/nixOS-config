@@ -245,7 +245,6 @@ in
       services.displayManager.defaultSession = "hyprland-nowait";
       services.displayManager.sddm.theme = "catppuccin-mocha-mauve";
       environment.systemPackages = [ pkgs.catppuccin-sddm ];
-      services.logind.settings.Login.HandleLidSwitch = lib.mkForce "suspend";
       services.upower.enable = true;
       services.power-profiles-daemon.enable = true;
       users.users.max.packages = with pkgs.kdePackages; [
