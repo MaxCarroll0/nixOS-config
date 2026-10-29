@@ -81,21 +81,13 @@ let
     })
 
     hl.env("QT_QPA_PLATFORMTHEME", "gtk3")
+    hl.animation({ leaf = "workspaces", enabled = true, speed = 5, bezier = "standard", style = "slidevert" })
 
-    local function row_of(window)
-        return window and type(window.layout) == "table" and window.layout.index_in_column
+    package.path = hypr .. "/?.lua;" .. hypr .. "/?/init.lua;" .. package.path
+    for name in pairs(package.loaded) do
+        if name == "wm" or name:sub(1, 3) == "wm." then package.loaded[name] = nil end
     end
-
-    function wm_move_keeping_row(direction)
-        local row = row_of(hl.get_active_window())
-        hl.dispatch(hl.dsp.window.move({ direction = direction }))
-        if not row then return end
-        for _ = 1, 16 do
-            local now = row_of(hl.get_active_window())
-            if not now or now <= row then return end
-            hl.dispatch(hl.dsp.window.move({ direction = "u" }))
-        end
-    end
+    require("wm")
 
     hl.on("hyprland.start", function()
         hl.exec_cmd("hyprctl setcursor " .. vars.cursorTheme .. " " .. vars.cursorSize)
@@ -116,6 +108,66 @@ let
     r = "right";
   };
 
+  wmCall = call: "function() wm.${call} end";
+
+  bridgeFocus = dir: {
+    owner = "bridge";
+    elisp = "wm-focus-${dir}";
+    dispatch = "hl.dsp.focus({ direction = ${luaStr dir} })";
+    desc = "focus ${dirNames.${dir}}, crossing into Emacs splits";
+  };
+
+  windowFocusKeys = lib.mapAttrs' (
+    key: dir:
+    lib.nameValuePair "win-focus-${dir}" (
+      bridgeFocus dir
+      // {
+        inherit key;
+        mods = "";
+      }
+    )
+  ) dirs;
+
+  windowMoveKeys = lib.mapAttrs' (
+    key: dir:
+    lib.nameValuePair "win-move-${dir}" {
+      inherit key;
+      mods = "SHIFT";
+      owner = "hyprland";
+      dispatch = wmCall "move(${luaStr dir})";
+      desc = "move ${dirNames.${dir}}";
+    }
+  ) dirs;
+
+  selectFocusKeys = lib.mapAttrs' (
+    key: dir:
+    lib.nameValuePair "sel-focus-${dir}" {
+      inherit key;
+      mods = "";
+      owner = "hyprland";
+      checkpoint = false;
+      dispatch = wmCall "focus_within(${luaStr dir})";
+      desc = "focus ${dirNames.${dir}} within the selection";
+    }
+  ) dirs;
+
+  resizeKeys = {
+    column-wider = top "equal" (wmCall "resize_column(\"+\")") "wider column";
+    column-narrower = top "minus" (wmCall "resize_column(\"-\")") "narrower column, then scroll on";
+    column-wider-fine = hyprKey "SUPER CTRL" "equal" (wmCall "resize_column(0.02)") "slightly wider";
+    column-narrower-fine =
+      hyprKey "SUPER CTRL" "minus" (wmCall "resize_column(-0.02)")
+        "slightly narrower";
+    row-taller = hyprKey "SUPER SHIFT" "equal" (wmCall "resize_row(0.1)") "taller row";
+    row-shorter = hyprKey "SUPER SHIFT" "minus" (wmCall "resize_row(-0.1)") "shorter row";
+    row-taller-fine =
+      hyprKey "SUPER CTRL SHIFT" "equal" (wmCall "resize_row(0.02)")
+        "slightly taller row";
+    row-shorter-fine =
+      hyprKey "SUPER CTRL SHIFT" "minus" (wmCall "resize_row(-0.02)")
+        "slightly shorter row";
+  };
+
   focusKeys = lib.mapAttrs' (
     key: dir:
     lib.nameValuePair "focus-${dir}" {
@@ -133,8 +185,8 @@ let
       inherit key;
       mods = "SUPER SHIFT";
       owner = "hyprland";
-      dispatch = "hl.dsp.window.move({ direction = ${luaStr dir} })";
-      desc = "move window ${dirNames.${dir}}";
+      dispatch = wmCall "move(${luaStr dir})";
+      desc = "move window or selection ${dirNames.${dir}}";
     }
   ) dirs;
 
@@ -246,13 +298,16 @@ in
   config = {
     programs.kitty.enable = true;
 
+    xdg.configFile."hypr/wm".source = ./hypr/wm;
+
     local.wm.keys =
       focusKeys
       // moveKeys
+      // resizeKeys
       // workspaceKeys
       // mediaKeys
       // {
-        workspace-last = top "Tab" "hl.dsp.focus({ workspace = \"previous\" })" "last workspace" // {
+        workspace-last = top "grave" "hl.dsp.focus({ workspace = \"previous\" })" "last workspace" // {
           mark = true;
         };
         ace = {
@@ -278,8 +333,8 @@ in
           insert = true;
         };
         kill-ring = typing (emacsKey "SUPER" "y" "wm-kill-ring" "yank from the Emacs kill ring");
-        mark-pop = emacsKey "SUPER" "comma" "wm-mark-pop" "pop the unified mark ring";
-        mark-unpop = emacsKey "SUPER" "period" "wm-mark-unpop" "unpop the unified mark ring";
+        mark-pop = emacsKey "SUPER" "bracketleft" "wm-mark-pop" "pop the unified mark ring";
+        mark-unpop = emacsKey "SUPER" "bracketright" "wm-mark-unpop" "unpop the unified mark ring";
         eshell-here = {
           key = "Return";
           owner = "bridge";
@@ -303,7 +358,19 @@ in
         sidebar = shellKey "SUPER" "n" "sidebar" "notifications and quick settings";
         session-menu = typing (shellKey "CTRL ALT" "Delete" "session" "session menu");
         clear-notifications = lockedKey "CTRL ALT" "c" (shell "clearNotifs") "clear notifications";
-        close-window = top "q" "hl.dsp.window.close()" "close window";
+        cut = top "s" (wmCall "cut()") "cut to the edge, remembered for paste";
+        paste = top "p" (wmCall "paste()") "paste below the focused window";
+        replace = top "r" (wmCall "replace()") "paste over the focused window";
+        evict = top "q" (wmCall "evict()") "evict to the nearer edge";
+        select-row = top "x" (wmCall "select_row()") "select the row";
+        select-column = hyprKey "SUPER SHIFT" "x" (wmCall "select_column()") "select the column";
+        select-toggle = top "Tab" (wmCall "toggle_select()") "add or remove from the selection";
+        select-mode = hyprKey "SUPER SHIFT" "Tab" (wmCall "select_mode()") "SELECT state";
+        rotate = top "t" (wmCall "rotate(true)") "rotate clockwise";
+        rotate-back = hyprKey "SUPER SHIFT" "t" (wmCall "rotate(false)") "rotate anticlockwise";
+        undo = top "u" (wmCall "undo()") "undo" // {
+          checkpoint = false;
+        };
         full-width = top "f" "hl.dsp.window.fullscreen({ mode = \"maximized\" })" "toggle full width";
         escape-emacs-restart =
           escape "r" "hl.dsp.exec_cmd(\"systemctl --user restart emacs.service\")"
@@ -321,40 +388,43 @@ in
       kp-keybinds = hyprKey "" "slash" (shell "keybinds") "keybind reference";
       kp-dashboard = hyprKey "" "d" (shell "dashboard") "dashboard";
       kp-sidebar = hyprKey "" "n" (shell "sidebar") "notifications and quick settings";
-      kp-session = typing (hyprKey "" "x" (shell "session") "session menu");
+      kp-close = sub "0" (wmCall "close()") "close window or selection" // {
+        prefix = [
+          "x"
+          "5"
+        ];
+      };
     };
+
+    local.wm.select = selectFocusKeys;
 
     local.wm.submaps = {
       window = {
         key = "w";
         desc = "window and column";
         sticky = true;
-        keys = {
-          win-left = sub "h" "function() wm_move_keeping_row(\"l\") end" "move left";
-          win-right = sub "l" "function() wm_move_keeping_row(\"r\") end" "move right";
-          win-up = sub "k" "hl.dsp.window.move({ direction = \"u\" })" "move up within the column";
-          win-down = sub "j" "hl.dsp.window.move({ direction = \"d\" })" "move down within the column";
-          win-wider = sub "equal" "hl.dsp.layout(\"colresize +conf\")" "next column width preset";
-          win-narrower = sub "minus" "hl.dsp.layout(\"colresize -conf\")" "previous column width preset";
-          win-fit = sub "a" "hl.dsp.layout(\"fit active\")" "fit the active column";
-          win-fill =
-            sub "f"
-              "function() hl.dispatch(hl.dsp.layout(\"promote\")); hl.dispatch(hl.dsp.layout(\"colresize 1\")) end"
-              "fill";
-          win-fit-visible = sub "v" "hl.dsp.layout(\"fit visible\")" "fit all visible columns";
-          win-promote = sub "p" "hl.dsp.layout(\"promote\")" "promote window to its own column";
-          win-expel = sub "e" "hl.dsp.layout(\"expel\")" "expel window from the column";
-          win-fill-row = sub "r" "hl.dsp.layout(\"colresize 1\")" "fill row";
-          win-fill-column = sub "c" "hl.dsp.layout(\"promote\")" "fill column";
-          win-float = sub "t" "hl.dsp.window.float()" "toggle floating";
-          win-close = sub "d" "hl.dsp.window.close()" "close window";
-        };
+        keys =
+          windowFocusKeys
+          // windowMoveKeys
+          // {
+            win-wider = sub "equal" (wmCall "resize_column(\"+\")") "wider column";
+            win-narrower = sub "minus" (wmCall "resize_column(\"-\")") "narrower column";
+            win-fit = sub "a" "hl.dsp.layout(\"fit active\")" "fit the active column";
+            win-fit-visible = sub "v" "hl.dsp.layout(\"fit visible\")" "fit all visible columns";
+            win-fill = sub "f" (wmCall "fill()") "fill, again to restore";
+            win-fill-row = sub "r" (wmCall "fill_row()") "fill row, again to restore";
+            win-fill-column = sub "c" (wmCall "fill_column()") "fill column, again to restore";
+            win-float = sub "t" "hl.dsp.window.float()" "toggle floating";
+            win-close = sub "d" (wmCall "close()") "close window or selection";
+          };
       };
 
       session = {
         key = "s";
         desc = "session and system";
+        keypadOnly = true;
         keys = {
+          ses-menu = typing (sub "x" (shell "session") "session menu");
           ses-lock = sub "l" (shell "lock") "lock";
           ses-emacs-restart =
             sub "r" "hl.dsp.exec_cmd(\"systemctl --user restart emacs.service\")"
@@ -394,7 +464,7 @@ in
       };
 
       project = {
-        key = "p";
+        key = "period";
         desc = "project";
         keys = {
           prj-switch = typing (emacsKey "" "p" "wm-project-switch" "switch project");

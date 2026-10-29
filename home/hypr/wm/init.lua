@@ -1,0 +1,643 @@
+-- Meow-style window editing over a layout backend: selection, cut and paste, rotate, undo.
+
+local model = require("wm.model")
+local undo = require("wm.undo")
+
+local wm = {
+    backend = require("wm.scrolling"),
+    selection = {},
+    clipboard = nil,
+    saved = {},
+    widths = { 0.333, 0.5, 0.667, 1.0 },
+    min_width = 0.05,
+    scroll_ms = 120,
+}
+_G.wm = wm
+
+local selection_colour = "rgb(9e648e)"
+do
+    local ok, scheme = pcall(dofile, os.getenv("HOME") .. "/.config/hypr/scheme/current.lua")
+    if ok and type(scheme) == "table" and scheme.tertiary then selection_colour = "rgb(" .. scheme.tertiary .. ")" end
+end
+
+local function workspace()
+    return hl.get_active_workspace().id
+end
+
+local function set_of(list)
+    local set = {}
+    for _, address in ipairs(list) do set[address] = true end
+    return set
+end
+
+local function centre(window)
+    return window.at.x + window.size.x / 2, window.at.y + window.size.y / 2
+end
+
+local function focus(window)
+    if window then hl.dispatch(hl.dsp.focus({ window = window })) end
+end
+
+local function apply(ws, m)
+    wm.backend.apply(ws, m)
+    wm.publish()
+end
+
+function wm.run(target)
+    if type(target) == "function" then target() else hl.dispatch(target) end
+end
+
+local function json(value)
+    local kind = type(value)
+    if kind == "table" then
+        if #value > 0 or next(value) == nil then
+            local items = {}
+            for _, item in ipairs(value) do items[#items + 1] = json(item) end
+            return "[" .. table.concat(items, ",") .. "]"
+        end
+        local items = {}
+        for k, item in pairs(value) do items[#items + 1] = json(tostring(k)) .. ":" .. json(item) end
+        return "{" .. table.concat(items, ",") .. "}"
+    elseif kind == "string" then
+        return '"' .. value:gsub('[%c"\\]', function(c) return string.format("\\u%04x", c:byte()) end) .. '"'
+    end
+    return tostring(value)
+end
+
+function wm.selected(ws)
+    local live = model.live(ws or workspace())
+    local list = {}
+    for address in pairs(wm.selection) do
+        if live[address] then list[#list + 1] = address end
+    end
+    return list, live
+end
+
+function wm.publish()
+    local list = {}
+    for address in pairs(wm.selection) do list[#list + 1] = address end
+    hl.dispatch(hl.dsp.event("wm>>" .. json({ selection = list, mode = hl.get_current_submap() })))
+end
+
+local function paint(address, on)
+    local window = hl.get_window("address:" .. address)
+    if not window then return end
+    local value = on and selection_colour or "unset"
+    hl.dispatch(hl.dsp.window.set_prop({ prop = "inactive_border_color", value = value, window = window }))
+    hl.dispatch(hl.dsp.window.tag({ tag = (on and "+" or "-") .. "wmsel", window = window }))
+end
+
+local function set_selected(address, on)
+    if not address or (wm.selection[address] or false) == on then return end
+    wm.selection[address] = on or nil
+    paint(address, on)
+end
+
+function wm.clear_selection()
+    for address in pairs(wm.selection) do set_selected(address, false) end
+    wm.publish()
+end
+
+local function targets(m)
+    local list = {}
+    for address in pairs(wm.selection) do
+        if model.find(m, address) then list[#list + 1] = address end
+    end
+    if #list == 0 and m.focus then list = { m.focus } end
+    return list
+end
+
+local function block_of(m, set)
+    local block, top, first = {}, math.huge, nil
+    for c, column in ipairs(m.columns) do
+        local picked, row = {}, nil
+        for r, address in ipairs(column.windows) do
+            if set[address] then
+                picked[#picked + 1] = address
+                row = row or r
+            end
+        end
+        if #picked > 0 then
+            first = first or c
+            block[#block + 1] = { windows = picked, width = column.width, row = row, col = c - first }
+            top = math.min(top, row)
+        end
+    end
+    for _, b in ipairs(block) do b.row = b.row - top end
+    return block
+end
+
+local function side_of(live, address)
+    local window = live[address]
+    local monitor = window and window.monitor or hl.get_active_monitor()
+    if not window then return "r" end
+    local x = centre(window)
+    return x < monitor.x + monitor.width / 2 and "l" or "r"
+end
+
+local function neighbour(m, gone)
+    local fc, fr = model.find(m, m.focus)
+    if not fc then return nil end
+    for distance = 0, #m.columns do
+        for _, c in ipairs({ fc - distance, fc + distance }) do
+            local column = m.columns[c]
+            if column then
+                local best, gap = nil, math.huge
+                for r, address in ipairs(column.windows) do
+                    if not gone[address] and math.abs(r - fr) < gap then best, gap = address, math.abs(r - fr) end
+                end
+                if best then return best end
+            end
+        end
+    end
+end
+
+local function place_at_edges(m, left, right)
+    for i, b in ipairs(left) do
+        table.insert(m.columns, i, { windows = b.windows, width = b.width })
+    end
+    for _, b in ipairs(right) do
+        m.columns[#m.columns + 1] = { windows = b.windows, width = b.width }
+    end
+end
+
+local function evict_from(m, list, live)
+    local left, right = {}, {}
+    for _, address in ipairs(list) do
+        (side_of(live, address) == "l" and left or right)[address] = true
+    end
+    local leftb, rightb = block_of(m, left), block_of(m, right)
+    model.remove(m, set_of(list))
+    model.prune(m)
+    place_at_edges(m, leftb, rightb)
+end
+
+local function evict(remember)
+    local ws = workspace()
+    local m = model.read(ws)
+    local list = targets(m)
+    if #list == 0 then return end
+    local gone = set_of(list)
+    if remember then wm.clipboard = { block = block_of(m, gone), ws = ws } end
+    local after = neighbour(m, gone)
+    evict_from(m, list, model.live(ws))
+    m.focus = after or m.focus
+    for _, address in ipairs(list) do set_selected(address, false) end
+    apply(ws, m)
+end
+
+function wm.evict() evict(false) end
+
+function wm.cut() evict(true) end
+
+function wm.cut_window(window)
+    if not window or window.floating then return end
+    focus(window)
+    local saved = wm.selection
+    wm.selection = {}
+    evict(true)
+    wm.selection = saved
+end
+
+local function paste(replace)
+    local clip = wm.clipboard
+    if not clip then return end
+    local ws = workspace()
+    for _, b in ipairs(clip.block) do
+        for _, address in ipairs(b.windows) do
+            local window = hl.get_window("address:" .. address)
+            if window and window.workspace and window.workspace.id ~= ws then
+                hl.dispatch(hl.dsp.window.move({ workspace = ws, follow = false, window = window }))
+            end
+        end
+    end
+    local m = model.read(ws)
+    local live = model.live(ws)
+    local incoming = {}
+    for _, b in ipairs(clip.block) do
+        for _, address in ipairs(b.windows) do
+            if live[address] and address ~= m.focus then incoming[address] = true end
+        end
+    end
+    if not next(incoming) then return end
+    model.remove(m, incoming)
+    model.prune(m)
+    local fc, fr = model.find(m, m.focus)
+    local first
+    if not fc then
+        fc, fr = #m.columns + 1, 0
+        m.columns[fc] = { windows = {}, width = clip.block[1].width }
+    end
+    local replaced
+    local at = fr + 1
+    if replace and m.focus then
+        replaced = m.focus
+        table.remove(m.columns[fc].windows, fr)
+        at = fr
+    end
+    for _, b in ipairs(clip.block) do
+        local windows = {}
+        for _, address in ipairs(b.windows) do
+            if incoming[address] then windows[#windows + 1] = address end
+        end
+        first = first or windows[1]
+        local c = fc + b.col
+        if c > #m.columns then
+            m.columns[#m.columns + 1] = { windows = windows, width = b.width }
+        else
+            local column = m.columns[c]
+            local pos = math.min(at + b.row, #column.windows + 1)
+            for i, address in ipairs(windows) do table.insert(column.windows, pos + i - 1, address) end
+        end
+    end
+    model.prune(m)
+    if replaced then
+        local side = side_of(live, replaced)
+        local edge = { { windows = { replaced }, width = m.columns[1] and m.columns[1].width or 0.5 } }
+        if side == "l" then place_at_edges(m, edge, {}) else place_at_edges(m, {}, edge) end
+    end
+    m.focus = first or m.focus
+    wm.clipboard = nil
+    apply(ws, m)
+end
+
+function wm.paste() paste(false) end
+
+function wm.replace() paste(true) end
+
+local function enter_select()
+    hl.dispatch(hl.dsp.submap("select"))
+    wm.publish()
+end
+
+function wm.select_mode()
+    if hl.get_current_submap() == "select" then
+        hl.dispatch(hl.dsp.submap("normal"))
+        wm.publish()
+    else
+        enter_select()
+    end
+end
+
+function wm.leave_select(to)
+    wm.clear_selection()
+    hl.dispatch(hl.dsp.submap(to or "normal"))
+    wm.publish()
+end
+
+function wm.toggle_select()
+    local window = hl.get_active_window()
+    if not window then return end
+    set_selected(window.address, not wm.selection[window.address])
+    wm.publish()
+end
+
+local function logical(m, address)
+    local c, r = model.find(m, address)
+    local x = 0
+    for i = 1, c - 1 do x = x + m.columns[i].width end
+    local column = m.columns[c]
+    return x + column.width / 2, (r - 0.5) / #column.windows, column
+end
+
+local function on_screen(window)
+    local monitor = window.monitor or hl.get_active_monitor()
+    return window.at.x < monitor.x + monitor.width and window.at.x + window.size.x > monitor.x
+end
+
+function wm.select_row()
+    local ws = workspace()
+    local m = model.read(ws)
+    if not m.focus then return end
+    local _, y = logical(m, m.focus)
+    for _, column in ipairs(m.columns) do
+        local r = math.min(#column.windows, math.floor(y * #column.windows) + 1)
+        set_selected(column.windows[r], true)
+    end
+    enter_select()
+end
+
+function wm.select_column()
+    local m = model.read(workspace())
+    local c = model.find(m, m.focus)
+    if not c then return end
+    for _, address in ipairs(m.columns[c].windows) do set_selected(address, true) end
+    enter_select()
+end
+
+function wm.rotate(clockwise)
+    local ws = workspace()
+    local m = model.read(ws)
+    local live = model.live(ws)
+    local scope = wm.selected(ws)
+    if #scope < 2 then
+        scope = {}
+        for address, window in pairs(live) do
+            if on_screen(window) then scope[#scope + 1] = address end
+        end
+    end
+    if #scope < 2 then return end
+    local position, cx, cy = {}, 0, 0
+    for _, address in ipairs(scope) do
+        local x, y = logical(m, address)
+        position[address] = { x = x, y = y }
+        cx, cy = cx + x / #scope, cy + y / #scope
+    end
+    for _, p in pairs(position) do p.angle = math.atan(p.y - cy, p.x - cx) end
+    table.sort(scope, function(a, b)
+        local p, q = position[a], position[b]
+        if math.abs(p.angle - q.angle) > 1e-6 then return p.angle < q.angle end
+        if p.x ~= q.x then return p.x > q.x end
+        return p.y < q.y
+    end)
+    local slots = {}
+    for i, address in ipairs(scope) do
+        local c, r = model.find(m, address)
+        slots[i] = { c = c, r = r }
+    end
+    local n = #scope
+    local result = model.copy(m)
+    for i, address in ipairs(scope) do
+        local slot = slots[(clockwise and i or i - 2) % n + 1]
+        result.columns[slot.c].windows[slot.r] = address
+    end
+    apply(ws, result)
+end
+
+local function move_vertical(m, set, down)
+    for _, column in ipairs(m.columns) do
+        local w = column.windows
+        if down then
+            for r = #w - 1, 1, -1 do
+                if set[w[r]] and not set[w[r + 1]] then w[r], w[r + 1] = w[r + 1], w[r] end
+            end
+        else
+            for r = 2, #w do
+                if set[w[r]] and not set[w[r - 1]] then w[r], w[r - 1] = w[r - 1], w[r] end
+            end
+        end
+    end
+end
+
+local function move_horizontal(m, set, step)
+    local n = #m.columns
+    local result, moving = {}, {}
+    for c = 0, n + 1 do result[c] = { windows = {}, width = m.columns[c] and m.columns[c].width or 0.5 } end
+    for c, column in ipairs(m.columns) do
+        local only_targets = true
+        for _, address in ipairs(column.windows) do
+            if not set[address] then only_targets = false end
+        end
+        for r, address in ipairs(column.windows) do
+            if set[address] then
+                local dest = c + step
+                if (dest < 1 or dest > n) and only_targets then dest = c end
+                if dest ~= c and (dest < 1 or dest > n) then result[dest].width = column.width end
+                moving[#moving + 1] = { address = address, dest = dest, row = r }
+            else
+                table.insert(result[c].windows, address)
+            end
+        end
+    end
+    table.sort(moving, function(a, b) return a.row < b.row end)
+    for _, entry in ipairs(moving) do
+        local column = result[entry.dest].windows
+        table.insert(column, math.min(entry.row, #column + 1), entry.address)
+    end
+    local columns = {}
+    for c = 0, n + 1 do
+        if #result[c].windows > 0 then columns[#columns + 1] = result[c] end
+    end
+    m.columns = columns
+end
+
+function wm.move(direction)
+    local ws = workspace()
+    local m = model.read(ws)
+    local set = set_of(targets(m))
+    if not next(set) then return end
+    if direction == "u" or direction == "d" then
+        move_vertical(m, set, direction == "d")
+    else
+        move_horizontal(m, set, direction == "r" and 1 or -1)
+    end
+    apply(ws, m)
+end
+
+local function nearest(from, candidates, direction)
+    local fx, fy = centre(from)
+    local best, score = nil, math.huge
+    for _, window in ipairs(candidates) do
+        local x, y = centre(window)
+        local along, across
+        if direction == "l" then along, across = fx - x, y - fy
+        elseif direction == "r" then along, across = x - fx, y - fy
+        elseif direction == "u" then along, across = fy - y, x - fx
+        else along, across = y - fy, x - fx end
+        if along > 1 then
+            local s = along + 2 * math.abs(across)
+            if s < score then best, score = window, s end
+        end
+    end
+    return best
+end
+
+function wm.focus_within(direction)
+    local active = hl.get_active_window()
+    if not active then return end
+    local list, live = wm.selected()
+    local candidates = {}
+    for _, address in ipairs(list) do
+        if address ~= active.address then candidates[#candidates + 1] = live[address] end
+    end
+    focus(nearest(active, candidates, direction))
+end
+
+local function step_focus(direction)
+    if hl.get_current_submap() == "select" then
+        wm.focus_within(direction)
+    else
+        hl.dispatch(hl.dsp.focus({ direction = direction }))
+    end
+end
+
+local scrolling = false
+function wm.scroll(direction)
+    if scrolling then return end
+    scrolling = true
+    hl.timer(function() scrolling = false end, { timeout = wm.scroll_ms, type = "oneshot" })
+    step_focus(direction)
+end
+
+local function saved_for(address)
+    wm.saved[address] = wm.saved[address] or {}
+    return wm.saved[address]
+end
+
+local function toggle_width(m, address)
+    local c = model.find(m, address)
+    local column = m.columns[c]
+    local saved = saved_for(address)
+    if column.width > 0.99 and saved.width then
+        column.width, saved.width = saved.width, nil
+    else
+        saved.width, column.width = column.width, 1.0
+    end
+end
+
+local function promote(m, address)
+    local c, r = model.find(m, address)
+    local column = m.columns[c]
+    if #column.windows < 2 then return false end
+    local saved = saved_for(address)
+    saved.beside = column.windows[r == 1 and 2 or r - 1]
+    saved.row = r
+    table.remove(column.windows, r)
+    table.insert(m.columns, c + 1, { windows = { address }, width = column.width })
+    return true
+end
+
+local function demote(m, address)
+    local saved = saved_for(address)
+    local c = model.find(m, address)
+    local home = saved.beside and model.find(m, saved.beside)
+    saved.beside = nil
+    if not home or home == c or #m.columns[c].windows > 1 then return false end
+    table.remove(m.columns, c)
+    if home > c then home = home - 1 end
+    local windows = m.columns[home].windows
+    table.insert(windows, math.min(saved.row or #windows + 1, #windows + 1), address)
+    return true
+end
+
+local function each_target(edit)
+    local ws = workspace()
+    local m = model.read(ws)
+    for _, address in ipairs(targets(m)) do edit(m, address) end
+    apply(ws, m)
+end
+
+function wm.fill_row()
+    each_target(toggle_width)
+end
+
+function wm.fill_column()
+    each_target(function(m, address)
+        if not demote(m, address) then promote(m, address) end
+    end)
+end
+
+function wm.fill()
+    each_target(function(m, address)
+        local c = model.find(m, address)
+        local saved = saved_for(address)
+        if m.columns[c].width > 0.99 and #m.columns[c].windows == 1 and (saved.beside or saved.width) then
+            local width = saved.width
+            saved.width = nil
+            if not demote(m, address) and width then m.columns[c].width = width end
+        else
+            promote(m, address)
+            c = model.find(m, address)
+            saved.width, m.columns[c].width = m.columns[c].width, 1.0
+        end
+    end)
+end
+
+local function column_windows(ws)
+    local m = model.read(ws)
+    local live = model.live(ws)
+    local seen, list = {}, {}
+    for _, address in ipairs(targets(m)) do
+        local c = model.find(m, address)
+        if not seen[c] then
+            seen[c] = true
+            list[#list + 1] = live[address]
+        end
+    end
+    return list, live[m.focus]
+end
+
+local function next_preset(width, grow)
+    if grow then
+        for _, preset in ipairs(wm.widths) do
+            if preset > width + 0.01 then return preset end
+        end
+        return 1.0
+    end
+    for i = #wm.widths, 1, -1 do
+        if wm.widths[i] < width - 0.01 then return wm.widths[i] end
+    end
+    return nil
+end
+
+function wm.resize_column(delta)
+    local list, active = column_windows(workspace())
+    local exhausted = false
+    for _, window in ipairs(list) do
+        local width = window.layout.column.width
+        local target
+        if delta == "+" or delta == "-" then
+            target = next_preset(width, delta == "+")
+        else
+            target = width + delta
+            if target < wm.min_width then target = nil end
+        end
+        if target then
+            focus(window)
+            hl.dispatch(hl.dsp.layout(string.format("colresize %.4f", math.min(target, 1.0))))
+        else
+            exhausted = true
+        end
+    end
+    focus(active)
+    if exhausted and #list == 1 then step_focus("r") end
+end
+
+function wm.resize_row(fraction)
+    local list, active = column_windows(workspace())
+    local monitor = hl.get_active_monitor()
+    for _, window in ipairs(list) do
+        focus(window)
+        hl.dispatch(hl.dsp.window.resize({ x = 0, y = math.floor(fraction * monitor.height), relative = true }))
+    end
+    focus(active)
+end
+
+function wm.close()
+    local ws = workspace()
+    local m = model.read(ws)
+    local live = model.live(ws)
+    local list = targets(m)
+    for _, address in ipairs(list) do
+        focus(live[address])
+        hl.dispatch(hl.dsp.window.close())
+        set_selected(address, false)
+    end
+    if #list == 0 then hl.dispatch(hl.dsp.window.close()) end
+end
+
+function wm.checkpoint()
+    if not wm.backend.applying then undo.checkpoint() end
+end
+
+function wm.undo()
+    undo.undo(wm.backend)
+    wm.publish()
+end
+
+hl.on("window.open", function(window)
+    undo.claim(window, wm.backend)
+end)
+
+hl.on("window.minimize", function(window, minimized)
+    if minimized ~= false and minimized ~= 0 then
+        wm.checkpoint()
+        wm.cut_window(window)
+    end
+end)
+
+hl.on("window.destroy", function(window)
+    if window and window.address and wm.selection[window.address] then wm.selection[window.address] = nil end
+end)
+
+return wm

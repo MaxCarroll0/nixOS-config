@@ -64,6 +64,16 @@ let
         default = [ ];
         description = "Hyprland bind flags.";
       };
+      prefix = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = "Keys typed before this one on the keypad, e.g. [ \"x\" \"5\" ].";
+      };
+      checkpoint = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Whether a hyprland binding records an undo checkpoint first.";
+      };
     };
   };
 
@@ -87,6 +97,11 @@ let
         default = false;
         description = "Whether the submap stays active after a binding fires, for repeatable keys.";
       };
+      keypadOnly = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Whether the submap is reached only from the keypad, with no chord or bare key.";
+      };
       keys = lib.mkOption {
         type = lib.types.attrsOf bindingType;
         default = { };
@@ -104,8 +119,10 @@ let
   '';
 
   bridgeEntries = lib.filterAttrs (_: b: b.owner == "bridge") (
-    cfg.keys // cfg.keypad // lib.concatMapAttrs (_: s: s.keys) cfg.submaps
+    cfg.keys // cfg.keypad // cfg.select // lib.concatMapAttrs (_: s: s.keys) cfg.submaps
   );
+
+  chordSubmaps = lib.filterAttrs (_: s: !s.keypadOnly) cfg.submaps;
 
   wmDispatch = pkgs.writeShellScriptBin "wm-dispatch" ''
     set -u
@@ -156,7 +173,9 @@ let
 
   bindTarget =
     b:
-    if b.owner == "hyprland" then
+    if b.owner == "hyprland" && b.checkpoint then
+      "function() wm.checkpoint(); wm.run(${b.dispatch}) end"
+    else if b.owner == "hyprland" then
       b.dispatch
     else if b.owner == "emacs" then
       luaExec "${emacsCall}/bin/wm-emacs ${b.elisp}"
@@ -174,7 +193,7 @@ let
   submapTo = name: "hl.dsp.submap(${luaStr name})";
 
   oneShotTo =
-    exit: b: bindWith "function() hl.dispatch(${submapTo exit}); hl.dispatch(${bindTarget b}) end" b;
+    exit: b: bindWith "function() hl.dispatch(${submapTo exit}); wm.run(${bindTarget b}) end" b;
 
   named = attrs: lib.mapAttrsToList (name: b: b // { inherit name; }) attrs;
 
@@ -187,14 +206,14 @@ let
     let
       m = modsOf b;
     in
-    lib.elem "SUPER" m && !(lib.elem "CTRL" m) && !(lib.elem "ALT" m);
+    lib.elem "SUPER" m && !(lib.elem "ALT" m);
 
   normalReserved = [
     "|escape"
     "|i"
     "|space"
   ]
-  ++ lib.mapAttrsToList (_: s: chordId (withoutSuper s)) cfg.submaps;
+  ++ lib.mapAttrsToList (_: s: chordId (withoutSuper s)) chordSubmaps;
 
   normalBare = lib.filter (b: !(lib.elem (chordId b) normalReserved)) (
     map withoutSuper (lib.filter plainSuper (named cfg.keys))
@@ -237,13 +256,6 @@ let
   '';
 
   leaderKey = "code:66";
-
-  mouseInputs = map (b: "mouse:${toString b}") (lib.range 272 276) ++ [
-    "mouse_up"
-    "mouse_down"
-    "mouse_left"
-    "mouse_right"
-  ];
 
   leaderLua = ''
     local wm_border = hl.get_config("general.border_size") or 1
@@ -296,53 +308,102 @@ let
 
   toApps = desc: extra: "${submapTo "reset"}, { description = ${luaStr desc}${extra} }";
 
-  normalBlock = ''
-    hl.define_submap("normal", function()
+  wheel = {
+    mouse_up = "u";
+    mouse_down = "d";
+    mouse_left = "l";
+    mouse_right = "r";
+  };
+
+  pointerLines = lib.concatStringsSep "\n" (
+    map (b: "  hl.bind(${luaStr "mouse:${toString b}"}, hl.dsp.no_op(), { non_consuming = true })") (
+      lib.range 272 276
+    )
+    ++ lib.mapAttrsToList (
+      input: dir: "  hl.bind(${luaStr input}, function() wm.scroll(${luaStr dir}) end)"
+    ) wheel
+  );
+
+  selectChords = map chordId (named cfg.select);
+  selectBare = named cfg.select ++ lib.filter (b: !(lib.elem (chordId b) selectChords)) normalBare;
+
+  modeBlock = name: bare: tail: ''
+    hl.define_submap(${luaStr name}, function()
     ${lib.concatStringsSep "\n" (map (b: "  " + normalLine b) (named cfg.keys))}
     ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (name: s: "  " + entryLine s (inNormal name)) cfg.submaps
+      lib.mapAttrsToList (name: s: "  " + entryLine s (inNormal name)) chordSubmaps
     )}
-    ${lib.concatStringsSep "\n" (map (b: "  " + normalLine b) normalBare)}
+    ${lib.concatStringsSep "\n" (map (b: "  " + normalLine b) bare)}
     ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (name: s: "  " + entryLine (withoutSuper s) (inNormal name)) cfg.submaps
+      lib.mapAttrsToList (name: s: "  " + entryLine (withoutSuper s) (inNormal name)) chordSubmaps
     )}
       hl.bind("space", ${submapTo "normal:keypad"}, { description = "keypad" })
-      hl.bind("escape", ${toApps "back to apps" ""})
-      hl.bind("i", ${toApps "back to apps" ""})
+    ${tail}
       hl.bind(${luaStr leaderKey}, hl.dsp.no_op(), { description = "stay in NORMAL" })
-      hl.bind("SUPER+escape", ${toApps "back to apps" ""})
-    ${lib.concatMapStringsSep "\n" (
-      m: "  hl.bind(${luaStr m}, hl.dsp.no_op(), { non_consuming = true })"
-    ) mouseInputs}
+    ${pointerLines}
       hl.bind("catchall", hl.dsp.no_op())
     end)
   '';
 
-  keypadBlock = ''
-    hl.define_submap("normal:keypad", function()
-    ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (name: s: "  " + entryLine (withoutSuper s) (inNormal name)) cfg.submaps
-    )}
-    ${lib.concatStringsSep "\n" (
-      map (b: "  " + oneShotTo (if b.insert then "reset" else "normal") b) (named cfg.keypad)
-    )}
-      ${closeLines "normal"}
-    end)
+  normalBlock = modeBlock "normal" normalBare ''
+    hl.bind("escape", ${toApps "back to apps" ""})
+    hl.bind("i", ${toApps "back to apps" ""})
+    hl.bind("SUPER+escape", ${toApps "back to apps" ""})
   '';
+
+  selectBlock = modeBlock "select" selectBare ''
+    hl.bind("escape", function() wm.leave_select("normal") end, { description = "clear the selection" })
+    hl.bind("i", function() wm.leave_select("reset") end, { description = "back to apps" })
+    hl.bind("SUPER+escape", function() wm.leave_select("reset") end, { description = "back to apps" })
+  '';
+
+  keypadPaths = lib.unique (
+    lib.concatMap (b: map (n: lib.take n b.prefix) (lib.range 1 (lib.length b.prefix))) (
+      lib.attrValues cfg.keypad
+    )
+  );
+  keypadName =
+    path: if path == [ ] then "normal:keypad" else "normal:keypad:${lib.concatStrings path}";
+  keypadChildren =
+    path:
+    lib.filter (
+      p: lib.length p == lib.length path + 1 && lib.take (lib.length path) p == path
+    ) keypadPaths;
+  keypadLeaves = path: lib.filter (b: b.prefix == path) (named cfg.keypad);
+
+  keypadBlock =
+    path:
+    let
+      submapEntries = lib.optionals (path == [ ]) (
+        lib.mapAttrsToList (name: s: entryLine (withoutSuper s) (inNormal name)) cfg.submaps
+      );
+      childEntries = map (
+        p:
+        "hl.bind(${luaStr (lib.last p)}, ${submapTo (keypadName p)}, { description = ${luaStr (lib.concatStringsSep " " p)} })"
+      ) (keypadChildren path);
+      leafEntries = map (b: oneShotTo (if b.insert then "reset" else "normal") b) (keypadLeaves path);
+    in
+    ''
+      hl.define_submap(${luaStr (keypadName path)}, function()
+      ${lib.concatMapStringsSep "\n" (l: "  " + l) (submapEntries ++ childEntries ++ leafEntries)}
+        ${closeLines "normal"}
+      end)
+    '';
 
   bindsLua = pkgs.writeText "binds.lua" ''
     ${lib.concatStringsSep "\n" (map bindLine (named cfg.keys))}
 
-    ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: s: entryLine s name) cfg.submaps)}
+    ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: s: entryLine s name) chordSubmaps)}
 
     ${leaderLua}
     hl.bind(${luaStr leaderKey}, wm_leader, { description = "NORMAL state" })
     hl.bind("SUPER+escape", ${submapTo "normal"}, { description = "NORMAL state" })
 
-    ${lib.concatStringsSep "\n" (lib.mapAttrsToList (prefixBlock "global") cfg.submaps)}
+    ${lib.concatStringsSep "\n" (lib.mapAttrsToList (prefixBlock "global") chordSubmaps)}
     ${lib.concatStringsSep "\n" (lib.mapAttrsToList (prefixBlock "normal") cfg.submaps)}
     ${normalBlock}
-    ${keypadBlock}
+    ${selectBlock}
+    ${lib.concatMapStringsSep "\n" keypadBlock ([ [ ] ] ++ keypadPaths)}
   '';
 
   shortName =
@@ -354,6 +415,7 @@ let
       "prj-"
       "ses-"
       "grab-"
+      "sel-"
     ];
   entryOf = b: {
     inherit (b) mods key insert;
@@ -374,13 +436,34 @@ let
     key = "space";
   };
 
+  keypadPathEntry = p: {
+    mods = "";
+    key = lib.last p;
+    desc = lib.concatStringsSep " " p;
+    prefix = true;
+    insert = false;
+  };
+  keypadEntries = path: map keypadPathEntry (keypadChildren path) ++ map entryOf (keypadLeaves path);
+  keypadEntry = keypadKey // {
+    desc = "keypad";
+    prefix = true;
+    insert = false;
+  };
+  insertEntry = {
+    mods = "";
+    key = "i";
+    desc = "insert";
+    prefix = false;
+    insert = true;
+  };
+
   modes =
     lib.mapAttrs (name: s: {
       title = name;
       inherit (s) sticky;
       path = [ { inherit (s) mods key; } ];
       entries = map entryOf (named s.keys);
-    }) cfg.submaps
+    }) chordSubmaps
     // lib.mapAttrs' (
       name: s:
       lib.nameValuePair (inNormal name) {
@@ -388,11 +471,37 @@ let
         inherit (s) sticky;
         path = [
           normalLabel
-          { inherit (withoutSuper s) mods key; }
-        ];
+        ]
+        ++ (
+          if s.keypadOnly then
+            [
+              keypadKey
+              { inherit (withoutSuper s) mods key; }
+            ]
+          else
+            [ { inherit (withoutSuper s) mods key; } ]
+        );
         entries = map entryOf (named s.keys);
       }
     ) cfg.submaps
+    // lib.listToAttrs (
+      map (
+        p:
+        lib.nameValuePair (keypadName p) {
+          title = lib.concatStringsSep " " p;
+          sticky = false;
+          path = [
+            normalLabel
+            keypadKey
+          ]
+          ++ map (key: {
+            mods = "";
+            inherit key;
+          }) p;
+          entries = keypadEntries p;
+        }
+      ) keypadPaths
+    )
     // {
       normal = {
         title = "NORMAL";
@@ -400,23 +509,22 @@ let
         path = [ normalLabel ];
         entries =
           map entryOf normalBare
-          ++ map prefixEntryOf (named cfg.submaps)
+          ++ map prefixEntryOf (named chordSubmaps)
           ++ [
-            (
-              keypadKey
-              // {
-                desc = "keypad";
-                prefix = true;
-                insert = false;
-              }
-            )
-            {
-              mods = "";
-              key = "i";
-              desc = "insert";
-              prefix = false;
-              insert = true;
-            }
+            keypadEntry
+            insertEntry
+          ];
+      };
+      select = {
+        title = "SELECT";
+        sticky = true;
+        path = [ { label = "SELECT"; } ];
+        entries =
+          map entryOf selectBare
+          ++ map prefixEntryOf (named chordSubmaps)
+          ++ [
+            keypadEntry
+            insertEntry
           ];
       };
       "normal:keypad" = {
@@ -426,7 +534,7 @@ let
           normalLabel
           keypadKey
         ];
-        entries = map prefixEntryOf (named cfg.submaps) ++ map entryOf (named cfg.keypad);
+        entries = map prefixEntryOf (named cfg.submaps) ++ keypadEntries [ ];
       };
     };
 
@@ -502,6 +610,10 @@ let
       label = "root";
       keys = cfg.keys;
     }
+    {
+      label = "select";
+      keys = cfg.select;
+    }
   ]
   ++ lib.mapAttrsToList (name: s: {
     label = "submap ${name}";
@@ -515,18 +627,29 @@ let
   ];
 
   prefixChords = lib.mapAttrs (_: withoutSuper) cfg.submaps;
+  keypadPathChords = lib.listToAttrs (
+    map (
+      p:
+      lib.nameValuePair "path ${lib.concatStrings p}" {
+        mods = "";
+        key = lib.last p;
+        prefix = lib.init p;
+      }
+    ) keypadPaths
+  );
   chordOnlyMaps = [
     {
       label = "keypad with its prefixes";
-      keys = cfg.keypad // prefixChords;
+      keys = cfg.keypad // prefixChords // keypadPathChords;
     }
     {
       label = "global with its prefixes";
-      keys = cfg.keys // cfg.submaps;
+      keys = cfg.keys // chordSubmaps;
     }
   ];
 
-  chordsOf = keys: lib.mapAttrsToList (_: b: "${b.mods}, ${b.key}") keys;
+  chordsOf =
+    keys: lib.mapAttrsToList (_: b: "${lib.concatStrings (b.prefix or [ ])} ${b.mods}, ${b.key}") keys;
   dupesIn =
     keys:
     let
@@ -558,6 +681,12 @@ in
       type = lib.types.attrsOf bindingType;
       default = { };
       description = "Flat hot-path bindings.";
+    };
+
+    select = lib.mkOption {
+      type = lib.types.attrsOf bindingType;
+      default = { };
+      description = "SELECT bindings, overriding the bare NORMAL keys they share a chord with.";
     };
 
     submaps = lib.mkOption {
