@@ -767,18 +767,23 @@ hl.define_submap("ace", function()
     hl.bind("o", function() wm.ace_cancel() end, { description = "cancel ace" })
 end)
 
-local windowed = {}
+local windowed_layout, before_fullscreen = {}, {}
 
-local function remember_widths()
-    for address, window in pairs(model.live(workspace())) do
-        if window.fullscreen == 0 then windowed[address] = { width = window.layout.column.width, x = window.at.x } end
+local function remember_layout()
+    local ws = workspace()
+    local live = model.live(ws)
+    local xs = {}
+    for address, window in pairs(live) do
+        if window.fullscreen ~= 0 then return end
+        xs[address] = window.at.x
     end
+    windowed_layout[ws] = { ws = ws, model = model.read(ws), x = xs }
 end
 
 function wm.checkpoint()
     if wm.backend.applying then return end
     undo.checkpoint()
-    remember_widths()
+    remember_layout()
 end
 
 function wm.undo()
@@ -831,26 +836,37 @@ hl.on("window.minimize", function(window, minimized)
     end
 end)
 
-hl.timer(remember_widths, { timeout = 500, type = "repeat" })
+hl.timer(remember_layout, { timeout = 500, type = "repeat" })
+
+local function after_layout(fn)
+    hl.timer(fn, { timeout = 50, type = "oneshot" })
+end
 
 hl.on("window.fullscreen", function(window)
-    if not window or window.fullscreen ~= 0 or wm.backend.applying then return end
-    local saved = windowed[window.address]
-    if not saved or type(window.layout) ~= "table" or not window.layout.column then return end
-    if math.abs(window.layout.column.width - saved.width) > 0.001 then
-        local active = hl.get_active_window()
-        focus(window)
-        hl.dispatch(hl.dsp.layout(string.format("colresize %.4f", saved.width)))
-        if active and active.address ~= window.address then focus(active) end
+    if not window or wm.backend.applying then return end
+    if window.fullscreen ~= 0 then
+        if before_fullscreen[window.address] then return end
+        for _, saved in pairs(windowed_layout) do
+            if saved.x[window.address] then before_fullscreen[window.address] = saved end
+        end
+        return
     end
-    hl.timer(function()
-        local now = model.live(workspace())[window.address]
-        if now and now.fullscreen == 0 then shift_view(math.floor(now.at.x - saved.x + 0.5)) end
-    end, { timeout = 50, type = "oneshot" })
+    local saved = before_fullscreen[window.address]
+    before_fullscreen[window.address] = nil
+    if not saved then return end
+    after_layout(function()
+        local target = model.copy(saved.model)
+        target.focus = window.address
+        wm.backend.apply(saved.ws, target)
+        after_layout(function()
+            local now = model.live(saved.ws)[window.address]
+            if now and now.fullscreen == 0 then shift_view(math.floor(now.at.x - saved.x[window.address] + 0.5)) end
+        end)
+    end)
 end)
 
 hl.on("window.destroy", function(window)
-    if window and window.address then windowed[window.address] = nil end
+    if window and window.address then before_fullscreen[window.address] = nil end
     if window and window.address and wm.selection[window.address] then wm.selection[window.address] = nil end
 end)
 
