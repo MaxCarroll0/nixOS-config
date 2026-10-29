@@ -14,9 +14,12 @@ let
   hyprland = inputs.hyprland.packages.${system}.hyprland;
 
   cli = inputs.caelestia-shell.inputs.caelestia-cli.packages.${system}.default.overrideAttrs (old: {
-    postInstall = (old.postInstall or "") + "\n" + ''
-      ln -s ${config.local.wallpaper.schemeRoot} "$(find $out -path '*/caelestia/data/schemes' -type d)/wallpaper"
-    '';
+    postInstall =
+      (old.postInstall or "")
+      + "\n"
+      + ''
+        ln -s ${config.local.wallpaper.schemeRoot} "$(find $out -path '*/caelestia/data/schemes' -type d)/wallpaper"
+      '';
   });
 
   shell =
@@ -112,6 +115,7 @@ in
         lib.types.oneOf [
           lib.types.str
           lib.types.int
+          lib.types.float
           lib.types.bool
         ]
       );
@@ -182,6 +186,7 @@ in
     local.wm.caelestia.vars = {
       cursorTheme = config.home.pointerCursor.name;
       cursorSize = config.home.pointerCursor.size;
+      windowOpacity = 0.9;
     };
 
     xdg.configFile = lib.listToAttrs (
