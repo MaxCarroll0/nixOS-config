@@ -1,11 +1,15 @@
 # Home for the AMD desktop.
 
-{ ... }:
+{ lib, ... }:
 
 {
   imports = [ ./common.nix ];
 
   local.wm.enable = true;
+
+  wayland.windowManager.hyprland.extraConfig = lib.mkAfter ''
+    hl.monitor({ output = "HDMI-A-1", disabled = true })
+  '';
 
   xdg.configFile."hypr/hypr-user.lua".text = ''
     hl.config({ cursor = { no_hardware_cursors = 1 } })
