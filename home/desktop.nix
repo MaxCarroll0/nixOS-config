@@ -5,6 +5,8 @@
 {
   imports = [ ./common.nix ];
 
+  local.wm.enable = true;
+
   programs.btop = {
     enable = true;
     settings = {
@@ -143,45 +145,6 @@
               height: 1
               width: 1
             refreshInterval: 60
-    '';
-  };
-
-  xdg.configFile."powerdevilrc" = {
-    force = true;
-    text = ''
-      [AC][Display]
-      DimDisplayIdleTimeoutSec=120
-      DimDisplayWhenIdle=true
-      TurnOffDisplayIdleTimeoutSec=300
-      TurnOffDisplayIdleTimeoutWhenLockedSec=30
-      TurnOffDisplayWhenIdle=true
-
-      [AC][SuspendAndShutdown]
-      AutoSuspendAction=0
-    '';
-  };
-
-  # The lock must fire before the display blanks: kde#523504 kills the greeter
-  # when PowerDevil powers the output off while it is still initialising.
-  # autosuspend reads the lock state as its "user is away" signal, so this
-  # timeout must stay below local.power.idle.autosuspend.idleMinutes.
-  xdg.configFile."kscreenlockerrc" = {
-    force = true;
-    text = ''
-      [Daemon]
-      Autolock=true
-      Timeout=4
-    '';
-  };
-
-  # plasma-shutdown saves whatever is running and plasma-fallback-session-restore
-  # launches it again at login, which is how a browser and a terminal came back
-  # on their own. restorePreviousLogout is the default.
-  xdg.configFile."ksmserverrc" = {
-    force = true;
-    text = ''
-      [General]
-      loginMode=emptySession
     '';
   };
 }

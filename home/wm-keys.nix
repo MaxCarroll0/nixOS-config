@@ -815,6 +815,6 @@ in
 
     xdg.configFile."emacs/wm-keys.el".source = keysEl;
     xdg.configFile."wm/help.json".source = helpJson;
-    systemd.user.services.caelestia.Unit.X-Restart-Triggers = [ "${helpJson}" ];
+    systemd.user.services.caelestia.Unit.X-Restart-Triggers = lib.mkIf cfg.enable [ "${helpJson}" ];
   };
 }
