@@ -85,6 +85,16 @@ Item {
 
             IconButton {
                 type: IconButton.Tonal
+                icon: "visibility"
+                isRound: true
+                onClicked: {
+                    ShellState.forActive().dashboard = false;
+                    Quickshell.execDetached(["hyprctl", "dispatch", "function() wm.peek() end"]);
+                }
+            }
+
+            IconButton {
+                type: IconButton.Tonal
                 icon: "shuffle"
                 isRound: true
                 onClicked: Quickshell.execDetached(["wallpaper-theme", "next"])
