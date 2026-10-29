@@ -63,6 +63,7 @@ in
   local.server.ssh.lanInterfaces = [ "enp5s0" ];
 
   local.gaming.enable = true;
+  local.desktop.plasma.enable = false;
 
   local.fancontrol = {
     enable = true;
