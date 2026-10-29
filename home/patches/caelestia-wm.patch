@@ -251,6 +251,76 @@ index f5058f0..cb87c31 100644
              }
  
              function onSessionChanged(): void {
+diff --git a/modules/launcher/services/Apps.qml b/modules/launcher/services/Apps.qml
+index 1b8740e..73b07cc 100644
+--- a/modules/launcher/services/Apps.qml
++++ b/modules/launcher/services/Apps.qml
+@@ -13,11 +13,14 @@ Searcher {
+ 
+         if (entry.runInTerminal)
+             Quickshell.execDetached({
+-                command: [...GlobalConfig.general.apps.terminal, `${Quickshell.shellDir}/assets/wrap_term_launch.sh`, ...entry.command],
++                command: ["uwsm", "app", "--", ...GlobalConfig.general.apps.terminal, `${Quickshell.shellDir}/assets/wrap_term_launch.sh`, ...entry.command],
+                 workingDirectory: entry.workingDirectory
+             });
+         else
+-            entry.execute();
++            Quickshell.execDetached({
++                command: ["uwsm", "app", "--", ...entry.command],
++                workingDirectory: entry.workingDirectory
++            });
+     }
+ 
+     function search(search: string): var {
+diff --git a/modules/lock/Lock.qml b/modules/lock/Lock.qml
+index f852cb7..0ea6452 100644
+--- a/modules/lock/Lock.qml
++++ b/modules/lock/Lock.qml
+@@ -7,13 +7,23 @@ import Quickshell.Wayland
+ import qs.components.misc
+ 
+ Scope {
++    id: root
++
+     property alias lock: lock
++    property bool quitting
++    readonly property string heldFlag: `${Quickshell.env("XDG_RUNTIME_DIR")}/caelestia-locked`
+ 
+     WlSessionLock {
+         id: lock
+ 
+         signal unlock
+ 
++        onLockedChanged: {
++            if (root.quitting)
++                return;
++            Quickshell.execDetached(locked ? ["sh", "-c", `echo 1 > "${root.heldFlag}"`] : ["rm", "-f", root.heldFlag]);
++        }
++
+         LockSurface {
+             lock: lock
+             pam: pam
+@@ -26,6 +36,20 @@ Scope {
+         lock: lock
+     }
+ 
++    Connections {
++        function onAboutToQuit(): void {
++            root.quitting = true;
++        }
++
++        target: Qt.application
++    }
++
++    FileView {
++        path: root.heldFlag
++        printErrors: false
++        onLoaded: lock.locked = true
++    }
++
+     Loader {
+         asynchronous: true
+         active: true
 diff --git a/modules/nexus/pages/AudioPage.qml b/modules/nexus/pages/AudioPage.qml
 index f53d072..6c3333e 100644
 --- a/modules/nexus/pages/AudioPage.qml

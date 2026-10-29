@@ -54,6 +54,32 @@ let
     '';
   };
 
+  heldFlag = "$XDG_RUNTIME_DIR/caelestia-locked";
+
+  fallbackLockConfig = pkgs.writeText "hyprlock-fallback.conf" ''
+    background {
+      color = rgb(131317)
+    }
+    input-field {
+      size = 320, 56
+      halign = center
+      valign = center
+    }
+  '';
+
+  fallbackLock = pkgs.writeShellApplication {
+    name = "caelestia-fallback-lock";
+    runtimeInputs = [
+      pkgs.hyprlock
+      pkgs.coreutils
+    ];
+    text = ''
+      [ -e "${heldFlag}" ] || exit 0
+      hyprlock --config ${fallbackLockConfig}
+      rm -f "${heldFlag}"
+    '';
+  };
+
   hyprFiles = [
     "variables.lua"
     "utils/functions.lua"
@@ -133,6 +159,9 @@ in
     xdg.configFile = lib.listToAttrs (
       map (f: lib.nameValuePair "hypr/${f}" { source = "${inputs.caelestia-dots}/hypr/${f}"; }) hyprFiles
     );
+
+    # A shell that dies holding the session lock leaves Hyprland showing its crashed-lock screen.
+    systemd.user.services.caelestia.Service.ExecStopPost = "${pkgs.bash}/bin/sh -c '[ \"\$SERVICE_RESULT\" = success ] || ${pkgs.systemd}/bin/systemd-run --user --collect --quiet --unit=caelestia-fallback-lock ${lib.getExe fallbackLock} || true'";
 
     systemd.user.paths.caelestia-chromium-theme = {
       Unit.Description = "Watch the Caelestia scheme for Chromium";
