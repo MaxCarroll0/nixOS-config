@@ -188,7 +188,7 @@
     instrument = true;
     idle.optimise = true;
     idle.policy = "autosuspend";
-    idle.autosuspend.idleMinutes = 10;
+    idle.autosuspend.idleMinutes = 15;
     idle.autosuspend.powerOffAfterHours = 6;
     idle.autosuspend.watchPorts = [
       22
