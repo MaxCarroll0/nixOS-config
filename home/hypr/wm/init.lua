@@ -644,14 +644,20 @@ local function emacs_splits()
     return frames
 end
 
+local function visible_corner(x, y, monitor)
+    return math.max(x, monitor.x), math.max(y, monitor.y)
+end
+
 local function ace_targets()
     local windows = {}
+    local monitors = {}
     local emacs = false
     for _, monitor in ipairs(hl.get_monitors()) do
         if monitor.active_workspace then
             for _, window in ipairs(hl.get_workspace_windows(monitor.active_workspace.id)) do
                 if on_screen(window, monitor) then
                     windows[#windows + 1] = window
+                    monitors[window.address] = monitor
                     emacs = emacs or window.class:lower() == "emacs"
                 end
             end
@@ -664,14 +670,16 @@ local function ace_targets()
     local splits = emacs and emacs_splits() or {}
     local targets = {}
     for _, window in ipairs(windows) do
+        local monitor = monitors[window.address]
         local inner = splits[window.address]
         if inner and #inner > 1 then
             for _, split in ipairs(inner) do
-                targets[#targets + 1] = { address = window.address, split = split.index,
-                    x = window.at.x + split.x, y = window.at.y + split.y }
+                local x, y = visible_corner(window.at.x + split.x, window.at.y + split.y, monitor)
+                targets[#targets + 1] = { address = window.address, split = split.index, x = x, y = y }
             end
         else
-            targets[#targets + 1] = { address = window.address, x = window.at.x, y = window.at.y }
+            local x, y = visible_corner(window.at.x, window.at.y, monitor)
+            targets[#targets + 1] = { address = window.address, x = x, y = y }
         end
     end
     return targets
