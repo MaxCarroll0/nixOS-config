@@ -980,11 +980,21 @@ local function unpeek()
     end, { timeout = wm.peek_ms, type = "oneshot" })
 end
 
-function wm.peek()
-    if wm.peeked then return unpeek() end
+function wm.leave_view(to)
+    if not wm.peeked then return end
+    local back = to or wm.peeked.from
+    unpeek()
+    hl.dispatch(hl.dsp.submap(back))
+    wm.publish()
+end
+
+function wm.view()
+    if wm.peeked then return wm.leave_view() end
+    local from = hl.get_current_submap()
     local ws = workspace()
     local active = hl.get_active_window()
-    local state = { ws = ws, model = model.read(ws), active = active and active.address, windows = {}, x = {} }
+    local state = { ws = ws, model = model.read(ws), active = active and active.address, windows = {}, x = {},
+                    from = from ~= "" and from or "reset" }
     for _, window in ipairs(hl.get_workspace_windows(ws)) do
         if window.mapped then
             state.windows[#state.windows + 1] = {
@@ -1000,7 +1010,6 @@ function wm.peek()
             state.x[window.address] = window.at.x
         end
     end
-    if #state.windows == 0 then return end
     without_animations(function()
         for _, s in ipairs(state.windows) do
             local window = hl.get_window("address:" .. s.address)
@@ -1014,6 +1023,8 @@ function wm.peek()
         hl.dispatch(hl.dsp.window.move({ x = target.x, y = target.y, window = hl.get_window("address:" .. address) }))
     end
     wm.peeked = state
+    hl.dispatch(hl.dsp.submap("view"))
+    wm.publish()
 end
 
 hl.on("window.destroy", function(window)

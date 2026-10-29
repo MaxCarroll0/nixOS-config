@@ -15,8 +15,9 @@ Singleton {
 
     readonly property bool normal: submap === "normal" || submap.startsWith("normal:")
     readonly property bool select: submap === "select"
+    readonly property bool view: submap === "view"
     readonly property var mode: (keymap.modes ?? {})[submap] ?? null
-    readonly property bool prefixActive: mode !== null && submap !== "normal"
+    readonly property bool prefixActive: mode !== null && submap !== "normal" && !view
 
     readonly property var keyNames: ({
             comma: ",",

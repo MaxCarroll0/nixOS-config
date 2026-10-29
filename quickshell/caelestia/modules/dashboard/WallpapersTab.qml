@@ -89,7 +89,7 @@ Item {
                 isRound: true
                 onClicked: {
                     ShellState.forActive().dashboard = false;
-                    Quickshell.execDetached(["hyprctl", "dispatch", "function() wm.peek() end"]);
+                    Quickshell.execDetached(["hyprctl", "dispatch", "function() wm.view() end"]);
                 }
             }
 

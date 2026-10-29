@@ -385,7 +385,7 @@ in
       // grouped "shell" {
         keybinds = shellKey "SUPER" "slash" "keybinds" "keybind reference";
         dashboard = shellKey "SUPER" "d" "dashboard" "dashboard";
-        peek = hyprKey "SUPER" "v" (wmCall "peek()") "peek at the wallpaper, again to return" // {
+        view-mode = hyprKey "SUPER" "v" (wmCall "view()") "VIEW state" // {
           checkpoint = false;
         };
         next-wallpaper =
@@ -418,9 +418,6 @@ in
       // grouped "shell" {
         kp-keybinds = hyprKey "" "slash" (shell "keybinds") "keybind reference";
         kp-dashboard = hyprKey "" "d" (shell "dashboard") "dashboard";
-        kp-peek = hyprKey "" "b" (wmCall "peek()") "peek at the wallpaper, again to return" // {
-          checkpoint = false;
-        };
         kp-sidebar = hyprKey "" "n" (shell "sidebar") "notifications and quick settings";
       }
       // grouped "edit" {

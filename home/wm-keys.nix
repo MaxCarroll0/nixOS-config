@@ -328,10 +328,12 @@ let
     mouse_right = "r";
   };
 
+  buttonLines = map (
+    b: "  hl.bind(${luaStr "mouse:${toString b}"}, hl.dsp.no_op(), { non_consuming = true })"
+  ) (lib.range 272 276);
+
   pointerLines = lib.concatStringsSep "\n" (
-    map (b: "  hl.bind(${luaStr "mouse:${toString b}"}, hl.dsp.no_op(), { non_consuming = true })") (
-      lib.range 272 276
-    )
+    buttonLines
     ++ lib.mapAttrsToList (
       input: dir: "  hl.bind(${luaStr input}, function() wm.scroll(${luaStr dir}) end)"
     ) wheel
@@ -368,6 +370,20 @@ let
     hl.bind("escape", function() wm.leave_select("normal") end, { description = "clear the selection" })
     hl.bind("i", function() wm.leave_select("reset") end, { description = "back to apps" })
     hl.bind("SUPER+escape", function() wm.leave_select("reset") end, { description = "back to apps" })
+  '';
+
+  viewBlock = ''
+    hl.define_submap("view", function()
+      hl.bind("escape", function() wm.leave_view() end, { description = "back" })
+      hl.bind("v", function() wm.leave_view() end, { description = "back" })
+      hl.bind("SUPER+v", function() wm.leave_view() end, { description = "back" })
+      hl.bind(${luaStr leaderKey}, function() wm.leave_view("normal") end, { description = "NORMAL state" })
+      hl.bind("i", function() wm.leave_view("reset") end, { description = "back to apps" })
+      hl.bind("SUPER+escape", function() wm.leave_view("reset") end, { description = "back to apps" })
+      hl.bind("n", hl.dsp.exec_cmd("wallpaper-theme next"), { description = "next wallpaper" })
+    ${lib.concatStringsSep "\n" buttonLines}
+      hl.bind("catchall", hl.dsp.no_op())
+    end)
   '';
 
   keypadPaths = lib.unique (
@@ -416,6 +432,7 @@ let
     ${lib.concatStringsSep "\n" (lib.mapAttrsToList (prefixBlock "normal") cfg.submaps)}
     ${normalBlock}
     ${selectBlock}
+    ${viewBlock}
     ${lib.concatMapStringsSep "\n" keypadBlock ([ [ ] ] ++ keypadPaths)}
   '';
 
@@ -539,6 +556,28 @@ let
             keypadEntry
             insertEntry
           ];
+      };
+      view = {
+        title = "VIEW";
+        sticky = true;
+        path = [ { label = "VIEW"; } ];
+        entries = [
+          {
+            mods = "";
+            key = "v";
+            desc = "back";
+            prefix = false;
+            insert = false;
+          }
+          {
+            mods = "";
+            key = "n";
+            desc = "next wallpaper";
+            prefix = false;
+            insert = false;
+          }
+          insertEntry
+        ];
       };
       "normal:keypad" = {
         title = "keypad";

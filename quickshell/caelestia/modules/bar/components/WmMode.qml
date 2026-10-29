@@ -13,24 +13,31 @@ ColumnLayout {
             label: "N",
             fill: "m3onSurface",
             ink: "m3surface",
-            request: `function() wm.leave_select("normal") end`
+            request: `function() wm.leave_view("normal") wm.leave_select("normal") end`
         },
         {
             key: "insert",
             label: "I",
             fill: "m3onSurface",
             ink: "m3surface",
-            request: `function() wm.leave_select("reset") end`
+            request: `function() wm.leave_view("reset") wm.leave_select("reset") end`
         },
         {
             key: "select",
             label: "S",
             fill: "m3tertiary",
             ink: "m3onTertiary",
-            request: `function() if hl.get_current_submap() ~= "select" then wm.select_mode() end end`
+            request: `function() wm.leave_view("normal") if hl.get_current_submap() ~= "select" then wm.select_mode() end end`
+        },
+        {
+            key: "view",
+            label: "V",
+            fill: "m3secondary",
+            ink: "m3onSecondary",
+            request: `function() if not wm.peeked then wm.view() end end`
         }
     ]
-    readonly property string current: WmState.select ? "select" : WmState.normal ? "normal" : "insert"
+    readonly property string current: WmState.view ? "view" : WmState.select ? "select" : WmState.normal ? "normal" : "insert"
     readonly property bool open: hover.hovered
 
     spacing: Tokens.spacing.medium
