@@ -46,8 +46,8 @@ into insert state; which-key marks these with ↩.
 | `SUPER 1-9` | workspace N **on this monitor** | Hyprland |
 | `SUPER SHIFT 1-9` | move window to workspace N | Hyprland |
 | `SUPER Tab` | last workspace | Hyprland |
-| `SUPER o` | unified ace: jump to any window or Emacs split, all monitors | bridge |
-| `SUPER SHIFT o` | ace: swap focused window with the chosen one | bridge |
+| `SUPER o` | ace: jump to any visible window or Emacs split, all monitors | Hyprland |
+| `SUPER SHIFT o` | ace: add or remove a labelled window from the selection | Hyprland |
 | `SUPER b` | switch buffer, window or Chromium tab (one `consult-buffer`) | Emacs |
 | `SUPER y` | kill-ring picker; types the selection into the focused window | bridge |
 | `SUPER ,` | pop the unified mark ring (back) | bridge |
@@ -60,6 +60,39 @@ into insert state; which-key marks these with ↩.
 
 `SUPER h/j/k/l` deliberately does **not** push the mark ring. See §6.
 
+### NORMAL-only editing
+
+NORMAL edits the scrolling strip like meow edits text. Commands act on the **selection** when
+there is one and on the focused window otherwise; focus and selection are separate and may
+overlap. Selected windows get a dotted outline from the shell overlay, drawn in the focus colour
+when the window is also focused.
+
+| Key | Action |
+|---|---|
+| `s` | cut: evict the targets and remember their shape for paste |
+| `p` | paste below the focused window, keeping the cut shape |
+| `r` | replace: paste over the focused window, evicting it |
+| `q` | evict to the nearer strip edge |
+| `x` / `X` | select the row / the column |
+| `Tab` | add or remove the focused window from the selection |
+| `S-Tab` | SELECT state: hjkl move within the selection, `ESC` clears it |
+| `o` / `O` | ace jump / ace select, labelling each Emacs split separately |
+| `t` / `T` | rotate the targets clockwise / anticlockwise |
+| `H/J/K/L` | move the targets, keeping their shape up to the strip edges |
+| `u` | undo the last command, reopening closed apps in their slot |
+| `z` | scroll the focused column to the left edge without changing the layout |
+| `-` / `=` | narrower / wider column (`=` continues past full width) |
+| `S--` / `S-=` | shorter / taller row |
+| `C--` / `C-=` | finer column steps; `C-S--` / `C-S-=` for rows |
+| `` ` `` | last workspace |
+| `[` / `]` | pop / unpop the mark ring |
+| `.` | project map |
+| `SPC x 5 0` | close the targets |
+
+The mouse wheel moves focus like hjkl in NORMAL, horizontally too, and an app's minimise
+button cuts its window. In the window map, `r`, `c` and `f` fill the row, column or screen and
+toggle back to the previous size.
+)
 ## 3. Submaps
 
 Entered with a `SUPER` chord, exited with `Escape` or any unbound key.
