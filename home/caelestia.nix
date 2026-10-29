@@ -194,9 +194,15 @@ in
       windowOpacity = 0.9;
     };
 
-    xdg.configFile = lib.listToAttrs (
-      map (f: lib.nameValuePair "hypr/${f}" { source = "${inputs.caelestia-dots}/hypr/${f}"; }) hyprFiles
-    );
+    xdg.configFile =
+      lib.listToAttrs (
+        map (f: lib.nameValuePair "hypr/${f}" { source = "${inputs.caelestia-dots}/hypr/${f}"; }) hyprFiles
+      )
+      // {
+        "hypr/hyprland/rules.lua".text =
+          builtins.replaceStrings [ "    \"discord|equibop|vesktop\", -- Discord clients\n" ] [ "" ]
+            (builtins.readFile "${inputs.caelestia-dots}/hypr/hyprland/rules.lua");
+      };
 
     # A shell that dies holding the session lock leaves Hyprland showing its crashed-lock screen.
     systemd.user.services.caelestia.Service.ExecStopPost =
