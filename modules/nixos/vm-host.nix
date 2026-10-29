@@ -146,10 +146,67 @@ let
       exit 1
     '';
   };
+
+  idlePauseMinutes = 15;
+  lastActive = "/run/${domainName}-last-active";
+
+  virsh = "virsh -c qemu:///system";
+
+  pauseWhenIdle = pkgs.writeShellApplication {
+    name = "${domainName}-pause-when-idle";
+    runtimeInputs = [
+      config.virtualisation.libvirtd.package
+      pkgs.coreutils
+    ];
+    text = ''
+      now=$(date +%s)
+      if [ "$(${virsh} domstate ${domainName})" != running ] || ${lib.getExe guestHasSshSession} || [ ! -e ${lastActive} ]; then
+        echo "$now" > ${lastActive}
+        exit 0
+      fi
+      if [ $(( now - $(cat ${lastActive}) )) -ge ${toString (idlePauseMinutes * 60)} ]; then
+        ${virsh} suspend ${domainName}
+      fi
+    '';
+  };
+
+  resume = pkgs.writeShellApplication {
+    name = "${domainName}-resume";
+    runtimeInputs = [
+      config.virtualisation.libvirtd.package
+    ];
+    text = ''
+      case "$(${virsh} domstate ${domainName})" in
+        paused)
+          ${virsh} resume ${domainName} >/dev/null
+          ${virsh} domtime ${domainName} --sync >/dev/null 2>&1 || true
+          echo "${domainName}: resumed"
+          ;;
+        running)
+          echo "${domainName}: already running"
+          ;;
+        *)
+          ${virsh} start ${domainName} >/dev/null
+          echo "${domainName}: booting, reachable in about a minute"
+          ;;
+      esac
+    '';
+  };
+
+  isRunning = pkgs.writeShellApplication {
+    name = "${domainName}-running";
+    runtimeInputs = [ config.virtualisation.libvirtd.package ];
+    text = ''
+      [ "$(${virsh} domstate ${domainName} 2>/dev/null)" = running ]
+    '';
+  };
 in
 
 {
-  imports = [ nixvirt.nixosModules.default ];
+  imports = [
+    nixvirt.nixosModules.default
+    ./wake-endpoint.nix
+  ];
 
   boot.kernelModules = [ "kvm-amd" ];
 
@@ -211,8 +268,37 @@ in
     '';
   };
 
-  services.autosuspend.checks.FriendVmSsh = {
+  systemd.services."${domainName}-pause-when-idle" = {
+    after = [ "nixvirt.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = lib.getExe pauseWhenIdle;
+    };
+  };
+
+  systemd.timers."${domainName}-pause-when-idle" = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnBootSec = "1min";
+      OnUnitActiveSec = "1min";
+    };
+  };
+
+  local.wakeEndpoint.command = lib.getExe resume;
+  users.users.vm-wake = {
+    isSystemUser = true;
+    group = "vm-wake";
+    extraGroups = [ "libvirtd" ];
+  };
+  users.groups.vm-wake = { };
+
+  systemd.services."wake-endpoint@".serviceConfig = {
+    DynamicUser = lib.mkForce false;
+    User = "vm-wake";
+  };
+
+  services.autosuspend.checks.FriendVmRunning = {
     class = "ExternalCommand";
-    command = lib.getExe guestHasSshSession;
+    command = lib.getExe isRunning;
   };
 }
