@@ -318,6 +318,8 @@ in
     };
   };
 
+  local.vpn.moderateNat = true;
+
   local.server.ssh.hostOnlyInterfaces = [ bridge ];
 
   networking.firewall.interfaces.${bridge} = {

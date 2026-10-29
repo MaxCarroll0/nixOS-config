@@ -270,7 +270,7 @@ let
       apply() {
         conf="$rundir/wg.conf"
         echo "generating config for $1" >&2
-        confgen -server "$1" -no-save -output "$conf" >/dev/null
+        confgen -server "$1" -no-save ${lib.optionalString cfg.moderateNat "-moderate-nat "}-output "$conf" >/dev/null
         if [ -n "$bootstrap" ]; then
           install -D -m 600 "$conf" "$bootstrap"
           rm -f "$conf"
@@ -430,6 +430,12 @@ in
     type = lib.types.str;
     default = "1.1.1.1";
     description = "Address pinged through the tunnel to accept a new peer.";
+  };
+
+  options.local.vpn.moderateNat = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    description = "Request Proton's Moderate NAT, so peers behind the tunnel can connect directly.";
   };
 
   options.local.vpn.selection = {
