@@ -84,6 +84,7 @@ let
 
     hl.env("QT_QPA_PLATFORMTHEME", "gtk3")
     hl.animation({ leaf = "workspaces", enabled = true, speed = 5, bezier = "standard", style = "slidevert" })
+    hl.window_rule({ match = { class = "org.kde.ksshaskpass" }, float = true, center = true, pin = true, stay_focused = true })
 
     package.path = hypr .. "/?.lua;" .. hypr .. "/?/init.lua;" .. package.path
     for name in pairs(package.loaded) do

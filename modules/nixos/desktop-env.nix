@@ -224,8 +224,8 @@ in
       };
 
       services.desktopManager.plasma6.enable = plasma;
-      services.displayManager.sddm.enable = true;
-      services.displayManager.sddm.wayland.enable = true;
+      services.displayManager.sddm.enable = plasma;
+      services.displayManager.sddm.wayland.enable = plasma;
       # kwallet is disabled outright in home/common.nix, so kwallet-pam has nothing
       # to unlock and only leaves kwalletd prompting for the rest of the session.
       security.pam.services = lib.mkIf plasma {
@@ -246,8 +246,11 @@ in
       xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
       services.displayManager.sessionPackages = [ hyprlandSession ];
       services.displayManager.defaultSession = "hyprland-nowait";
-      services.displayManager.sddm.theme = "catppuccin-mocha-mauve";
-      environment.systemPackages = [ pkgs.catppuccin-sddm ];
+      services.greetd = {
+        enable = true;
+        useTextGreeter = true;
+        settings.default_session.command = "${lib.getExe pkgs.tuigreet} --time --asterisks --remember --remember-session --sessions ${config.services.displayManager.sessionData.desktops}/share/wayland-sessions --cmd 'uwsm start -g -1 -e -D Hyprland hyprland.desktop'";
+      };
       services.upower.enable = true;
       services.power-profiles-daemon.enable = true;
       users.users.max.packages = with pkgs.kdePackages; [
