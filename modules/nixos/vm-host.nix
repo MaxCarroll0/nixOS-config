@@ -152,6 +152,7 @@ let
         pkgs.jq
         pkgs.coreutils
       ];
+      excludeShellChecks = [ "SC2016" ];
       text = ''
         agent() { virsh -c qemu:///system qemu-agent-command ${domainName} "$1" 2>/dev/null; }
         pid=$(agent ${
@@ -179,12 +180,21 @@ let
 
   guestHoldsServer = guestSucceeds "held" "/usr/bin/sh" [
     "-c"
-    "/usr/bin/lslocks -rn -o PATH | /usr/bin/grep -qx ${guestHoldLock}"
+    ''
+      [ -e ${guestHoldLock} ] || /usr/bin/install -m 0644 /dev/null ${guestHoldLock}
+      /usr/bin/chmod 0644 ${guestHoldLock}
+      /usr/bin/lslocks -rn -o PATH | /usr/bin/grep -qx ${guestHoldLock}
+    ''
   ];
 
-  guestHasLogin = guestSucceeds "logged-in" "/usr/bin/pgrep" [
-    "-f"
-    "^sshd-session: |tailscaled be-child ssh"
+  guestHasLogin = guestSucceeds "logged-in" "/usr/bin/sh" [
+    "-c"
+    ''
+      for session in $(/usr/bin/loginctl list-sessions --no-legend | /usr/bin/awk '$6 == "user" { print $1 }'); do
+        [ "$(/usr/bin/loginctl show-session "$session" -p State --value)" = active ] && exit 0
+      done
+      exit 1
+    ''
   ];
 
   idlePauseMinutes = 15;
