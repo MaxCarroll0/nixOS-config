@@ -413,6 +413,49 @@ def caelestia_scheme():
         return {}
 
 
+def kitty_colours(roles):
+    named = {
+        "background": roles["bg"],
+        "foreground": roles["fg"],
+        "cursor": roles["fg"],
+        "cursor_text_color": roles["bg"],
+        "selection_background": roles["sel-bg"],
+        "selection_foreground": roles["sel-fg"],
+        "url_color": roles["accent-alt"],
+        "active_border_color": roles["border-active"],
+        "inactive_border_color": roles["border-inactive"],
+    } | {f"color{i}": roles[f"ansi{i}"] for i in range(16)}
+    return "".join(f"{k} {v}\n" for k, v in named.items())
+
+
+def set_ini_key(path, key, value):
+    if not path.is_file():
+        return
+    lines = path.read_text().splitlines()
+    entry = f"{key}={value}"
+    replaced = [entry if line.split("=", 1)[0].strip() == key else line for line in lines]
+    if entry not in replaced:
+        at = next((i + 1 for i, line in enumerate(replaced) if line.strip() == "[Settings]"), len(replaced))
+        replaced.insert(at, entry)
+    write_atomic(path, "\n".join(replaced) + "\n")
+
+
+def publish_polarity(roles):
+    dark = roles["polarity"] == "dark"
+    subprocess.run(
+        ["dconf", "write", "/org/gnome/desktop/interface/color-scheme", "'prefer-dark'" if dark else "'prefer-light'"],
+        check=False,
+    )
+    subprocess.run(
+        ["dconf", "write", "/org/gnome/desktop/interface/gtk-theme", "'Adwaita-dark'" if dark else "'Adwaita'"],
+        check=False,
+    )
+    for ini in config["gtkSettings"]:
+        set_ini_key(Path(ini), "gtk-application-prefer-dark-theme", "true" if dark else "false")
+    write_atomic(Path(config["kittyColours"]), kitty_colours(roles))
+    subprocess.run(["pkill", "-USR1", "-u", str(os.getuid()), "-f", "^kitty( |$)"], check=False)
+
+
 def apply(path, mode):
     roles = generate(path, mode)
     write_atomic(Path(config["palettePath"]), json.dumps(roles))
@@ -429,6 +472,7 @@ def apply(path, mode):
             [config["caelestia"], "scheme", "set", "-n", "wallpaper", "-f", mode, "-m", polarity], check=True
         )
     subprocess.run([config["caelestia"], "wallpaper", "-f", str(path), "--no-smart"], check=True)
+    publish_polarity(roles)
     write_atomic(state_file, json.dumps({"mode": mode, "wallpaper": str(path)}))
 
 

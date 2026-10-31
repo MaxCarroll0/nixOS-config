@@ -11,6 +11,8 @@ let
   cfg = config.local.wallpaper;
   state = config.xdg.stateHome;
 
+  kittyColours = "${state}/wallpaper-theme/kitty.conf";
+
   settings = pkgs.writeText "wallpaper-theme.json" (
     builtins.toJSON {
       wallpaperDir = cfg.dir;
@@ -28,6 +30,11 @@ let
       caelestia = lib.getExe' config.programs.caelestia.cli.package "caelestia";
       caelestiaScheme = "${state}/caelestia/scheme.json";
       caelestiaWallpaper = "${state}/caelestia/wallpaper/path.txt";
+      inherit kittyColours;
+      gtkSettings = map (v: "${config.xdg.configHome}/gtk-${v}/settings.ini") [
+        "3.0"
+        "4.0"
+      ];
     }
   );
 
@@ -36,8 +43,37 @@ let
     ps.astral
   ]);
 
+  realesrgan = pkgs.realesrgan-ncnn-vulkan;
+
+  wallpaperUpscale = pkgs.writeShellApplication {
+    name = "wallpaper-upscale";
+    runtimeInputs = [
+      realesrgan
+      pkgs.imagemagick
+      pkgs.rsync
+      pkgs.openssh
+      pkgs.findutils
+      pkgs.diffutils
+      pkgs.util-linux
+    ];
+    runtimeEnv = {
+      ORIGINALS = cfg.originals;
+      POOL = cfg.dir;
+      HOST = cfg.upscaleHost;
+      REALESRGAN = "${realesrgan}";
+      MODEL = "realesrgan-x4plus-anime";
+      SIZE = "3840x2160^";
+    };
+    excludeShellChecks = [ "SC2029" ];
+    text = builtins.readFile ./wallpaper/wallpaper-upscale.sh;
+  };
+
   wallpaperTheme = pkgs.writeShellApplication {
     name = "wallpaper-theme";
+    runtimeInputs = [
+      pkgs.dconf
+      pkgs.procps
+    ];
     text = ''
       WALLPAPER_THEME_CONFIG=${settings} exec ${python}/bin/python3 -I ${./wallpaper/wallpaper-theme.py} "$@"
     '';
@@ -49,6 +85,16 @@ in
       type = lib.types.str;
       default = "${config.home.homeDirectory}/Pictures/Wallpapers";
       description = "Wallpaper pool; light/, dusk/ and dark/ subfolders override classification.";
+    };
+    originals = lib.mkOption {
+      type = lib.types.str;
+      default = "${config.home.homeDirectory}/Pictures/WallpaperOriginals";
+      description = "Unscaled source images kept by wallpaper-upscale.";
+    };
+    upscaleHost = lib.mkOption {
+      type = lib.types.str;
+      default = "desktopnew";
+      description = "GPU host wallpaper-upscale runs Real-ESRGAN on before falling back to this one.";
     };
     location = {
       latitude = lib.mkOption {
@@ -86,7 +132,20 @@ in
   };
 
   config = lib.mkIf config.local.wm.enable {
-    home.packages = [ wallpaperTheme ];
+    home.packages = [
+      wallpaperTheme
+      wallpaperUpscale
+    ];
+
+    programs.kitty.extraConfig = "include ${kittyColours}";
+
+    home.activation.claudeAutoTheme = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+      f="${config.home.homeDirectory}/.claude.json"
+      if [ -s "$f" ] && [ "$(${lib.getExe pkgs.jq} -r .theme "$f")" != auto ]; then
+        ${lib.getExe pkgs.jq} '.theme = "auto"' "$f" > "$f.tmp"
+        mv "$f.tmp" "$f"
+      fi
+    '';
 
     systemd.user.services.wallpaper-theme-sync = {
       Unit = {
