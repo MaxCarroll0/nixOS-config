@@ -324,6 +324,16 @@ in
     '';
   };
 
+  xdg.configFile."mpv/mpv.conf" = {
+    force = true;
+    text = ''
+      fullscreen=yes
+      autofit=50%
+      screenshot-format=png
+      screenshot-png-compression=7
+    '';
+  };
+
   xdg.desktopEntries.google-meet = {
     name = "Google Meet";
     genericName = "Video Conferencing";
