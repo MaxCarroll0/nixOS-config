@@ -1,17 +1,26 @@
 # Home for the AMD desktop.
 
-{ lib, pkgs, ... }:
+{
+  lib,
+  pkgs,
+  inputs,
+  ...
+}:
 
 let
   headless = pkgs.writeShellApplication {
     name = "desktop-headless";
     runtimeInputs = [
+      pkgs.coreutils
       pkgs.systemd
       pkgs.uwsm
+      inputs.hyprland.packages.${pkgs.stdenv.hostPlatform.system}.hyprland
     ];
     text = ''
-      systemctl --user stop 'app-*.scope'
+      hyprctl dispatch 'hl.dsp.dpms({ action = "disable" })' || true
+      timeout 5 systemctl --user stop 'app-*.scope' || systemctl --user kill --signal=SIGKILL 'app-*.scope' || true
       systemctl --user reset-failed 'app-*.scope' || true
+      systemctl start --no-block headless-park.service || true
       uwsm stop
     '';
   };

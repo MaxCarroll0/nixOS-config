@@ -301,6 +301,9 @@ let
           systemctl start wake-soft-hardware.service
           rm -f ${parked}
           if [ -e ${forcedOff} ]; then
+            for blank in /sys/class/graphics/fb*/blank; do
+              echo 0 > "$blank" || true
+            done
             ${lib.getExe sessionKscreen} --dpms on
             rm -f ${forcedOff}
           fi
@@ -331,6 +334,26 @@ let
 
       systemctl start suspend-soft-hardware.service
       touch ${parked}
+    '';
+  };
+
+  headlessPark = pkgs.writeShellApplication {
+    name = "headless-park";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.procps
+      pkgs.systemd
+    ];
+    text = ''
+      for _ in $(seq 60); do
+        pgrep -f '/bin/Hyprland' > /dev/null || break
+        sleep 0.5
+      done
+      systemctl start suspend-soft-hardware.service
+      touch ${parked} ${forcedOff}
+      for blank in /sys/class/graphics/fb*/blank; do
+        echo 4 > "$blank" || true
+      done
     '';
   };
 
@@ -923,6 +946,25 @@ in
           done
         '';
       };
+
+      systemd.services.headless-park = {
+        description = "Park peripherals and power the panel down once the session has ended";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = lib.getExe headlessPark;
+        };
+      };
+
+      security.polkit.extraConfig = ''
+        polkit.addRule(function (action, subject) {
+          if (action.id == "org.freedesktop.systemd1.manage-units"
+              && action.lookup("unit") == "headless-park.service"
+              && action.lookup("verb") == "start"
+              && subject.user == "max") {
+            return polkit.Result.YES;
+          }
+        });
+      '';
 
       systemd.services.usb-reset-empty-ports = lib.mkIf cfg.idle.usb.resetEmptyPorts {
         description = "Re-enumerate USB ports that came up with no device";
