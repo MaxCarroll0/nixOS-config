@@ -63,7 +63,7 @@ for f in "${sources[@]}"; do
   name=$(basename "$f")
   stem=${name%.*}
   if [ "$force" = 1 ] || [ -z "$(find "$POOL" -type f -name "$stem.png" -print -quit)" ]; then
-    cp "$f" "$work/in/$name"
+    magick "$f" -filter Lanczos -resize "$NATIVE" "$work/in/$stem.png"
   fi
 done
 
@@ -77,16 +77,16 @@ upscale_local() {
   for f in "$work/in"/*; do
     name=$(basename "$f")
     echo "upscaling $name here"
-    upscayl-bin -i "$f" -o "$work/out/${name%.*}.png" -m "$MODELS" -n "$MODEL" -s 4 > /dev/null 2>&1
+    realesrgan-ncnn-vulkan -i "$f" -o "$work/out/${name%.*}.png" -n "$MODEL" -s 4 > /dev/null 2>&1
   done
 }
 
 upscale_remote() {
   local remote=offload/wallpaper-upscale
-  nix copy --to "ssh-ng://$HOST" "$UPSCALER" "$MODELS" || return 1
+  nix copy --to "ssh-ng://$HOST" "$REALESRGAN" || return 1
   ssh "$HOST" "rm -rf $remote && mkdir -p $remote/out" || return 1
   rsync -a "$work/in/" "$HOST:$remote/in/" || return 1
-  ssh "$HOST" "cd $remote && for f in in/*; do n=\${f#in/}; echo \"upscaling \$n on $HOST\"; $UPSCALER/bin/upscayl-bin -i \"\$f\" -o \"out/\${n%.*}.png\" -m $MODELS -n $MODEL -s 4 > /dev/null 2>&1 || exit 1; done" || return 1
+  ssh "$HOST" "cd $remote && for f in in/*; do n=\${f#in/}; echo \"upscaling \$n on $HOST\"; $REALESRGAN/bin/realesrgan-ncnn-vulkan -i \"\$f\" -o \"out/\${n%.*}.png\" -n $MODEL -s 4 > /dev/null 2>&1 || exit 1; done" || return 1
   rsync -a "$HOST:$remote/out/" "$work/out/" || return 1
   ssh "$HOST" "rm -rf $remote"
 }
