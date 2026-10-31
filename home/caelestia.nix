@@ -199,6 +199,8 @@ in
         map (f: lib.nameValuePair "hypr/${f}" { source = "${inputs.caelestia-dots}/hypr/${f}"; }) hyprFiles
       )
       // {
+        "menus/hyprland-applications.menu".text =
+          builtins.readFile "${pkgs.kdePackages.plasma-workspace}/etc/xdg/menus/plasma-applications.menu";
         "hypr/hyprland/rules.lua".text =
           builtins.replaceStrings [ "    \"discord|equibop|vesktop\", -- Discord clients\n" ] [ "" ]
             (builtins.readFile "${inputs.caelestia-dots}/hypr/hyprland/rules.lua");
