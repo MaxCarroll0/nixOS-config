@@ -22,6 +22,10 @@
     systems = [ "aarch64-linux" ];
   };
 
+  fairphone = {
+    tailscale = "100.96.208.89";
+  };
+
   damien-fedora = {
     tailnetAddress = "100.113.63.17";
   };

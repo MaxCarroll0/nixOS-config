@@ -10,8 +10,18 @@
 
 let
   nixvirt = inputs.NixVirt;
+  facts = import ../../hosts/facts.nix;
 
   domainName = "damien-fedora";
+  guestMac = "52:54:00:f1:3d:01";
+  guestAddress = "192.168.122.108";
+  minecraftPort = 25565;
+  hostTailnetAddress = facts.${config.networking.hostName}.tailscale;
+  firstClassPeers = map (host: facts.${host}.tailscale) [
+    "laptop"
+    "pi"
+    "fairphone"
+  ];
   imageDir = "/var/lib/libvirt/images";
   diskPath = "${imageDir}/${domainName}.qcow2";
   seedPath = "${imageDir}/${domainName}-seed.iso";
@@ -67,7 +77,7 @@ let
     storage_vol = diskPath;
     install_vol = seedPath;
     bridge_name = bridge;
-    net_iface_mac = "52:54:00:f1:3d:01";
+    net_iface_mac = guestMac;
   };
 
   domain = base // {
@@ -101,9 +111,15 @@ let
     ip = {
       address = "192.168.122.1";
       netmask = "255.255.255.0";
-      dhcp.range = {
-        start = "192.168.122.2";
-        end = "192.168.122.254";
+      dhcp = {
+        range = {
+          start = "192.168.122.2";
+          end = "192.168.122.254";
+        };
+        host = {
+          mac = guestMac;
+          ip = guestAddress;
+        };
       };
     };
   };
@@ -290,6 +306,7 @@ in
         {
           definition = nixvirt.lib.network.writeXML network;
           active = true;
+          restart = false;
         }
       ];
       domains = [
@@ -342,6 +359,37 @@ in
       }
     '';
   };
+
+  systemd.sockets."${domainName}-minecraft" = {
+    wantedBy = [ "sockets.target" ];
+    socketConfig = {
+      ListenStream = "${hostTailnetAddress}:${toString minecraftPort}";
+      FreeBind = true;
+      IPAddressAllow = firstClassPeers ++ [ hostTailnetAddress ];
+      IPAddressDeny = "any";
+    };
+  };
+
+  systemd.services."${domainName}-minecraft" = {
+    requires = [ "${domainName}-minecraft.socket" ];
+    after = [ "${domainName}-minecraft.socket" ];
+    serviceConfig = {
+      ExecStart = "${config.systemd.package}/lib/systemd/systemd-socket-proxyd --exit-idle-time=10min ${guestAddress}:${toString minecraftPort}";
+      DynamicUser = true;
+      IPAddressAllow = guestAddress;
+      IPAddressDeny = "any";
+      RestrictAddressFamilies = [ "AF_INET" ];
+      PrivateDevices = true;
+      ProtectHome = true;
+      ProtectKernelTunables = true;
+      ProtectControlGroups = true;
+      CapabilityBoundingSet = "";
+    };
+  };
+
+  networking.firewall.extraInputRules = ''
+    iifname "tailscale0" ip saddr { ${lib.concatStringsSep ", " firstClassPeers} } tcp dport ${toString minecraftPort} accept
+  '';
 
   systemd.services."${domainName}-pause-when-idle" = {
     after = [ "nixvirt.service" ];
