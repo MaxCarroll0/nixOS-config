@@ -141,27 +141,51 @@ let
     '';
   };
 
-  guestHasSshSession = pkgs.writeShellApplication {
-    name = "${domainName}-ssh-active";
-    runtimeInputs = [
-      config.virtualisation.libvirtd.package
-      pkgs.jq
-      pkgs.coreutils
-    ];
-    text = ''
-      agent() { virsh -c qemu:///system qemu-agent-command ${domainName} "$1" 2>/dev/null; }
-      pid=$(agent '{"execute":"guest-exec","arguments":{"path":"/usr/bin/pgrep","arg":["-f","^sshd-session: |tailscaled be-child ssh"]}}' | jq -e .return.pid) || exit 1
-      for _ in 1 2 3 4 5; do
-        status=$(agent "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$pid}}") || exit 1
-        if [ "$(jq .return.exited <<<"$status")" = true ]; then
-          [ "$(jq .return.exitcode <<<"$status")" = 0 ]
-          exit
-        fi
-        sleep 1
-      done
-      exit 1
-    '';
-  };
+  guestHoldLock = "/run/keep-running.lock";
+
+  guestSucceeds =
+    name: path: args:
+    pkgs.writeShellApplication {
+      name = "${domainName}-${name}";
+      runtimeInputs = [
+        config.virtualisation.libvirtd.package
+        pkgs.jq
+        pkgs.coreutils
+      ];
+      text = ''
+        agent() { virsh -c qemu:///system qemu-agent-command ${domainName} "$1" 2>/dev/null; }
+        pid=$(agent ${
+          lib.escapeShellArg (
+            builtins.toJSON {
+              execute = "guest-exec";
+              arguments = {
+                inherit path;
+                arg = args;
+              };
+            }
+          )
+        } | jq -e .return.pid) || exit 1
+        for _ in 1 2 3 4 5; do
+          status=$(agent "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$pid}}") || exit 1
+          if [ "$(jq .return.exited <<<"$status")" = true ]; then
+            [ "$(jq .return.exitcode <<<"$status")" = 0 ]
+            exit
+          fi
+          sleep 1
+        done
+        exit 1
+      '';
+    };
+
+  guestHoldsServer = guestSucceeds "held" "/usr/bin/sh" [
+    "-c"
+    "/usr/bin/lslocks -rn -o PATH | /usr/bin/grep -qx ${guestHoldLock}"
+  ];
+
+  guestHasLogin = guestSucceeds "logged-in" "/usr/bin/pgrep" [
+    "-f"
+    "^sshd-session: |tailscaled be-child ssh"
+  ];
 
   idlePauseMinutes = 15;
   lastActive = "/run/${domainName}-last-active";
@@ -179,23 +203,33 @@ let
     text = ''
       now=$(date +%s)
       running=false
+      held=false
       loggedIn=false
       if [ "$(${virsh} domstate ${domainName})" = running ]; then
         running=true
-        if ${lib.getExe guestHasSshSession}; then
+        if ${lib.getExe guestHoldsServer}; then
+          held=true
+        fi
+        if ${lib.getExe guestHasLogin}; then
           loggedIn=true
         fi
       fi
-      if [ "$running" = false ] || [ "$loggedIn" = true ] || [ ! -e ${lastActive} ]; then
+      active=false
+      if [ "$held" = true ] || [ "$loggedIn" = true ]; then
+        active=true
+      fi
+      if [ "$running" = false ] || [ "$active" = true ] || [ ! -e ${lastActive} ]; then
         echo "$now" > ${lastActive}
       fi
       pausesAt=$(( $(cat ${lastActive}) + ${toString (idlePauseMinutes * 60)} ))
-      jq -cn --argjson loggedIn "$loggedIn" --argjson running "$running" --argjson pausesAt "$pausesAt" \
-        --argjson updated "$now" --argjson idleAfter ${toString (idlePauseMinutes * 60)} \
-        '{loggedIn:$loggedIn,updated:$updated,idleAfter:$idleAfter,pausesAt:(if $running and ($loggedIn|not) then $pausesAt else null end)}' \
+      jq -cn --argjson held "$held" --argjson loggedIn "$loggedIn" --argjson active "$active" --argjson running "$running" \
+        --argjson pausesAt "$pausesAt" --argjson updated "$now" --argjson idleAfter ${
+          toString (idlePauseMinutes * 60)
+        } \
+        '{held:$held,loggedIn:$loggedIn,updated:$updated,idleAfter:$idleAfter,pausesAt:(if $running and ($active|not) then $pausesAt else null end)}' \
         > ${idleStatus}.tmp
       mv ${idleStatus}.tmp ${idleStatus}
-      if [ "$running" = true ] && [ "$loggedIn" = false ] && [ "$now" -ge "$pausesAt" ]; then
+      if [ "$running" = true ] && [ "$active" = false ] && [ "$now" -ge "$pausesAt" ]; then
         ${virsh} suspend ${domainName}
       fi
     '';
