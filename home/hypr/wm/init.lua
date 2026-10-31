@@ -915,6 +915,27 @@ hl.on("window.close", refocus_after_close)
 
 wm.peek_ms = 450
 
+local view_file = (os.getenv("XDG_RUNTIME_DIR") or "/tmp") .. "/hypr-wm-view.lua"
+
+local function literal(value)
+    local kind = type(value)
+    if kind == "table" then
+        local items = {}
+        for k, item in pairs(value) do items[#items + 1] = "[" .. literal(k) .. "]=" .. literal(item) end
+        return "{" .. table.concat(items, ",") .. "}"
+    elseif kind == "string" then
+        return string.format("%q", value)
+    end
+    return tostring(value)
+end
+
+local function save_view(state)
+    local f = io.open(view_file, "w")
+    if not f then return end
+    f:write("return ", literal(state))
+    f:close()
+end
+
 local function without_animations(fn)
     local animated = hl.get_config("animations.enabled")
     hl.config({ ["animations.enabled"] = false })
@@ -950,6 +971,7 @@ end
 local function unpeek()
     local state = wm.peeked
     wm.peeked = nil
+    os.remove(view_file)
     for _, s in ipairs(state.windows) do
         local window = hl.get_window("address:" .. s.address)
         if window then hl.dispatch(hl.dsp.window.move({ x = s.x, y = s.y, window = window })) end
@@ -981,9 +1003,9 @@ local function unpeek()
 end
 
 function wm.leave_view(to)
-    if not wm.peeked then return end
-    local back = to or wm.peeked.from
-    unpeek()
+    if not wm.peeked and hl.get_current_submap() ~= "view" then return end
+    local back = to or (wm.peeked and wm.peeked.from) or "reset"
+    if wm.peeked then unpeek() end
     hl.dispatch(hl.dsp.submap(back))
     wm.publish()
 end
@@ -1023,8 +1045,18 @@ function wm.view()
         hl.dispatch(hl.dsp.window.move({ x = target.x, y = target.y, window = hl.get_window("address:" .. address) }))
     end
     wm.peeked = state
+    save_view(state)
     hl.dispatch(hl.dsp.submap("view"))
     wm.publish()
+end
+
+do
+    local saved = loadfile(view_file)
+    local ok, state = pcall(saved or error)
+    if ok and type(state) == "table" then
+        wm.peeked = state
+        hl.timer(function() wm.leave_view() end, { timeout = 100, type = "oneshot" })
+    end
 end
 
 hl.on("window.destroy", function(window)
