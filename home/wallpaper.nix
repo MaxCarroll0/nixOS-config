@@ -43,12 +43,16 @@ let
     ps.astral
   ]);
 
-  realesrgan = pkgs.realesrgan-ncnn-vulkan;
+  upscaylModels = pkgs.runCommand "upscayl-models" { } ''
+    cp -r ${
+      pkgs.appimageTools.extractType2 { inherit (pkgs.upscayl) pname version src; }
+    }/resources/models $out
+  '';
 
   wallpaperUpscale = pkgs.writeShellApplication {
     name = "wallpaper-upscale";
     runtimeInputs = [
-      realesrgan
+      pkgs.upscayl-ncnn
       pkgs.imagemagick
       pkgs.rsync
       pkgs.openssh
@@ -60,8 +64,9 @@ let
       ORIGINALS = cfg.originals;
       POOL = cfg.dir;
       HOST = cfg.upscaleHost;
-      REALESRGAN = "${realesrgan}";
-      MODEL = "realesrgan-x4plus-anime";
+      UPSCALER = "${pkgs.upscayl-ncnn}";
+      MODELS = "${upscaylModels}";
+      MODEL = "high-fidelity-4x";
       SIZE = "3840x2160^";
     };
     excludeShellChecks = [ "SC2029" ];
@@ -94,7 +99,7 @@ in
     upscaleHost = lib.mkOption {
       type = lib.types.str;
       default = "desktopnew";
-      description = "GPU host wallpaper-upscale runs Real-ESRGAN on before falling back to this one.";
+      description = "GPU host wallpaper-upscale wallpaper-upscale uses before falling back to this one.";
     };
     location = {
       latitude = lib.mkOption {
