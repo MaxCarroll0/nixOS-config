@@ -840,7 +840,6 @@ local function hold_scroll()
     hl.timer(release_scroll, { timeout = 500, type = "oneshot" })
 end
 
-release_scroll()
 hl.on("workspace.active", release_scroll)
 
 local function after_layout(fn)
