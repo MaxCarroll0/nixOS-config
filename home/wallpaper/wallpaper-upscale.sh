@@ -83,7 +83,6 @@ upscale_local() {
 
 upscale_remote() {
   local remote=offload/wallpaper-upscale
-  wake-peer "$HOST" > /dev/null || return 1
   nix copy --to "ssh-ng://$HOST" "$REALESRGAN" || return 1
   ssh "$HOST" "rm -rf $remote && mkdir -p $remote/out" || return 1
   rsync -a "$work/in/" "$HOST:$remote/in/" || return 1
@@ -92,13 +91,15 @@ upscale_remote() {
   ssh "$HOST" "rm -rf $remote"
 }
 
-if [ "$where" = remote ]; then
+if [ "$where" = local ]; then
+  upscale_local
+elif wake-peer "$HOST" > /dev/null; then
   upscale_remote || {
-    echo "wallpaper-upscale: $HOST unavailable, upscaling here" >&2
-    rm -f "$work/out"/*
-    upscale_local
+    echo "wallpaper-upscale: upscaling on $HOST failed" >&2
+    exit 1
   }
 else
+  echo "wallpaper-upscale: $HOST unreachable, upscaling here" >&2
   upscale_local
 fi
 
