@@ -328,7 +328,6 @@ in
     force = true;
     text = ''
       fullscreen=yes
-      autofit=50%
       screenshot-format=png
       screenshot-png-compression=7
     '';
