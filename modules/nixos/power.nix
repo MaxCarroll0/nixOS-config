@@ -427,13 +427,14 @@ let
     text = ''
       usage() {
         printf '%s\n' \
-          'keep-awake [--why REASON] [--shutdown] [--] COMMAND [ARGS...]' \
-          'keep-awake --for DURATION [--why REASON] [--shutdown]' \
-          'keep-awake --take NAME [--why REASON] [--for DURATION] [--shutdown]' \
+          'keep-awake [--why REASON] [--shutdown] [--drain] [--] COMMAND [ARGS...]' \
+          'keep-awake --for DURATION [--why REASON] [--shutdown] [--drain]' \
+          'keep-awake --take NAME [--why REASON] [--for DURATION] [--shutdown] [--drain]' \
           'keep-awake --release NAME|all' \
           'keep-awake --list' \
           "" \
           'Holds a block inhibitor so the idle watcher leaves the host alone.' \
+          '--drain blocks suspend without restarting the idle countdown.' \
           'DURATION accepts 90, 30m, 2h.'
       }
 
@@ -475,6 +476,7 @@ let
 
       why="keep-awake"
       what="sleep"
+      who="keep-awake"
       duration=""
       name=""
       release=""
@@ -488,6 +490,7 @@ let
           --release) release="$2"; shift 2 ;;
           --list) list=1; shift ;;
           --shutdown) what="sleep:shutdown"; shift ;;
+          --drain) who="keep-awake-drain"; shift ;;
           -h|--help) usage; exit 0 ;;
           --) shift; break ;;
           -*) echo "unknown option $1" >&2; usage >&2; exit 2 ;;
@@ -521,7 +524,7 @@ let
         run_scoped --quiet --collect --unit "$unit" \
           --property=RuntimeMaxSec="$secs" \
           --description="keep-awake: $why" \
-          -- systemd-inhibit --mode=block --what="$what" --who=keep-awake --why="$why" \
+          -- systemd-inhibit --mode=block --what="$what" --who="$who" --why="$why" \
             -- sleep "$secs"
         echo "$unit"
         exit 0
@@ -533,7 +536,7 @@ let
         run_scoped --quiet --collect --unit "$unit" \
           --property=RuntimeMaxSec="$secs" \
           --description="keep-awake: $why" \
-          -- systemd-inhibit --mode=block --what="$what" --who=keep-awake --why="$why" \
+          -- systemd-inhibit --mode=block --what="$what" --who="$who" --why="$why" \
             -- sleep "$secs"
         echo "$unit"
         exit 0
@@ -544,7 +547,7 @@ let
         exit 2
       fi
 
-      exec systemd-inhibit --mode=block --what="$what" --who=keep-awake --why="$why" -- "$@"
+      exec systemd-inhibit --mode=block --what="$what" --who="$who" --why="$why" -- "$@"
     '';
   };
 
@@ -563,6 +566,7 @@ let
         org.freedesktop.login1.Manager ListInhibitors \
         | jq -r '.data[0][]
                  | select(.[3] == "block")
+                 | select(.[1] != "keep-awake-drain")
                  | select(.[0] | split(":") | any(. == "sleep" or . == "shutdown"))
                  | .[5]')
 

@@ -200,7 +200,7 @@ let
     ''
   ];
 
-  idleShutdownMinutes = 15;
+  idleShutdownMinutes = 10;
   shutdownGraceMinutes = 5;
   lastActive = "/run/${domainName}-last-active";
   shutdownRequested = "/run/${domainName}-shutdown-requested";
@@ -214,6 +214,7 @@ let
       config.virtualisation.libvirtd.package
       pkgs.coreutils
       pkgs.jq
+      config.local.power.keepAwakePackage
     ];
     text = ''
       count() {
@@ -252,6 +253,14 @@ let
         > ${idleStatus}.tmp
       mv ${idleStatus}.tmp ${idleStatus}
 
+      if [ "$running" = false ]; then
+        keep-awake --release ${domainName}
+      elif [ "$idle" = true ]; then
+        keep-awake --take ${domainName} --drain --for 3m --why "${domainName} idle" >/dev/null
+      else
+        keep-awake --take ${domainName} --for 3m --why "${domainName} in use" >/dev/null
+      fi
+
       if [ "$idle" = true ] && [ "$now" -ge "$shutsDownAt" ]; then
         if [ ! -e ${shutdownRequested} ]; then
           echo "$now" > ${shutdownRequested}
@@ -282,17 +291,6 @@ let
           ${virsh} start ${domainName} >/dev/null
           echo "${domainName}: booting, reachable in about a minute"
           ;;
-      esac
-    '';
-  };
-
-  isRunning = pkgs.writeShellApplication {
-    name = "${domainName}-running";
-    runtimeInputs = [ config.virtualisation.libvirtd.package ];
-    text = ''
-      case "$(${virsh} domstate ${domainName} 2>/dev/null)" in
-        running | "in shutdown") ;;
-        *) exit 1 ;;
       esac
     '';
   };
@@ -515,9 +513,4 @@ in
   };
 
   networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ statusPort ];
-
-  services.autosuspend.checks.FriendVmRunning = {
-    class = "ExternalCommand";
-    command = lib.getExe isRunning;
-  };
 }
