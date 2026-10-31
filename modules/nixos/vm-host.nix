@@ -143,7 +143,7 @@ let
 
   guestHoldLock = "/run/keep-running.lock";
 
-  guestSucceeds =
+  guestRun =
     name: path: args:
     pkgs.writeShellApplication {
       name = "${domainName}-${name}";
@@ -161,6 +161,7 @@ let
               execute = "guest-exec";
               arguments = {
                 inherit path;
+                capture-output = true;
                 arg = args;
               };
             }
@@ -169,6 +170,7 @@ let
         for _ in 1 2 3 4 5; do
           status=$(agent "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$pid}}") || exit 1
           if [ "$(jq .return.exited <<<"$status")" = true ]; then
+            jq -j '.return."out-data" // "" | @base64d' <<<"$status"
             [ "$(jq .return.exitcode <<<"$status")" = 0 ]
             exit
           fi
@@ -178,69 +180,85 @@ let
       '';
     };
 
-  guestHoldsServer = guestSucceeds "held" "/usr/bin/sh" [
+  guestLockCount = guestRun "lock-count" "/usr/bin/sh" [
     "-c"
     ''
       [ -e ${guestHoldLock} ] || /usr/bin/install -m 0644 /dev/null ${guestHoldLock}
       /usr/bin/chmod 0644 ${guestHoldLock}
-      /usr/bin/lslocks -rn -o PATH | /usr/bin/grep -qx ${guestHoldLock}
+      /usr/bin/lslocks -rn -o PATH | /usr/bin/grep -cx ${guestHoldLock} || true
     ''
   ];
 
-  guestHasLogin = guestSucceeds "logged-in" "/usr/bin/sh" [
+  guestLoginCount = guestRun "login-count" "/usr/bin/sh" [
     "-c"
     ''
+      count=0
       for session in $(/usr/bin/loginctl list-sessions --no-legend | /usr/bin/awk '$6 == "user" { print $1 }'); do
-        [ "$(/usr/bin/loginctl show-session "$session" -p State --value)" = active ] && exit 0
+        [ "$(/usr/bin/loginctl show-session "$session" -p State --value)" = active ] && count=$((count + 1))
       done
-      exit 1
+      echo "$count"
     ''
   ];
 
-  idlePauseMinutes = 15;
+  idleShutdownMinutes = 15;
+  shutdownGraceMinutes = 5;
   lastActive = "/run/${domainName}-last-active";
+  shutdownRequested = "/run/${domainName}-shutdown-requested";
   idleStatus = "/run/${domainName}-idle.json";
 
   virsh = "virsh -c qemu:///system";
 
-  pauseWhenIdle = pkgs.writeShellApplication {
-    name = "${domainName}-pause-when-idle";
+  shutdownWhenIdle = pkgs.writeShellApplication {
+    name = "${domainName}-shutdown-when-idle";
     runtimeInputs = [
       config.virtualisation.libvirtd.package
       pkgs.coreutils
       pkgs.jq
     ];
     text = ''
+      count() {
+        local n
+        n=$("$1") || n=0
+        if [[ "$n" =~ ^[0-9]+$ ]]; then echo "$n"; else echo 0; fi
+      }
+
       now=$(date +%s)
       running=false
-      held=false
-      loggedIn=false
-      if [ "$(${virsh} domstate ${domainName})" = running ]; then
-        running=true
-        if ${lib.getExe guestHoldsServer}; then
-          held=true
-        fi
-        if ${lib.getExe guestHasLogin}; then
-          loggedIn=true
-        fi
-      fi
-      active=false
-      if [ "$held" = true ] || [ "$loggedIn" = true ]; then
-        active=true
-      fi
-      if [ "$running" = false ] || [ "$active" = true ] || [ ! -e ${lastActive} ]; then
+      locks=0
+      logins=0
+      case "$(${virsh} domstate ${domainName})" in
+        running | "in shutdown")
+          running=true
+          locks=$(count ${lib.getExe guestLockCount})
+          logins=$(count ${lib.getExe guestLoginCount})
+          ;;
+      esac
+
+      if [ "$running" = false ] || [ $((locks + logins)) -gt 0 ] || [ ! -e ${lastActive} ]; then
         echo "$now" > ${lastActive}
+        rm -f ${shutdownRequested}
       fi
-      pausesAt=$(( $(cat ${lastActive}) + ${toString (idlePauseMinutes * 60)} ))
-      jq -cn --argjson held "$held" --argjson loggedIn "$loggedIn" --argjson active "$active" --argjson running "$running" \
-        --argjson pausesAt "$pausesAt" --argjson updated "$now" --argjson idleAfter ${
-          toString (idlePauseMinutes * 60)
-        } \
-        '{held:$held,loggedIn:$loggedIn,updated:$updated,idleAfter:$idleAfter,pausesAt:(if $running and ($active|not) then $pausesAt else null end)}' \
+      shutsDownAt=$(( $(cat ${lastActive}) + ${toString (idleShutdownMinutes * 60)} ))
+      idle=false
+      if [ "$running" = true ] && [ $((locks + logins)) -eq 0 ]; then
+        idle=true
+      fi
+
+      jq -cn --argjson locks "$locks" --argjson logins "$logins" --argjson idle "$idle" \
+        --argjson shutsDownAt "$shutsDownAt" --argjson updated "$now" \
+        --argjson stopping "$([ -e ${shutdownRequested} ] && echo true || echo false)" \
+        --argjson idleAfter ${toString (idleShutdownMinutes * 60)} \
+        '{locks:$locks,logins:$logins,stopping:$stopping,updated:$updated,idleAfter:$idleAfter,shutsDownAt:(if $idle then $shutsDownAt else null end)}' \
         > ${idleStatus}.tmp
       mv ${idleStatus}.tmp ${idleStatus}
-      if [ "$running" = true ] && [ "$active" = false ] && [ "$now" -ge "$pausesAt" ]; then
-        ${virsh} suspend ${domainName}
+
+      if [ "$idle" = true ] && [ "$now" -ge "$shutsDownAt" ]; then
+        if [ ! -e ${shutdownRequested} ]; then
+          echo "$now" > ${shutdownRequested}
+          ${virsh} shutdown ${domainName}
+        elif [ $((now - $(cat ${shutdownRequested}))) -ge ${toString (shutdownGraceMinutes * 60)} ]; then
+          ${virsh} destroy ${domainName}
+        fi
       fi
     '';
   };
@@ -272,7 +290,10 @@ let
     name = "${domainName}-running";
     runtimeInputs = [ config.virtualisation.libvirtd.package ];
     text = ''
-      [ "$(${virsh} domstate ${domainName} 2>/dev/null)" = running ]
+      case "$(${virsh} domstate ${domainName} 2>/dev/null)" in
+        running | "in shutdown") ;;
+        *) exit 1 ;;
+      esac
     '';
   };
 
@@ -356,7 +377,7 @@ in
       domains = [
         {
           definition = nixvirt.lib.domain.writeXML domain;
-          active = true;
+          active = null;
         }
       ];
     };
@@ -435,15 +456,15 @@ in
     iifname "tailscale0" ip saddr { ${lib.concatStringsSep ", " firstClassPeers} } tcp dport ${toString minecraftPort} accept
   '';
 
-  systemd.services."${domainName}-pause-when-idle" = {
+  systemd.services."${domainName}-shutdown-when-idle" = {
     after = [ "nixvirt.service" ];
     serviceConfig = {
       Type = "oneshot";
-      ExecStart = lib.getExe pauseWhenIdle;
+      ExecStart = lib.getExe shutdownWhenIdle;
     };
   };
 
-  systemd.timers."${domainName}-pause-when-idle" = {
+  systemd.timers."${domainName}-shutdown-when-idle" = {
     wantedBy = [ "timers.target" ];
     timerConfig = {
       OnBootSec = "1min";
