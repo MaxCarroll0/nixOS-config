@@ -12,6 +12,10 @@ let
   scfg = cfg.storage;
   overrides = import ../../../lib/overrides.nix { inherit lib; };
 
+  streamBranches = lib.unique (
+    lib.mapAttrsToList (_: s: "${scfg.diskRoot}/${s.branch}") (cfg.streams or { })
+  );
+
   dataMounts = lib.mapAttrsToList (name: _: "${scfg.diskRoot}/${name}") scfg.dataDisks;
 
   snapraidConf = pkgs.writeText "snapraid.conf" (
@@ -96,7 +100,7 @@ let
         exit 1
       fi
 
-      snapraid --conf ${snapraidConf} sync
+      flock ${cfg.nilfsWriteLock} snapraid --conf ${snapraidConf} sync
     '';
   };
 
@@ -119,6 +123,15 @@ let
       [ -n "$cmd" ] && [ -n "$branch" ] || usage
       mountpoint -q "$branch" || { echo "not mounted: $branch" >&2; exit 1; }
       device=$(findmnt -no SOURCE "$branch" | head -1)
+      stream_branches=( ${lib.escapeShellArgs streamBranches} )
+      if [ "$cmd" = start ]; then
+        for stream_branch in "''${stream_branches[@]}"; do
+          if [ "$(realpath "$branch")" = "$stream_branch" ]; then
+            echo "refusing: $branch holds a NAS stream, whose history is never collected" >&2
+            exit 1
+          fi
+        done
+      fi
 
       case "$cmd" in
         start)  nilfs_cleanerd -c ${scfg.cleanerConfig} "$device" "$branch" ;;
@@ -143,6 +156,12 @@ let
 in
 
 {
+  options.local.nas.nilfsWriteLock = lib.mkOption {
+    type = lib.types.str;
+    default = "/run/nas-nilfs-write.lock";
+    description = "Serialises NILFS2 writers against checkpoint mounts and parity sync.";
+  };
+
   options.local.nas.storage = {
     enable = lib.mkEnableOption "the mergerfs pool, SnapRAID parity and their timers";
 
@@ -299,7 +318,8 @@ in
             "noauto"
             "noatime"
           ]
-          ++ lib.optional (d.fsType == "btrfs") "compress=zstd:1";
+          ++ lib.optional (d.fsType == "btrfs") "compress=zstd:1"
+          ++ lib.optional (d.fsType == "nilfs2") "nogc";
         }
       ) scfg.dataDisks)
 

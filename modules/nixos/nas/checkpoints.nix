@@ -15,131 +15,83 @@ let
   nilfsBranches = lib.filterAttrs (_: d: d.fsType == "nilfs2") scfg.dataDisks;
   branchPaths = map (name: "${scfg.diskRoot}/${name}") (lib.attrNames nilfsBranches);
 
+  mountUnit =
+    name:
+    "${lib.replaceStrings [ "/" ] [ "-" ] (lib.removePrefix "/" "${scfg.diskRoot}/${name}")}.mount";
+
   forEachBranch = body: ''
     branches=( ${lib.escapeShellArgs branchPaths} )
     for branch in "''${branches[@]}"; do
       mountpoint -q "$branch" || continue
       device=$(findmnt -no SOURCE "$branch" | head -1) || continue
       [ -n "$device" ] || continue
-      lscp "$device" >/dev/null 2>&1 || continue
+      [ -d "/sys/fs/nilfs2/$(basename "$(readlink -f "$device")")" ] || continue
       ${body}
     done
   '';
 
-  # Nothing is ever collected automatically: promotion to snapshot is what retains a checkpoint.
-  promote = pkgs.writeShellApplication {
-    name = "nas-checkpoint-promote";
-    runtimeInputs = [
-      pkgs.nilfs-utils
-      pkgs.util-linux
-      pkgs.gawk
-      pkgs.findutils
-    ];
-    # The device argument needs patches/nilfs-utils-chcp-device-arg.patch; without it
-    # chcp silently targets the first rw nilfs2 mount instead.
-    text = forEachBranch ''
-      lscp -r "$device" | awk '$4=="cp" {print $1}' | xargs -r -n1 chcp ss "$device" || true
-    '';
-  };
+  streamRoots = lib.mapAttrsToList (name: st: "${name}=${st.root}") (cfg.streams or { });
 
-  # lscp prints local time; @GMT- names are UTC by convention, so convert explicitly.
-  window = pkgs.writeShellApplication {
-    name = "nas-checkpoint-window";
-    runtimeInputs = [
-      pkgs.nilfs-utils
-      pkgs.util-linux
-      pkgs.gawk
-      pkgs.coreutils
-    ];
-    text = forEachBranch ''
-      snapdir="$branch/${ccfg.snapshotDir}"
-      mkdir -p "$snapdir"
-
-      wanted=""
-      while read -r cno cpdate cptime _rest; do
-        [ -n "$cno" ] || continue
-        epoch=$(date -d "$cpdate $cptime" +%s) || continue
-        name=$(date -u -d "@$epoch" +@GMT-%Y.%m.%d-%H.%M.%S) || continue
-        wanted="$wanted $name"
-        if ! mountpoint -q "$snapdir/$name" 2>/dev/null; then
-          mkdir -p "$snapdir/$name"
-          mount -t nilfs2 -o "cp=$cno,ro" "$device" "$snapdir/$name" || rmdir "$snapdir/$name" || true
-        fi
-      done < <(lscp -s -r -n ${toString ccfg.window} "$device" | awk 'NR>1 {print $1, $2, $3}')
-
-      for path in "$snapdir"/@GMT-*; do
-        [ -d "$path" ] || continue
-        case " $wanted " in
-          *" $(basename "$path") "*) ;;
-          *) umount "$path" 2>/dev/null && rmdir "$path" 2>/dev/null || true ;;
-        esac
-      done
-    '';
-  };
+  atArgs =
+    lib.concatMap (b: [
+      "--branch"
+      b
+    ]) branchPaths
+    ++ [
+      "--index"
+      ccfg.indexDb
+      "--lock"
+      cfg.nilfsWriteLock
+      "--pool"
+      cfg.dataRoot
+      "--view"
+      ccfg.viewDir
+      "--hide"
+      ccfg.snapshotDir
+    ]
+    ++ lib.optionals (streamRoots != [ ]) (
+      [
+        "--points"
+        cfg.streamPointsDb
+      ]
+      ++ lib.concatMap (r: [
+        "--stream"
+        r
+      ]) streamRoots
+    );
 
   at = pkgs.writeShellApplication {
     name = "nas-at";
     runtimeInputs = [
       pkgs.nilfs-utils
       pkgs.util-linux
-      pkgs.gawk
-      pkgs.coreutils
     ];
     text = ''
-      usage() {
-        echo "usage: nas-at '<YYYY-MM-DD HH:MM[:SS]>'   mount the array as it was" >&2
-        echo "       nas-at --release <NAME>            unmount it" >&2
-        echo "       nas-at --list                      show mounted views" >&2
-        exit 2
-      }
+      exec ${
+        pkgs.python3.withPackages (ps: [ ps.fusepy ])
+      }/bin/python3 ${./nas-at.py} ${lib.escapeShellArgs atArgs} "$@"
+    '';
+  };
 
-      case "''${1:-}" in
-        --list)
-          findmnt -rno TARGET -t nilfs2 | grep '@AT-' || echo "none mounted"
-          exit 0
-          ;;
-        --release)
-          [ $# -eq 2 ] || usage
-          name=$2
-          ${forEachBranch ''
-            path="$branch/${ccfg.snapshotDir}/$name"
-            [ -d "$path" ] && { umount "$path" 2>/dev/null || true; rmdir "$path" 2>/dev/null || true; }
-          ''}
-          echo "released $name"
-          exit 0
-          ;;
-        "" ) usage ;;
-      esac
+  promote = pkgs.writeShellApplication {
+    name = "nas-checkpoint-promote";
+    text = "exec ${lib.getExe at} index --promote";
+  };
 
-      want=$(date -d "$1" +%s) || usage
-      name="@AT-$(date -u -d "@$want" +%Y.%m.%d-%H.%M.%S)"
-      found=0
+  window = pkgs.writeShellApplication {
+    name = "nas-checkpoint-window";
+    text = "exec ${lib.getExe at} window --snapshot-dir ${ccfg.snapshotDir} --bucket ${toString ccfg.windowBucketSeconds} --generations ${toString ccfg.window}";
+  };
 
-      ${forEachBranch ''
-        # Newest checkpoint at or before the requested time.
-        cno=$(lscp "$device" | awk -v want="$want" '
-          NR>1 && $1 ~ /^[0-9]+$/ {
-            cmd = "date -d \"" $2 " " $3 "\" +%s"; cmd | getline epoch; close(cmd)
-            if (epoch <= want && epoch > best) { best = epoch; keep = $1 }
-          }
-          END { if (keep != "") print keep }')
-
-        if [ -z "$cno" ]; then
-          echo "$branch: nothing retained at or before $1" >&2
-        else
-          target="$branch/${ccfg.snapshotDir}/$name"
-          mkdir -p "$target"
-          if mountpoint -q "$target" || mount -t nilfs2 -o "cp=$cno,ro" "$device" "$target"; then
-            echo "$branch: checkpoint $cno"
-            found=$((found + 1))
-          else
-            rmdir "$target" 2>/dev/null || true
-          fi
-        fi
-      ''}
-
-      [ "$found" -gt 0 ] || { echo "no branch had a checkpoint that old" >&2; exit 1; }
-      echo "${cfg.dataRoot}/${ccfg.snapshotDir}/$name"
+  unmountView = pkgs.writeShellApplication {
+    name = "nas-at-view-unmount";
+    runtimeInputs = [ pkgs.util-linux ];
+    text = ''
+      umount -l ${ccfg.viewDir} 2>/dev/null || true
+      findmnt -rno TARGET | grep '^/run/nas-at/' | sort -r | while read -r target; do
+        umount "$target" || umount -l "$target" || true
+        rmdir "$target" 2>/dev/null || true
+      done
     '';
   };
 
@@ -168,8 +120,9 @@ let
         echo '# TYPE nas_metrics_timestamp_seconds gauge'
         ${forEachBranch ''
           label=$(basename "$branch")
-          total=$(lscp "$device" | tail -n +2 | wc -l)
-          snaps=$(lscp -s "$device" | tail -n +2 | wc -l)
+          sysfs=/sys/fs/nilfs2/$(basename "$(readlink -f "$device")")/checkpoints
+          total=$(cat "$sysfs/checkpoints_number")
+          snaps=$(cat "$sysfs/snapshots_number")
           if [ -d "$branch/${ccfg.snapshotDir}" ]; then
             shown=$(find "$branch/${ccfg.snapshotDir}" -maxdepth 1 -name '@GMT-*' | wc -l)
           else
@@ -215,6 +168,31 @@ in
       description = "Generations exposed for SMB Previous Versions. Versioning does not depend on this.";
     };
 
+    windowBucketSeconds = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 900;
+      description = "One SMB generation per bucket, so a busy stream cannot crowd out older ones.";
+    };
+
+    indexDb = lib.mkOption {
+      type = lib.types.str;
+      default = "/var/lib/nas-checkpoints/index.db";
+      description = "Incremental checkpoint index: cno and epoch per branch.";
+    };
+
+    viewDir = lib.mkOption {
+      type = lib.types.str;
+      default = "/srv/nas-at";
+      description = "Read-only time view: <viewDir>/<ISO time>/<path>.";
+    };
+
+    atPackage = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      default = at;
+      description = "The nas-at command with this host's branches baked in.";
+    };
+
     interval = lib.mkOption {
       type = lib.types.str;
       default = "15m";
@@ -242,6 +220,23 @@ in
       at
       pkgs.nilfs-utils
     ];
+
+    systemd.tmpfiles.rules = [ "d ${dirOf ccfg.indexDb} 0750 root root - -" ];
+
+    systemd.services.nas-at-view = {
+      description = "Read-only time view of the NAS at ${ccfg.viewDir}";
+      wantedBy = map mountUnit (lib.attrNames nilfsBranches) ++ [ "multi-user.target" ];
+      partOf = map mountUnit (lib.attrNames nilfsBranches);
+      after = map mountUnit (lib.attrNames nilfsBranches);
+      serviceConfig = {
+        ExecStartPre = lib.getExe unmountView;
+        ExecStart = "${lib.getExe at} serve";
+        ExecStopPost = lib.getExe unmountView;
+        Restart = "on-failure";
+        RestartSec = 10;
+        Nice = 5;
+      };
+    };
 
     systemd.services.nas-checkpoint-promote = {
       description = "Retain every NILFS2 checkpoint by promoting it";

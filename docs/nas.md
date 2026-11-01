@@ -499,13 +499,14 @@ directory, copies the file out and unmounts. Mounting is the only way to read fr
 NILFS2 exposes no API to read a path from a checkpoint without one — so this is a single
 transient mount, not a whole-array operation.
 
-**By time, whole array.** `nas-at '<time>'` resolves the newest checkpoint at or before that
-time **per branch** and mounts each read-only under `snapshots/@AT-<ts>`, which mergerfs unions
-into one rewound view of the pool. `nas-at --list` shows what is mounted, `nas-at --release
-<name>` tears it down. `ro,cp=N` means writes fail by construction rather than by policy.
+**By time, any path.** `/srv/nas-at/<ISO time>/<path>` is a read-only FUSE view (`nas-at-view`)
+of the pool as it was at that instant, to the millisecond: `ls '/srv/nas-at/2026-11-01T14:03:27.250/max'`.
+`nas-at resolve <path> '<time>'` prints that view path for a pool or branch path, or says the path
+did not exist then. See section 25 for how a time maps to a checkpoint and what precision means.
+Writes fail with `EROFS` by construction.
 
-It is **not** a globally atomic cut: each branch resolves its own nearest checkpoint. That is
-acceptable because user-affinity placement keeps an account on one branch.
+It is **not** a globally atomic cut: each path resolves its own checkpoint on its own branch. That
+is acceptable because user-affinity placement keeps an account on one branch.
 
 ### 4.6 Versions: NILFS2 checkpoints
 
@@ -1369,7 +1370,8 @@ the cifs automount.
 | `samba.nix` | one private share per account, `valid users` scoped to the owner, SMB3 + required encryption, `vfs_recycle` | enabled, `tailscale0` only |
 | `storage.nix` | mergerfs pool with the placement policy from section 4, SnapRAID config, sync and scrub timers that no-op unless every branch is mounted | enabled |
 | `index.nix` + `nas-index.py` | SQLite browse index, `find-new` incremental scan, version counter, thumbnailer, per-user usage and file-age metrics | enabled |
-| `checkpoints.nix` | `nas-checkpoint-promote` (retention), the `@GMT-` window for Samba, `nas-at` time travel, checkpoint metrics | enabled |
+| `checkpoints.nix` + `nas-at.py` | the incremental checkpoint index, `nas-checkpoint-promote` (retention), the bucketed `@GMT-` window for Samba, the `/srv/nas-at` time view, checkpoint metrics from sysfs | enabled |
+| `streams.nix` + `nas-stream.py` + `../blockdelta.py` | tailnet receivers for pushed 4 KiB block deltas, an SSD spool, and an applier that makes each point one NILFS2 snapshot | enabled, `minecraft` on `disk1` |
 | `versions.nix` | one `fatrace` watcher per NILFS2 branch, the ingest timer, the `nas-versions-reconcile` mtime backstop, `nas-versions list`/`restore` | enabled |
 | `prefetch.nix` | `nas-prefetch`: `fatrace -c -f O -j` driving a read-ahead loop with per-directory cooldown, file and byte budgets, a bulk-reader ignore list and textfile counters | enabled, one unit per branch |
 | `unlock.nix` | `nas-unlock-local`/`nas-lock-local` plus `nas.target` on the server; `nas-unlock`/`nas-lock` on the client | server on the pi, client on the laptop |
@@ -1977,3 +1979,64 @@ no stamp, identical stamp (skips), grown events (runs), promoted stamp (skips), 
 24 h (runs), and watcher truncation shrinking the file (runs). The last matters because
 `cmp -s a b && exit 1` as a script's final command would exit 1 on *difference* under errexit,
 inverting the gate; the explicit trailing `exit 0` is what prevents that.
+
+## 25. Continuous streams and the time view
+
+**Requirement.** Pick any file or directory and any instant, and see it as it was, to the
+millisecond, with nothing ever collected. The Minecraft server in `damien-fedora` on desktopnew
+is the first stream, captured every 60 s.
+
+**Any instant is already on disk.** NILFS2 writes a log per sync, and every log is a checkpoint;
+there is no on-disk state between two logs. With `nogc` on every branch (no `nilfs_cleanerd` can
+start, even implicitly) and promotion snapshotting everything, every state the array ever held is
+retained. What limited rewinding was the index: `lscp` plus one `date` per checkpoint per minute
+does not survive thousands of checkpoints a day.
+
+**The index.** `nas-at index` appends to `/var/lib/nas-checkpoints/index.db` with
+`lscp -a -i <last+1>`, so each run costs only the new checkpoints. Promotion, the window,
+`nas-versions-ingest` and `-reconcile` all read it (versions attaches it as a view), and metrics
+come from `/sys/fs/nilfs2/<dev>/checkpoints/*_number` in O(1).
+
+**How a time maps to a file.** Checkpoint times are whole seconds. For an ordinary path at time T
+the view takes the first checkpoint after T, provided that version's ctime is at or before T;
+otherwise the checkpoint before. Two writes between the same pair of logs cannot be told apart,
+and the earlier one is gone: that is the real precision limit, set by how often the writer syncs.
+Stream paths resolve by **capture** time instead, to the newest point captured at or before T,
+however late it was applied.
+
+**The Minecraft stream.**
+
+```
+guest (btrfs /home)        desktopnew: minecraft-backup        pi
+RCON save-off              qemu guest agent, every 60 s
+save-all flush
+btrfs snapshot -r  ------> guest diffs new vs base (blockdelta)
+RCON save-on               guest-file-read the delta
+                           TCP to pi:8020 over the tailnet --> nas-stream-receive: verify, spool on SSD, ack
+                                                               nas-stream-apply: pwrite under the write lock,
+                                                               mkcp -s, points(captured -> cno)
+```
+
+- The world is consistent only at `save-off; save-all flush`, so a point is that cut and nothing
+  in between. `save-off` is held only for the btrfs snapshot.
+- No SSH keys and no VPN change: the host drives the guest through the agent and pushes over
+  the tailnet; the receiver accepts only desktopnew's tailnet address.
+- Every delta names its base. A delta whose base is not the receiver's head is answered `resync`,
+  and the driver drops its base, so the next point is a full tree. An unreachable pi just means
+  the next success is one larger delta; nothing queues on the desktop.
+- A locked array, or a long `snapraid sync` (which holds `/run/nas-nilfs-write.lock`), only grows
+  the spool (cap 8 GiB, then pushes are refused). Points keep their capture time.
+- Mounting a checkpoint under write load Oopses the kernel (section 22), so every checkpoint
+  mount (view, window, restore) takes the same write lock the applier and parity sync take.
+- `nas-cleaner start` refuses a stream branch outright.
+- `nas-stream --name minecraft ... list` (or the `points` table) lists every point with its stall.
+
+**Stated limits.** Parity protects the latest state only; NILFS2 history lives on one disk.
+`disk1` was chosen because the browse index already keeps it from parking (section 24), so
+minute-by-minute applies cost no extra spin-ups. The flush stall is logged per point
+(`journalctl -u minecraft-backup` on desktopnew) and is the data for tuning the interval or adding
+incremental saving later.
+
+**One-time step.** The driver writes `enable-rcon`, `rcon.port` and the password into
+`server.properties`, but RCON only starts with the server, so restart it once (in tmux, not a
+foreground SSH session).

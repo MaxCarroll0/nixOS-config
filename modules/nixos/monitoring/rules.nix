@@ -1403,5 +1403,21 @@ in
         for' = "15m";
         summary = "Checkpoint metrics have not been written for {{ $value | humanizeDuration }}, so branch fullness is no longer being watched.";
       })
+      (threshold {
+        uid = "nas-stream-spool-filling";
+        title = "NAS stream spool filling";
+        expr = "max by (stream) (nas_stream_spool_bytes / nas_stream_spool_max_bytes)";
+        value = 0.5;
+        for' = "10m";
+        summary = "The {{ $labels.stream }} spool is {{ $value | humanizePercentage }} of its cap. Points are not reaching NILFS2; at the cap pushes are refused and history gets a gap.";
+      })
+      (threshold {
+        uid = "nas-stream-apply-stuck";
+        title = "NAS stream not applying";
+        expr = "max by (stream) (nas_stream_spool_deltas * nas_stream_branch_mounted)";
+        value = 5;
+        for' = "15m";
+        summary = "{{ $value }} {{ $labels.stream }} deltas are waiting although the branch is mounted. Check journalctl -u nas-stream-apply-{{ $labels.stream }}.";
+      })
     ];
 }

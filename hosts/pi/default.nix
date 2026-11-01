@@ -29,6 +29,7 @@
     ../../modules/nixos/nas/checkpoints.nix
     ../../modules/nixos/nas/versions.nix
     ../../modules/nixos/nas/prefetch.nix
+    ../../modules/nixos/nas/streams.nix
     ../../modules/nixos/fancontrol.nix
     ../../modules/nixos/gpio-pwm-fan.nix
     ../../modules/nixos/build-client.nix
@@ -282,6 +283,11 @@
     checkpoints.enable = true;
     versions.enable = true;
     prefetch.enable = true;
+    streams.minecraft = {
+      branch = "disk1";
+      port = 8020;
+      allowFrom = [ (import ../facts.nix).desktopnew.tailscale ];
+    };
   };
 
   local.atticClient = {

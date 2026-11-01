@@ -19,6 +19,7 @@ let
     "${lib.replaceStrings [ "/" ] [ "-" ] (lib.removePrefix "/" "${scfg.diskRoot}/${name}")}.mount";
 
   db = "${vcfg.stateDir}/versions.db";
+  indexDb = cfg.checkpoints.indexDb;
   eventsFor = name: "${vcfg.stateDir}/${name}.jsonl";
   offsetFor = name: "${vcfg.stateDir}/${name}.offset";
 
@@ -49,6 +50,8 @@ let
       CREATE INDEX IF NOT EXISTS inodes_ino ON inodes (branch, ino);
       SQL
 
+      ${lib.getExe cfg.checkpoints.atPackage} index >/dev/null || echo "checkpoint index refresh failed; using the existing index" >&2
+
       # fatrace opens its output O_EXCL, never O_APPEND: read forward, rotate by restart.
       ingest_branch() {
         branch=$1
@@ -63,17 +66,11 @@ let
         [ "$size" -ge "$offset" ] || offset=0
         [ "$size" -gt "$offset" ] || return 0
 
-        device=$(findmnt -no SOURCE "$branch" | head -1)
-        lscp "$device" >/dev/null 2>&1 || return 0
         work=$(mktemp -d)
         # shellcheck disable=SC2064
         trap "rm -rf '$work'" RETURN
 
         tail -c "+$((offset + 1))" "$events" | head -c "$((size - offset))" > "$work/pending.jsonl"
-
-        lscp "$device" | awk 'NR>1 && $1 ~ /^[0-9]+$/ {print $1 "," $2 " " $3}' > "$work/cno.txt"
-        cut -d, -f2 "$work/cno.txt" | date -f - +%s > "$work/epoch.txt"
-        paste -d, <(cut -d, -f1 "$work/cno.txt") "$work/epoch.txt" > "$work/cps.csv"
 
         jq -r --arg root "$branch/" '
           select(.path | startswith($root))
@@ -81,10 +78,10 @@ let
         ' "$work/pending.jsonl" > "$work/events.csv"
 
         sqlite3 ${db} <<SQL
-      CREATE TEMP TABLE cps(cno INTEGER, epoch INTEGER);
+      ATTACH '${indexDb}' AS idx;
+      CREATE TEMP VIEW cps AS SELECT cno, epoch FROM idx.checkpoints WHERE branch='$branch';
       CREATE TEMP TABLE raw(ino INTEGER, ts INTEGER, path TEXT);
       .mode csv
-      .import '$work/cps.csv' cps
       .import '$work/events.csv' raw
       BEGIN;
       -- Checkpoint times are whole seconds, so a checkpoint sharing the write's second may predate
@@ -104,7 +101,7 @@ let
 
         # An event newer than the newest checkpoint has nowhere to land yet, so leave it
         # unconsumed rather than advancing past it and losing that version for good.
-        maxcp=$(cut -d, -f2 "$work/cps.csv" | sort -n | tail -1)
+        maxcp=$(sqlite3 -noheader ${indexDb} "SELECT MAX(epoch) FROM checkpoints WHERE branch='$branch';")
         awk -v m="''${maxcp:-0}" '
           match($0, /"timestamp":[0-9]+/) {
             if (substr($0, RSTART + 12, RLENGTH - 12) + 0 > m) print
@@ -137,11 +134,11 @@ let
       pkgs.coreutils
     ];
     text = ''
+      ${lib.getExe cfg.checkpoints.atPackage} index >/dev/null || echo "checkpoint index refresh failed; using the existing index" >&2
+
       reconcile_branch() {
         branch=$1
         mountpoint -q "$branch" || return 0
-        device=$(findmnt -no SOURCE "$branch" | head -1)
-        lscp "$device" >/dev/null 2>&1 || return 0
 
         work=$(mktemp -d)
         # shellcheck disable=SC2064
@@ -154,16 +151,12 @@ let
           -type f -printf '%i,%T@,%P\n' | awk -F, '{printf "%s,%d,%s\n", $1, $2, $3}' > "$work/live.csv"
         [ -s "$work/live.csv" ] || return 0
 
-        lscp "$device" | awk 'NR>1 && $1 ~ /^[0-9]+$/ {print $1 "," $2 " " $3}' > "$work/cno.txt"
-        cut -d, -f2 "$work/cno.txt" | date -f - +%s > "$work/epoch.txt"
-        paste -d, <(cut -d, -f1 "$work/cno.txt") "$work/epoch.txt" > "$work/cps.csv"
-
         sqlite3 ${db} <<SQL
       CREATE TEMP TABLE live(ino INTEGER, mtime INTEGER, path TEXT);
-      CREATE TEMP TABLE cps(cno INTEGER, epoch INTEGER);
+      ATTACH '${indexDb}' AS idx;
+      CREATE TEMP VIEW cps AS SELECT cno, epoch FROM idx.checkpoints WHERE branch='$branch';
       .mode csv
       .import '$work/live.csv' live
-      .import '$work/cps.csv' cps
       BEGIN;
       INSERT INTO versions (branch, ino, cno, created)
         SELECT DISTINCT '$branch', l.ino,
@@ -269,7 +262,7 @@ let
           [ -n "$cno" ] || { echo "no version $version for $rel" >&2; exit 1; }
           tmp=$(mktemp -d /run/nas-restore.XXXXXX)
           trap 'umount "$tmp" 2>/dev/null || true; rmdir "$tmp" 2>/dev/null || true' EXIT
-          mount -t nilfs2 -o "cp=$cno,ro" "$device" "$tmp"
+          flock ${cfg.nilfsWriteLock} mount -t nilfs2 -o "cp=$cno,ro,nogc" "$device" "$tmp"
           [ -f "$tmp/$rel" ] || { echo "$rel absent from checkpoint $cno" >&2; exit 1; }
           cp -a "$tmp/$rel" "''${output:-$target}"
           echo "restored version $version (checkpoint $cno) to ''${output:-$target}"
