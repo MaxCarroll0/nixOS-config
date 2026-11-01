@@ -85,10 +85,14 @@ let
 
   unmountView = pkgs.writeShellApplication {
     name = "nas-at-view-unmount";
-    runtimeInputs = [ pkgs.util-linux ];
+    runtimeInputs = with pkgs; [
+      coreutils
+      gawk
+      util-linux
+    ];
     text = ''
       umount -l ${ccfg.viewDir} 2>/dev/null || true
-      findmnt -rno TARGET | grep '^/run/nas-at/' | sort -r | while read -r target; do
+      findmnt -rno TARGET | awk 'index($0, "/run/nas-at/") == 1' | sort -r | while read -r target; do
         umount "$target" || umount -l "$target" || true
         rmdir "$target" 2>/dev/null || true
       done
