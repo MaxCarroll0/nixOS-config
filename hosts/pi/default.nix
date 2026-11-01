@@ -395,6 +395,13 @@
 
   systemd.services.grafana.serviceConfig.MemorySwapMax = "192M";
 
+  services.victoriametrics.extraOptions = [
+    "-memory.allowedBytes=64MiB"
+    "-cacheExpireDuration=5m"
+    "-search.maxConcurrentRequests=2"
+  ];
+  systemd.services.victoriametrics.environment.GOMEMLIMIT = "200MiB";
+
   # false for 3 pin, true for 4 pin PWM
   local.gpioPwmFan = {
     enable = false;
