@@ -2030,8 +2030,9 @@ console save-on (ExecStopPost)                           post-xfer: mkcp -s, poi
   on `enp1s0`.
 - No buffering: if the pi is down or the array locked, that minute is a gap and the next pass
   catches up. A failed transfer takes no snapshot, so only complete points are listed in `points`.
-- Each pass writes `/var/lib/minecraft-backup/last` in the guest; the host's idle check reads it
-  and the panel shows it.
+- Each point writes `/var/lib/nas-streams/<stream>.last` on the pi, and the Satisfactory restic
+  store stamps `/var/lib/satisfactory-backup/last`; the panel reads both, so last-backup times
+  show while the desktop sleeps.
 - Measured pi cost (synthetic 1 GB tree): about 0.1 CPU-s per idle minute, 1.3 CPU-s for a minute
   rewriting 30 region files; the larger load is reading changed files on the branch.
 - Commands go to the guest's console FIFO (`/run/systemd/minecraft.stdin`); `enable-rcon=false`.

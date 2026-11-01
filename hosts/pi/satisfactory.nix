@@ -22,10 +22,12 @@ in
       address = facts.desktopnew.tailscale;
       wakeName = "desktopnew";
       sshPort = 2222;
+      lastBackupFile = config.local.satisfactory.backupStore.stampFile;
     };
     minecraft = {
       enable = true;
       connectAddress = "79.72.87.71:25565";
+      lastBackupFile = "/var/lib/nas-streams/minecraft.last";
     };
     sshKeyFile = config.sops.secrets.satisfactory-remote-key.path;
     wakePackage = config.local.wake.package;

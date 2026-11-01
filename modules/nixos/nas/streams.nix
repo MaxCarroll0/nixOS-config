@@ -26,6 +26,7 @@ let
       [ "$RSYNC_EXIT_STATUS" = 0 ] || exit 0
       cno=$(mkcp -s -p "$(findmnt -no SOURCE "$1")")
       now=$(date +%s)
+      echo "$now" > ${stateDir}/"$RSYNC_MODULE_NAME".last
       sqlite3 ${cfg.streamPointsDb} \
         "CREATE TABLE IF NOT EXISTS points (stream TEXT, id TEXT, captured REAL, applied REAL, branch TEXT, cno INTEGER, stall_ms INTEGER, bytes INTEGER, PRIMARY KEY (stream, id));
          INSERT INTO points VALUES ('$RSYNC_MODULE_NAME', '$cno', $now, $now, '$1', $cno, NULL, 0);"
@@ -90,7 +91,7 @@ in
       message = "local.nas.streams.${name}.branch must name a nilfs2 data disk";
     }) cfg.streams;
 
-    systemd.tmpfiles.rules = [ "d ${stateDir} 0750 root root - -" ];
+    systemd.tmpfiles.rules = [ "d ${stateDir} 0755 root root - -" ];
 
     systemd.sockets = lib.mapAttrs' (
       name: st:

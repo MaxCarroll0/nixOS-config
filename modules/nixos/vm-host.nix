@@ -191,8 +191,6 @@ let
     ''
   ];
 
-  guestLastBackup = guestRun "last-backup" "/usr/bin/cat" [ "/var/lib/minecraft-backup/last" ];
-
   guestLoginCount = guestRun "login-count" "/usr/bin/sh" [
     "-c"
     ''
@@ -231,13 +229,11 @@ let
       running=false
       locks=0
       logins=0
-      lastBackup=0
       case "$(${virsh} domstate ${domainName})" in
         running | "in shutdown")
           running=true
           locks=$(count ${lib.getExe guestLockCount})
           logins=$(count ${lib.getExe guestLoginCount})
-          lastBackup=$(count ${lib.getExe guestLastBackup})
           ;;
       esac
 
@@ -251,11 +247,11 @@ let
         idle=true
       fi
 
-      jq -cn --argjson locks "$locks" --argjson logins "$logins" --argjson idle "$idle" --argjson lastBackup "$lastBackup" \
+      jq -cn --argjson locks "$locks" --argjson logins "$logins" --argjson idle "$idle" \
         --argjson shutsDownAt "$shutsDownAt" --argjson updated "$now" \
         --argjson stopping "$([ -e ${shutdownRequested} ] && echo true || echo false)" \
         --argjson idleAfter ${toString (idleShutdownMinutes * 60)} \
-        '{locks:$locks,logins:$logins,stopping:$stopping,updated:$updated,idleAfter:$idleAfter,shutsDownAt:(if $idle then $shutsDownAt else null end),lastBackup:(if $lastBackup > 0 then $lastBackup else null end)}' \
+        '{locks:$locks,logins:$logins,stopping:$stopping,updated:$updated,idleAfter:$idleAfter,shutsDownAt:(if $idle then $shutsDownAt else null end)}' \
         > ${idleStatus}.tmp
       mv ${idleStatus}.tmp ${idleStatus}
 
