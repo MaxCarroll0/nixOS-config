@@ -109,15 +109,18 @@
     {
       device = "/swapfile";
       size = 12 * 1024;
-      randomEncryption.enable = true;
     }
   ];
+  systemd.sleep.settings.Sleep.AllowHibernation = lib.mkForce true;
+  services.upower.criticalPowerAction = "Hibernate";
   # The stock unit rewrites a resized swapfile with dd, outlasting the swap device's 90s timeout.
   systemd.services.mkswap-swapfile.preStart = ''
-    if [[ "$(stat -c %s /swapfile 2>/dev/null || echo 0)" != "$((12 * 1024 * 1024 * 1024))" ]]; then
+    if [[ "$(stat -c %s /swapfile 2>/dev/null || echo 0)" != "$((12 * 1024 * 1024 * 1024))" ]] \
+      || [[ "$(${pkgs.util-linux}/bin/blkid -p -o value -s TYPE /swapfile 2>/dev/null)" != swap ]]; then
       rm -f /swapfile
       ${pkgs.util-linux}/bin/fallocate -l 12GiB /swapfile
       chmod 600 /swapfile
+      ${pkgs.util-linux}/bin/mkswap /swapfile
     fi
   '';
 
