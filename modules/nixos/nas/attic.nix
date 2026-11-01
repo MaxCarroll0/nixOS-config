@@ -145,7 +145,15 @@ in
         forceSSL = true;
         sslCertificate = acfg.tlsCertificate;
         sslCertificateKey = config.sops.secrets."attic-tls-key".path;
-        locations."/".proxyPass = "http://127.0.0.1:${toString acfg.port}";
+        locations."/" = {
+          proxyPass = "http://127.0.0.1:${toString acfg.port}";
+          extraConfig = ''
+            client_max_body_size 0;
+            proxy_request_buffering off;
+            proxy_read_timeout 1h;
+            proxy_send_timeout 1h;
+          '';
+        };
       };
     };
 
