@@ -1,4 +1,4 @@
-# NAS streams: block deltas pushed over the tailnet, spooled on the SSD, applied as one NILFS2 snapshot each.
+# NAS streams: rsync daemon modules on a NILFS2 branch, one snapshot per completed transfer.
 
 {
   config,
@@ -13,50 +13,37 @@ let
   stateDir = "/var/lib/nas-streams";
   facts = import ../../../hosts/facts.nix;
 
-  mountUnit =
-    branch:
-    "${lib.replaceStrings [ "/" ] [ "-" ] (lib.removePrefix "/" "${scfg.diskRoot}/${branch}")}.mount";
+  branchPath = st: "${scfg.diskRoot}/${st.branch}";
 
-  stream = pkgs.writeShellApplication {
-    name = "nas-stream";
+  point = pkgs.writeShellApplication {
+    name = "nas-stream-point";
     runtimeInputs = [
       pkgs.nilfs-utils
       pkgs.util-linux
+      pkgs.sqlite
     ];
     text = ''
-      PYTHONPATH=${
-        pkgs.linkFarm "blockdelta" [
-          {
-            name = "blockdelta.py";
-            path = ../blockdelta.py;
-          }
-        ]
-      } exec ${pkgs.python3}/bin/python3 ${./nas-stream.py} "$@"
+      [ "$RSYNC_EXIT_STATUS" = 0 ] || exit 0
+      cno=$(mkcp -s -p "$(findmnt -no SOURCE "$1")")
+      now=$(date +%s)
+      sqlite3 ${cfg.streamPointsDb} \
+        "CREATE TABLE IF NOT EXISTS points (stream TEXT, id TEXT, captured REAL, applied REAL, branch TEXT, cno INTEGER, stall_ms INTEGER, bytes INTEGER, PRIMARY KEY (stream, id));
+         INSERT INTO points VALUES ('$RSYNC_MODULE_NAME', '$cno', $now, $now, '$1', $cno, NULL, 0);"
     '';
   };
 
-  argsFor = name: st: [
-    "--name"
-    name
-    "--spool"
-    "${stateDir}/spool/${name}"
-    "--head"
-    "${stateDir}/${name}.head"
-    "--db"
-    cfg.streamPointsDb
-    "--branch"
-    "${scfg.diskRoot}/${st.branch}"
-    "--root"
-    "${scfg.diskRoot}/${st.branch}/${st.root}"
-    "--lock"
-    cfg.nilfsWriteLock
-    "--spool-max"
-    (toString st.spoolMax)
-    "--metrics"
-    "/var/lib/node-exporter-textfile/nas-stream-${name}.prom"
-  ];
-
-  listen = st: "${facts.${config.networking.hostName}.tailscale}:${toString st.port}";
+  rsyncdConf =
+    name: st:
+    pkgs.writeText "nas-stream-${name}.conf" ''
+      [${name}]
+      path = ${branchPath st}/${st.root}
+      use chroot = no
+      read only = no
+      write only = yes
+      uid = root
+      gid = root
+      post-xfer exec = ${lib.getExe point} ${branchPath st}
+    '';
 in
 
 {
@@ -84,16 +71,11 @@ in
             };
             port = lib.mkOption {
               type = lib.types.port;
-              description = "Tailnet port the receiver listens on.";
+              description = "Tailnet port the rsync daemon listens on.";
             };
             allowFrom = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               description = "Tailnet addresses allowed to push.";
-            };
-            spoolMax = lib.mkOption {
-              type = lib.types.int;
-              default = 8 * 1024 * 1024 * 1024;
-              description = "Spool bytes above which pushes are refused.";
             };
           };
         }
@@ -108,61 +90,37 @@ in
       message = "local.nas.streams.${name}.branch must name a nilfs2 data disk";
     }) cfg.streams;
 
-    environment.systemPackages = [ stream ];
-
-    systemd.tmpfiles.rules = [
-      "d ${stateDir} 0750 root root - -"
-      "d ${stateDir}/spool 0750 root root - -"
-    ];
+    systemd.tmpfiles.rules = [ "d ${stateDir} 0750 root root - -" ];
 
     systemd.sockets = lib.mapAttrs' (
       name: st:
-      lib.nameValuePair "nas-stream-receive-${name}" {
+      lib.nameValuePair "nas-stream-${name}" {
         wantedBy = [ "sockets.target" ];
         socketConfig = {
-          ListenStream = listen st;
+          ListenStream = "${facts.${config.networking.hostName}.tailscale}:${toString st.port}";
           Accept = true;
           FreeBind = true;
-          MaxConnections = 4;
+          MaxConnections = 1;
           IPAddressAllow = st.allowFrom;
           IPAddressDeny = "any";
         };
       }
     ) cfg.streams;
 
-    systemd.services = lib.mkMerge [
-      (lib.mapAttrs' (
-        name: st:
-        lib.nameValuePair "nas-stream-receive-${name}@" {
-          description = "Spool one ${name} stream delta";
-          serviceConfig = {
-            ExecStart = "${lib.getExe stream} ${lib.escapeShellArgs (argsFor name st)} receive";
-            StandardInput = "socket";
-            StandardOutput = "socket";
-            StandardError = "journal";
-            RuntimeMaxSec = "10min";
-            Nice = 5;
-          };
-        }
-      ) cfg.streams)
-
-      (lib.mapAttrs' (
-        name: st:
-        lib.nameValuePair "nas-stream-apply-${name}" {
-          description = "Apply spooled ${name} stream deltas to ${st.branch}";
-          wantedBy = [ (mountUnit st.branch) ];
-          partOf = [ (mountUnit st.branch) ];
-          after = [ (mountUnit st.branch) ];
-          serviceConfig = {
-            ExecStart = "${lib.getExe stream} ${lib.escapeShellArgs (argsFor name st)} apply";
-            Restart = "always";
-            RestartSec = 30;
-            Nice = 5;
-          };
-          unitConfig.ConditionPathIsMountPoint = "${scfg.diskRoot}/${st.branch}";
-        }
-      ) cfg.streams)
-    ];
+    systemd.services = lib.mapAttrs' (
+      name: st:
+      lib.nameValuePair "nas-stream-${name}@" {
+        unitConfig.ConditionPathIsMountPoint = branchPath st;
+        serviceConfig = {
+          ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${branchPath st}/${st.root}";
+          ExecStart = "${pkgs.util-linux}/bin/flock ${cfg.nilfsWriteLock} ${lib.getExe pkgs.rsync} --daemon --config=${rsyncdConf name st}";
+          StandardInput = "socket";
+          StandardOutput = "inherit";
+          RuntimeMaxSec = "10min";
+          Nice = 5;
+        };
+      }
+    ) cfg.streams;
 
     networking.firewall.extraInputRules = lib.concatStrings (
       lib.mapAttrsToList (_: st: ''

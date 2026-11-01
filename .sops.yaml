@@ -37,9 +37,3 @@ creation_rules:
       - *laptop
       - *desktopnew
       - *pi
-  - path_regex: secrets/minecraft-rcon-password$
-    key_groups:
-    - age:
-      - *primary
-      - *laptop
-      - *desktopnew

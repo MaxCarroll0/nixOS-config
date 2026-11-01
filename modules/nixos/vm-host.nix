@@ -15,6 +15,8 @@ let
   domainName = "damien-fedora";
   guestMac = "52:54:00:f1:3d:01";
   guestAddress = "192.168.122.108";
+  bridgeAddress = "192.168.122.1";
+  nasStreamPort = 8020;
   minecraftPort = 25565;
   hostTailnetAddress = facts.${config.networking.hostName}.tailscale;
   firstClassPeers = map (host: facts.${host}.tailscale) [
@@ -109,7 +111,7 @@ let
     bridge.name = bridge;
     mac.address = "52:54:00:f1:3d:00";
     ip = {
-      address = "192.168.122.1";
+      address = bridgeAddress;
       netmask = "255.255.255.0";
       dhcp = {
         range = {
@@ -189,6 +191,8 @@ let
     ''
   ];
 
+  guestLastBackup = guestRun "last-backup" "/usr/bin/cat" [ "/var/lib/minecraft-backup/last" ];
+
   guestLoginCount = guestRun "login-count" "/usr/bin/sh" [
     "-c"
     ''
@@ -199,109 +203,6 @@ let
       echo "$count"
     ''
   ];
-
-  minecraftDir = "/home/minecraft/neoforge";
-  minecraftConsole = "/run/systemd/minecraft.stdin";
-  lockMod = pkgs.callPackage ./minecraft-lock-mod { };
-
-  minecraftUnit = pkgs.writeText "minecraft.service" ''
-    [Unit]
-    Description=Minecraft server
-    Wants=network-online.target
-    Requires=minecraft.socket
-    After=network-online.target tailscaled.service minecraft.socket
-
-    [Service]
-    User=minecraft
-    Group=minecraft
-    WorkingDirectory=${minecraftDir}
-    Sockets=minecraft.socket
-    StandardInput=socket
-    StandardOutput=journal
-    StandardError=journal
-    ExecStart=/usr/bin/java @user_jvm_args.txt @libraries/net/neoforged/neoforge/21.1.265/unix_args.txt nogui
-    ExecStop=/bin/sh -c 'echo stop > ${minecraftConsole}; while kill -0 "$MAINPID" 2>/dev/null; do sleep 1; done'
-    SuccessExitStatus=143
-    TimeoutStopSec=4min
-    Restart=on-failure
-    RestartSec=30
-
-    [Install]
-    WantedBy=multi-user.target
-  '';
-
-  minecraftSocket = pkgs.writeText "minecraft.socket" ''
-    [Unit]
-    Description=Minecraft server console
-    PartOf=minecraft.service
-
-    [Socket]
-    ListenFIFO=${minecraftConsole}
-    SocketUser=minecraft
-    SocketMode=0600
-    RemoveOnStop=true
-  '';
-
-  guestLockTmpfiles = pkgs.writeText "keep-running-lock.conf" ''
-    f ${guestHoldLock} 0644 root root -
-  '';
-
-  guestPayload = pkgs.runCommand "${domainName}-payload.tar" { } ''
-    mkdir files
-    cp ${minecraftUnit} files/minecraft.service
-    cp ${minecraftSocket} files/minecraft.socket
-    cp ${guestLockTmpfiles} files/keep-running-lock.conf
-    cp ${lockMod}/*.jar files/
-    tar -C files -cf $out .
-  '';
-
-  guestInstall = ''
-    set -e
-    stamp=/var/lib/host-sync/stamp
-    [ "$(cat "$stamp" 2>/dev/null)" = "$1" ] && exit 0
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
-    tar -C "$tmp" -xf -
-    install -m 0644 "$tmp/minecraft.service" "$tmp/minecraft.socket" /etc/systemd/system/
-    install -m 0644 "$tmp/keep-running-lock.conf" /etc/tmpfiles.d/keep-running-lock.conf
-    rm -f ${minecraftDir}/mods/keep-running-lock-*.jar
-    install -o minecraft -g minecraft -m 0644 "$tmp"/keep-running-lock-*.jar ${minecraftDir}/mods/
-    restorecon /etc/systemd/system/minecraft.service /etc/systemd/system/minecraft.socket /etc/tmpfiles.d/keep-running-lock.conf ${minecraftDir}/mods/keep-running-lock-*.jar
-    systemd-tmpfiles --create /etc/tmpfiles.d/keep-running-lock.conf
-    systemctl daemon-reload
-    systemctl enable minecraft.service
-    systemctl is-active -q minecraft.service || systemctl start minecraft.service
-    install -d /var/lib/host-sync
-    echo "$1" > "$stamp"
-  '';
-
-  guestSync = pkgs.writeShellApplication {
-    name = "${domainName}-guest-sync";
-    runtimeInputs = [
-      config.virtualisation.libvirtd.package
-      pkgs.jq
-      pkgs.coreutils
-    ];
-    text = ''
-      [ "$(${virsh} domstate ${domainName})" = running ] || exit 0
-      agent() { virsh -c qemu:///system qemu-agent-command ${domainName} "$1" 2>/dev/null; }
-      agent '{"execute":"guest-ping"}' >/dev/null || exit 0
-      request=$(jq -cn --arg script ${lib.escapeShellArg guestInstall} \
-        --arg stamp "$(basename ${guestPayload})" --arg input "$(base64 -w0 ${guestPayload})" \
-        '{execute:"guest-exec",arguments:{path:"/usr/bin/sh",arg:["-c",$script,"sh",$stamp],"input-data":$input,"capture-output":true}}')
-      pid=$(agent "$request" | jq -e .return.pid)
-      for _ in $(seq 60); do
-        status=$(agent "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$pid}}")
-        if [ "$(jq .return.exited <<<"$status")" = true ]; then
-          jq -j '(.return."out-data" // "" | @base64d), (.return."err-data" // "" | @base64d)' <<<"$status"
-          [ "$(jq .return.exitcode <<<"$status")" = 0 ]
-          exit
-        fi
-        sleep 1
-      done
-      exit 1
-    '';
-  };
 
   idleShutdownMinutes = 10;
   shutdownGraceMinutes = 6;
@@ -330,11 +231,13 @@ let
       running=false
       locks=0
       logins=0
+      lastBackup=0
       case "$(${virsh} domstate ${domainName})" in
         running | "in shutdown")
           running=true
           locks=$(count ${lib.getExe guestLockCount})
           logins=$(count ${lib.getExe guestLoginCount})
+          lastBackup=$(count ${lib.getExe guestLastBackup})
           ;;
       esac
 
@@ -348,11 +251,11 @@ let
         idle=true
       fi
 
-      jq -cn --argjson locks "$locks" --argjson logins "$logins" --argjson idle "$idle" \
+      jq -cn --argjson locks "$locks" --argjson logins "$logins" --argjson idle "$idle" --argjson lastBackup "$lastBackup" \
         --argjson shutsDownAt "$shutsDownAt" --argjson updated "$now" \
         --argjson stopping "$([ -e ${shutdownRequested} ] && echo true || echo false)" \
         --argjson idleAfter ${toString (idleShutdownMinutes * 60)} \
-        '{locks:$locks,logins:$logins,stopping:$stopping,updated:$updated,idleAfter:$idleAfter,shutsDownAt:(if $idle then $shutsDownAt else null end)}' \
+        '{locks:$locks,logins:$logins,stopping:$stopping,updated:$updated,idleAfter:$idleAfter,shutsDownAt:(if $idle then $shutsDownAt else null end),lastBackup:(if $lastBackup > 0 then $lastBackup else null end)}' \
         > ${idleStatus}.tmp
       mv ${idleStatus}.tmp ${idleStatus}
 
@@ -516,9 +419,16 @@ in
   networking.nftables.tables.vm-isolation = {
     family = "inet";
     content = ''
+      chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+
+        iifname "${bridge}" ip saddr ${guestAddress} ip daddr ${bridgeAddress} tcp dport ${toString nasStreamPort} dnat ip to ${facts.pi.tailscale}
+      }
+
       chain forward {
         type filter hook forward priority filter - 1; policy accept;
 
+        iifname "${bridge}" ip saddr ${guestAddress} ip daddr ${facts.pi.tailscale} oifname "tailscale0" tcp dport ${toString nasStreamPort} accept
         iifname "${bridge}" meta nfproto ipv6 counter drop
         iifname "${bridge}" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 } counter drop
         iifname "${bridge}" oifname != "${config.local.vpn.interface}" counter drop
@@ -566,23 +476,6 @@ in
   };
 
   systemd.timers."${domainName}-shutdown-when-idle" = {
-    wantedBy = [ "timers.target" ];
-    timerConfig = {
-      OnBootSec = "1min";
-      OnUnitActiveSec = "1min";
-    };
-  };
-
-  systemd.services."${domainName}-guest-sync" = {
-    after = [ "nixvirt.service" ];
-    restartIfChanged = false;
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = lib.getExe guestSync;
-    };
-  };
-
-  systemd.timers."${domainName}-guest-sync" = {
     wantedBy = [ "timers.target" ];
     timerConfig = {
       OnBootSec = "1min";

@@ -47,7 +47,6 @@ in
     ../desktop-common.nix
     ./satisfactory.nix
     ../../modules/nixos/vm-host.nix
-    ../../modules/nixos/minecraft-backup.nix
   ];
 
   networking.hostName = "desktopnew";
@@ -64,7 +63,6 @@ in
   local.server.ssh.lanInterfaces = [ "enp5s0" ];
 
   local.gaming.enable = true;
-  local.minecraftBackup.enable = true;
   local.desktop.plasma.enable = false;
 
   local.fancontrol = {

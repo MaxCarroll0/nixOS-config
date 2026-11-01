@@ -1371,7 +1371,7 @@ the cifs automount.
 | `storage.nix` | mergerfs pool with the placement policy from section 4, SnapRAID config, sync and scrub timers that no-op unless every branch is mounted | enabled |
 | `index.nix` + `nas-index.py` | SQLite browse index, `find-new` incremental scan, version counter, thumbnailer, per-user usage and file-age metrics | enabled |
 | `checkpoints.nix` + `nas-at.py` | the incremental checkpoint index, `nas-checkpoint-promote` (retention), the bucketed `@GMT-` window for Samba, the `/srv/nas-at` time view, checkpoint metrics from sysfs | enabled |
-| `streams.nix` + `nas-stream.py` + `../blockdelta.py` | tailnet receivers for pushed 4 KiB block deltas, an SSD spool, and an applier that makes each point one NILFS2 snapshot | enabled, `minecraft` on `disk1` |
+| `streams.nix` | tailnet rsync daemon modules; each completed transfer becomes one NILFS2 snapshot | enabled, `minecraft` on `disk1` |
 | `versions.nix` | one `fatrace` watcher per NILFS2 branch, the ingest timer, the `nas-versions-reconcile` mtime backstop, `nas-versions list`/`restore` | enabled |
 | `prefetch.nix` | `nas-prefetch`: `fatrace -c -f O -j` driving a read-ahead loop with per-directory cooldown, file and byte budgets, a bulk-reader ignore list and textfile counters | enabled, one unit per branch |
 | `unlock.nix` | `nas-unlock-local`/`nas-lock-local` plus `nas.target` on the server; `nas-unlock`/`nas-lock` on the client | server on the pi, client on the laptop |
@@ -2007,36 +2007,33 @@ however late it was applied.
 **The Minecraft stream.**
 
 ```
-guest (btrfs /home)        desktopnew: minecraft-backup        pi
-RCON save-off              qemu guest agent, every 60 s
-save-all flush
-btrfs snapshot -r  ------> guest diffs new vs base (blockdelta)
-RCON save-on               guest-file-read the delta
-                           TCP to pi:8020 over the tailnet --> nas-stream-receive: verify, spool on SSD, ack
-                                                               nas-stream-apply: pwrite under the write lock,
-                                                               mkcp -s, points(captured -> cno)
+guest damien-fedora: minecraft-backup.timer (1 min)          pi
+flock -s /run/keep-running.lock
+console save-off; save-all flush
+rsync --inplace --block-size=4096 ---------------------> rsyncd module (under the write lock)
+console save-on (ExecStopPost)                           post-xfer: mkcp -s, points(captured -> cno)
 ```
 
-- The world is consistent only at `save-off; save-all flush`, so a point is that cut and nothing
-  in between. `save-off` is held only for the btrfs snapshot.
-- No SSH keys and no VPN change: the host drives the guest through the agent and pushes over
-  the tailnet; the receiver accepts only desktopnew's tailnet address.
-- Every delta names its base. A delta whose base is not the receiver's head is answered `resync`,
-  and the driver drops its base, so the next point is a full tree. An unreachable pi just means
-  the next success is one larger delta; nothing queues on the desktop.
-- A locked array, or a long `snapraid sync` (which holds `/run/nas-nilfs-write.lock`), only grows
-  the spool (cap 8 GiB, then pushes are refused). Points keep their capture time.
-- Mounting a checkpoint under write load Oopses the kernel (section 22), so every checkpoint
-  mount (view, window, restore) takes the same write lock the applier and parity sync take.
-- `nas-cleaner start` refuses a stream branch outright.
-- `nas-stream --name minecraft ... list` (or the `points` table) lists every point with its stall.
-
-**Stated limits.** Parity protects the latest state only; NILFS2 history lives on one disk.
-`disk1` was chosen because the browse index already keeps it from parking (section 24), so
-minute-by-minute applies cost no extra spin-ups. The flush stall is logged per point
-(`journalctl -u minecraft-backup` on desktopnew) and is the data for tuning the interval or adding
-incremental saving later.
-
-**One-time step.** The driver writes `enable-rcon`, `rcon.port` and the password into
-`server.properties`, but RCON only starts with the server, so restart it once (in tmux, not a
-foreground SSH session).
+- NILFS2 stores every block written, identical or not, so the copy must write only changed
+  blocks. `rsync --inplace --no-whole-file` compares and skips matching 4 KiB blocks; Minecraft
+  rewrites only changed sectors, so each point costs what actually changed.
+- The world is consistent only between `save-all flush` and `save-on`; the rsync runs inside that
+  window (a few seconds; the game keeps running, only disk writes pause).
+- The guest owns the service: `/etc/systemd/system/minecraft-backup.{service,timer}` and
+  `/usr/local/libexec/minecraft-backup`. The timer is `WantedBy=` and `PartOf=minecraft.service`,
+  and the shared lock keeps idle shutdown from stopping the VM mid-pass.
+- The guest pushes to `192.168.122.1:8020`; `vm-isolation` DNATs that to pi:8020 over `tailscale0`
+  and libvirt masquerades it to desktopnew's tailnet address. Nothing else leaves the VPN and
+  nothing can connect back in. The module is write-only and accepts only desktopnew.
+- The guest never addresses the pi directly: it runs its own Tailscale (a different tailnet),
+  whose route table claims 100.64/10 and whose `ts-input` drops CGNAT-sourced replies arriving
+  on `enp1s0`.
+- No buffering: if the pi is down or the array locked, that minute is a gap and the next pass
+  catches up. A failed transfer takes no snapshot, so only complete points are listed in `points`.
+- Each pass writes `/var/lib/minecraft-backup/last` in the guest; the host's idle check reads it
+  and the panel shows it.
+- Measured pi cost (synthetic 1 GB tree): about 0.1 CPU-s per idle minute, 1.3 CPU-s for a minute
+  rewriting 30 region files; the larger load is reading changed files on the branch.
+- Commands go to the guest's console FIFO (`/run/systemd/minecraft.stdin`); `enable-rcon=false`.
+- Transfers hold `/run/nas-nilfs-write.lock`, like every checkpoint mount (section 22) and parity
+  sync. Parity protects the latest state only; NILFS2 history lives on `disk1` alone.
