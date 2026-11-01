@@ -200,8 +200,111 @@ let
     ''
   ];
 
+  minecraftDir = "/home/minecraft/neoforge";
+  minecraftConsole = "/run/systemd/minecraft.stdin";
+  lockMod = pkgs.callPackage ./minecraft-lock-mod { };
+
+  minecraftUnit = pkgs.writeText "minecraft.service" ''
+    [Unit]
+    Description=Minecraft server
+    Wants=network-online.target
+    Requires=minecraft.socket
+    After=network-online.target tailscaled.service minecraft.socket
+
+    [Service]
+    User=minecraft
+    Group=minecraft
+    WorkingDirectory=${minecraftDir}
+    Sockets=minecraft.socket
+    StandardInput=socket
+    StandardOutput=journal
+    StandardError=journal
+    ExecStart=/usr/bin/java @user_jvm_args.txt @libraries/net/neoforged/neoforge/21.1.265/unix_args.txt nogui
+    ExecStop=/bin/sh -c 'echo stop > ${minecraftConsole}; while kill -0 "$MAINPID" 2>/dev/null; do sleep 1; done'
+    SuccessExitStatus=143
+    TimeoutStopSec=4min
+    Restart=on-failure
+    RestartSec=30
+
+    [Install]
+    WantedBy=multi-user.target
+  '';
+
+  minecraftSocket = pkgs.writeText "minecraft.socket" ''
+    [Unit]
+    Description=Minecraft server console
+    PartOf=minecraft.service
+
+    [Socket]
+    ListenFIFO=${minecraftConsole}
+    SocketUser=minecraft
+    SocketMode=0600
+    RemoveOnStop=true
+  '';
+
+  guestLockTmpfiles = pkgs.writeText "keep-running-lock.conf" ''
+    f ${guestHoldLock} 0644 root root -
+  '';
+
+  guestPayload = pkgs.runCommand "${domainName}-payload.tar" { } ''
+    mkdir files
+    cp ${minecraftUnit} files/minecraft.service
+    cp ${minecraftSocket} files/minecraft.socket
+    cp ${guestLockTmpfiles} files/keep-running-lock.conf
+    cp ${lockMod}/*.jar files/
+    tar -C files -cf $out .
+  '';
+
+  guestInstall = ''
+    set -e
+    stamp=/var/lib/host-sync/stamp
+    [ "$(cat "$stamp" 2>/dev/null)" = "$1" ] && exit 0
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    tar -C "$tmp" -xf -
+    install -m 0644 "$tmp/minecraft.service" "$tmp/minecraft.socket" /etc/systemd/system/
+    install -m 0644 "$tmp/keep-running-lock.conf" /etc/tmpfiles.d/keep-running-lock.conf
+    rm -f ${minecraftDir}/mods/keep-running-lock-*.jar
+    install -o minecraft -g minecraft -m 0644 "$tmp"/keep-running-lock-*.jar ${minecraftDir}/mods/
+    restorecon /etc/systemd/system/minecraft.service /etc/systemd/system/minecraft.socket /etc/tmpfiles.d/keep-running-lock.conf ${minecraftDir}/mods/keep-running-lock-*.jar
+    systemd-tmpfiles --create /etc/tmpfiles.d/keep-running-lock.conf
+    systemctl daemon-reload
+    systemctl enable minecraft.service
+    systemctl is-active -q minecraft.service || systemctl start minecraft.service
+    install -d /var/lib/host-sync
+    echo "$1" > "$stamp"
+  '';
+
+  guestSync = pkgs.writeShellApplication {
+    name = "${domainName}-guest-sync";
+    runtimeInputs = [
+      config.virtualisation.libvirtd.package
+      pkgs.jq
+      pkgs.coreutils
+    ];
+    text = ''
+      [ "$(${virsh} domstate ${domainName})" = running ] || exit 0
+      agent() { virsh -c qemu:///system qemu-agent-command ${domainName} "$1" 2>/dev/null; }
+      agent '{"execute":"guest-ping"}' >/dev/null || exit 0
+      request=$(jq -cn --arg script ${lib.escapeShellArg guestInstall} \
+        --arg stamp "$(basename ${guestPayload})" --arg input "$(base64 -w0 ${guestPayload})" \
+        '{execute:"guest-exec",arguments:{path:"/usr/bin/sh",arg:["-c",$script,"sh",$stamp],"input-data":$input,"capture-output":true}}')
+      pid=$(agent "$request" | jq -e .return.pid)
+      for _ in $(seq 60); do
+        status=$(agent "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$pid}}")
+        if [ "$(jq .return.exited <<<"$status")" = true ]; then
+          jq -j '(.return."out-data" // "" | @base64d), (.return."err-data" // "" | @base64d)' <<<"$status"
+          [ "$(jq .return.exitcode <<<"$status")" = 0 ]
+          exit
+        fi
+        sleep 1
+      done
+      exit 1
+    '';
+  };
+
   idleShutdownMinutes = 10;
-  shutdownGraceMinutes = 5;
+  shutdownGraceMinutes = 6;
   lastActive = "/run/${domainName}-last-active";
   shutdownRequested = "/run/${domainName}-shutdown-requested";
   idleStatus = "/run/${domainName}-idle.json";
@@ -463,6 +566,23 @@ in
   };
 
   systemd.timers."${domainName}-shutdown-when-idle" = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnBootSec = "1min";
+      OnUnitActiveSec = "1min";
+    };
+  };
+
+  systemd.services."${domainName}-guest-sync" = {
+    after = [ "nixvirt.service" ];
+    restartIfChanged = false;
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = lib.getExe guestSync;
+    };
+  };
+
+  systemd.timers."${domainName}-guest-sync" = {
     wantedBy = [ "timers.target" ];
     timerConfig = {
       OnBootSec = "1min";

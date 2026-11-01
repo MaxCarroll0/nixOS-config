@@ -1,0 +1,17 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "MIT"
+
+[[mods]]
+modId = "keeprunninglock"
+version = "1.0.0"
+displayName = "Keep Running Lock"
+description = "Holds one lock on /run/keep-running.lock per online player."
+displayTest = "IGNORE_ALL_VERSION"
+
+[[dependencies.keeprunninglock]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+ordering = "NONE"
+side = "SERVER"
