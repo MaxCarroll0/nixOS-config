@@ -1,0 +1,44 @@
+diff --git a/modules/bar/components/StatusIcons.qml b/modules/bar/components/StatusIcons.qml
+index 90ad09b..7927bfd 100644
+--- a/modules/bar/components/StatusIcons.qml
++++ b/modules/bar/components/StatusIcons.qml
+@@ -37,6 +37,8 @@ StyledRect {
+     function collapsed(entry: var): bool {
+         if (entry.id === "lockStatus")
+             return !Hypr.capsLock && !Hypr.numLock;
++        if (entry.id === "vpn")
++            return !Vpn.present;
+         return false;
+     }
+ 
+@@ -126,6 +128,14 @@ StyledRect {
+                         }
+                     }
+                 }
++                DelegateChoice {
++                    roleValue: "vpn"
++                    delegate: EntryWrapper {
++                        VpnStatus {
++                            colour: root.colour
++                        }
++                    }
++                }
+                 DelegateChoice {
+                     roleValue: "bluetooth"
+                     delegate: EntryWrapper {
+diff --git a/modules/bar/popouts/Content.qml b/modules/bar/popouts/Content.qml
+index 567b6cc..87c5cc1 100644
+--- a/modules/bar/popouts/Content.qml
++++ b/modules/bar/popouts/Content.qml
+@@ -95,6 +95,11 @@ Item {
+             }
+         }
+ 
++        Popout {
++            name: "vpn"
++            sourceComponent: VpnPopout {}
++        }
++
+         Popout {
+             name: "bluetooth"
+             sourceComponent: Bluetooth {

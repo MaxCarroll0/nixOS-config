@@ -74,6 +74,8 @@ let
   };
 
   bootstrapConf = "/run/proton/${cfg.interface}.conf";
+  serverFile = "/run/proton/${cfg.interface}.server";
+  statusFile = "/run/proton/status.json";
 
   selection = cfg.selection;
   selectionEnabled = selection.countries != [ ];
@@ -288,6 +290,7 @@ let
 
       if [ -n "$server" ]; then
         if apply "$server"; then
+          [ -n "$bootstrap" ] || printf '%s\n' "$server" > ${serverFile}
           echo "''${iface:-bootstrap} -> $server"
           exit 0
         fi
@@ -322,6 +325,7 @@ let
 
       for name in $candidates; do
         if apply "$name"; then
+          [ -n "$bootstrap" ] || printf '%s\n' "$name" > ${serverFile}
           echo "''${iface:-bootstrap} -> $name"
           exit 0
         fi
@@ -336,6 +340,82 @@ let
       wg syncconf "$iface" "$backup"
       echo "no candidate came up; restored previous peer" >&2
       exit 1
+    '';
+  };
+
+  vpnStatus = pkgs.writeShellApplication {
+    name = "vpn-status";
+    runtimeInputs = with pkgs; [
+      wireguard-tools
+      nftables
+      gawk
+      jq
+      coreutils
+    ];
+    text = /* bash */ ''
+      busy="''${1:-}"
+      failed="''${2:-}"
+      iface=${cfg.interface}
+      enabled=true
+      if nft list table inet ${disableTable} >/dev/null 2>&1; then
+        enabled=false
+      fi
+      up=false endpoint="" handshake=0 rx=0 tx=0
+      if wg show "$iface" >/dev/null 2>&1; then
+        up=true
+        endpoint="$(wg show "$iface" endpoints | awk 'NR == 1 { print $2 }')"
+        handshake="$(wg show "$iface" latest-handshakes | awk '{ print $2 }' | sort -n | tail -1)"
+        read -r rx tx < <(wg show "$iface" transfer | awk '{ r += $2; t += $3 } END { print r + 0, t + 0 }')
+      fi
+      server="$(cat ${serverFile} 2>/dev/null || true)"
+      json="$(jq -cn \
+        --argjson enabled "$enabled" --argjson up "$up" \
+        --arg server "$server" --arg endpoint "$endpoint" \
+        --argjson handshake "''${handshake:-0}" --argjson rx "$rx" --argjson tx "$tx" \
+        --arg busy "$busy" --arg failed "$failed" \
+        --argjson countries '${builtins.toJSON selection.menuCountries}' \
+        --argjson updated "$(date +%s)" \
+        '$ARGS.named')"
+      install -d -m 755 /run/proton
+      printf '%s\n' "$json" > ${statusFile}
+    '';
+  };
+
+  vpnCtl = pkgs.writeShellApplication {
+    name = "vpn-ctl";
+    runtimeInputs = [
+      vpnSwitch
+      vpnStatus
+      pkgs.util-linux
+    ];
+    text = /* bash */ ''
+      verb="$1"
+      case "$verb" in
+        status) exec vpn-status ;;
+        repick) args=() ;;
+        enable) args=(--enable) ;;
+        disable) args=(--disable) ;;
+        secure-core) args=(--secure-core) ;;
+        country-*)
+          country="''${verb#country-}"
+          if ! [[ "$country" =~ ^[A-Z]{2}$ ]]; then
+            echo "bad country: $country" >&2
+            exit 2
+          fi
+          args=(--country "$country")
+          ;;
+        *) echo "unknown verb: $verb" >&2; exit 2 ;;
+      esac
+
+      exec 9> /run/proton/ctl.lock
+      flock 9
+      vpn-status "$verb"
+      if vpn-switch "''${args[@]}"; then
+        vpn-status
+      else
+        vpn-status "" "$verb"
+        exit 1
+      fi
     '';
   };
 
@@ -464,6 +544,22 @@ in
       description = "Pick at random among this many lowest-scoring servers.";
     };
 
+    menuCountries = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = lib.unique (
+        selection.countries
+        ++ [
+          "UK"
+          "NL"
+          "DE"
+          "CH"
+          "SE"
+          "US"
+        ]
+      );
+      description = "Countries the desktop VPN controller offers.";
+    };
+
     rotateEvery = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -553,19 +649,59 @@ in
           serviceConfig = {
             Type = "oneshot";
             ExecStart = "${vpnSwitchPkg}/bin/vpn-switch";
+            ExecStartPost = lib.getExe vpnStatus;
+          };
+        };
+
+        "vpn-ctl@" = {
+          description = "VPN controller action %i";
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = "${lib.getExe vpnCtl} %i";
+          };
+        };
+
+        vpn-status = {
+          description = "Publish the VPN state to ${statusFile}";
+          after = [ "wg-quick-${cfg.interface}.service" ];
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = lib.getExe vpnStatus;
           };
         };
       };
 
-    systemd.timers = lib.optionalAttrs (selectionEnabled && selection.rotateEvery != null) {
-      vpn-autoselect = {
-        wantedBy = [ "timers.target" ];
-        timerConfig = {
-          OnUnitActiveSec = selection.rotateEvery;
-          RandomizedDelaySec = "10m";
+    systemd.timers =
+      lib.optionalAttrs selectionEnabled {
+        vpn-status = {
+          wantedBy = [ "timers.target" ];
+          timerConfig = {
+            OnActiveSec = "10s";
+            OnUnitActiveSec = "1min";
+            AccuracySec = "10s";
+          };
+        };
+      }
+      // lib.optionalAttrs (selectionEnabled && selection.rotateEvery != null) {
+        vpn-autoselect = {
+          wantedBy = [ "timers.target" ];
+          timerConfig = {
+            OnUnitActiveSec = selection.rotateEvery;
+            RandomizedDelaySec = "10m";
+          };
         };
       };
-    };
+
+    security.polkit.extraConfig = lib.mkIf selectionEnabled ''
+      polkit.addRule(function (action, subject) {
+        if (action.id == "org.freedesktop.systemd1.manage-units"
+            && /^vpn-ctl@(status|repick|enable|disable|secure-core|country-[A-Z]{2})\.service$/.test(action.lookup("unit"))
+            && action.lookup("verb") == "start"
+            && subject.user == "max") {
+          return polkit.Result.YES;
+        }
+      });
+    '';
 
     # Fail-closed VPN kill switch: drop all egress except loopback, the tunnel
     # interfaces, WireGuard's own marked packets, LAN, and DHCP. Active even

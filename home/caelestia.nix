@@ -28,7 +28,13 @@ let
       caelestia-cli = cli;
     }).overrideAttrs
       (old: {
-        patches = (old.patches or [ ]) ++ [ ./patches/caelestia-wm.patch ] ++ cfg.caelestia.patches;
+        patches =
+          (old.patches or [ ])
+          ++ [
+            ./patches/caelestia-wm.patch
+            ./patches/caelestia-vpn.patch
+          ]
+          ++ cfg.caelestia.patches;
         postPatch = (old.postPatch or "") + ''
           cp -r --no-preserve=mode ${../quickshell/caelestia}/. .
         '';
@@ -160,6 +166,22 @@ in
       mkdir -p "$(dirname "$f")"
       [ -s "$f" ] || echo '{}' > "$f"
       ${lib.getExe pkgs.jq} '.services.weatherUnits //= "Celsius" | .services.clockFormat //= "TwentyFourHour"' "$f" > "$f.tmp"
+      mv "$f.tmp" "$f"
+    '';
+
+    home.activation.caelestiaVpnIcon = lib.hm.dag.entryAfter [ "caelestiaUnits" ] ''
+      f="${config.xdg.configHome}/caelestia/shell.json"
+      ${lib.getExe pkgs.jq} '
+        .bar.statusIcons = ((.bar.statusIcons // [
+          {id: "lockStatus", enabled: true},
+          {id: "audio", enabled: false},
+          {id: "microphone", enabled: false},
+          {id: "kbLayout", enabled: false},
+          {id: "network", enabled: true},
+          {id: "bluetooth", enabled: true},
+          {id: "battery", enabled: true}
+        ]) | if any(.id == "vpn") then . else map(if .id == "network" then ., {id: "vpn", enabled: true} else . end) end)
+      ' "$f" > "$f.tmp"
       mv "$f.tmp" "$f"
     '';
 
