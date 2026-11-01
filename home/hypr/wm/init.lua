@@ -442,6 +442,19 @@ local function nearest(from, candidates, direction)
     return best
 end
 
+function wm.focus_dir(direction)
+    local active = hl.get_active_window()
+    if active and (direction == "l" or direction == "r") then
+        local m = model.read(workspace())
+        local c = model.find(m, active.address)
+        if c and m.columns[c + (direction == "r" and 1 or -1)] then
+            hl.dispatch(hl.dsp.layout("focus " .. direction))
+            return
+        end
+    end
+    hl.dispatch(hl.dsp.focus({ direction = direction }))
+end
+
 function wm.focus_within(direction)
     local active = hl.get_active_window()
     if not active then return end
@@ -450,14 +463,15 @@ function wm.focus_within(direction)
     for _, address in ipairs(list) do
         if address ~= active.address then candidates[#candidates + 1] = live[address] end
     end
-    focus(nearest(active, candidates, direction))
+    local target = nearest(active, candidates, direction)
+    if target then focus(target) else wm.focus_dir(direction) end
 end
 
 local function step_focus(direction)
     if hl.get_current_submap() == "select" then
         wm.focus_within(direction)
     else
-        hl.dispatch(hl.dsp.focus({ direction = direction }))
+        wm.focus_dir(direction)
     end
 end
 

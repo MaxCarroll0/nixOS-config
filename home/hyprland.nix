@@ -116,7 +116,7 @@ let
   bridgeFocus = dir: {
     owner = "bridge";
     elisp = "wm-focus-${dir}";
-    dispatch = "hl.dsp.focus({ direction = ${luaStr dir} })";
+    dispatch = wmCall "focus_dir(${luaStr dir})";
     desc = "focus ${dirNames.${dir}}, crossing into Emacs splits";
   };
 
@@ -177,7 +177,7 @@ let
       inherit key;
       owner = "bridge";
       elisp = "wm-focus-${dir}";
-      dispatch = "hl.dsp.focus({ direction = ${luaStr dir} })";
+      dispatch = wmCall "focus_dir(${luaStr dir})";
       desc = "focus ${dirNames.${dir}}, crossing into Emacs splits";
     }
   ) dirs;
