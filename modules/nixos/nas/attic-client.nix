@@ -50,6 +50,7 @@ let
     runtimeInputs = with pkgs; [
       attic-client
       coreutils
+      gawk
       util-linux
     ];
     text = ''
@@ -85,18 +86,49 @@ let
         exit 0
       fi
 
-      if attic push --stdin --jobs 1 lan:${cfg.cache} < ${stateDir}/pending; then
-        rm -f ${stateDir}/pending
-      else
-        # Attic pushes are idempotent. Requeue the whole batch so a partial
-        # upload or network change is safely retried on the next timer run.
+      requeue() {
         (
           flock 9
-          cat ${stateDir}/pending >> ${stateDir}/queue
-          rm -f ${stateDir}/pending
+          cat "$1" >> ${stateDir}/queue
+          rm -f "$1"
         ) 9> ${stateDir}/queue.lock
+      }
+
+      if attic push --stdin --jobs 1 lan:${cfg.cache} < ${stateDir}/pending; then
+        rm -f ${stateDir}/pending
+        exit 0
+      fi
+
+      if ! attic cache info lan:${cfg.cache} > /dev/null; then
+        requeue ${stateDir}/pending
         exit 1
       fi
+
+      touch ${stateDir}/failures
+      : > ${stateDir}/retry
+      while read -r path; do
+        attempts=$(awk -v p="$path" '$1 == p { n = $2 } END { print n + 0 }' ${stateDir}/failures)
+        awk -v p="$path" '$1 != p' ${stateDir}/failures > ${stateDir}/failures.new
+        mv ${stateDir}/failures.new ${stateDir}/failures
+        if attic push --jobs 1 lan:${cfg.cache} "$path" < /dev/null; then
+          continue
+        fi
+        attempts=$((attempts + 1))
+        if [ "$attempts" -ge ${toString cfg.maxAttempts} ]; then
+          echo "giving up on $path after $attempts failed uploads; recorded in ${stateDir}/failed" >&2
+          printf '%s\n' "$path" >> ${stateDir}/failed
+        else
+          printf '%s %s\n' "$path" "$attempts" >> ${stateDir}/failures
+          printf '%s\n' "$path" >> ${stateDir}/retry
+        fi
+      done < ${stateDir}/pending
+      rm -f ${stateDir}/pending
+
+      if [ -s ${stateDir}/retry ]; then
+        requeue ${stateDir}/retry
+        exit 1
+      fi
+      rm -f ${stateDir}/retry
     '';
   };
 in
@@ -123,6 +155,11 @@ in
       type = lib.types.bool;
       default = true;
       description = "Queue completed builds and upload them after the requester has received the result.";
+    };
+    maxAttempts = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 3;
+      description = "Failed uploads of one path, with the server reachable, before it is moved to the failed list.";
     };
     tokenFile = lib.mkOption {
       type = lib.types.str;
