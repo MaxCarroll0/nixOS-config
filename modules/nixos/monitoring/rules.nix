@@ -291,13 +291,6 @@ let
     "disk:queue_depth" = "rate(node_disk_io_time_weighted_seconds_total[1m])";
     "disk:iops" =
       "rate(node_disk_reads_completed_total[1m]) + rate(node_disk_writes_completed_total[1m])";
-    "fs:avail_bytes" = ''node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs"}'';
-    "fs:free_ratio" =
-      ''node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs"}''
-      + ''/ node_filesystem_size_bytes{fstype!~"tmpfs|ramfs"}'';
-    "fs:inode_free_ratio" =
-      ''node_filesystem_files_free{fstype!~"tmpfs|ramfs"}''
-      + ''/ clamp_min(node_filesystem_files{fstype!~"tmpfs|ramfs"}, 1)'';
 
     "mem:major_faults" = "rate(node_vmstat_pgmajfault[1m])";
     "mem:swap_in_pages" = "rate(node_vmstat_pswpin[1m])";
@@ -317,14 +310,23 @@ let
       "clamp_max(rate(node_vmstat_pgmajfault[1m]) / 200, 1)"
       + " * clamp_max(avg by (instance)"
       + " (rate(node_pressure_memory_stalled_seconds_total[1m])) * 10, 1)";
-    "systemd:failed_units" = ''sum by (instance) (node_systemd_unit_state{state="failed"})'';
     "host:up" =
       ''clamp_max(count by (instance) (present_over_time(up{job="node"}[1m])), 1)''
       + "* on(instance) group_left() "
       + ''(label_replace(max by (peer) (tailscale_peer_online{instance="pi"}), "instance", "$1", "peer", "(.+)")''
       + ''or max by (instance) (up{job="node", instance="pi"}))''
-      + ''or (max by (instance) (last_over_time(up{job="node"}[7d])) * 0)''
-      + ''or max by (instance) (label_replace(max by (peer) (last_over_time(tailscale_peer_online{instance="pi"}[7d])) * 0, "instance", "$1", "peer", "(.+)"))'';
+      + ''or (max by (instance) (last_over_time(host:up:1h[7d])) * 0)'';
+  };
+
+  slowSystemRules = {
+    "fs:avail_bytes" = ''node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs"}'';
+    "fs:free_ratio" =
+      ''node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs"}''
+      + ''/ node_filesystem_size_bytes{fstype!~"tmpfs|ramfs"}'';
+    "fs:inode_free_ratio" =
+      ''node_filesystem_files_free{fstype!~"tmpfs|ramfs"}''
+      + ''/ clamp_min(node_filesystem_files{fstype!~"tmpfs|ramfs"}, 1)'';
+    "systemd:failed_units" = ''sum by (instance) (node_systemd_unit_state{state="failed"})'';
     "host:boot_time_seconds" = "node_boot_time_seconds";
     "host:awake_since_seconds" = "node_awake_since_seconds";
   };
@@ -917,6 +919,11 @@ in
       name = "system";
       interval = "1s";
       rules = toRules (systemRules // networkRules);
+    }
+    {
+      name = "system-slow";
+      interval = "30s";
+      rules = toRules slowSystemRules;
     }
     {
       name = "capacity";
