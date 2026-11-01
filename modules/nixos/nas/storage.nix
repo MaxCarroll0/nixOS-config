@@ -362,6 +362,7 @@ in
       text = ''
         [Unit]
         DefaultDependencies=no
+        RequiresMountsFor=${lib.concatStringsSep " " dataMounts}
       '';
     };
 
