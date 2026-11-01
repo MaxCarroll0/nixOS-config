@@ -250,6 +250,12 @@ in
       environment.systemPackages = [ pkgs.catppuccin-sddm ];
       services.upower.enable = true;
       services.power-profiles-daemon.enable = true;
+      # Upstream's After=multi-user.target queues the shell's D-Bus activation behind network-online.
+      services.power-profiles-daemon.package = pkgs.power-profiles-daemon.overrideAttrs (old: {
+        postFixup = (old.postFixup or "") + ''
+          sed -i 's/^After=multi-user.target /After=/' $out/lib/systemd/system/power-profiles-daemon.service
+        '';
+      });
       users.users.max.packages = with pkgs.kdePackages; [
         dolphin
         okular
