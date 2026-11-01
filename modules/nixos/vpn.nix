@@ -375,10 +375,11 @@ let
   # alike, not just the boot race.
   protonReconnect = pkgs.writeShellScript "proton-reconnect" ''
     action="$2"
-    [ "$action" = "up" ] || exit 0
+    [ "$action" = "up" ] && [ "$1" != lo ] || exit 0
     systemctl is-active --quiet wg-quick-${cfg.interface}.service && exit 0
-    systemctl restart proton-bootstrap.service
-    systemctl restart wg-quick-${cfg.interface}.service
+    [ -n "$(systemctl list-jobs --no-legend proton-bootstrap.service wg-quick-${cfg.interface}.service)" ] && exit 0
+    systemctl restart --no-block proton-bootstrap.service
+    systemctl restart --no-block wg-quick-${cfg.interface}.service
   '';
 in
 
