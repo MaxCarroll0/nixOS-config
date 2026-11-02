@@ -713,6 +713,38 @@ It found three bugs the unit-level prototype could not:
   dropped. Every scan now renders what it consumed.
 - The history lock lived under the view's mount directory, so reclaim's own lock looked like an
   open view file and every real reclaim was postponed. It is `/run/nas-history.lock` now.
+- `forget`'s `rm` was still unsynced when the dry run read `protcno`, so reclaim predicted 456
+  blocks and freed 532. `forget` and `reclaim` now `sync` first.
+- A path that vanished before its deletion was scanned was closed at the newest indexed
+  checkpoint, whose `hi` is exclusive, so `forget` left the file visible in exactly that
+  checkpoint's view. An unscanned deletion now closes the path one checkpoint later; a scanned
+  death still tightens it.
+
+#### On the pi
+
+| Measure | Result |
+|---|---|
+| First pass (backfill, disk1 alone has 158,333 segments) | 2h17m wall, 25m52s CPU, 2.4 TB read, 2.1 GB written; peak 812.5 MB RSS + 503 MB swap. The plan's 65 min assumed summary-only reads; `dumpseg` reads whole segments (TODO) |
+| Idle pass, as deployed | 4.9 s, 226.5 MB read: `metrics` rescanned `lives` every run |
+| Pass on idle disks, with `history_days` | 10.9-28.6 s, 0.8-1.2 GB read: never actually idle (below), and the recount scanned `lives` once per branch |
+| Idle pass, minor checkpoints left alone | 0.34-0.36 s, 4.7-6.6 MB read (interpreter, from the SSD), 4 KB written; no new checkpoint on any branch, HDD write counters flat. The first pass after the deploy (0.68 s, 53 MB) left the old code's last minor checkpoint unpromoted |
+| History, disk1 | current 1.306 TB, retained 3.03 GB, reclaimable 1.40 GB, metadata 17.7 GB; 4,398 checkpoints, 4,299 snapshots |
+| History, disk2 / disk3 | current 80 MB / 105 MB, retained 3.06 GB / 2.5 GB |
+| Write-day panel | 12.7 s through Grafana when it grouped `lives` live; under a millisecond from `history_days` |
+
+`history_days` holds bytes per branch, write day and state. A pass rebuilds it only for branches it
+scanned, so an idle pass reads nothing from `lives`, and both the Prometheus totals and the Grafana
+panel read the small table. frser-sqlite-datasource 4.0.2 has no `$__unixEpochFrom()` macro (only
+`$__unixEpochGroupSeconds`); the panel bounds the range with Grafana's `$__from / 1000` instead.
+
+**Promotion fed itself.** `chcp ss` dirties the cpfile, so segctor writes a segment and records a
+*minor* checkpoint (`lscp -a` flag `i`: no file changed). The next pass saw the branch move,
+promoted that one, and so on: every branch, idle or not, gained one snapshot and one segment write
+per 15-minute pass, at the pass's own timestamp, and was never quiet long enough to park. The
+promoter has done this since it first listed with `lscp -a`; disk2's 260 checkpoints are mostly
+these. Minor checkpoints are now indexed but never promoted: they hold no file change, so the
+snapshot before them already shows the same tree. A recount now happens only when a pass touched
+an inode or reclaimed a segment, in one scan for every branch that needs it.
 
 #### Previous Versions over SMB
 
@@ -731,7 +763,8 @@ minutes. `@GMT-` names are UTC: convert through the epoch, never `date -u -d` on
 which silently parses it as UTC and leaves every name an hour off in BST.
 
 The Samba recycle bin is gone: history already holds every deleted file, so it was a second
-mechanism covering the same ground. Existing `.recycle/` contents were forgotten once.
+mechanism covering the same ground. Existing `.recycle/` contents are forgotten once with
+`nas-at forget /srv/nas/*/.recycle --yes`.
 
 **A plain checkpoint cannot be mounted. Only a snapshot can.** `mount -t nilfs2 -o cp=1365,ro`
 fails with `Invalid argument` until `chcp ss`. This is why promotion is load-bearing: the view and

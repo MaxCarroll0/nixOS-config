@@ -8,5 +8,6 @@ References: see [NAS history references](nas.md#nas-history-references).
       indistinguishability); btrbk retention policy; Time Machine thinning
 - [ ] Content-diff large-delta landmarks (the net-shrink proxy misses rewrites in place)
 - [ ] Day×level savings histogram, if `keep --target` misses its 10 s budget
-- [ ] In-tree summary reader instead of parsing `dumpseg`, if scan/backfill cost shows up
+- [ ] In-tree summary reader instead of parsing `dumpseg`: the pi's backfill read 2.4 TB (whole
+      segments, not summaries) over 2h17m
 - [ ] Upstream the libnilfsgc liveness callback to nilfs-utils
