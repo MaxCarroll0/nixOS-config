@@ -645,7 +645,6 @@ in
             "sops-install-secrets.service"
           ];
           partOf = [ "wg-quick-${cfg.interface}.service" ];
-          wantedBy = [ "multi-user.target" ];
           serviceConfig = {
             Type = "oneshot";
             ExecStart = "${vpnSwitchPkg}/bin/vpn-switch";
@@ -686,6 +685,7 @@ in
         vpn-autoselect = {
           wantedBy = [ "timers.target" ];
           timerConfig = {
+            OnActiveSec = selection.rotateEvery;
             OnUnitActiveSec = selection.rotateEvery;
             RandomizedDelaySec = "10m";
           };
