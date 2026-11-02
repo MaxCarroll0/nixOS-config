@@ -116,22 +116,29 @@ with subtest("view against branch: stat walk and sequential read"):
     R["view"] = walk
 
 with subtest("Previous Versions over SMB"):
+    written = set()
+    for _ in range(24):
+        sh(f"date -s '+16 minutes' > /dev/null && head -c 1M /dev/urandom > {B}/big/pv && sync && mkcp -s {DEV}")
+        written.add(sh(f"sha256sum < {B}/big/pv").split()[0])
+    settle()
     sh("echo 3 > /proc/sys/vm/drop_caches")
     before = view_mounts()
-    cold, out = timed(f"{SMB} -c 'allinfo big/seq'")
-    warm, _ = timed(f"{SMB} -c 'allinfo big/seq'")
+    cold, out = timed(f"{SMB} -c 'allinfo big/pv'")
+    warm, _ = timed(f"{SMB} -c 'allinfo big/pv'")
     names = re.findall(r"@GMT-[0-9.-]+", out)
     pv = {"versions": len(names), "list_cold_s": round(cold, 3), "list_warm_s": round(warm, 3), "mounts_listing": view_mounts() - before}
-    if names:
-        code, got = machine.execute(f"{SMB} -c 'get {names[0]}/big/seq /tmp/pv' 2>&1 && cmp /tmp/pv {B}/big/seq")
-        pv["get_ok"] = code == 0
-        pv["mounts_after_get"] = view_mounts() - before
-        if code:
-            pv["get"] = got.strip()[-300:]
-        sh("rm -f /tmp/pv")
-    else:
+    got = set()
+    for name in {names[0], names[-1]} if names else []:
+        code, text = machine.execute(f"{SMB} -c 'get {name}/big/pv /tmp/pv' 2>&1 && sha256sum < /tmp/pv")
+        got.add(text.split()[-2] if code == 0 else text.strip()[-300:])
+    sh("rm -f /tmp/pv")
+    pv["get_ok"] = len(got) == 2 and got <= written
+    pv["mounts_after_get"] = view_mounts() - before
+    if not pv["get_ok"]:
         pv["allinfo"] = out.strip()[-500:]
+        pv["got"] = sorted(got)
     R["previous_versions"] = pv
+    assert pv["versions"] == 24 and pv["get_ok"], pv
 
 with subtest("SnapRAID diff after reclaim"):
     dropped = churn("sr")
