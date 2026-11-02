@@ -27,6 +27,17 @@ let
 
   heroicNovpn = lib.hiPrio (pkgs.writeShellScriptBin "heroic" (novpn (lib.getExe pkgs.heroic)));
 
+  prismOfflineOwned = pkgs.prismlauncher.override {
+    prismlauncher-unwrapped = pkgs.prismlauncher-unwrapped.overrideAttrs (old: {
+      postPatch = (old.postPatch or "") + ''
+        substituteInPlace launcher/minecraft/auth/MinecraftAccount.h \
+          --replace-fail \
+            "return data.type != AccountType::Offline && data.minecraftEntitlement.ownsMinecraft;" \
+            "return data.type == AccountType::Offline || data.minecraftEntitlement.ownsMinecraft;"
+      '';
+    });
+  };
+
   steamVpn = pkgs.writeShellScriptBin "steam-vpn" ''
     exec ${steamPkg}/bin/steam "$@"
   '';
@@ -72,7 +83,7 @@ in
       steamNovpn
       steamVpn
       pkgs.heroic
-      pkgs.prismlauncher
+      prismOfflineOwned
       heroicNovpn
       pkgs.protonup-qt
       pkgs.lutris
