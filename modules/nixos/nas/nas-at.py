@@ -278,9 +278,10 @@ def index_branch(db, branch, promote):
             continue
         cno = int(fields[0])
         epoch = int(time.mktime(time.strptime(f"{fields[1]} {fields[2]}", "%Y-%m-%d %H:%M:%S")))
-        if fields[3] == "cp":
+        minor = len(fields) > 4 and fields[4] == "i"
+        if fields[3] == "cp" and not minor:
             plain.append(str(cno))
-        rows.append((branch, cno, epoch, int(fields[3] == "ss" or promote)))
+        rows.append((branch, cno, epoch, int(fields[3] == "ss" or (promote and not minor))))
     if promote:
         for batch in chunks(plain, 512):
             subprocess.run(["chcp", "ss", device, *batch], check=False, capture_output=True)
@@ -409,17 +410,23 @@ def all_inos(db, branch):
     return [r[0] for r in db.execute("SELECT DISTINCT ino FROM lives WHERE branch=?", (branch,))]
 
 
-def recount_days(db, br):
-    db.execute("DELETE FROM history_days WHERE branch=?", (br.path,))
-    db.execute(
-        "INSERT INTO history_days "
-        "SELECT ?, COALESCE(c.epoch / 86400 * 86400, 0) AS day, SUM(l.cur) * ?, SUM(l.ret) * ?, SUM(l.rec) * ? "
-        "FROM (SELECT s, SUM(CASE WHEN e=? THEN n ELSE 0 END) AS cur, "
+def recount_days(db, brs):
+    if not brs:
+        return
+    bsize = {br.path: br.bsize for br in brs}
+    db.execute(f"DELETE FROM history_days WHERE branch IN ({marks(bsize)})", tuple(bsize))
+    rows = db.execute(
+        "SELECT l.branch, COALESCE(c.epoch / 86400 * 86400, 0) AS day, SUM(l.cur), SUM(l.ret), SUM(l.rec) "
+        "FROM (SELECT branch, s, SUM(CASE WHEN e=? THEN n ELSE 0 END) AS cur, "
         "SUM(CASE WHEN e<? AND dead=0 AND seg IS NOT NULL THEN n ELSE 0 END) AS ret, "
         "SUM(CASE WHEN dead=1 AND seg IS NOT NULL THEN n ELSE 0 END) AS rec "
-        "FROM lives NOT INDEXED WHERE branch=? GROUP BY s) l "
-        "LEFT JOIN checkpoints c ON c.branch=? AND c.cno=l.s GROUP BY day",
-        (br.path, br.bsize, br.bsize, br.bsize, OPEN, OPEN, br.path, br.path),
+        f"FROM lives NOT INDEXED WHERE branch IN ({marks(bsize)}) GROUP BY branch, s) l "
+        "LEFT JOIN checkpoints c ON c.branch=l.branch AND c.cno=l.s GROUP BY l.branch, day",
+        (OPEN, OPEN, *bsize),
+    ).fetchall()
+    db.executemany(
+        "INSERT INTO history_days VALUES (?, ?, ?, ?, ?)",
+        [(b, day, cur * bsize[b], ret * bsize[b], rec * bsize[b]) for b, day, cur, ret, rec in rows],
     )
     db.commit()
 
@@ -1182,19 +1189,28 @@ class History:
     def run(self, walk=False, force=False, reclaim_force=False):
         self.hold()
         now = time.time()
-        results = {}
+        results, recount = {}, set()
         for br in self.live():
             touched, worked = self.refresh(br, walk=walk, force=force)
             if worked or reclaim_force:
                 results[br.path] = self.settle(br, touched, now, reclaim_force=reclaim_force)
-        self.metrics(recount=set(results))
+                if touched or (results[br.path] or {}).get("cleaned"):
+                    recount.add(br.path)
+        self.metrics(recount=recount)
         return results
 
     def metrics(self, recount=None):
         args, db = self.args, self.db
-        for br in self.live():
-            if recount is None or br.path in recount or one(db, "SELECT 1 FROM history_days WHERE branch=?", br.path) is None:
-                recount_days(db, br)
+        recount_days(
+            db,
+            [
+                br
+                for br in self.live()
+                if recount is None
+                or br.path in recount
+                or one(db, "SELECT 1 FROM history_days WHERE branch=?", br.path) is None
+            ],
+        )
         if not args.metrics:
             return
         lines = [

@@ -202,3 +202,9 @@ with subtest("an idle pass leaves the write-day table alone"):
     sh(f"touch {B}/idle-probe && sync && sleep 2")
     sh("nas-at pass")
     assert "-1" not in sh(f"sqlite3 {DB} 'SELECT current FROM history_days'").split()
+
+with subtest("a pass on a quiet branch creates no checkpoint"):
+    sh("nas-at pass && sleep 8 && nas-at pass && sleep 8")
+    newest = sh(f"lscp -a {DEV} | tail -1")
+    sh("nas-at pass && sleep 8 && nas-at pass && sleep 8")
+    assert sh(f"lscp -a {DEV} | tail -1") == newest, newest
