@@ -1,4 +1,4 @@
-# Steam with Proton, Heroic for Epic, Lutris with Wine, gamescope, GameMode and MangoHud.
+# Steam with Proton, Heroic for Epic, Prism Launcher for Minecraft, Lutris with Wine, gamescope, GameMode and MangoHud.
 
 {
   config,
@@ -72,6 +72,7 @@ in
       steamNovpn
       steamVpn
       pkgs.heroic
+      pkgs.prismlauncher
       heroicNovpn
       pkgs.protonup-qt
       pkgs.lutris
