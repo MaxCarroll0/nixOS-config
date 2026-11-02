@@ -9,22 +9,26 @@
 let
   cfg = config.local.nas;
 
-  shareOf = name: {
-    path = "${cfg.dataRoot}/${name}";
-    browseable = "yes";
-    writable = "yes";
-    "valid users" = name;
-    "force user" = name;
-    "force group" = name;
-    "create mask" = "0600";
-    "directory mask" = "0700";
-    "vfs objects" = "recycle";
-    "recycle:repository" = ".recycle/%Y-%m";
-    "recycle:keeptree" = "yes";
-    "recycle:versions" = "yes";
-    "recycle:touch" = "yes";
-    "recycle:exclude" = "*.tmp *.temp *.o *.obj ~$*";
-  };
+  shareOf =
+    name:
+    {
+      path = "${cfg.dataRoot}/${name}";
+      browseable = "yes";
+      writable = "yes";
+      "valid users" = name;
+      "force user" = name;
+      "force group" = name;
+      "create mask" = "0600";
+      "directory mask" = "0700";
+    }
+    // lib.optionalAttrs cfg.checkpoints.enable {
+      "vfs objects" = "shadow_copy2";
+      "shadow:mountpoint" = cfg.dataRoot;
+      "shadow:snapdir" = cfg.checkpoints.viewDir;
+      "shadow:format" = "@GMT-%Y.%m.%d-%H.%M.%S";
+      "shadow:localtime" = "no";
+      "shadow:sort" = "desc";
+    };
 in
 
 {

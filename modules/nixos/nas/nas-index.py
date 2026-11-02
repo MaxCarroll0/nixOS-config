@@ -30,29 +30,16 @@ CREATE TABLE IF NOT EXISTS scan_state (
     last_gen    INTEGER NOT NULL DEFAULT 0,
     last_run    INTEGER NOT NULL DEFAULT 0
 );
-
-CREATE TABLE IF NOT EXISTS versions (
-    owner       TEXT NOT NULL,
-    path        TEXT NOT NULL,
-    checkpoint  INTEGER NOT NULL,
-    size        INTEGER NOT NULL,
-    mtime       INTEGER NOT NULL,
-    seen        INTEGER NOT NULL,
-    PRIMARY KEY (owner, path, checkpoint)
-);
-CREATE INDEX IF NOT EXISTS versions_path ON versions (owner, path, seen DESC);
+DROP TABLE IF EXISTS versions;
 """
 
 THUMBNAILABLE = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".heic"}
 
 HIDE_MARKER = ".nashidden"
 
-# Not accounts: indexing these would multiply the index by the checkpoint window.
-RESERVED = {"snapshots", "lost+found"}
+RESERVED = {"lost+found"}
 
-# Each mounted generation under snapshots/ is a whole copy of the branch, so walking in
-# multiplies the index by the number of exposed generations.
-PRUNED_DIRS = {"snapshots", ".snapshots", ".recycle", "lost+found"}
+PRUNED_DIRS = {".snapshots", ".recycle", "lost+found"}
 
 
 def is_hidden_path(root, path):
@@ -87,22 +74,27 @@ def migrate(db):
     db.commit()
 
 
-def current_checkpoint(path):
-    """Newest NILFS2 checkpoint number for the filesystem holding path, or None."""
+def history_counts(history_db, owner):
+    """Retained edits per path under owner, from the NILFS2 history index."""
     try:
-        out = subprocess.run(
-            ["lscp", "-r", str(path)],
-            capture_output=True, text=True, timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
+        h = sqlite3.connect(f"file:{history_db}?mode=ro", uri=True, timeout=60)
+        rows = h.execute(
+            """
+            SELECT p.path, COUNT(DISTINCT p.branch || ':' || l.s)
+            FROM paths p JOIN lives l ON l.branch=p.branch AND l.ino=p.ino
+            WHERE p.path >= ? AND p.path < ?
+              AND (p.lo IS NULL OR l.s >= p.lo) AND (p.hi IS NULL OR l.s < p.hi)
+              AND NOT EXISTS (SELECT 1 FROM drops d
+                              WHERE d.branch=l.branch AND d.ino=l.ino AND d.lo<=l.s AND l.s<d.hi)
+            GROUP BY p.path
+            """,
+            (owner + "/", owner + "0"),
+        ).fetchall()
+        h.close()
+    except sqlite3.Error as e:
+        print(f"history counts for {owner}: {e}", file=sys.stderr)
         return None
-    if out.returncode != 0:
-        return None
-    for line in out.stdout.splitlines():
-        parts = line.split()
-        if parts and parts[0].isdigit():
-            return int(parts[0])
-    return None
+    return {path[len(owner) + 1:]: n for path, n in rows}
 
 
 def thumbnail_for(src, thumb_dir, size):
@@ -168,25 +160,6 @@ def full_scan(db, owner, root, thumb_dir, thumb_size, want_thumbs):
                 db.commit()
     db.commit()
     return seen
-
-
-def note_version(db, owner, root, path, checkpoint):
-    """Record which checkpoint holds this version, so revert is a lookup not a search."""
-    if checkpoint is None:
-        return
-    try:
-        st = path.lstat()
-    except OSError:
-        return
-    db.execute(
-        """
-        INSERT INTO versions (owner, path, checkpoint, size, mtime, seen)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(owner, path, checkpoint) DO NOTHING
-        """,
-        (owner, str(path.relative_to(root)), checkpoint,
-         st.st_size, int(st.st_mtime), int(time.time())),
-    )
 
 
 def export_metrics(db, out_path):
@@ -261,6 +234,7 @@ def main():
     ap.add_argument("--metrics-file")
     ap.add_argument("--no-thumbnails", action="store_true")
     ap.add_argument("--owner", action="append", default=[])
+    ap.add_argument("--history-db")
     args = ap.parse_args()
 
     data_root = Path(args.data_root)
@@ -280,23 +254,22 @@ def main():
         root = data_root / owner
         if not root.is_dir():
             continue
-        checkpoint = current_checkpoint(root)
-
         touched = full_scan(db, owner, root, thumb_dir,
                             args.thumb_size, not args.no_thumbnails)
 
-        if checkpoint is not None:
-            for row in db.execute(
-                "SELECT path FROM entries WHERE owner=? AND is_dir=0", (owner,)
-            ).fetchall():
-                note_version(db, owner, root, root / row[0], checkpoint)
+        counts = history_counts(args.history_db, owner) if args.history_db else None
+        if counts is not None:
+            db.executemany(
+                "UPDATE entries SET versions=? WHERE owner=? AND path=? AND is_dir=0",
+                [(n, owner, rel) for rel, n in counts.items()],
+            )
 
         db.execute(
             """
-            INSERT INTO scan_state (owner, last_gen, last_run) VALUES (?, ?, strftime('%s','now'))
-            ON CONFLICT(owner) DO UPDATE SET last_gen=excluded.last_gen, last_run=excluded.last_run
+            INSERT INTO scan_state (owner, last_gen, last_run) VALUES (?, 0, strftime('%s','now'))
+            ON CONFLICT(owner) DO UPDATE SET last_run=excluded.last_run
             """,
-            (owner, checkpoint or 0),
+            (owner,),
         )
         db.commit()
         print(f"{owner}: {touched} entries", file=sys.stderr)

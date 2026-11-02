@@ -315,7 +315,7 @@ let
       + "* on(instance) group_left() "
       + ''(label_replace(max by (peer) (tailscale_peer_online{instance="pi"}), "instance", "$1", "peer", "(.+)")''
       + ''or max by (instance) (up{job="node", instance="pi"}))''
-      + ''or (max by (instance) (last_over_time(host:up:1h[7d])) * 0)'';
+      + "or (max by (instance) (last_over_time(host:up:1h[7d])) * 0)";
   };
 
   slowSystemRules = {
@@ -1367,7 +1367,7 @@ in
         expr = "max by (branch) (nas_branch_used_ratio)";
         value = 0.8;
         for' = "30m";
-        summary = "{{ $labels.branch }} is {{ $value | humanizePercentage }} full. Retained history is never collected, so this only rises.";
+        summary = "{{ $labels.branch }} is {{ $value | humanizePercentage }} full. Free space with nas-at top, then nas-at keep or forget; the history pass reclaims what they drop.";
       })
       (threshold {
         uid = "nas-branch-nearly-full";
@@ -1376,7 +1376,7 @@ in
         value = 0.92;
         for' = "5m";
         severity = "critical";
-        summary = "{{ $labels.branch }} is {{ $value | humanizePercentage }} full. A full NILFS2 stops accepting writes; clean versions or add capacity.";
+        summary = "{{ $labels.branch }} is {{ $value | humanizePercentage }} full. A full NILFS2 stops accepting writes; drop history with nas-at keep or forget, or add capacity.";
       })
       (threshold {
         uid = "unclean-boot";

@@ -58,7 +58,6 @@ let
         path=''${line#*'"path":"'}
         path=''${path%%'"'*}
         case $path in "$branch"/*) ;; *) continue ;; esac
-        case $path in *"/${cfg.checkpoints.snapshotDir or "snapshots"}/"*) continue ;; esac
 
         comm=''${line#*'"comm":"'}
         comm=''${comm%%'"'*}
@@ -127,7 +126,6 @@ in
         "dd"
         "fatrace"
         "rsync"
-        "nilfs_cleanerd"
       ];
       description = "Bulk readers whose opens must not trigger read-ahead; a scrub would otherwise warm the whole array.";
     };

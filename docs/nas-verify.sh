@@ -22,7 +22,7 @@ mountpoint -q /srv/nas && echo "  pool: $(df -h /srv/nas | tail -1 | awk '{print
 
 echo
 echo "########## services"
-for u in nas-versions-watch-disk1 nas-versions-watch-disk2 nas-prefetch-disk1 \
+for u in nas-history-watch-disk1 nas-history-watch-disk2 nas-prefetch-disk1 \
          nas-prefetch-disk2 samba-smbd nginx grafana; do
   [ "$(systemctl is-active $u.service)" = active ] && ok "$u" || bad "$u inactive"
 done

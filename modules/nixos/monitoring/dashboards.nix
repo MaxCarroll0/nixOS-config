@@ -116,7 +116,7 @@ let
     // lib.optionalAttrs (timeFrom != null) { inherit timeFrom; }
     // lib.optionalAttrs noLiveSmoothing { __noLiveSmoothing = true; }
     // lib.optionalAttrs (description != null) { inherit description; }
-    // lib.optionalAttrs (lib.any (t: lib.hasInfix "pc:energy_" t.expr) targets) {
+    // lib.optionalAttrs (lib.any (t: lib.hasInfix "pc:energy_" (t.expr or "")) targets) {
       description =
         (if description == null then "" else description + " ")
         + "Electricity attributed to recorded device use, stored in non-overlapping minute totals. "
@@ -202,6 +202,21 @@ let
     type = "prometheus";
     uid = "prometheus-archive";
   };
+
+  nasHistoryDatasource = {
+    type = "frser-sqlite-datasource";
+    uid = "nas-history";
+  };
+
+  nasHistoryByDay = ''
+    SELECT c.epoch / 86400 * 86400 AS time,
+      SUM(CASE WHEN l.e = 9223372036854775807 THEN l.n ELSE 0 END) * 4096 AS current,
+      SUM(CASE WHEN l.e < 9223372036854775807 AND l.dead = 0 THEN l.n ELSE 0 END) * 4096 AS retained,
+      SUM(CASE WHEN l.dead = 1 THEN l.n ELSE 0 END) * 4096 AS reclaimable
+    FROM lives l JOIN checkpoints c ON c.branch = l.branch AND c.cno = l.s
+    WHERE l.seg IS NOT NULL AND c.epoch BETWEEN $__unixEpochFrom() AND $__unixEpochTo()
+    GROUP BY 1 ORDER BY 1
+  '';
 
   allTimeMaxPower = ''label_replace(max by (instance) (max_over_time(pc:power_watts_max{instance=~"$host"}[10y])), "category", "Max (all time)", "__name__", ".*")'';
 
@@ -5172,7 +5187,7 @@ let
       })
       (stat {
         title = "Branch fullness";
-        description = "History is never collected, so this only ever rises. A full NILFS2 stops accepting writes.";
+        description = "Space is given back only when nas-at keep or forget drops history and the pass reclaims it. A full NILFS2 stops accepting writes.";
         unit = "percentunit";
         w = 8;
         h = 4;
@@ -5195,11 +5210,55 @@ let
         ];
       })
       (stat {
-        title = "Generations exposed to SMB";
-        description = "Mounted under snapshots/ for Windows Previous Versions.";
+        title = "Reclaimable history";
+        description = "Blocks every rule has dropped, freed once the history pass reclaims their segments.";
+        unit = "bytes";
         w = 8;
         h = 4;
-        targets = [ { expr = "sum(nas_checkpoints_exposed)"; } ];
+        targets = [ { expr = ''sum(nas_history_bytes{state="reclaimable"})''; } ];
+      })
+      (ts {
+        title = "History bytes";
+        description = "File blocks still current, history kept by the rules, and history waiting for reclaim.";
+        unit = "bytes";
+        w = 12;
+        h = 8;
+        custom = lineCustom // {
+          fillOpacity = 30;
+          stacking.mode = "normal";
+        };
+        targets = [
+          {
+            expr = ''sum by (state) (nas_history_bytes{state!="freed"})'';
+            legendFormat = "{{state}}";
+          }
+          {
+            expr = "sum(nas_history_metadata_bytes)";
+            legendFormat = "metadata";
+          }
+        ];
+      })
+      (ts {
+        title = "History by write day";
+        description = "Bytes grouped by the day they were written: still current, kept as history, or reclaimable.";
+        unit = "bytes";
+        w = 12;
+        h = 8;
+        noLiveSmoothing = true;
+        custom = lineCustom // {
+          drawStyle = "bars";
+          fillOpacity = 80;
+          stacking.mode = "normal";
+        };
+        targets = [
+          {
+            datasource = nasHistoryDatasource;
+            queryType = "time series";
+            timeColumns = [ "time" ];
+            rawQueryText = nasHistoryByDay;
+            queryText = nasHistoryByDay;
+          }
+        ];
       })
       (ts {
         title = "Checkpoint growth";

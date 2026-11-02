@@ -9,6 +9,7 @@
 
 let
   cfg = config.local.monitoring;
+  nasHistory = config.local.nas.enable && config.local.nas.checkpoints.enable;
 
   rules = import ./rules.nix { inherit config lib; };
   dashboards = import ./dashboards.nix { inherit lib; };
@@ -685,7 +686,8 @@ in
         enable = true;
         declarativePlugins = [
           pkgs.grafanaPlugins.grafana-metricsdrilldown-app
-        ];
+        ]
+        ++ lib.optional nasHistory pkgs.grafanaPlugins.frser-sqlite-datasource;
         settings.server = {
           http_addr = "127.0.0.1";
           http_port = 3000;
@@ -753,7 +755,17 @@ in
             (datasource "Live (1s, 7d)" "prometheus" hiresPort)
             (datasource "Live (1s, 7d) default" "prometheus-lt" hiresPort)
             (datasource "History (1h, forever)" "prometheus-archive" longtermPort)
-          ];
+          ]
+          ++ lib.optional nasHistory {
+            name = "NAS history";
+            uid = "nas-history";
+            type = "frser-sqlite-datasource";
+            access = "proxy";
+            jsonData = {
+              path = config.local.nas.checkpoints.indexDb;
+              pathOptions = "mode=ro";
+            };
+          };
         };
 
         provision.dashboards.settings = {

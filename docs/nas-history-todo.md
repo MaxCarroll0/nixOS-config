@@ -2,7 +2,7 @@
 
 References: see [NAS history references](nas.md#nas-history-references).
 
-- [ ] Draft implementation (Phase 0 prototype, then components 1-5)
+- [x] Draft implementation (Phase 0 prototype, then components 1-5)
 - [ ] Age-graded resolution, design undecided. It must never merge two sessions. Refs: Santry et al.,
       "Deciding when to forget in the Elephant file system", SOSP '99 §2.3 (age-dependent
       indistinguishability); btrbk retention policy; Time Machine thinning

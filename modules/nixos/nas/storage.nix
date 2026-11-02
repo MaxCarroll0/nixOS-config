@@ -11,10 +11,6 @@ let
   cfg = config.local.nas;
   scfg = cfg.storage;
 
-  streamBranches = lib.unique (
-    lib.mapAttrsToList (_: s: "${scfg.diskRoot}/${s.branch}") (cfg.streams or { })
-  );
-
   dataMounts = lib.mapAttrsToList (name: _: "${scfg.diskRoot}/${name}") scfg.dataDisks;
 
   snapraidConf = pkgs.writeText "snapraid.conf" (
@@ -28,8 +24,6 @@ let
         "exclude /tmp/"
         "exclude .recycle/"
         "exclude .snapshots/"
-        # Each mounted generation is a whole view of the branch; parity must not walk them.
-        "exclude ${cfg.checkpoints.snapshotDir or "snapshots"}/"
         "exclude lost+found/"
         "blocksize 256"
         "autosave 250"
@@ -100,44 +94,6 @@ let
       fi
 
       flock ${cfg.nilfsWriteLock} snapraid --conf ${snapraidConf} sync
-    '';
-  };
-
-  cleaner = pkgs.writeShellApplication {
-    name = "nas-cleaner";
-    runtimeInputs = [
-      pkgs.nilfs-utils
-      pkgs.util-linux
-      pkgs.coreutils
-    ];
-    text = ''
-      usage() {
-        echo "usage: nas-cleaner start|status|stop <branch>" >&2
-        echo "  Collection is deliberate and bounded: retained history is never collected," >&2
-        echo "  so a collector should only run while reclaiming explicitly deleted versions." >&2
-        exit 2
-      }
-
-      cmd=''${1:-}; branch=''${2:-}
-      [ -n "$cmd" ] && [ -n "$branch" ] || usage
-      mountpoint -q "$branch" || { echo "not mounted: $branch" >&2; exit 1; }
-      device=$(findmnt -no SOURCE "$branch" | head -1)
-      stream_branches=( ${lib.escapeShellArgs streamBranches} )
-      if [ "$cmd" = start ]; then
-        for stream_branch in "''${stream_branches[@]}"; do
-          if [ "$(realpath "$branch")" = "$stream_branch" ]; then
-            echo "refusing: $branch holds a NAS stream, whose history is never collected" >&2
-            exit 1
-          fi
-        done
-      fi
-
-      case "$cmd" in
-        start)  nilfs_cleanerd -c ${scfg.cleanerConfig} "$device" "$branch" ;;
-        status) nilfs-clean -l "$device" ;;
-        stop)   nilfs-clean -q "$device" ;;
-        *)      usage ;;
-      esac
     '';
   };
 
@@ -255,12 +211,6 @@ in
       default = 5000;
       description = "Modifications above which the nightly sync refuses to touch parity.";
     };
-
-    cleanerConfig = lib.mkOption {
-      type = lib.types.path;
-      default = ./nilfs_cleanerd.conf;
-      description = "Collector settings, passed with -c so no collector ever starts implicitly.";
-    };
   };
 
   config = lib.mkIf (cfg.enable && scfg.enable) {
@@ -276,7 +226,6 @@ in
     ];
 
     environment.systemPackages = [
-      cleaner
       pkgs.snapraid
       pkgs.mergerfs
       pkgs.nilfs-utils

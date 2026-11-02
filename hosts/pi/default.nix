@@ -27,7 +27,6 @@
     ../../modules/nixos/nas/client.nix
     ../../modules/nixos/nas/unlock.nix
     ../../modules/nixos/nas/checkpoints.nix
-    ../../modules/nixos/nas/versions.nix
     ../../modules/nixos/nas/prefetch.nix
     ../../modules/nixos/nas/streams.nix
     ../../modules/nixos/fancontrol.nix
@@ -281,7 +280,6 @@
       parityDevice = "/dev/disk/by-uuid/48be9161-8f27-4b53-94f7-a7aa67bd8f53";
     };
     checkpoints.enable = true;
-    versions.enable = true;
     prefetch.enable = true;
     streams.minecraft = {
       branch = "disk1";

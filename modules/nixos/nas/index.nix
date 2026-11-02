@@ -11,6 +11,9 @@ let
   cfg = config.local.nas;
   icfg = cfg.index;
 
+  history = cfg.checkpoints.enable;
+  historyDir = dirOf cfg.checkpoints.indexDb;
+
   watchStamp = "${icfg.stateDir}/watch.stamp";
   watchPending = "${icfg.stateDir}/watch.pending";
 
@@ -22,7 +25,7 @@ let
       pkgs.diffutils
     ];
     text = ''
-      stat -c '%n %s %Y' ${cfg.versions.stateDir}/*.jsonl > ${watchPending} 2>/dev/null || true
+      stat -c '%n %s %Y' ${historyDir}/events/*.jsonl > ${watchPending} 2>/dev/null || true
       [ -n "$(find ${watchStamp} -mmin -1440 2>/dev/null)" ] || exit 0
       cmp -s ${watchPending} ${watchStamp} && exit 1
       exit 0
@@ -43,6 +46,7 @@ let
         --thumb-dir ${icfg.stateDir}/thumbs \
         --thumb-size ${toString icfg.thumbnailSize} \
         --metrics-file ${icfg.metricsFile} \
+        ${lib.optionalString history "--history-db ${cfg.checkpoints.indexDb}"} \
         ${lib.optionalString (!icfg.thumbnails) "--no-thumbnails"} "$@"
     '';
   };
@@ -108,9 +112,9 @@ in
           icfg.stateDir
           (builtins.dirOf icfg.metricsFile)
         ];
-        ReadOnlyPaths = [ cfg.dataRoot ];
+        ReadOnlyPaths = [ cfg.dataRoot ] ++ lib.optional history historyDir;
       }
-      // lib.optionalAttrs cfg.versions.enable {
+      // lib.optionalAttrs history {
         ExecCondition = lib.getExe changeGate;
         ExecStartPost = "${pkgs.coreutils}/bin/mv ${watchPending} ${watchStamp}";
       };

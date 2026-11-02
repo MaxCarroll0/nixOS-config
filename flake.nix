@@ -283,6 +283,10 @@
               pkgs = pkgsFor "x86_64-linux";
               inherit lib;
             };
+            x86_64-linux.nas-at = import ./tests/nas-at.nix {
+              pkgs = pkgsFor "x86_64-linux";
+              inherit lib;
+            };
           };
 
       packages.x86_64-linux = {

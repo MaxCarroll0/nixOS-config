@@ -1,4 +1,4 @@
-# nilfs-utils 2.3.1 with the history liveness filter, plus nilfs-reclaim.
+# nilfs-utils 2.3.1 with the history liveness filter, plus nilfs-reclaim, nilfs-lives and nas-at.
 
 { lib }:
 
@@ -33,5 +33,20 @@ final: prev: {
   nilfs-reclaim = final.runCommandCC "nilfs-reclaim" { buildInputs = [ final.nilfs-utils ]; } ''
     mkdir -p $out/bin
     $CC -O2 -Wall -Wextra -Werror -o $out/bin/nilfs-reclaim ${./nilfs-reclaim.c} -lnilfsgc -lnilfs
+    $CC -O2 -Wall -Wextra -Werror -DHAVE_LINUX_TYPES_H=1 -DHAVE_STDDEF_H=1 -DHAVE_SYS_SYSMACROS_H=1 -DHAVE_GETPROGNAME=1 \
+      -I${final.nilfs-utils.src}/include -o $out/bin/nilfs-lives ${./nilfs-lives.c} -lnilfsgc -lnilfs
   '';
+
+  nas-at = final.writeShellApplication {
+    name = "nas-at";
+    runtimeInputs = [
+      final.nilfs-utils
+      final.nilfs-reclaim
+      final.util-linux
+      final.systemd
+    ];
+    text = ''
+      exec ${final.python3.withPackages (ps: [ ps.fusepy ])}/bin/python3 ${./nas-at.py} "$@"
+    '';
+  };
 }

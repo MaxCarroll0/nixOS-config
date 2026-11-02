@@ -4,7 +4,7 @@ Design-of-record for turning `pi` into a shared, encrypted, observable family NA
 keeping it the always-on Grafana and Wake-on-LAN node it already is.
 
 **Status: stages 1-6 built; the array holds live data and is versioned.** Storage, checkpoints,
-per-file versions, parity, SMB, the browse index, prefetch and the Attic cache are deployed and
+per-file history control (4.6), parity, SMB, the browse index, prefetch and the Attic cache are deployed and
 exercised against the real disks. What remains is onboarding anyone other than Max (stage 3's
 enrolment and Tailscale sharing, gated on real per-request identity), the application-tier choice
 (stage 7) and the offsite follow-ons (stage 8). Section 15 carries the per-stage detail, and
@@ -333,8 +333,8 @@ so a block cache cannot deliver the other two under any tuning:
   - The reconciliation walk runs in the **nightly window** when disks are already spinning for
     `snapraid sync`, so it costs no extra spin-up.
   - The watcher records a monotonic event sequence, so a gap is detectable rather than silent.
-  - Checkpoint numbers from `lscp` are recorded alongside each observed change, which is what
-    lets `nas-versions` mount exactly one checkpoint instead of searching.
+  - Version identity comes from the log itself (`nilfs-lives`, 4.5.2), not from event times, so a
+    missed event loses a path rename at worst, never a version.
 
   Because the array is built fresh, counts begin at zero and no backfill is required.
 
@@ -357,7 +357,7 @@ dependency is reversed and the component is correspondingly less robust:
 |---|---|---|
 | Tree changes, immediate | fanotify events into single-row upserts | O(1) per event |
 | Tree changes, reconciliation | full walk in the nightly spin-up window | O(files) |
-| Version identity | checkpoint number from `lscp` recorded with each observed change | O(1) |
+| Version counts | retained edits per path, read from the history index (4.5.2) | O(changes) |
 | Thumbnails | generated at ingest while the file is still on the SSD tier | zero HDD I/O |
 
 The reconciliation walk is the only thing that can repair drift, and it is O(files) rather than
@@ -407,120 +407,98 @@ same capability to whichever server is chosen. If OpenCloud does win, its native
 store versions in its state directory separately from the btrfs snapshots of section 4.6.
 Whether to disable one, accept the duplication, or reconcile them is decided at Stage 7.
 
-### 4.5.2 The version index, as built
+### 4.5.2 The history index, as built
 
-Separate from the browse index, and much smaller: `modules/nixos/nas/versions.nix` maintains the
-mapping from a file to every checkpoint that contains a change to it. Two integer tables in one
-SQLite file on the SSD:
-
-```
-versions(branch, ino, cno, created) PRIMARY KEY (branch, ino, cno)
-inodes  (branch, path, ino, seen)   PRIMARY KEY (branch, path)
-```
-
-**`versions` must be keyed by branch, not by inode alone.** Inode numbers are per-filesystem, so
-with two branches disk1 and disk2 both allocate low numbers and unrelated files collide. The first
-two-branch test showed one disk2 path listing four versions, two from disk2's checkpoint space and
-two from disk1's, out of chronological order. The listing is the visible symptom; the dangerous one
-is `restore --version N` picking a cno that belongs to the other branch and mounting that number on
-this device, where it is often a valid but unrelated checkpoint, so the wrong contents come back
-silently. This was invisible for as long as there was one branch.
-
-**Two traps in walking a branch that has its window mounted.** Both appear only once promotion is
-running, so neither was reachable during development:
-
-- **`find` reports a filesystem loop.** A checkpoint mounted inside its own branch shares the
-  device, so `find` warns `File system loop detected` and **exits 1**, which `set -e` turns into a
-  failed unit. `-not -path` filters the output but does not stop find entering. Prune instead:
-  `find "$branch" -xdev -path "$branch/snapshots" -prune -o -type f -printf ...`.
-- **A tree walk multiplies by the number of generations.** `nas-index` pruned btrfs's dotted
-  `.snapshots` but not the NILFS2 `snapshots`, so it would have walked into every mounted
-  generation, each a complete copy of the branch. This is the same dotted-name mismatch that hit
-  the SnapRAID exclude list; that name has now caused the bug twice.
-
-**`readlink -m`, not `-f`, when resolving a path for lookup.** `-f` fails if any parent is missing,
-which is exactly the case for a file whose directory was deleted, so listing a deleted file's
-history died silently before printing anything. Verified after the fix: a file whose parent
-directory was removed still lists all four versions and restores byte-identical.
-
-**Lookups resolve the inode from the live file, not from the recorded path.** Applications
-routinely write to a temporary name and rename into place, and NILFS2 keeps the inode across the
-rename while `fatrace -f W+D` never sees the move. SnapRAID is a live example: its history was
-recorded against `.snapraid.content.tmp`, so a query for `.snapraid.content` returned nothing.
-`stat`-ing the live path gives the authoritative inode and the history follows the rename; the
-recorded path is the fallback, used for files that no longer exist.
-
-A million versions is roughly 24 MB. Nothing is resident between runs: SQLite is a library, not
-a server, and the ingest is a `oneshot` timer.
-
-**Why an index is required at all.** "Show me every version of this file and when" cannot be
-answered by scanning checkpoints, because nothing is ever collected: there will eventually be
-tens of thousands, and mounting each to `stat` one path is O(checkpoints) per query.
-
-**Why not `dumpseg`.** It does carry the mapping — `ino` and `cno` per log entry — but measured
-on disk1 it emits 120 KB and 2047 lines per segment at 74 ms, of which **one line** is useful.
-Extrapolated to the 427 GB migration (~53,000 segments) that is ~6.4 GB of text and ~65 minutes
-of Pi CPU to recover a few thousand rows. It is also documented as a debugging tool, so its
-format is not a stable interface. It stays as the **offline audit path** for checking the index
-against the log, which is what a debugging tool is for. `lssu` reports segment usage only, with
-no inode detail, so it does not help.
-
-**Collection is `fatrace`**, the packaged C fanotify tool — one instance per NILFS2 branch,
-`-c` scoping it to that mount:
+`nas-at` keeps everything history needs in one SQLite file on the SSD,
+`/var/lib/nas-checkpoints/index.db` (WAL, directory `0750 root:grafana` so Grafana can read it):
 
 ```
-fatrace -c -j -f W+D -t -t -o <events>.jsonl
+checkpoints(branch, cno, epoch, ss)                 every checkpoint, appended from lscp
+lives(branch, ino, vblk, n, s, e, seg, off, dead)   block runs with their exact DAT lifetime [s, e)
+paths(branch, ino, inc, path, dir, lo, hi, since)   which name an inode held over which cnos
+policy(id, paths, rule, params, lo, hi, created, undone)   one row per user action
+drops(rule, branch, ino, lo, hi)                    rendered: "no snapshot in [lo, hi) counts for ino"
+rendered, gc_runs, scan, meta                       bookkeeping
 ```
 
-`-j` gives JSONL carrying `inode`, `path` and an epoch `timestamp`, so no path-to-inode
-resolution is needed afterwards. Writing the consumer in Python was rejected: the stdlib has no
-fanotify, so it would mean hand-written `ctypes` syscall wrappers plus an interpreter's RSS —
-C-in-Python with the drawbacks of both. The ingest is shell (`jq`, `sqlite3`, `lscp`).
+**Everything is keyed by branch.** Inode and checkpoint numbers are per filesystem, and the first
+two-branch test of the old index listed one disk2 path with versions from disk1's checkpoint space.
+Restoring one would have mounted an unrelated checkpoint of the right number, silently.
 
-**Time to checkpoint.** A write lands in the first checkpoint at or after it, so each event
-resolves to `MIN(cno) WHERE cp.epoch >= event.ts`. This must be a per-row scalar subquery; an
-earlier `JOIN ... ON c.cno = (subquery)` silently dropped versions and was caught only by a test
-that expected three checkpoints and got one.
+**Where each table comes from.**
 
-**Checkpoint times are whole seconds, so the tie must break towards the later checkpoint.**
-`lscp` reports to the second while several checkpoints can share one, and a checkpoint created in
-the same second as a write may still predate it. Taking the *first* qualifying checkpoint recorded
-a version that could never be restored: the test wrote a file at `T`, checkpoints 1 and 2 both
-reported `T`, the index chose cp1, and mounting cp1 found no file. Ordering by
-`epoch, cno DESC` takes the last checkpoint in that second instead, which does contain the write.
+- `lives` is read from the log itself by `nilfs-lives` (C, in `nilfs-utils.nix`, linked against
+  libnilfs). `follow` walks the segment chain from the last position recorded in `scan` to the
+  sysfs head (`segctor/last_seg_sequence`, `segctor/last_pseg_block`), emitting each file's block
+  runs with their `GET_VINFO` lifetimes. The summary's `ss_next` is the next segment's first
+  *block*, not its number (`dumpseg` divides it for display); the first `follow` compared it as a
+  segment number and reported a broken chain on the first segment boundary. `probe` re-reads the lifetime of runs that may have ended.
+  A run is keyed by `(branch, vblk, s)`, so blocks moved by GC upsert onto the same row with their
+  new `seg`. Inode reuse needs no special case: a reused number gets new vblocks with later `s`.
+- `paths` comes from `nas-history-watch-<branch>`, one `fatrace -c -j -f 'W+D<>' -t -t` per NILFS2
+  branch. Writes give the file and inode; creates, deletes and both halves of a rename give the
+  directory, which the pass then re-lists. A nightly `nas-history-walk` re-lists the whole branch
+  inside the SnapRAID window as the backstop for a watcher outage.
+- `checkpoints` is `lscp -a -i <last+1>`, so each pass costs only the new checkpoints.
 
-**Rotation, forced by `fatrace`'s output handling.** It opens `-o` with `O_CREAT|O_WRONLY|O_EXCL`
-and no `O_APPEND`, which has two consequences: a stale file makes the watcher fail to start (so
-the unit removes it in `ExecStartPre`), and the file cannot be renamed or truncated out from
-under it. Ingest therefore reads forward from a stored byte offset, and rotates only by deleting
-the file and restarting the watcher once it passes `rotateBytes` (64 MB).
+**Why `nilfs-lives` and not `dumpseg`.** `dumpseg` carries the same data, but measured on disk1 it
+prints 120 KB and 2,047 lines per segment at 74 ms, so the 53,000-segment migration is ~6.4 GB of
+text and ~65 minutes of pi CPU. It is also a debugging tool with no stable format. `nilfs-lives`
+reads the same summaries through libnilfs and emits one line per run.
 
-**The known weakness is missed events while the watcher is down.** The backstop is
-`nas-versions-reconcile`, a timed pass comparing each file's mtime against its newest recorded
-version. It is built and runs, and it recovers *that* a file changed, not that it changed three
-times: a watcher outage still collapses several versions into one.
+**The pass** (`nas-at pass`, `nas-checkpoint-promote.timer`, every 15 minutes, idle I/O class) does,
+per branch:
 
-Version *number* is the ordinal of a checkpoint within that inode's history, so "currently on
-version 12" is a `COUNT(*)` and the full timestamped list is one indexed range scan.
+1. **Nothing**, unless the sysfs log head moved or the event file grew. An idle pass reads no disk.
+2. Promote new checkpoints to snapshots, follow the log, re-list touched directories, probe
+   touched inodes.
+3. Render the rules (4.6) for the touched paths into `drops`, and mark runs whose blocks no
+   retained instant needs as `dead`.
+4. Reclaim when the branch is under 15% free: `nilfs-reclaim` over segments at least 25% dead,
+   oldest first, recorded in `gc_runs`.
+5. Write the textfile metrics.
 
-### 4.5.3 Reading a previous version, and time travel
+The first pass on a branch with no `scan` row backfills it from every dirty segment, about an hour
+on disk1 at idle priority. `nas-at backfill` repeats that by hand if the log chain is ever found
+broken (the pass then says so instead of guessing).
 
-Two access paths, deliberately separate:
+**fatrace output rotation.** It opens `-o` with `O_CREAT|O_EXCL` and no `O_APPEND`, so a stale file
+stops it starting (the unit removes it in `ExecStartPre`) and the file cannot be truncated under it.
+The pass reads forward from a stored byte offset and restarts the watcher once the file passes
+`rotateBytes` (64 MB).
 
-**Per file, on demand.** `nas-versions list <path>` is an index query with no mounts at all.
-`nas-versions restore <path> --version N` mounts that one checkpoint read-only in a temporary
-directory, copies the file out and unmounts. Mounting is the only way to read from a checkpoint —
-NILFS2 exposes no API to read a path from a checkpoint without one — so this is a single
-transient mount, not a whole-array operation.
+**Timers use `OnActiveSec`, not `OnBootSec`.** On a host already past `OnBootSec`, the timer fires
+the moment activation installs it, and a failing `oneshot` makes `switch-to-configuration` exit 4,
+which rolls the deploy back. The first versions deploy failed exactly this way. Every history unit
+also sets `restartIfChanged = false`, so a running backfill never blocks an activation.
 
-**By time, any path.** `/srv/nas-at/<ISO time>/<path>` is a read-only FUSE view (`nas-at-view`)
-of the pool as it was at that instant, to the millisecond: `ls '/srv/nas-at/2026-11-01T14:03:27.250/max'`.
-`nas-at resolve <path> '<time>'` prints that view path for a pool or branch path, or says the path
-did not exist then. See section 25 for how a time maps to a checkpoint and what precision means.
-Writes fail with `EROFS` by construction.
+### 4.5.3 Reading the past
 
-It is **not** a globally atomic cut: each path resolves its own checkpoint on its own branch. That
-is acceptable because user-affinity placement keeps an account on one branch.
+- **One file.** `nas-at log <path>` lists every retained and dropped edit of a path across inodes
+  and branches, with bytes, the rules that apply, pins and a `moved` tag for mover copies. No
+  mounts. `nas-at revert <path> (-n N | --at T)` copies that version back in as a new edit.
+- **A directory.** `nas-at revert <dir> --at T` snaps T back to the latest instant every rule in
+  scope retained, prints it, copies the tree from it and removes files created since (they stay in
+  history). The restored tree is therefore a state that actually existed.
+- **By time, any path.** `/srv/nas-at/<ISO time>/<path>` is a read-only FUSE view (`nas-at-view`)
+  of the pool at that instant: `ls '/srv/nas-at/2026-11-01T14:03:27.250/max'`. `nas-at resolve
+  <path> '<time>'` prints the view path, or says the path did not exist then. Writes fail with
+  `EROFS`. The view root also lists the last 24 quarter-hour `@GMT-…` names that Samba shows as
+  Previous Versions (4.6).
+
+The view is **not** a globally atomic cut: each path resolves on its own branch. User-affinity
+placement keeps an account on one branch, so this does not show in practice.
+
+**The view is the only thing that mounts a checkpoint, and it never opens a dropped version.**
+This is a kernel constraint, found in the Phase 0 prototype (4.6). A `cp=` mount shares the live
+branch's super block. Once GC has freed a dropped version's blocks, reading it turns a DAT
+`-ENOENT` into `-EINVAL`, which reaches `__nilfs_error` and remounts the **live** branch read-only.
+After the DAT entry is reused it can instead return another file's bytes. So the resolver serves
+an inode at time T from the latest retained edit at or before T, hides forgotten inodes, mounts
+with a non-blocking `flock` on the write lock (a `snapraid sync` holds it for hours; the version
+then shows as unavailable), and refuses while the suspend marker exists. The reclaim pass bumps a
+policy generation that the view re-reads on every lookup, and it refuses to run while any other
+`cp=` mount of the branch exists or the view has files open.
 
 ### 4.6 Versions: NILFS2 checkpoints
 
@@ -531,28 +509,21 @@ unrecoverable, and a file created and deleted inside that window leaves no trace
 the reason for the change.
 
 Checkpoints live **outside the filesystem namespace**. They are listed with `lscp`, promoted to
-permanent snapshots with `chcp ss` (which protects them from garbage collection), removed with
-`rmcp`, and read by mounting: `mount -t nilfs2 -o cp=<n>,ro`.
+snapshots with `chcp ss` (which protects them from garbage collection) and read by mounting:
+`mount -t nilfs2 -o cp=<n>,ro`.
 
 Two consequences are worth stating because they contradict the earlier btrfs design:
 
-1. **SnapRAID still needs the snapshot exclusion, for a different reason.** Checkpoints are not
-   files, so parity does not see them — but the SMB window *mounts* up to 24 of them inside each
-   branch at `snapshots/@GMT-…`, and each mount is a complete view of that branch. Without
-   `exclude snapshots/`, `snapraid sync` walks every one and computes parity over roughly 24x the
-   array. The inherited config excluded btrfs's dotted `.snapshots/`, which does not match the
-   NILFS2 window directory; that mismatch was live and only harmless because promotion happened
-   to be suspended, leaving the directory empty.
-2. **Promotion is retention, and everything is promoted.** `nilfs_cleanerd`'s protection period
-   is time-bounded and cannot express "keep forever", so `nas-checkpoint-promote` runs `chcp ss`
-   over every checkpoint it finds. A promoted checkpoint is immune to collection, which means the
-   collector has nothing to reclaim and **is not run on a timer at all**.
-
-   **The cost, stated plainly: space grows monotonically with churn and is never returned.** That
-   is the requirement, not a flaw, but it needs an honest failure mode — a full NILFS2 filesystem
-   stops accepting writes — so `nas_branch_used_ratio` and `nas_checkpoint_snapshots` are exported
-   and alertable. Also unmeasured: whether NILFS2 stays healthy at very large snapshot counts. At
-   one checkpoint per 250 MB written, a terabyte of writes is ~4,000 snapshots.
+1. **Checkpoints are not files, so parity never sees them.** The old SMB window mounted 24 of them
+   inside each branch at `snapshots/@GMT-…`, which needed a SnapRAID exclude (and the dotted btrfs
+   `.snapshots/` name did not match it). The time view now mounts under `/run/nas-at`, outside every
+   branch, so nothing history-related is inside a branch at all.
+2. **Every checkpoint is promoted, and history is thinned per file instead.** `nilfs_cleanerd`'s
+   protection period is time-bounded and whole-filesystem, so it can neither keep forever nor keep
+   one file's history while dropping another's. Every branch mounts `nogc`, `nas-at pass` runs
+   `chcp ss` over every new checkpoint, and space comes back only through the per-file rules below
+   and `nilfs-reclaim`. A full NILFS2 stops accepting writes, so `nas_branch_used_ratio`,
+   `nas_history_bytes` and the `nas-branch-filling` alerts stay; they now point at `nas-at top`.
 
 **Measured checkpoint rate.** Writing 1000 MB to disk1 in 21 seconds produced 4 checkpoints:
 
@@ -565,11 +536,11 @@ and near-zero when idle (two checkpoints five minutes apart on a quiet filesyste
 *activity*, not elapsed time, which is what makes "retain everything" affordable here where a
 fixed timer would not be.
 
-**The trap this exposes: do not blindly promote during bulk ingest.** A 427 GB migration generates
-roughly 1,700 checkpoints, almost all of which capture *partial file-transfer states* of no value.
-Promoting them pins that garbage permanently. `nas-checkpoint-promote` promotes everything it
-finds by design, so the operational rule is to **stop its timer before a migration and start it
-afterwards**; unpromoted checkpoints are then collectable.
+**Bulk ingest no longer needs promotion suspended for space.** A 427 GB migration creates ~1,700
+checkpoints of partial transfer states, and measurement showed they cost about 7 GB (0.4%), because
+a fresh bulk copy is almost all live data. If they matter, `nas-at keep <dir> --quantum inf --from
+<start> --until <end>` drops them afterwards. The suspend marker remains for its other purpose:
+holding every mount and pass off the array while something else needs it to itself.
 
 #### Future opportunity: btrfs with btrbk
 
@@ -602,8 +573,8 @@ the data that changes least.
 
 So `sda4` (the write tier, section 4.1) is NILFS2 as well. This suits it: a log-structured
 filesystem writes sequentially, which is what flash prefers, and its garbage collection costs no
-seeks and — critically — never touches a spun-down HDD. The nightly GC window applies to the HDD
-branches; the SSD can be collected freely.
+seeks and, critically, never touches a spun-down HDD. Reclaim runs only from the history pass,
+and only on a branch under its free-space threshold.
 
 `sda5`, the bcache read cache, is unaffected. It is block-level and below the filesystem, so it
 has no bearing on versioning.
@@ -619,151 +590,175 @@ intermediate save of an actively-edited file needs to know that window is finite
 mover should promote a file's *history* as well as its current contents is unresolved, and there
 is no cheap mechanism for it: checkpoints cannot be transplanted between filesystems.
 
-#### Exposing versions to SMB
+#### Per-file history control
 
-Samba's `shadow_copy2` needs generations visible as directories, which NILFS2 does not provide
-natively. Mounting each branch's checkpoint **inside that branch**, at
-`/mnt/disks/<branch>/snapshots/@GMT-<ts>/`, makes the **single existing mergerfs** union them by
-name — the same by-name union the btrfs design relied on.
+References for this subsection are at the top of this document ([NAS history
+references](#nas-history-references)); open work is in [`nas-history-todo.md`](nas-history-todo.md).
+
+No per-file GC exists for NILFS2. Rohner's cost-benefit series and thesis cover only which segments
+to clean, and were never merged. The design here adds **one liveness hook and one rule kind**, and
+lets NILFS2 do the rest.
+
+**The hook.** nilfs-utils decides block liveness in userspace (`lib/gc.c`, `nilfs_vdesc_is_live`):
+a block lives while some snapshot cno lies in its DAT lifetime `[start, end)`. `nilfs-history.patch`
+adds a callback to libnilfsgc that, after the stock protection test, removes the inode's **drop
+ranges** from that interval before the stock snapshot search runs on what is left. `nilfs-reclaim
+--policy F --protcno N [--dry-run] DEVICE SEGNUM...` (`nilfs-reclaim.c`) runs
+`nilfs_reclaim_segment` with that callback over explicit segments and prints `freed_vblks`, so a
+dry run is the real computation. There is no resident `nilfs_cleanerd` at all: no oldest-first
+sweep over ~53,000 fully live migration segments, no cpfile re-read, no unattended disk wake-ups.
+
+**The rule kind.** The policy file holds `ino lo hi` lines meaning "no snapshot in `[lo, hi)` counts
+for this inode". Ranges intersect for free (a cno counts only if no range drops it). They are always
+closed and bounded by the inode's lifetime under that number, because NILFS2 reuses inode numbers.
+Snapshots themselves are never deleted and stay the global time index, with one exception below.
+
+**Retained instants.** A rule acts on a **scope**, the paths it was given and everything under
+them. It picks a set R of checkpoints on the scope's merged edit timeline, and every file in scope
+keeps the version that was current at each instant in R, plus its live version; `nas-at` writes the
+gaps between consecutive instants as drop ranges. So **every instant in R is an exact snapshot of
+the whole scope**, and a directory revert to one is consistent. Interleaved edits to several files
+in one scope therefore save less than per-file thinning would; that is the price of consistency.
+
+| `nas-at keep <paths> …` | R is |
+|---|---|
+| `--quantum Q` | the last edit in each clock-aligned bucket of Q (`10m`, `1h`, `1d`, `inf`), plus landmarks |
+| `--pairs [-x N]` | every second intermediate edit dropped between landmarks, repeated N times |
+| `--continuous` | every edit (no drops) |
+| `--none` | nothing but pins: historyless |
+| `--target 5G` / `--target-ratio 0.6` | the first quantum in 1 s, 5 s, 10 s, 30 s, 1 m, 5 m, 10 m, 30 m, 1 h, 1 d, inf that frees that much |
+
+`--from T --until T` bounds the range; `--from now` sets a resolution for future edits and closes
+the previous future rule on the same scope. `--dry-run` prints what would be freed. Savings come
+from `lives`, the exact VINFO lifetimes, not an estimate.
+
+**Landmarks** are instants every stitch keeps, so the scope is consistent there too (after Elephant's
+"keep landmarks": edits arrive in bursts, and the last version of a burst is the one worth keeping).
+
+- **Session end**: the last edit before the scope sits idle for at least `--gap` (default 10 m,
+  `checkpoints.landmarkGap`). A Minecraft world's session ends when the server drains.
+- **Large removal**: the instant before an edit that shrinks a path by at least 25% and 64 KiB,
+  summed across its inodes so atomic saves count.
+- **Pins**: `nas-at pin <path> [-n N | --at T]` marks a version; only `forget` drops it.
+
+A quantum bucket containing a landmark is split at it, pairs runs separately inside each piece, and
+`--quantum inf` keeps exactly the landmarks. `--no-landmarks` stops adding session and removal
+landmarks (pins still apply), for a single file or any scope, while R is still chosen on the scope's
+merged timeline, so what remains is still consistent. **Future rules only stitch sessions that have
+ended**; the open session is kept whole until the next one starts, the safe direction.
+
+**Defaults.** `checkpoints.historyless` (`tmp`, `.cache`, `*/.cache`) is the built-in rule #0: a
+historyless future rule over those globs, shown by `nas-at rules`.
+
+**Other commands.**
+
+- `nas-at top [dir] [--by size|history|ratio] [-n N]`: the largest files and the ones whose history
+  dwarfs them.
+- `nas-at forget <paths> --yes`: recursive `rm` plus a drop over each inode's whole lifetime. The
+  content is freed; the name is tagged deleted and hidden from every view, though old directory
+  blocks still hold it. Refuses the whole pool; lists the pins it drops.
+- `nas-at rules [--all]`, `nas-at undo <id>`: undo is refused once a reclaim has freed blocks under
+  that rule, since the old versions no longer exist.
+- `nas-at reclaim [--dry-run]`: reclaim now instead of waiting for the 15% free threshold.
+
+**Drops never shrink once enforced.** After a reclaim, a range that later stopped being dropped would
+make the view believe a freed version is readable, which is the Phase 0 hazard (4.5.3). So a
+re-rendered rule unions its previous drops once any reclaim has run since it was created.
+
+**Whole-pool stitching demotes snapshots.** Inode-table and directory blocks belong to no user file,
+so per-file drops cannot reclaim them. `nas-at keep / …` (and only a rule over the whole pool) also
+runs `chcp cp` on every snapshot not in R, recorded in the rule so `undo` can re-promote them while
+that is still possible.
+
+**Stated limits.** Precision is one log (one sync). Truncating a tiny file held in a direct bmap is
+not seen until the inode is touched again. A rewrite in place that keeps the size is not a large
+removal (TODO). Per-file rules cannot reclaim metadata.
+
+#### Phase 0: the prototype that set the constraints
+
+`tests/nas-history.{nix,py}`, a throwaway VM on a 256-block-segment NILFS2, before anything touched
+the pi:
+
+- A drop range on one inode across 100 snapshots: the dry run predicted 1,854 freed blocks and the
+  real reclaim freed 1,857 (0.16%). A second pass found nothing. Every other file was byte-identical
+  at every checkpoint, and an inode number reused mid-history kept its new file intact.
+- Reading a dropped version after its blocks were freed **remounted the live branch read-only**.
+  Mounting the live branch `errors=continue` kept it writable, but the read still failed, and after
+  the DAT entry was reused it could return foreign data, so `errors=continue` was declined in
+  favour of never opening a dropped version (4.5.3).
+- 1,000 checkpoint mount and unmount cycles under a concurrent writer produced no Oops or warning.
+
+#### End-to-end VM test
+
+`tests/nas-at.{nix,py}` (`checks.x86_64-linux.nas-at`) drives the real `nas-at`, fatrace watcher
+and view on a 256-block-segment NILFS2: two editing sessions over interleaved files, a pinned
+file, a large removal, a `.cache/` file, then every command in turn.
+
+| Check | Result |
+|---|---|
+| View before any rule | every edit of `proj/` byte-identical through `/srv/nas-at/@EPOCH` |
+| `.cache/` | one current version, every older one dropped by rule #0 |
+| `--quantum inf` | keeps exactly session end, pin, large removal and range end; the view at every edit shows the latest kept state |
+| `--no-landmarks` | keeps only the range end; the first edit's view is empty, not stale |
+| `--pairs` on interleaved files | every directory revert lands on a real state, snapped back where a drop covers it |
+| `forget` | gone from the branch and every view time, `log` shows `tagged: deleted` |
+| `reclaim` | dry run 532 blocks, real 532 blocks (2.1 MiB, 5 segments); retained views unchanged after; branch still writable, no NILFS error |
+| Metrics | `nas_history_bytes` reports current, retained, reclaimable and freed > 0 |
+
+It found three bugs the unit-level prototype could not:
+
+- `ss_next` is a block number (4.5.2), so the first segment boundary looked like a broken log.
+- A command that scanned new segments (`pin`, `log`, `keep`) advanced the cursor without
+  re-rendering the rules those segments touched, so `.cache/` edits scanned by a `pin` were never
+  dropped. Every scan now renders what it consumed.
+- The history lock lived under the view's mount directory, so reclaim's own lock looked like an
+  open view file and every real reclaim was postponed. It is `/run/nas-history.lock` now.
+
+#### Previous Versions over SMB
+
+Each share runs `shadow_copy2` against the time view instead of mounts inside the branches:
 
 ```
-shadow:mountpoint = /srv/nas        shadow:snapdir = /srv/nas/snapshots
-shadow:basedir    = /srv/nas/data   shadow:format  = @GMT-%Y.%m.%d-%H.%M.%S
+vfs objects = shadow_copy2       shadow:mountpoint = /srv/nas
+shadow:snapdir = /srv/nas-at     shadow:format = @GMT-%Y.%m.%d-%H.%M.%S
+shadow:localtime = no            shadow:sort = desc
 ```
 
-**`@GMT-` names are UTC, and `date -u -d` alone does not produce them.** `-u` sets `TZ=UTC` for
-the whole process, so it parses `lscp`'s local timestamp *as* UTC and returns it unchanged — a
-silent no-op that leaves every generation an hour off in BST. Convert through the epoch instead,
-which also picks the right offset for the checkpoint's own date rather than today's:
+The view root lists the newest 24 quarter-hour `@GMT-` names, each resolving like any other time, so
+Windows' right-click Previous Versions needs no client software and no per-generation mounts; the
+view mounts a checkpoint only when a version is actually opened, and unmounts it after 10 idle
+minutes. `@GMT-` names are UTC: convert through the epoch, never `date -u -d` on a local timestamp,
+which silently parses it as UTC and leaves every name an hour off in BST.
 
-```bash
-epoch=$(date -d "$cpdate $cptime" +%s)
-name=$(date -u -d "@$epoch" +@GMT-%Y.%m.%d-%H.%M.%S)
-```
+The Samba recycle bin is gone: history already holds every deleted file, so it was a second
+mechanism covering the same ground. Existing `.recycle/` contents were forgotten once.
 
-Verified on the pi: a August checkpoint at 14:29:32 local yields `13.29.32`, while a January one
-at the same clock time yields `14.29.32`, since GMT has no offset.
+**A plain checkpoint cannot be mounted. Only a snapshot can.** `mount -t nilfs2 -o cp=1365,ro`
+fails with `Invalid argument` until `chcp ss`. This is why promotion is load-bearing: the view and
+`revert` both mount.
 
-Cost per exposed generation is **two kernel mounts**, a few KB — not a mergerfs process each. An
-earlier estimate of 7.5 MB per generation was wrong: it assumed one mergerfs per generation to
-union the branches, which mounting inside the branches avoids.
+**nilfs-utils is pinned past 2.2.12, where promotion is a silent no-op.** 2.2.12 inverts the
+`[DEVICE]`/`CNO` test in `bin/chcp.c`, so every `chcp ss "$device" N` failed behind `|| true` and
+the snapshot count sat at 0. Fixed upstream in `27bfa50c4` (2.3.0); the overlay is on 2.3.1 with
+the history patch. Write-up in `docs/nilfs-chcp-bug.md`.
 
-Only a **bounded rolling window** is exposed this way (default 24). That is what gives Windows
-its native right-click Previous Versions with no client software, while keeping the mount count
-predictable. Everything older is reached through the web tier, which mounts on demand.
+**The history pass and new view mounts are suspended by a marker file, not by stopping a timer.**
+`systemctl mask` fails on a NixOS unit whose `/etc/systemd/system` entry is a store symlink, and a
+stopped timer is restarted by the next activation. `touch /run/nas-promote-suspended`; the units
+carry `ConditionPathExists=!` on it, so a skip is not a failure.
 
-**Verified end to end on the live array**, with real NILFS2 checkpoints on disk1:
+**Every nilfs tool takes the device, never the mountpoint.** `lscp /mnt/disks/disk1` fails with
+`No such device or address`; `lscp /dev/mapper/nas-disk1` works.
 
-```
-/dev/mapper/nas-disk1 /mnt/disks/disk1/snapshots/@GMT-2026.08.19-03.16.09 nilfs2 ro,cp=2
-/dev/mapper/nas-disk1 /mnt/disks/disk1/snapshots/@GMT-2026.08.19-03.11.02 nilfs2 ro,cp=1
-
-ls /srv/nas/snapshots/   ->   @GMT-2026.08.19-03.11.02  @GMT-2026.08.19-03.16.09
-```
-
-Checkpoints mount read-only inside the branch under the exact name `shadow_copy2` expects, and
-mergerfs surfaces them at pool level. `ro,cp=N` means a rewound view is unwritable by
-construction rather than by policy.
-
-**A plain checkpoint cannot be mounted. Only a snapshot can.**
-
-```
-mount -t nilfs2 -o cp=1365,ro /dev/mapper/nas-disk1 ...
-  ->  Error while mounting: Invalid argument
-```
-
-`cp=N` succeeds only once that checkpoint has been promoted with `chcp ss`. This makes promotion
-load-bearing rather than merely a retention policy: the SMB window, `nas-versions restore` and
-`nas-at` all mount, so **none of them can reach a checkpoint that was never promoted**. It is also
-why the migration's unpromoted checkpoints are unreachable as well as collectable, which is the
-intended outcome there.
-
-**nilfs-utils is pinned to 2.3.0, and on nixpkgs' 2.2.12 promotion is a silent no-op.** 2.2.12
-inverts the `[DEVICE]`/`CNO` test in `bin/chcp.c`, so `nas-checkpoint-promote`'s
-`xargs -n1 chcp ss "$device"` failed on **every** invocation, swallowed by `|| true`. The snapshot
-count sat at 0 while the unit reported success — and since an unpromoted checkpoint is also
-unmountable, nothing was retained *and* nothing was readable. Full write-up and reproduction in
-`docs/nilfs-chcp-bug.md`.
-
-Fixed upstream in `27bfa50c4`, released in 2.3.0; the overlay in `storage.nix` bumps to it.
-
-**Promotion is suspended by a marker file, not by stopping the timer.** `systemctl mask` cannot be
-used on a NixOS unit whose `/etc/systemd/system` entry is a store symlink, and a stopped timer is
-restarted by the next activation — which is how a deploy mid-migration nearly pinned ~1,300
-bulk-ingest checkpoints permanently. `nas-checkpoint-promote` therefore carries
-`ConditionPathExists=!/run/nas-promote-suspended`; `touch` that file for a bulk copy and remove it
-afterwards. A failed condition marks the unit skipped rather than failed, so it cannot break an
-activation either.
-
-**Timers must use `OnActiveSec`, not `OnBootSec`.** On a host whose uptime already exceeds
-`OnBootSec`, the timer fires the instant activation installs it, so a `oneshot` that fails takes
-`switch-to-configuration` to exit 4 and deploy-rs rolls the whole generation back. That is exactly
-how the first `versions.nix` deploy failed.
-
-**Operational note: every nilfs tool takes the device, never the mountpoint.** `lscp
-/mnt/disks/disk1` fails with `cannot open NILFS ... No such device or address`, while `lscp
-/dev/mapper/nas-disk1` works. This silently produced "promoted 0" until it was found.
-
-**`nilfs_cleanerd` could not start at all until `/etc/nilfs_cleanerd.conf` existed.** The earlier
-reading, that no collector "had been started", was wrong: every attempt died immediately with
-
-```
-/etc/nilfs_cleanerd.conf: bad configuration file
-cannot create cleanerd on /dev/dm-3: Invalid argument
-```
-
-nilfs-utils ships a sample at `$out/etc/nilfs_cleanerd.conf`, but NixOS never links a package's
-`etc/` into `/etc`, so the file was simply absent. This matters far more than it appears: the
-accepted failure mode of this design is that a branch fills up, and without a startable collector
-there is **no way to reclaim space even after deleting versions**.
-
-The settings live in `modules/nixos/nas/nilfs_cleanerd.conf`, version controlled and passed
-explicitly with `nilfs_cleanerd -c`. Deliberately **not** installed to `/etc`: nothing should be
-able to start a collector implicitly while the policy is to retain everything. `nas-cleaner
-start|status|stop <branch>` is the only intended entry point.
-
-**Beware `nilfs-clean -s`: that is `--suspend`, not status.** Status is `-l`. Using `-s` to "check"
-a running cleaner silently suspends it.
-
-**Deleting checkpoints frees no space by itself** — `nilfs-clean` only signals a running collector. Under the retain-everything policy that is the
-correct steady state — every checkpoint is a snapshot, so there is nothing to reclaim and no
-collector runs. It matters only during a bulk migration, when the timer is stopped deliberately
-and the unpromoted checkpoints do need collecting; start `nilfs_cleanerd` by hand for that
-window, so collection never touches a spun-down disk unattended.
-
-**Measured: bulk-ingest checkpoints cost almost nothing, so reclaiming them is pointless.** After
-the migration, disk1 held 2,171 checkpoints against a 427 GB live tree while the filesystem
-reported 434 GB used, so the entire checkpoint overhead was about **7 GB, 0.4% of the disk**.
-Running the collector over it removed nothing and sat `idle`, because `min_reclaimable_blocks 10%`
-skips segments that are mostly live data, which a fresh bulk copy is. The concern that motivated
-suspending promotion (that promoting bulk checkpoints "pins that garbage permanently") assumed a
-large space cost that measurement does not support.
-
-**Suspend promotion during bulk ingest.** At the measured rate, copying 427 GB creates ~1,700
-checkpoints, almost all of them partial file-transfer states. Promoting those pins them
-permanently. Stop `nas-checkpoint-promote.timer` before a migration and restart it afterwards;
-unpromoted checkpoints are then reclaimed by the collector.
-
-The earlier proof, before any disk was reformatted — two tmpfs mounts inside separate branches
-unioned by name through the existing mergerfs mount:
-
-```
-mount -t tmpfs tmpfs /mnt/disks/disk1/snapshots/probe   # contains a.txt
-mount -t tmpfs tmpfs /mnt/disks/disk2/snapshots/probe   # contains b.txt
-ls /srv/nas/snapshots/probe/                            # -> a.txt  b.txt
-```
-
-mergerfs traverses submounts inside its branches, so checkpoint mounts placed there appear as
-unified generations. This was tested before any disk was reformatted, because the whole
-native-SMB half of the design depends on it.
+**Beware `nilfs-clean -s`: that is `--suspend`, not status.** Nothing here runs `nilfs-clean` any
+more, but the trap is worth keeping in mind on any NILFS2 host.
 
 ### 4.7 Namespace and protection tiers
 
 ```
 /srv/nas/data/users/<name>/           <name>:<name>, mode 0700
-/srv/nas/data/users/<name>/.recycle/  Samba recycle bin, purged at 90 days
 /srv/nas/data/shared/<group>/         root:nas-<group>, mode 2770
-/srv/nas/snapshots/@GMT-.../          union of per-branch snapshots
+/srv/nas-at/<time>/...                read-only time view; @GMT-... names for Previous Versions
 /srv/cache                            Attic (p3)
 ```
 
@@ -968,64 +963,26 @@ button.
 
 ## 7. Deletion and recovery
 
-**There is no recycle bin.** It was removed: a checkpoint taken before a deletion still contains
-the file, so continuous versioning *is* deletion recovery, and `vfs_recycle` plus a 90-day purge
-timer was a second mechanism covering the same ground. One mechanism, not two.
+**There is no recycle bin.** History already contains every deleted file, so `vfs_recycle` was a
+second mechanism covering the same ground; it was dropped and existing `.recycle/` contents were
+forgotten once. The one thing it caught that history does not is a file created and deleted inside
+one log, a window of one sync.
 
-The one thing recycle caught that checkpoints do not is a file created and deleted between two
-checkpoints. With NILFS2 that window is the segment write interval rather than a timer, so it is
-far narrower than it would be with periodic snapshots — but it is not zero.
+- **Restore a file**: `nas-at log <path>` lists its versions; `nas-at revert <path> -n N` or
+  `--at T` copies one back in as a new edit. Recent times are also in Windows Explorer's Previous
+  Versions (4.6).
+- **Rewind a folder**: `nas-at revert <dir> --at T` restores the tree as it was at the latest
+  consistent instant at or before T (4.5.3), or browse `/srv/nas-at/<time>/…` read-only.
+- **Permanent delete**: `nas-at forget <path> --yes` removes it and drops every version of every
+  inode it held; the pass reclaims the blocks. Unrelated history in the same checkpoints is
+  untouched, which `rmcp` could never do.
+- **Opting out**: `nas-at keep <dir> --none --from now`, or the `checkpoints.historyless` globs
+  (`tmp`, `.cache`, `*/.cache` by default).
 
-- **Restore a version**: `nas-versions list <path>` reads the index; `nas-versions restore` mounts
-  exactly one checkpoint read-only, copies the file out, unmounts. Recent history is also visible
-  natively in Windows Explorer via Previous Versions (section 4.6).
-- **Rewind a folder**: the web tier presents a whole directory as of a chosen point. Writes to it
-  are impossible rather than forbidden — the checkpoint is mounted `ro` and an unpromoted
-  checkpoint cannot be mounted writable at all. Restoring is an explicit copy forward into the
-  live tree, so the live tree stays the only writable surface.
-- **Permanent delete**: see the limitation below.
-
-**Permanent delete is coarser on NILFS2 than it would be on btrfs.** `rmcp` removes a whole
-checkpoint; there is no way to strip one path from one checkpoint, whereas a btrfs snapshot can be
-flipped read-write and edited. So purging a file from history means deleting every checkpoint that
-contains it, which discards unrelated history in that window. **Unresolved:** whether that is
-acceptable, or whether purge should be defined as live-tree-only with history expiring naturally.
-
-Note that `shred` and `wipe` are **ineffective in this stack** and must not be relied upon: a
-log-structured filesystem never overwrites in place, and the SSD's flash translation layer
-relocates writes regardless. Disposing of a drive is covered by LUKS, not by file deletion.
-
-### 7.1 Ideas the version index makes possible
-
-Both are unbuilt. They are recorded because the index changes what is feasible, not because they
-are scheduled.
-
-**Opting a file out of versioning.** NILFS2 checkpoints are whole-filesystem, so a file cannot be
-excluded from one. The mechanism therefore has to be placement, not policy: keep a branch that is
-**not** NILFS2 — plain ext4 or xfs — in the mergerfs pool, and move opted-out files there. mergerfs
-unions by name, so the file stays at the same path in `/srv/nas` while nothing about it is
-versioned and its blocks are freed on delete like any ordinary filesystem. Good candidates are
-caches, transcodes, downloads that can be re-fetched, and anything large and derived.
-
-**Retroactively reclaiming a deleted file's history.** Today purging one file from history means
-deleting every checkpoint containing it, which discards unrelated history in the same window. The
-index makes this *decidable* rather than all-or-nothing: it knows exactly which checkpoints hold
-versions of a given inode, so it can identify checkpoints whose only content is that inode. Those
-can be removed with `rmcp -f` with no collateral loss, and the collector then reclaims the space.
-
-This is common in practice: a large file written on its own occupies whole checkpoints by itself.
-Deleting a 40 GB video and reclaiming its history would work cleanly, while a file edited alongside
-others in the same checkpoint would not — and the index can say which case applies before anything
-is removed, rather than after.
-
-Both need a way to answer "which inodes does checkpoint N contain", which `dumpseg` provides
-offline. That is the right use for a debugging tool: an occasional, deliberate audit rather than a
-routine path.
-
-Note that `shred` and `wipe` are **ineffective in this stack** and must not be relied upon:
-btrfs is copy-on-write so overwriting a file writes to new blocks and leaves the originals
-intact, and the SSD's flash translation layer relocates writes so overwrite-in-place is
-meaningless. Disposing of a drive is covered by LUKS, not by file deletion.
+`shred` and `wipe` are **ineffective in this stack** and must not be relied upon: a log-structured
+filesystem never overwrites in place, and the SSD's flash translation layer relocates writes
+regardless. Even `forget` frees blocks for reuse rather than erasing them. Disposing of a drive is
+covered by LUKS, not by file deletion.
 
 ## 8. Failure envelope
 
@@ -1374,19 +1331,19 @@ or stop it, before reorganising the tree.
 
 `local.nas.enable` is **true** on the pi. Every `config` block still sits behind `mkIf`, so the
 tree is inert on every other host, but on the pi it contributes `nas-snapraid-sync`,
-`nas-snapraid-scrub`, `nas-index`, `nas-checkpoint-promote`, `nas-versions-ingest`,
-`nas-versions-reconcile`, one `nas-prefetch-<branch>` per data disk, `atticd`, their timers and
+`nas-snapraid-scrub`, `nas-index`, `nas-checkpoint-promote` (the history pass), `nas-history-walk`,
+`nas-at-view`, one `nas-history-watch-<branch>` and one `nas-prefetch-<branch>` per data disk, `atticd`, their timers and
 the cifs automount.
 
 | file | provides | on the pi |
 |---|---|---|
 | `accounts.nix` | `local.nas.accounts`, explicit uids 3000-3999, homes 0700, uid-uniqueness assertion, and `/etc/nas/identity-map` from each account's `tailscaleLogin` | enabled, two accounts |
-| `samba.nix` | one private share per account, `valid users` scoped to the owner, SMB3 + required encryption, `vfs_recycle` | enabled, `tailscale0` only |
+| `samba.nix` | one private share per account, `valid users` scoped to the owner, SMB3 + required encryption, `shadow_copy2` over the time view | enabled, `tailscale0` only |
 | `storage.nix` | mergerfs pool with the placement policy from section 4, SnapRAID config, sync and scrub timers that no-op unless every branch is mounted | enabled |
-| `index.nix` + `nas-index.py` | SQLite browse index, `find-new` incremental scan, version counter, thumbnailer, per-user usage and file-age metrics | enabled |
-| `checkpoints.nix` + `nas-at.py` | the incremental checkpoint index, `nas-checkpoint-promote` (retention), the bucketed `@GMT-` window for Samba, the `/srv/nas-at` time view, checkpoint metrics from sysfs | enabled |
+| `index.nix` + `nas-index.py` | SQLite browse index, `find-new` incremental scan, version counts from the history index, thumbnailer, per-user usage and file-age metrics | enabled |
+| `checkpoints.nix` + `nas-at.py` | the history index and pass (promote, scan, rules, reclaim, metrics), the `fatrace` watchers, the `/srv/nas-at` time view with its `@GMT-` names, `nas-at log/top/revert/keep/forget/pin` | enabled |
+| `nilfs-utils.nix` + `nilfs-history.patch`, `nilfs-reclaim.c`, `nilfs-lives.c` | nilfs-utils 2.3.1 with the per-inode liveness callback, the explicit-segment reclaimer and the log reader | enabled |
 | `streams.nix` | tailnet rsync daemon modules; each completed transfer becomes one NILFS2 snapshot | enabled, `minecraft` on `disk1` |
-| `versions.nix` | one `fatrace` watcher per NILFS2 branch, the ingest timer, the `nas-versions-reconcile` mtime backstop, `nas-versions list`/`restore` | enabled |
 | `prefetch.nix` | `nas-prefetch`: `fatrace -c -f O -j` driving a read-ahead loop with per-directory cooldown, file and byte budgets, a bulk-reader ignore list and textfile counters | enabled, one unit per branch |
 | `unlock.nix` | `nas-unlock-local`/`nas-lock-local` plus `nas.target` on the server; `nas-unlock`/`nas-lock` on the client | server on the pi, client on the laptop |
 | `attic.nix` | atticd on `/srv/cache`, nginx vhost and TLS, 7-day GC | enabled, `tailscale0` only |
@@ -1401,10 +1358,12 @@ Metrics exported for dashboards, all read from the index rather than the array s
 ever wakes a disk: `nas_user_bytes`, `nas_user_files`, `nas_user_directories`, `nas_age_bytes`,
 `nas_age_files`, `nas_oldest_file_seconds`, `nas_metadata_warm_entries`,
 `nas_metadata_warm_seconds`, `nas_metadata_warm_timestamp_seconds`, `nas_branch_size_bytes`,
-`nas_branch_used_ratio`, `nas_checkpoints`, `nas_checkpoint_snapshots`, `nas_checkpoints_exposed`,
+`nas_branch_used_ratio`, `nas_checkpoints`, `nas_checkpoint_snapshots`, `nas_history_bytes{state}`,
+`nas_history_metadata_bytes`, `nas_history_rules`,
 `nas_metrics_timestamp_seconds` and `nas_prefetch_{files,bytes,skipped}_total`. The `NAS usage`
 dashboard (uid `nas-usage`, in the metrics folder) charts totals, per-account usage, file age and
-warm-pass age. Alerts live in `modules/nixos/monitoring/rules.nix`: `nas-branch-filling`,
+warm-pass age, plus history bytes by state and, through a SQLite datasource on the history
+index, history by write day. Alerts live in `modules/nixos/monitoring/rules.nix`: `nas-branch-filling`,
 `nas-branch-nearly-full`, `nas-array-unmounted` and `nas-metrics-stale`.
 
 Two gaps in that list. The warm-pass age panel reads permanently stale because `cache.nix` is not
@@ -1721,7 +1680,7 @@ still mounted and still unlocked. Three distinct faults stacked:
    complete failure to unmount was reported as success. Same shape as section 20: the happy path
    and the total-failure path produce identical output.
 3. **A bare `umount` cannot release the branches.** This is the real mechanism, and it is not
-   obvious. `nas-versions-watch-disk{1,2}` and `nas-prefetch-disk{1,2}` are four `fatrace`
+   obvious. `nas-history-watch-disk{1,2}` (then `nas-versions-watch`) and `nas-prefetch-disk{1,2}` are four `fatrace`
    processes whose `WorkingDirectory` is inside the branch, and they are correctly declared
    `partOf = [ mountUnit ]`. But **`PartOf=` propagates only a unit stop.** `umount` takes the
    mount down behind systemd's back, the `.mount` unit is never stopped, the watchers are never
@@ -1936,8 +1895,8 @@ mysterious rather than systemic.
 
 The fix is `local.nas.index.interval = "6h"` (now the module default). A disk parks ~3660 s after
 each walk and stays parked for the rest of the cycle, so disk1 goes from 0% parked to ~83%.
-Staleness costs nothing that matters: `nas-versions-watch-*` sees every change live through
-fatrace, so versioning is unaffected and only the browse cache, thumbnails and the usage panel
+Staleness costs nothing that matters: `nas-history-watch-*` sees every change live through
+fatrace, so history is unaffected and only the browse cache, thumbnails and the usage panel
 lag. A better design would trigger the index from the watcher instead of a timer, at which point
 the interval stops mattering at all.
 
@@ -1970,8 +1929,8 @@ or not anything changed, which is a floor of pointless spin-ups on an array that
 at a time.
 
 `nas-index.service` now carries an `ExecCondition` that skips the walk when the pool has not
-changed. The signal is free: `nas-versions-watch-*` already records every write through fatrace
-into `/var/lib/nas-versions/<branch>.jsonl`, and that directory is on the SSD, so the check is a
+changed. The signal is free: `nas-history-watch-*` already records every write through fatrace
+into `/var/lib/nas-checkpoints/events/<branch>.jsonl`, and that directory is on the SSD, so the check is a
 `stat` that never touches a spinning disk. The gate stores `%n %s %Y` for those files and compares
 against the stamp from the last successful index; `ExecStartPost` promotes the stamp only on
 success, so a failed index retries rather than silently marking itself done. An `ExecCondition`
@@ -1997,26 +1956,22 @@ inverting the gate; the explicit trailing `exit 0` is what prevents that.
 ## 25. Continuous streams and the time view
 
 **Requirement.** Pick any file or directory and any instant, and see it as it was, to the
-millisecond, with nothing ever collected. The Minecraft server in `damien-fedora` on desktopnew
+millisecond, wherever the rules (4.6) retained it. The Minecraft server in `damien-fedora` on desktopnew
 is the first stream, captured every 60 s.
 
 **Any instant is already on disk.** NILFS2 writes a log per sync, and every log is a checkpoint;
-there is no on-disk state between two logs. With `nogc` on every branch (no `nilfs_cleanerd` can
-start, even implicitly) and promotion snapshotting everything, every state the array ever held is
-retained. What limited rewinding was the index: `lscp` plus one `date` per checkpoint per minute
-does not survive thousands of checkpoints a day.
+there is no on-disk state between two logs. Every branch mounts `nogc`, the pass snapshots every
+checkpoint, and nothing is collected except what a rule drops.
 
-**The index.** `nas-at index` appends to `/var/lib/nas-checkpoints/index.db` with
-`lscp -a -i <last+1>`, so each run costs only the new checkpoints. Promotion, the window,
-`nas-versions-ingest` and `-reconcile` all read it (versions attaches it as a view), and metrics
-come from `/sys/fs/nilfs2/<dev>/checkpoints/*_number` in O(1).
+**The index** is the history index of 4.5.2: checkpoints are appended with `lscp -a -i <last+1>`,
+and metrics come from `/sys/fs/nilfs2/<dev>/checkpoints/*_number` in O(1).
 
-**How a time maps to a file.** Checkpoint times are whole seconds. For an ordinary path at time T
-the view takes the first checkpoint after T, provided that version's ctime is at or before T;
-otherwise the checkpoint before. Two writes between the same pair of logs cannot be told apart,
-and the earlier one is gone: that is the real precision limit, set by how often the writer syncs.
-Stream paths resolve by **capture** time instead, to the newest point captured at or before T,
-however late it was applied.
+**How a time maps to a file.** For an ordinary path at time T the view takes the latest retained
+edit of that inode at or before T, from `lives` rather than from ctime guesses, and serves it from
+an already-mounted checkpoint when no edit lies between the two. Two writes inside one log cannot be
+told apart: that is the real precision limit, set by how often the writer syncs. Stream paths
+resolve by **capture** time instead, to the newest point captured at or before T, however late it
+was applied.
 
 **The Minecraft stream.**
 
