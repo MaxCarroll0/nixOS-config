@@ -485,6 +485,20 @@ def recount_days(db, brs):
     db.commit()
 
 
+def published_counts(path):
+    found = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                name, _, value = line.strip().rpartition(" ")
+                for metric, slot in (("nas_checkpoints{branch=\"", 0), ("nas_checkpoint_snapshots{branch=\"", 1)):
+                    if name.startswith(metric) and name.endswith("\"}") and value.isdigit():
+                        found.setdefault(name[len(metric) : -2], [None, None])[slot] = int(value)
+    except FileNotFoundError:
+        pass
+    return {label: tuple(pair) for label, pair in found.items() if None not in pair}
+
+
 def read_events(db, br, args):
     path = os.path.join(args.state, "events", br.name + ".jsonl")
     offset = one(db, "SELECT events_offset FROM scan WHERE branch=?", br.path) or 0
@@ -1334,17 +1348,18 @@ class History:
     def run(self, walk=False, force=False, reclaim_force=False):
         self.hold()
         now = time.time()
-        results, recount = {}, set()
+        results, recount, worked_on = {}, set(), set()
         for br in self.live():
             touched, worked = self.refresh(br, walk=walk, force=force)
             if worked or reclaim_force:
+                worked_on.add(br.path)
                 results[br.path] = self.settle(br, touched, now, reclaim_force=reclaim_force)
                 if touched or (results[br.path] or {}).get("cleaned"):
                     recount.add(br.path)
-        self.metrics(recount=recount)
+        self.metrics(recount=recount, worked_on=worked_on)
         return results
 
-    def metrics(self, recount=None):
+    def metrics(self, recount=None, worked_on=None):
         args, db = self.args, self.db
         recount_days(
             db,
@@ -1376,8 +1391,11 @@ class History:
             "# HELP nas_metrics_timestamp_seconds When this file was last written.",
             "# TYPE nas_metrics_timestamp_seconds gauge",
         ]
+        published = published_counts(args.metrics) if worked_on is not None else {}
         for br in self.live():
             label = br.name
+            counts = published.get(label) if br.path not in (worked_on or ()) else None
+            checkpoints, snapshots = counts or (br.read("checkpoints/checkpoints_number"), br.read("checkpoints/snapshots_number"))
             st = os.statvfs(br.path)
             size = st.f_blocks * st.f_frsize
             used = (st.f_blocks - st.f_bfree) * st.f_frsize
@@ -1389,8 +1407,8 @@ class History:
             freed = one(db, "SELECT COALESCE(SUM(freed), 0) FROM gc_runs WHERE branch=?", br.path)
             tracked = current + retained_b + reclaimable
             lines += [
-                f'nas_checkpoints{{branch="{label}"}} {br.read("checkpoints/checkpoints_number")}',
-                f'nas_checkpoint_snapshots{{branch="{label}"}} {br.read("checkpoints/snapshots_number")}',
+                f'nas_checkpoints{{branch="{label}"}} {checkpoints}',
+                f'nas_checkpoint_snapshots{{branch="{label}"}} {snapshots}',
                 f'nas_branch_used_ratio{{branch="{label}"}} {used / size if size else 0:.6f}',
                 f'nas_branch_size_bytes{{branch="{label}"}} {size}',
                 f'nas_history_bytes{{branch="{label}",state="current"}} {current}',

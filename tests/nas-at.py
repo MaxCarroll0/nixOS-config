@@ -269,6 +269,18 @@ with subtest("a pass on a quiet branch creates no checkpoint"):
     sh("nas-at pass && sleep 8 && nas-at pass && sleep 8")
     assert sh(f"lscp -a {DEV} | tail -1") == newest, newest
 
+with subtest("an idle pass reads nothing from a cold disk"):
+    disk = sh(f"basename $(realpath {DEV})").strip()
+    reads = lambda: sh(f"awk '$3==\"{disk}\"{{print $4}}' /proc/diskstats").strip()
+    sh("sync && nas-at pass && sync && echo 3 > /proc/sys/vm/drop_caches")
+    before = reads()
+    sh("nas-at pass")
+    assert reads() == before, f"{before} -> {reads()}"
+    prom = sh("cat /var/lib/nas-checkpoints/nas.prom")
+    for metric, attr in (("nas_checkpoints", "checkpoints_number"), ("nas_checkpoint_snapshots", "snapshots_number")):
+        published = found(rf'{metric}{{branch="disk1"}} (\d+)', prom)
+        assert published == sh(f"cat /sys/fs/nilfs2/{disk}/checkpoints/{attr}").strip(), (metric, published)
+
 with subtest("tallies match a fresh aggregate of lives"):
     o = "9223372036854775807"
     fresh = (
