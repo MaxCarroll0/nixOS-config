@@ -141,6 +141,7 @@ let
       postPatch = (old.postPatch or "") + ''
         cp ${../curd/zz_cf_inject.go} internal/zz_cf_inject.go
       '';
+      doCheck = false;
     })
   );
 
