@@ -192,7 +192,7 @@ def parse_size(text):
 
 def merge(ranges):
     out = []
-    for lo, hi in sorted(ranges):
+    for lo, hi in sorted(map(tuple, ranges)):
         if out and lo <= out[-1][1]:
             out[-1][1] = max(out[-1][1], hi)
         else:
@@ -368,7 +368,7 @@ def probe(db, br, inos, also=()):
     seen = {}
     for line in lives(br, "probe", feed="".join(f"{v} {n}\n" for v, n, _ in rows)):
         f = line.split()
-        if f[0] != "V":
+        if f[0] != "V" or f[5] == "0":
             continue
         vblk, n, s = int(f[3]), int(f[4]), int(f[5])
         set_end(db, br.path, vblk, n, s, number(f[6]))
@@ -437,7 +437,7 @@ def read_events(db, br, args):
     try:
         size = os.path.getsize(path)
     except FileNotFoundError:
-        return set(), set(), 0
+        return set(), set(), 0, {}
     if size < offset:
         offset = 0
     with open(path, "rb") as f:
@@ -445,7 +445,7 @@ def read_events(db, br, args):
         data = f.read(size - offset)
     data = data[: data.rfind(b"\n") + 1]
     offset += len(data)
-    dirs, inos = set(), set()
+    dirs, inos, written = set(), set(), {}
     root = br.path + "/"
     for line in data.splitlines():
         try:
@@ -465,12 +465,31 @@ def read_events(db, br, args):
             dirs.add(os.path.dirname(rel))
             if "inode" in ev:
                 inos.add(ev["inode"])
+                written[ev["inode"]] = rel
         if any(c in types for c in "+D<>"):
             dirs.add(rel)
     if size > args.rotate_bytes:
         subprocess.run(["systemctl", "restart", f"nas-history-watch-{br.name}.service"], check=False)
         offset = 0
-    return dirs, inos, offset
+    return dirs, inos, offset, written
+
+
+def adopt(db, branch, written, cno):
+    for ino, rel in written.items():
+        try:
+            if os.lstat(os.path.join(branch, rel)).st_ino == ino:
+                continue
+        except OSError:
+            pass
+        prior = db.execute("SELECT inc, hi FROM paths WHERE branch=? AND ino=?", (branch, ino)).fetchall()
+        if any(hi is None for _, hi in prior):
+            continue
+        inc = max((i for i, _ in prior), default=-1) + 1
+        lo = max((hi for _, hi in prior), default=None)
+        db.execute(
+            "INSERT INTO paths (branch, ino, inc, path, dir, lo, hi, since) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+            (branch, ino, inc, rel, os.path.dirname(rel), lo, cno),
+        )
 
 
 def sync_dirs(db, br, dirs, cno, recursive=False):
@@ -1032,7 +1051,7 @@ def reclaim(db, br, tl, args, force=False, dry_run=False):
                 f"UPDATE lives SET seg=NULL WHERE branch=? AND dead=1 AND seg IN ({marks(batch)})", (br.path, *batch)
             )
         db.commit()
-        return {"segments": len(cleaned), "freed": freed, "cleaned": cleaned}
+        return {"segments": len(cleaned), "freed": freed, "cleaned": cleaned, "protected_segs": result.get("protected_segs", 0)}
     finally:
         lock.close()
 
@@ -1134,7 +1153,7 @@ class History:
             return touched, True
         head = br.head()
         moved = head != db.execute("SELECT sysfs_seq, sysfs_blk FROM scan WHERE branch=?", (br.path,)).fetchone()
-        dirs, inos, offset = read_events(db, br, args)
+        dirs, inos, offset, written_paths = read_events(db, br, args)
         if not (moved or dirs or inos or walk or force):
             return set(), False
         index_branch(db, br.path, promote=True)
@@ -1143,6 +1162,7 @@ class History:
             follow(db, br, written)
         tl = Timeline(db, br.path)
         synced = walk_branch(db, br, tl) if walk else set()
+        adopt(db, br.path, written_paths, tl.last)
         synced |= sync_dirs(db, br, dirs, tl.last)
         probe(db, br, (written | inos) - synced)
         touched = written | inos | synced
@@ -2043,11 +2063,14 @@ def run_reclaim_cli(args):
         result = h.settle(br, touched, time.time(), reclaim_force=True, dry_run=args.dry_run)
         if result is None:
             print(f"{br.name}: not run")
-        elif args.dry_run:
+            continue
+        held = result.get("protected_segs", 0)
+        held = f"; {held} segments newer than the superblock's log cursor held back" if held else ""
+        if args.dry_run:
             blocks = result.get("freed_vblks", 0)
-            print(f"{br.name}: would free {human(blocks * br.bsize)} ({blocks} blocks)")
+            print(f"{br.name}: would free {human(blocks * br.bsize)} ({blocks} blocks){held}")
         else:
-            print(f"{br.name}: {result['segments']} segments cleaned, {human(result['freed'])} freed ({result['freed'] // br.bsize} blocks)")
+            print(f"{br.name}: {result['segments']} segments cleaned, {human(result['freed'])} freed ({result['freed'] // br.bsize} blocks){held}")
     h.metrics()
 
 

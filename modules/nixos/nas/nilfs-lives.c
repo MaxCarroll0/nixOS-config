@@ -45,8 +45,17 @@ static int lifetimes(struct vec *v)
 
 		for (size_t j = 0; j < n; j++)
 			vi[j].vi_vblocknr = v->b[i + j].vblk;
-		if (nilfs_get_vinfo(nilfs, vi, n) < 0)
-			return -1;
+		if (nilfs_get_vinfo(nilfs, vi, n) < 0) {
+			if (errno != ENOENT)
+				return -1;
+			for (size_t j = 0; j < n; j++) {
+				if (nilfs_get_vinfo(nilfs, &vi[j], 1) >= 0)
+					continue;
+				if (errno != ENOENT)
+					return -1;
+				vi[j].vi_blocknr = vi[j].vi_start = vi[j].vi_end = 0;
+			}
+		}
 		for (size_t j = 0; j < n; j++) {
 			struct blk *b = &v->b[i + j];
 			int current = !b->blocknr || vi[j].vi_blocknr == b->blocknr;

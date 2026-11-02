@@ -51,6 +51,21 @@ def blocks(out):
     return int(found(r"\((\d+) blocks\)", out))
 
 
+def diag(like):
+    inos = f"(SELECT ino FROM paths WHERE path LIKE '{like}%')"
+    for q in [
+        f"SELECT rowid, ino, inc, path, lo, hi, since FROM paths WHERE ino IN {inos}",
+        f"SELECT ino, s, e, seg, dead, SUM(n), COUNT(*) FROM lives WHERE ino IN {inos} GROUP BY 1, 2, 3, 4, 5",
+        f"SELECT * FROM drops WHERE ino IN {inos}",
+        "SELECT * FROM scan",
+        "SELECT * FROM meta",
+        "SELECT cno, ss FROM checkpoints ORDER BY cno DESC LIMIT 8",
+        "SELECT dead, seg IS NULL, COUNT(*), SUM(n) FROM lives GROUP BY 1, 2",
+    ]:
+        machine.log(q + "\n" + sh(f"sqlite3 -header {DB} \"{q}\""))
+    machine.log(sh(f"lscp -a {DEV} | tail -8; lssu {DEV} | tail -12"))
+
+
 machine.wait_for_unit("multi-user.target")
 sh("dmesg -C")
 sh(f"mkfs.nilfs2 -f -B 256 {DEV}")
@@ -181,6 +196,22 @@ with subtest("reclaim frees what the dry run predicted, and history survives it"
     sh(f"touch {B}/still-writable && sync")
     dmesg = sh("dmesg")
     assert "read-only" not in dmesg and "NILFS error" not in dmesg, dmesg
+
+with subtest("an open rule re-renders after its drops were enforced"):
+    edit(".cache/x", 64)
+    sh("sync && sleep 6 && nas-at pass")
+
+with subtest("a historyless file written and deleted between passes is reclaimable"):
+    sh(f"mkdir -p {B}/.cache/brief && dd if=/dev/urandom of={B}/.cache/brief/f bs=1M count=4 conv=fsync status=none")
+    sh(f"sync && sleep 6 && rm {B}/.cache/brief/f && sync && sleep 6 && nas-at pass")
+    for i in range(8):
+        dry = sh("nas-at reclaim --dry-run")
+        machine.log(dry)
+        if blocks(dry) >= 1024:
+            break
+        sh(f"head -c 65536 /dev/urandom > {B}/tick-{i} && sync && sleep 6")
+    diag(".cache/brief")
+    assert blocks(dry) >= 1024, dry
 
 with subtest("metrics parse"):
     metrics = sh("cat /var/lib/nas-checkpoints/nas.prom")
