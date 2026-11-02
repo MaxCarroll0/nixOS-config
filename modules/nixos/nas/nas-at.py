@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS paths (
 CREATE INDEX IF NOT EXISTS paths_dir ON paths (branch, dir) WHERE hi IS NULL;
 CREATE INDEX IF NOT EXISTS paths_path ON paths (branch, path);
 CREATE INDEX IF NOT EXISTS paths_ino ON paths (branch, ino);
+CREATE INDEX IF NOT EXISTS paths_unbounded ON paths (branch) WHERE lo IS NULL;
 CREATE TABLE IF NOT EXISTS policy (
     id      INTEGER PRIMARY KEY,
     paths   TEXT NOT NULL,
@@ -629,6 +630,25 @@ def sync_dirs(db, br, dirs, cno, recursive=False):
         for rowid, _ in rows:
             db.execute("UPDATE paths SET hi=MAX(COALESCE(lo, 0), ?) WHERE rowid=?", (end, rowid))
     return candidates
+
+
+def incarnation_start(db, branch, ino, since):
+    front, start = None, 0
+    for s, e in db.execute("SELECT s, e FROM lives WHERE branch=? AND ino=? ORDER BY s, e", (branch, ino)):
+        if front is not None and front < s and front <= since:
+            start = front
+        front = e if front is None else max(front, e)
+    if front is not None and front < OPEN and front <= since:
+        start = front
+    return start
+
+
+def bound_incarnations(db, branch):
+    rows = db.execute("SELECT rowid, ino, since FROM paths WHERE branch=? AND lo IS NULL", (branch,)).fetchall()
+    db.executemany(
+        "UPDATE paths SET lo=? WHERE rowid=?",
+        [(incarnation_start(db, branch, ino, since), rowid) for rowid, ino, since in rows],
+    )
 
 
 def same_inode(branch, rel, ino):
@@ -1253,6 +1273,7 @@ class History:
             touched = backfill(db, br)
             tl = Timeline(db, br.path)
             touched |= walk_branch(db, br, tl)
+            bound_incarnations(db, br.path)
             db.commit()
             return touched, True
         head = br.head()
@@ -1269,6 +1290,7 @@ class History:
         adopt(db, br.path, written_paths, tl.last)
         synced |= sync_dirs(db, br, dirs, tl.last)
         probe(db, br, (written | inos) - synced)
+        bound_incarnations(db, br.path)
         touched = written | inos | synced
         db.execute("UPDATE scan SET events_offset=? WHERE branch=?", (offset, br.path))
         db.commit()
@@ -1815,10 +1837,13 @@ def run_top(args):
     for br in h.live():
         sql = (
             "SELECT p.path, COALESCE(SUM(t.data), 0), COALESCE(SUM(t.ret + t.rec), 0) "
-            "FROM paths p JOIN tallies t ON t.branch=p.branch AND t.ino=p.ino "
+            "FROM paths p "
+            "JOIN (SELECT ino, inc, MIN(COALESCE(lo, 0)) AS start FROM paths WHERE branch=? GROUP BY ino, inc) b "
+            "ON b.ino=p.ino AND b.inc=p.inc "
+            "JOIN tallies t ON t.branch=p.branch AND t.ino=p.ino AND t.s>=b.start "
             "WHERE p.branch=? AND p.hi IS NULL"
         )
-        params = [br.path]
+        params = [br.path, br.path]
         if rel:
             sql += " AND (p.path=? OR (p.path>=? AND p.path<?))"
             params += [rel, rel + "/", rel + "0"]

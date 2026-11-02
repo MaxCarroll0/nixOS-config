@@ -180,6 +180,26 @@ with subtest("forget hides the path everywhere"):
         sh(f"test ! -e {VIEW}/@{epoch(cno)}/land2/h")
     assert "tagged: deleted" in sh(f"nas-at log {B}/land2/h")
 
+with subtest("a reused inode number does not inherit the untracked previous owner's history"):
+    sh("systemctl stop nas-history-watch-disk1")
+    for _ in range(3):
+        old_cno = edit("reuse/old", 1024)
+    old_tree = tree(f"{B}/reuse")
+    old_ino = sh(f"stat -c %i {B}/reuse/old").strip()
+    sh(f"rm {B}/reuse/old && sync && sleep 2")
+    edit("reuse/new", 4)
+    assert sh(f"stat -c %i {B}/reuse/new").strip() == old_ino, "nilfs2 did not reuse the inode number"
+    sh("systemctl start nas-history-watch-disk1")
+    machine.wait_until_succeeds("test -e /var/lib/nas-checkpoints/events/disk1.jsonl")
+    sh("nas-at pass --walk")
+    machine.log(sh(f"nas-at log {B}/reuse/new"))
+    assert len(log_states("reuse/new")) == 1, log_states("reuse/new")
+    top = sh(f"nas-at top {B}/reuse")
+    machine.log(top)
+    assert found(r"(\S+)\s+\S+\s+disk1\s+reuse/new", top) == "0B", top
+    machine.log(sh(f"nas-at forget {B}/reuse/new --yes"))
+    assert view("reuse", old_cno) == old_tree
+
 with subtest("reclaim frees what the dry run predicted, and history survives it"):
     dry = sh("nas-at reclaim --dry-run")
     machine.log(dry)
@@ -193,6 +213,7 @@ with subtest("reclaim frees what the dry run predicted, and history survives it"
     for i in (2, 4, 5, 7):
         assert view("land", land[i][0]) == land[i][1], f"land at edit {i + 1} after reclaim"
     assert any(s == "compressed, freed" for s in log_states("land/g"))
+    assert view("reuse", old_cno) == old_tree, "reclaim freed the reused inode's previous owner"
     sh(f"touch {B}/still-writable && sync")
     dmesg = sh("dmesg")
     assert "read-only" not in dmesg and "NILFS error" not in dmesg, dmesg
