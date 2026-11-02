@@ -275,7 +275,15 @@
         };
       };
 
-      checks = lib.mapAttrs (_: deployLib: deployLib.deployChecks self.deploy) inputs.deploy-rs.lib;
+      checks =
+        lib.recursiveUpdate
+          (lib.mapAttrs (_: deployLib: deployLib.deployChecks self.deploy) inputs.deploy-rs.lib)
+          {
+            x86_64-linux.nas-history = import ./tests/nas-history.nix {
+              pkgs = pkgsFor "x86_64-linux";
+              inherit lib;
+            };
+          };
 
       packages.x86_64-linux = {
         deploy-rs = inputs.deploy-rs.packages.x86_64-linux.default;

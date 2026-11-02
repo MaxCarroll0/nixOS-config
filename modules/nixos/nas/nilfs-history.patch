@@ -1,0 +1,93 @@
+diff --git a/include/nilfs_gc.h b/include/nilfs_gc.h
+index e4be812..217efc4 100644
+--- a/include/nilfs_gc.h
++++ b/include/nilfs_gc.h
+@@ -20,7 +20,12 @@
+ #define NILFS_RECLAIM_PARAM_PROTSEQ			(1UL << 0)
+ #define NILFS_RECLAIM_PARAM_PROTCNO			(1UL << 1)
+ #define NILFS_RECLAIM_PARAM_MIN_RECLAIMABLE_BLKS	(1UL << 2)
+-#define __NR_NILFS_RECLAIM_PARAMS	3
++#define NILFS_RECLAIM_PARAM_LIVE_FILTER			(1UL << 3)
++#define __NR_NILFS_RECLAIM_PARAMS	4
++
++typedef int (*nilfs_live_filter_t)(uint64_t ino, nilfs_cno_t start,
++				   nilfs_cno_t end, const nilfs_cno_t *ss,
++				   size_t nss, void *arg);
+ 
+ /**
+  * struct nilfs_reclaim_params - structure to specify GC parameters
+@@ -34,6 +39,8 @@ struct nilfs_reclaim_params {
+ 	unsigned long min_reclaimable_blks;
+ 	uint64_t protseq;
+ 	nilfs_cno_t protcno;
++	nilfs_live_filter_t live_filter;
++	void *live_filter_arg;
+ };
+ 
+ /**
+diff --git a/lib/gc.c b/lib/gc.c
+index fde07d3..c1dcd1b 100644
+--- a/lib/gc.c
++++ b/lib/gc.c
+@@ -496,14 +496,15 @@ static int nilfs_toss_vdescs(struct nilfs *nilfs,
+ 			     struct nilfs_vector *vdescv,
+ 			     struct nilfs_vector *periodv,
+ 			     struct nilfs_vector *vblocknrv,
+-			     nilfs_cno_t protcno)
++			     nilfs_cno_t protcno,
++			     const struct nilfs_reclaim_params *params)
+ {
+ 	struct nilfs_vdesc *vdesc;
+ 	struct nilfs_period *periodp;
+ 	uint64_t *vblocknrp;
+ 	nilfs_cno_t *ss, last_hit;
+ 	ssize_t n;
+-	int i, j, ret;
++	int i, j, ret, filtered;
+ 
+ 	ss = NULL;
+ 	n = nilfs_get_snapshot(nilfs, &ss);
+@@ -515,9 +516,22 @@ static int nilfs_toss_vdescs(struct nilfs *nilfs,
+ 		for (j = i; j < nilfs_vector_get_size(vdescv); j++) {
+ 			vdesc = nilfs_vector_get_element(vdescv, j);
+ 			assert(vdesc != NULL);
++			filtered = 0;
+ 			if (nilfs_vdesc_is_live(vdesc, protcno, ss, n,
+-						&last_hit))
+-				break;
++						&last_hit)) {
++				if (!(params->flags &
++				      NILFS_RECLAIM_PARAM_LIVE_FILTER) ||
++				    vdesc->vd_cno == 0 ||
++				    vdesc->vd_period.p_end == NILFS_CNO_MAX ||
++				    vdesc->vd_period.p_end > protcno ||
++				    params->live_filter(vdesc->vd_ino,
++							vdesc->vd_period.p_start,
++							vdesc->vd_period.p_end,
++							ss, n,
++							params->live_filter_arg))
++					break;
++				filtered = 1;
++			}
+ 
+ 			/*
+ 			 * Add the virtual block number to the candidate
+@@ -534,7 +548,7 @@ static int nilfs_toss_vdescs(struct nilfs *nilfs,
+ 			 * Add the period to the candidate for deletion
+ 			 * unless the file is cpfile or sufile.
+ 			 */
+-			if (vdesc->vd_cno != 0) {
++			if (vdesc->vd_cno != 0 && !filtered) {
+ 				periodp = nilfs_vector_get_new_element(periodv);
+ 				if (unlikely(!periodp)) {
+ 					ret = -1;
+@@ -725,7 +739,8 @@ int nilfs_xreclaim_segment(struct nilfs *nilfs,
+ 	protcno = (params->flags & NILFS_RECLAIM_PARAM_PROTCNO) ?
+ 		params->protcno : NILFS_CNO_MAX;
+ 
+-	ret = nilfs_toss_vdescs(nilfs, vdescv, periodv, vblocknrv, protcno);
++	ret = nilfs_toss_vdescs(nilfs, vdescv, periodv, vblocknrv, protcno,
++				params);
+ 	if (unlikely(ret < 0))
+ 		goto out_lock;
+ 

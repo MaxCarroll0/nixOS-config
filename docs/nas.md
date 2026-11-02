@@ -17,6 +17,20 @@ became user-affinity (`mspmfs`) with automatic overflow rather than proportional
 from the application tier (4.5.1); and section 13 was superseded by what was actually
 deployed.
 
+## NAS history references
+
+Per-file history control (4.6, TODO list in [`nas-history-todo.md`](nas-history-todo.md)) builds on:
+
+- D. S. Santry, M. J. Feeley, N. C. Hutchinson, A. C. Veitch, R. W. Carton, J. Ofir, "Deciding when
+  to forget in the Elephant file system", SOSP '99, doi:10.1145/319151.319159. Source for
+  landmarks, pins, discontinuities and the undecided age-graded resolution.
+- A. Rohner, NILFS2 garbage-collection policies, diploma thesis, TU Wien 2018,
+  <https://repositum.tuwien.at/handle/20.500.12708/3045>, and his cost-benefit GC series on
+  linux-nilfs, <https://www.mail-archive.com/linux-nilfs@vger.kernel.org/msg02663.html>.
+- nilfs-utils `lib/gc.c`, `nilfs_vdesc_is_live`: the liveness rule the history patch extends.
+- btrbk retention policy and macOS Time Machine thinning: the age-based schemes the TODO compares
+  against.
+
 ## 1. Requirements
 
 1. Encrypted at rest, redundant, snapshotted. A 90 day recoverable-delete window,
