@@ -525,7 +525,7 @@ let
           --property=RuntimeMaxSec="$secs" \
           --description="keep-awake: $why" \
           -- systemd-inhibit --mode=block --what="$what" --who="$who" --why="$why" \
-            -- sleep "$secs"
+            -- ${pkgs.coreutils}/bin/sleep "$secs"
         echo "$unit"
         exit 0
       fi
@@ -537,7 +537,7 @@ let
           --property=RuntimeMaxSec="$secs" \
           --description="keep-awake: $why" \
           -- systemd-inhibit --mode=block --what="$what" --who="$who" --why="$why" \
-            -- sleep "$secs"
+            -- ${pkgs.coreutils}/bin/sleep "$secs"
         echo "$unit"
         exit 0
       fi
