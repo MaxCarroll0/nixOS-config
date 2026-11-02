@@ -539,10 +539,9 @@ def adopt(db, branch, written, cno):
         if any(hi is None for _, hi in prior):
             continue
         inc = max((i for i, _ in prior), default=-1) + 1
-        lo = max((hi for _, hi in prior), default=None)
         db.execute(
-            "INSERT INTO paths (branch, ino, inc, path, dir, lo, hi, since) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
-            (branch, ino, inc, rel, os.path.dirname(rel), lo, cno),
+            "INSERT INTO paths (branch, ino, inc, path, dir, lo, hi, since) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)",
+            (branch, ino, inc, rel, os.path.dirname(rel), cno),
         )
 
 
@@ -614,7 +613,6 @@ def sync_dirs(db, br, dirs, cno, recursive=False):
                     inc, lo = last[2], cno
                 else:
                     inc = max(r[2] for r in prior) + 1
-                    lo = max((r[3] for r in prior if r[3] is not None), default=cno)
         db.execute(
             "INSERT INTO paths (branch, ino, inc, path, dir, lo, hi, since) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
             (branch, ino, inc, rel, d, lo, cno),
@@ -632,23 +630,22 @@ def sync_dirs(db, br, dirs, cno, recursive=False):
     return candidates
 
 
-def incarnation_start(db, branch, ino, since):
+def incarnation_start(db, branch, ino, since, present):
     front, start = None, 0
     for s, e in db.execute("SELECT s, e FROM lives WHERE branch=? AND ino=? ORDER BY s, e", (branch, ino)):
         if front is not None and front < s and front <= since:
             start = front
         front = e if front is None else max(front, e)
-    if front is not None and front < OPEN and front <= since:
+    if present and front is not None and front < OPEN and front <= since:
         start = front
     return start
 
 
 def bound_incarnations(db, branch):
-    rows = db.execute("SELECT rowid, ino, since FROM paths WHERE branch=? AND lo IS NULL", (branch,)).fetchall()
-    db.executemany(
-        "UPDATE paths SET lo=? WHERE rowid=?",
-        [(incarnation_start(db, branch, ino, since), rowid) for rowid, ino, since in rows],
-    )
+    rows = db.execute("SELECT rowid, ino, inc, since, hi IS NULL FROM paths WHERE branch=? AND lo IS NULL", (branch,)).fetchall()
+    for rowid, ino, inc, since, present in rows:
+        before = one(db, "SELECT MAX(hi) FROM paths WHERE branch=? AND ino=? AND inc<?", branch, ino, inc) or 0
+        db.execute("UPDATE paths SET lo=? WHERE rowid=?", (max(before, incarnation_start(db, branch, ino, since, present)), rowid))
 
 
 def same_inode(branch, rel, ino):
@@ -1241,6 +1238,7 @@ def walk_branch(db, br, tl):
         if r[0] >= 11
     ]
     probe(db, br, orphans)
+    bound_incarnations(db, br.path)
     return touched | set(orphans)
 
 
@@ -1273,7 +1271,6 @@ class History:
             touched = backfill(db, br)
             tl = Timeline(db, br.path)
             touched |= walk_branch(db, br, tl)
-            bound_incarnations(db, br.path)
             db.commit()
             return touched, True
         head = br.head()
@@ -2132,6 +2129,7 @@ def run_forget(args):
     for br in h.live():
         tl = Timeline(h.db, br.path)
         touched = sync_dirs(h.db, br, {os.path.dirname(p) for p in paths}, tl.last)
+        bound_incarnations(h.db, br.path)
         h.settle(br, touched, time.time())
     h.metrics()
     print(f"rule #{rid}")
