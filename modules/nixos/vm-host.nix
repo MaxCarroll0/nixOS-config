@@ -202,6 +202,14 @@ let
     ''
   ];
 
+  guestServerReadyAt = guestRun "server-ready-at" "/usr/bin/sh" [
+    "-c"
+    ''
+      [ "$(/usr/bin/systemctl is-active minecraft)" = active ] || exit 0
+      /usr/bin/systemctl show -P ActiveEnterTimestamp --timestamp=unix minecraft | /usr/bin/tr -d @
+    ''
+  ];
+
   idleShutdownMinutes = 10;
   shutdownGraceMinutes = 6;
   lastActive = "/run/${domainName}-last-active";
@@ -229,11 +237,13 @@ let
       running=false
       locks=0
       logins=0
+      readyAt=0
       case "$(${virsh} domstate ${domainName})" in
         running | "in shutdown")
           running=true
           locks=$(count ${lib.getExe guestLockCount})
           logins=$(count ${lib.getExe guestLoginCount})
+          readyAt=$(count ${lib.getExe guestServerReadyAt})
           ;;
       esac
 
@@ -241,17 +251,23 @@ let
         echo "$now" > ${lastActive}
         rm -f ${shutdownRequested}
       fi
-      shutsDownAt=$(( $(cat ${lastActive}) + ${toString (idleShutdownMinutes * 60)} ))
+      activeUntil=$(cat ${lastActive})
+      if [ "$readyAt" -gt "$activeUntil" ] && [ "$readyAt" -le "$now" ]; then
+        activeUntil=$readyAt
+      fi
+      shutsDownAt=$(( activeUntil + ${toString (idleShutdownMinutes * 60)} ))
       idle=false
+      starting=false
       if [ "$running" = true ] && [ $((locks + logins)) -eq 0 ]; then
         idle=true
+        [ "$readyAt" -gt 0 ] || starting=true
       fi
 
-      jq -cn --argjson locks "$locks" --argjson logins "$logins" --argjson idle "$idle" \
+      jq -cn --argjson locks "$locks" --argjson logins "$logins" --argjson idle "$idle" --argjson starting "$starting" \
         --argjson shutsDownAt "$shutsDownAt" --argjson updated "$now" \
         --argjson stopping "$([ -e ${shutdownRequested} ] && echo true || echo false)" \
         --argjson idleAfter ${toString (idleShutdownMinutes * 60)} \
-        '{locks:$locks,logins:$logins,stopping:$stopping,updated:$updated,idleAfter:$idleAfter,shutsDownAt:(if $idle then $shutsDownAt else null end)}' \
+        '{locks:$locks,logins:$logins,starting:$starting,stopping:$stopping,updated:$updated,idleAfter:$idleAfter,shutsDownAt:(if $idle then $shutsDownAt else null end)}' \
         > ${idleStatus}.tmp
       mv ${idleStatus}.tmp ${idleStatus}
 
