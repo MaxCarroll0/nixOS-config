@@ -291,3 +291,39 @@ with subtest("tallies match a fresh aggregate of lives"):
     rows = sh(f"sqlite3 {DB} 'SELECT COUNT(*) FROM lives'").strip()
     differ = sh(f"sqlite3 {DB} 'SELECT COUNT(*) FROM ({fresh} EXCEPT {kept}) UNION ALL SELECT COUNT(*) FROM ({kept} EXCEPT {fresh})'")
     assert int(rows) > 0 and differ.split() == ["0", "0"], differ
+
+with subtest("the browse index follows history without walking the pool"):
+    IDX = "/var/lib/nas-index/index.db"
+    ROWS = "SELECT owner, path, is_dir, size, mtime, hidden FROM entries ORDER BY 1, 2"
+
+    def files(owner):
+        out = sh(f"sqlite3 {IDX} \"SELECT path, size FROM entries WHERE owner='{owner}' AND is_dir=0\"")
+        return dict(line.split("|") for line in out.splitlines())
+
+    for name in ("keep", "gone", "old"):
+        edit(f"idx/{name}", 8)
+    sh("nas-at pass && nas-index")
+    assert files("idx") == {"keep": "8192", "gone": "8192", "old": "8192"}, files("idx")
+
+    sh(f"mkdir -p {B}/elsewhere/d && echo hi > {B}/elsewhere/d/n")
+    sh(f"dd if=/dev/urandom of={B}/idx/keep bs=16K count=1 status=none && rm {B}/idx/gone && mv {B}/idx/old {B}/idx/new && sync")
+    time.sleep(1.5)
+    sh("nas-at pass")
+    for _ in range(3):
+        sh("nas-index")
+        assert files("idx") == {"keep": "16384", "new": "8192"}, files("idx")
+        assert files("elsewhere") == {"d/n": "3"}, files("elsewhere")
+
+    disk = sh(f"basename $(realpath {DEV})").strip()
+    reads = lambda: sh(f"awk '$3==\"{disk}\"{{print $4}}' /proc/diskstats").strip()
+    sh("sync && echo 3 > /proc/sys/vm/drop_caches")
+    before = reads()
+    sh("nas-index")
+    assert reads() == before, f"an idle index read the disk: {before} -> {reads()}"
+
+    incremental = sh(f"sqlite3 {IDX} \"{ROWS}\"")
+    sh(f"sqlite3 {IDX} \"DELETE FROM entries WHERE owner='elsewhere'\" && nas-index")
+    assert files("elsewhere") == {}, files("elsewhere")
+    sh("nas-index --full")
+    walked = sh(f"sqlite3 {IDX} \"{ROWS}\"")
+    assert walked == incremental, "\n".join(sorted(set(walked.splitlines()) ^ set(incremental.splitlines())))

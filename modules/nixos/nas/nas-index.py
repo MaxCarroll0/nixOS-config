@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS scan_state (
     last_gen    INTEGER NOT NULL DEFAULT 0,
     last_run    INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS history_marks (
+    branch      TEXT PRIMARY KEY,
+    seen        INTEGER NOT NULL,
+    settled     INTEGER NOT NULL
+);
 DROP TABLE IF EXISTS versions;
 """
 
@@ -53,7 +59,7 @@ def is_hidden_path(root, path):
 
 
 def connect(db_path):
-    db = sqlite3.connect(db_path)
+    db = sqlite3.connect(db_path, timeout=300)
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA synchronous=NORMAL")
     db.executescript(SCHEMA)
@@ -81,7 +87,7 @@ def history_counts(history_db, owner):
         rows = h.execute(
             """
             SELECT p.path, COUNT(DISTINCT p.branch || ':' || l.s)
-            FROM paths p JOIN lives l ON l.branch=p.branch AND l.ino=p.ino
+            FROM paths p CROSS JOIN lives l ON l.branch=p.branch AND l.ino=p.ino
             WHERE p.path >= ? AND p.path < ?
               AND (p.lo IS NULL OR l.s >= p.lo) AND (p.hi IS NULL OR l.s < p.hi)
               AND NOT EXISTS (SELECT 1 FROM drops d
@@ -95,6 +101,65 @@ def history_counts(history_db, owner):
         print(f"history counts for {owner}: {e}", file=sys.stderr)
         return None
     return {path[len(owner) + 1:]: n for path, n in rows}
+
+
+def history_changes(history_db, marks):
+    try:
+        h = sqlite3.connect(f"file:{history_db}?mode=ro", uri=True, timeout=60)
+        h.execute("BEGIN")
+        return read_changes(h, marks)
+    except sqlite3.Error as e:
+        print(f"history changes: {e}", file=sys.stderr)
+        return {}, {}
+
+
+def read_changes(h, marks):
+    heads = dict(h.execute("SELECT branch, MAX(cno) FROM checkpoints GROUP BY branch"))
+    changed = set()
+    for branch in heads:
+        if branch not in marks:
+            continue
+        settled = marks[branch][1]
+        changed.update(
+            path
+            for (path,) in h.execute(
+                """
+                SELECT path FROM paths p
+                WHERE branch=? AND (since > ? OR hi > ? OR (hi IS NULL AND EXISTS (
+                    SELECT 1 FROM lives l WHERE l.branch=p.branch AND l.ino=p.ino AND l.s > ?)))
+                """,
+                (branch, settled, settled, settled),
+            )
+        )
+    holder = dict(h.execute("SELECT path, branch FROM paths WHERE hi IS NULL")) if changed else {}
+    h.close()
+    return heads, {path: holder.get(path) for path in changed}
+
+
+def hidden_in_index(db, owner, rel):
+    parent = os.path.dirname(rel)
+    return db.execute(
+        "SELECT 1 FROM entries WHERE owner=? AND ((path=? AND hidden=1) OR path IN (?, ?)) LIMIT 1",
+        (owner, parent, os.path.join(parent, HIDE_MARKER), os.path.join(rel, HIDE_MARKER)),
+    ).fetchone() is not None
+
+
+def apply_changes(db, owner, changes, thumb_dir, thumb_size, want_thumbs):
+    for rel in sorted(changes):
+        branch = changes[rel]
+        if PRUNED_DIRS.intersection(rel.split("/")):
+            continue
+        if branch is None:
+            db.execute(
+                "DELETE FROM entries WHERE owner=? AND (path=? OR substr(path, 1, ?)=?)",
+                (owner, rel, len(rel) + 1, rel + "/"),
+            )
+            continue
+        root = Path(branch) / owner
+        record(db, owner, root, root / rel, thumb_dir, thumb_size, want_thumbs,
+               1 if hidden_in_index(db, owner, rel) else 0)
+    db.commit()
+    return len(changes)
 
 
 def thumbnail_for(src, thumb_dir, size):
@@ -235,6 +300,7 @@ def main():
     ap.add_argument("--no-thumbnails", action="store_true")
     ap.add_argument("--owner", action="append", default=[])
     ap.add_argument("--history-db")
+    ap.add_argument("--full", action="store_true")
     args = ap.parse_args()
 
     data_root = Path(args.data_root)
@@ -244,18 +310,37 @@ def main():
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
     db = connect(args.db)
     thumb_dir = Path(args.thumb_dir)
-    owners = args.owner or [
-        p.name
-        for p in data_root.iterdir()
-        if p.is_dir() and p.name not in RESERVED and not p.name.startswith(".")
-    ]
+    marks = {b: (seen, settled) for b, seen, settled in db.execute("SELECT branch, seen, settled FROM history_marks")}
+    heads, changed = history_changes(args.history_db, marks) if args.history_db else ({}, {})
+    incremental = bool(marks) and not args.full
+
+    by_owner = {}
+    for path, branch in changed.items():
+        owner, _, rel = path.partition("/")
+        if rel and owner not in RESERVED and not owner.startswith("."):
+            by_owner.setdefault(owner, {})[rel] = branch
+
+    if incremental:
+        owners = sorted(by_owner)
+    else:
+        owners = [
+            p.name
+            for p in data_root.iterdir()
+            if p.is_dir() and p.name not in RESERVED and not p.name.startswith(".")
+        ]
+    if args.owner:
+        owners = [o for o in owners if o in args.owner]
 
     for owner in owners:
         root = data_root / owner
-        if not root.is_dir():
+        changes = by_owner.get(owner, {})
+        if incremental and not any(os.path.basename(r) == HIDE_MARKER for r in changes):
+            touched = apply_changes(db, owner, changes, thumb_dir, args.thumb_size, not args.no_thumbnails)
+        elif root.is_dir():
+            touched = full_scan(db, owner, root, thumb_dir,
+                                args.thumb_size, not args.no_thumbnails)
+        else:
             continue
-        touched = full_scan(db, owner, root, thumb_dir,
-                            args.thumb_size, not args.no_thumbnails)
 
         counts = history_counts(args.history_db, owner) if args.history_db else None
         if counts is not None:
@@ -273,6 +358,20 @@ def main():
         )
         db.commit()
         print(f"{owner}: {touched} entries", file=sys.stderr)
+
+    if not args.owner:
+        db.executemany(
+            """
+            INSERT INTO history_marks (branch, seen, settled) VALUES (?, ?, ?)
+            ON CONFLICT(branch) DO UPDATE SET settled=history_marks.seen, seen=excluded.seen
+            """,
+            [(b, head, head) for b, head in heads.items()],
+        )
+        db.commit()
+
+    if incremental and not owners:
+        db.close()
+        return 0
 
     if args.metrics_file:
         export_metrics(db, args.metrics_file)

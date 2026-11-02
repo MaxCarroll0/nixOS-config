@@ -14,24 +14,6 @@ let
   history = cfg.checkpoints.enable;
   historyDir = dirOf cfg.checkpoints.indexDb;
 
-  watchStamp = "${icfg.stateDir}/watch.stamp";
-  watchPending = "${icfg.stateDir}/watch.pending";
-
-  changeGate = pkgs.writeShellApplication {
-    name = "nas-index-changed";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.findutils
-      pkgs.diffutils
-    ];
-    text = ''
-      stat -c '%n %s %Y' ${historyDir}/events/*.jsonl > ${watchPending} 2>/dev/null || true
-      [ -n "$(find ${watchStamp} -mmin -1440 2>/dev/null)" ] || exit 0
-      cmp -s ${watchPending} ${watchStamp} && exit 1
-      exit 0
-    '';
-  };
-
   indexer = pkgs.writeShellApplication {
     name = "nas-index";
     runtimeInputs = [
@@ -79,7 +61,7 @@ in
     interval = lib.mkOption {
       type = lib.types.str;
       default = "6h";
-      description = "How often the index reconciles against the data tree.";
+      description = "How often the index walks the whole pool when NILFS2 history is off.";
     };
 
     metricsFile = lib.mkOption {
@@ -89,45 +71,63 @@ in
     };
   };
 
-  config = lib.mkIf (cfg.enable && icfg.enable) {
-    environment.systemPackages = [ indexer ];
+  config = lib.mkIf (cfg.enable && icfg.enable) (
+    let
+      service = description: args: {
+        inherit description;
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${lib.getExe indexer}${args}";
+          Nice = 10;
+          IOSchedulingClass = "idle";
+          ProtectSystem = "strict";
+          ProtectHome = true;
+          NoNewPrivileges = true;
+          PrivateTmp = true;
+          ReadWritePaths = [
+            icfg.stateDir
+            (builtins.dirOf icfg.metricsFile)
+          ];
+          ReadOnlyPaths = [ cfg.dataRoot ] ++ lib.optional history historyDir;
+        };
+      };
+    in
+    lib.mkMerge [
+      {
+        environment.systemPackages = [ indexer ];
 
-    systemd.tmpfiles.rules = [
-      "d ${icfg.stateDir} 0755 root root - -"
-      "d ${icfg.stateDir}/thumbs 0755 root root - -"
-    ];
-
-    systemd.services.nas-index = {
-      description = "Reconcile the NAS browse index";
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = lib.getExe indexer;
-        Nice = 10;
-        IOSchedulingClass = "idle";
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        NoNewPrivileges = true;
-        PrivateTmp = true;
-        ReadWritePaths = [
-          icfg.stateDir
-          (builtins.dirOf icfg.metricsFile)
+        systemd.tmpfiles.rules = [
+          "d ${icfg.stateDir} 0755 root root - -"
+          "d ${icfg.stateDir}/thumbs 0755 root root - -"
+          "r ${icfg.stateDir}/watch.stamp"
+          "r ${icfg.stateDir}/watch.pending"
         ];
-        ReadOnlyPaths = [ cfg.dataRoot ] ++ lib.optional history historyDir;
-      }
-      // lib.optionalAttrs history {
-        ExecCondition = lib.getExe changeGate;
-        ExecStartPost = "${pkgs.coreutils}/bin/mv ${watchPending} ${watchStamp}";
-      };
-    };
 
-    systemd.timers.nas-index = {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnBootSec = "10m";
-        OnUnitActiveSec = icfg.interval;
-        Persistent = true;
-        RandomizedDelaySec = "2m";
-      };
-    };
-  };
+        systemd.services.nas-index = service "Update the NAS browse index" "";
+
+        systemd.timers.nas-index = {
+          wantedBy = [ "timers.target" ];
+          timerConfig = {
+            OnBootSec = "10m";
+            OnUnitActiveSec = if history then cfg.checkpoints.interval else icfg.interval;
+            Persistent = true;
+            RandomizedDelaySec = "2m";
+          };
+        };
+      }
+
+      (lib.mkIf history {
+        systemd.services.nas-index-full = service "Reconcile the NAS browse index against the whole pool" " --full";
+
+        systemd.timers.nas-index-full = {
+          wantedBy = [ "timers.target" ];
+          timerConfig = {
+            OnCalendar = cfg.checkpoints.walkCalendar;
+            Persistent = true;
+            RandomizedDelaySec = "10m";
+          };
+        };
+      })
+    ]
+  );
 }

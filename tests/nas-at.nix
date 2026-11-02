@@ -9,6 +9,11 @@ pkgs.testers.runNixOSTest {
     { pkgs, ... }:
     let
       state = "/var/lib/nas-checkpoints";
+      index = pkgs.writeShellApplication {
+        name = "nas-index";
+        runtimeInputs = [ pkgs.python3 ];
+        text = ''exec python3 ${../modules/nixos/nas/nas-index.py} --db /var/lib/nas-index/index.db --data-root /mnt/disks/disk1 --thumb-dir /var/lib/nas-index/thumbs --no-thumbnails --history-db ${state}/index.db "$@"'';
+      };
       at = pkgs.writeShellApplication {
         name = "nas-at";
         text = ''exec ${lib.getExe pkgs.nas-at} --branch /mnt/disks/disk1 --index ${state}/index.db --pool /mnt/disks/disk1 --view /srv/nas-at --metrics ${state}/nas.prom --suspend /run/nas-promote-suspended --gap-default 5 "$@"'';
@@ -22,6 +27,7 @@ pkgs.testers.runNixOSTest {
       programs.fuse.userAllowOther = true;
       environment.systemPackages = [
         at
+        index
         pkgs.nilfs-utils
         pkgs.nilfs-reclaim
         pkgs.sqlite

@@ -2114,7 +2114,7 @@ collectors gate on the same `$6 + $10` diskstats comparison and serve a cached r
 that has not moved, and the health probe additionally passes `smartctl -n standby`, which returns
 without spinning the motor up.
 
-### The interval alone leaves a floor, so the walk is gated on real change
+### The interval alone leaves a floor, so the walk follows history instead
 
 Raising the interval was confirmed working: `sde` entered standby 17 minutes after becoming
 eligible, its first park in 39 hours, and all four disks were parked together for the first time
@@ -2122,30 +2122,48 @@ since the `disk3` addition. But a 6 h timer still wakes the fullest disk four ti
 or not anything changed, which is a floor of pointless spin-ups on an array that is idle for weeks
 at a time.
 
-`nas-index.service` now carries an `ExecCondition` that skips the walk when the pool has not
-changed. The signal is free: `nas-history-watch-*` already records every write through fatrace
-into `/var/lib/nas-checkpoints/events/<branch>.jsonl`, and that directory is on the SSD, so the check is a
-`stat` that never touches a spinning disk. The gate stores `%n %s %Y` for those files and compares
-against the stamp from the last successful index; `ExecStartPost` promotes the stamp only on
-success, so a failed index retries rather than silently marking itself done. An `ExecCondition`
-that exits non-zero skips the unit **cleanly**, so a skipped run does not appear as a failure.
+The first fix was an `ExecCondition` that skipped the walk unless
+`/var/lib/nas-checkpoints/events/<branch>.jsonl` had grown since the last index. It stopped
+working the day the Minecraft rsync stream arrived: `backups/streams/minecraft` writes to disk1
+every few minutes, so the events file always grew, the gate always passed, and every 6 h run
+walked the whole pool. mergerfs with `category.search=ff` probes every branch on `readdir` and
+`getattr`, so the walk woke disk2 and disk3 too, for a write that only ever touched disk1.
 
-A `find -mmin -1440` clause forces a walk if the stamp is missing or older than 24 h. That bounds
-the blast radius of a gate bug: the worst case is one stale day and one extra wake, not an index
-that silently freezes forever.
+A second fault made each wake last over an hour. `history_counts` joins the history db's `paths`
+to `lives` (2.95 M rows on the pi). Once `lives` grew past `paths`, SQLite's planner flipped to
+`SCAN lives` with a per-row lookup into `paths`, and a run took 66 minutes of CPU, keeping its
+branch's `idle_since` fresh for the whole time. `CROSS JOIN` pins `paths` as the outer loop and
+the same query takes 9 s.
 
-**Known limitation, stated rather than hidden.** `nas-index.py` takes `--data-root` and walks the
-whole pool, so it cannot be scoped to the branch that actually changed. A single small write to
-disk2 therefore still wakes disk1 on the next run. Fixing that means teaching the indexer to scan
-one branch, which is why the interval stays at 6 h rather than dropping to something responsive:
-with the gate, an idle array costs nothing at all, and an active array is the case where the disks
-were awake anyway.
+**The index is now incremental, driven by the history db.** A NILFS2 checkpoint cno is a free,
+monotone change counter, and the history pass already records which paths changed at which cno:
 
-Tested before deploying, against the real script under `set -euo pipefail`: no stamp, events with
-no stamp, identical stamp (skips), grown events (runs), promoted stamp (skips), stamp older than
-24 h (runs), and watcher truncation shrinking the file (runs). The last matters because
-`cmp -s a b && exit 1` as a script's final command would exit 1 on *difference* under errexit,
-inverting the gate; the explicit trailing `exit 0` is what prevents that.
+- `paths.since` is the cno a row was inserted at, `paths.hi` the cno it closed at, and
+  `lives.s` the cno a block was born at. A path changed after cno `c` exactly when one of those
+  exceeds `c`.
+- `history_marks(branch, seen, settled)` in the index db carries a one-run lag.
+  `index_branch` commits the new checkpoints mid-pass, before the `lives` scan for them has
+  finished, so the head cno read during a run can be ahead of the rows. Each run queries rows
+  newer than `settled`, then shifts `seen` into `settled` and the current head into `seen`. A
+  path is therefore picked up at most one run late, never missed, and re-recording it is
+  idempotent.
+- Each changed path is stat'ed on the branch that holds its open row, never through the pool,
+  so no other branch is touched. A path with no open row is deleted from the index along with
+  everything under it. The hidden flag comes from rows already in the index db. A changed
+  `.nashidden` falls back to a full walk of that owner only.
+- With nothing changed, a run reads two SQLite files on the SSD and exits before writing metrics.
+
+The timer runs at the checkpoint interval. `nas-index-full.timer` walks everything with `--full`
+once a day in the checkpoint walk window, when the disks are awake for the reconcile walk anyway,
+which also catches anything the watcher missed. The `ExecCondition`, its stamps and the 24 h
+escape hatch are gone.
+
+`checks.nas-at` covers it: a rewrite, a removal and a rename are all reflected on three
+consecutive runs, a change under another owner is indexed without walking the first, an idle run
+leaves the disk's read counter unchanged after `drop_caches`, rows deleted from the index db come
+back only with `--full`, and `--full` reproduces the incremental rows exactly. A file written while
+the watcher is stopped is not a gap: the next watched event in its parent makes the pass rescan
+that directory, so history and the index both pick it up.
 
 ## 25. Continuous streams and the time view
 
