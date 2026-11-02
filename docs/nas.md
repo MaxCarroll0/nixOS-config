@@ -785,7 +785,7 @@ space (256 MiB sequential at 50%, 40 MiB at 97%).
 | CLI (pi db) | as above | **pass**: `top` 0.024 s and `keep --target` 0.26 s against a copy of disk1's `index.db` (were 4.9 s and 339-618 s on the pi) |
 | SnapRAID | `diff` after reclaim shows nothing updated or removed | **pass**: after `sync`, a reclaim of 142.2 MiB, then `diff`: 10,006 equal, 0 added, removed, updated or moved; `check` reports `Everything OK` |
 | Space | freed matches dry run within 2% | **pass**: within one block at every level (35,343/35,344, 37,059/37,059, 37,779/37,780, 36,371/36,371) |
-| Disk parking over 2 h, db growth per day | | not measured in the VM: they need Stage B or a week of the pi. The db estimate is in [Speed](#speed-stitching-top-and-gc) |
+| Disk parking over 2 h, db growth per day | diskstats flat for ≥ 2 h with everything enabled; growth recorded | **pass after a fix**, on the pi. The first window (16:31-18:34) failed: every pass read disk2 about 24 times, because reading `checkpoints/checkpoints_number` walks the cpfile through metadata the page cache had dropped since the last pass, and that reset the 60-minute park deadline indefinitely. An idle branch now reuses the counts it last published (VM, after `drop_caches`: 0 reads, 4 without the fix). After the fix: 19:08-21:10 flat on disk2, disk3 and parity (0 reads, 0 writes) across 9 passes, and disk2 and disk3 parked at 20:08, 60 min after their last access. disk1 carried the Minecraft stream throughout. db: +3.3 MB in 2 h 03 min with the stream pushing every minute, about 39 MB a day, see [Speed](#speed-stitching-top-and-gc) |
 
 "Fill" is `used / (used + avail)`. NILFS2 reserves 5% of segments for GC (`mkfs.nilfs2 -m`), so
 `df` never shows more than about 94.5% of the raw device in use; 97% here means 97% of what can
@@ -901,8 +901,11 @@ after the change:
   written segments now cost `nilfs-lives` 3.4 MB instead of 256 MB and a reclaim dry run 3.2 MB
   instead of 260 MB, with identical output. libnilfsgc reads only summaries in userspace (the
   kernel moves the live blocks), so reclaim gains the same.
-- **db growth.** The db grows by about 158 B for each `lives` row. The pi adds 1,000-3,500 rows a
-  day, so the db grows by 0.15-0.55 MB a day.
+- **db growth.** A `lives` row is about 158 B, but the file grows by about 1.4 KB per row once its
+  indexes, `tallies`, `paths` and `checkpoints` are counted. Measured on the pi over 2 h 03 min
+  with the Minecraft stream pushing every minute: 2,437 rows and 3.3 MB (451.4 to 454.8 MB), so
+  about 28,000 rows and 39 MB a day while a stream is active. A day without one adds 1,000-3,500
+  rows, 1.4-5 MB.
 
 #### Previous Versions over SMB
 
