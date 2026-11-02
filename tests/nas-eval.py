@@ -6,6 +6,7 @@ B = "/mnt/disks/disk1"
 DB = "/var/lib/nas-checkpoints/index.db"
 VIEW = "/srv/nas-at"
 AT = "/run/current-system/sw/bin/nas-at"
+PREP = f"NAS_RECLAIM_FREE=0 {AT}"
 ENV = "--setenv=PATH=/run/current-system/sw/bin"
 SEG_BLOCKS = 2048
 MB = 1 << 20
@@ -28,16 +29,16 @@ def df():
 
 
 def fill():
-    size, used, _ = df()
-    return used / size
+    _, used, avail = df()
+    return used / (used + avail)
 
 
 def settle():
-    sh(f"sync && sleep 6 && {AT} pass")
+    sh(f"sync && sleep 6 && {PREP} pass")
 
 
 def reclaim():
-    out = sh(f"sync && sleep 6 && {AT} pass && {AT} reclaim")
+    out = sh(f"sync && sleep 6 && {PREP} pass && {PREP} reclaim")
     machine.log(out)
     return out
 
@@ -46,26 +47,30 @@ bulk = [0]
 
 
 def set_fill(target):
-    size, used, _ = df()
-    goal = int(target * size)
-    if used > goal:
+    for _ in range(3):
         files = sh(f"ls -t {B}/.cache/bulk 2>/dev/null || true").split()
-        need = used - goal
-        doomed = files[: max(1, need // (64 * MB) + 1)]
+        _, used, avail = df()
+        excess = used - target * (used + avail)
+        if excess <= 0 or not files:
+            break
+        doomed = files[: max(1, int(excess // (64 * MB)) + 1)]
         sh(f"cd {B}/.cache/bulk && rm -f {' '.join(doomed)}")
         reclaim()
-        size, used, _ = df()
     sh(f"mkdir -p {B}/.cache/bulk")
-    while used + 64 * MB <= goal:
+    while True:
+        _, used, avail = df()
+        if used + 64 * MB > target * (used + avail):
+            break
         bulk[0] += 1
         code, _ = machine.execute(f"dd if=/dev/zero of={B}/.cache/bulk/b{bulk[0]} bs=1M count=64 conv=fsync status=none")
         if code != 0:
             break
-        size, used, _ = df()
-    return used / size
+    return fill()
 
 
 def fio_json(out):
+    if "{" not in out:
+        return {"jobs": [{"error": out.strip()[-200:] or "no output", "write": {"bw": 0, "iops": 0, "clat_ns": {}}}]}
     return json.loads(out[out.index("{"):])
 
 
@@ -73,15 +78,21 @@ def pct(d, key):
     return (d.get("percentile") or {}).get(key, 0) / 1e6
 
 
+def fio(args):
+    code, out = machine.execute(f"mkdir -p {B}/.cache/fio && fio {args} --ioengine=psync --output-format=json 2>/dev/null")
+    job = fio_json(out)["jobs"][0]
+    error = job.get("error") or code
+    return job, ({"error": error} if error else {})
+
+
 def fio_seq(mb):
-    out = sh(f"mkdir -p {B}/.cache/fio && fio --name=seq --directory={B}/.cache/fio --rw=write --bs=1M --size={mb}M --ioengine=psync --end_fsync=1 --output-format=json")
-    w = fio_json(out)["jobs"][0]["write"]
-    return {"mb": mb, "MBps": round(w["bw"] / 1024, 1), "clat_p99_ms": round(pct(w["clat_ns"], "99.000000"), 2)}
+    job, err = fio(f"--name=seq --directory={B}/.cache/fio --rw=write --bs=1M --size={mb}M --end_fsync=1")
+    w = job["write"]
+    return {"mb": mb, "MBps": round(w["bw"] / 1024, 1), "clat_p99_ms": round(pct(w["clat_ns"], "99.000000"), 2), **err}
 
 
 def fio_rand(mb):
-    out = sh(f"mkdir -p {B}/.cache/fio && fio --name=rand --filename={B}/.cache/fio/r --rw=randwrite --bs=4k --size={mb}M --fsync=32 --runtime=15 --time_based --ioengine=psync --output-format=json")
-    job = fio_json(out)["jobs"][0]
+    job, err = fio(f"--name=rand --filename={B}/.cache/fio/r --rw=randwrite --bs=4k --size={mb}M --io_size={2 * mb}M --fsync=32")
     w, s = job["write"], job.get("sync", {}).get("lat_ns", {})
     return {
         "mb": mb,
@@ -91,20 +102,22 @@ def fio_rand(mb):
         "fsync_p99_ms": round(pct(s, "99.000000"), 2),
         "fsync_p999_ms": round(pct(s, "99.900000"), 2),
         "fsync_max_ms": round(s.get("max", 0) / 1e6, 2),
+        **err,
     }
 
 
 def workloads():
     _, _, avail = df()
-    seq_mb = max(16, min(256, int(avail * 0.4) // MB))
-    rand_mb = max(8, min(64, int(avail * 0.15) // MB))
+    seq_mb = max(8, min(256, int(avail * 0.3) // MB))
+    rand_mb = max(4, min(64, int(avail * 0.1) // MB))
     result = {"fill": round(fill(), 3), "seq": fio_seq(seq_mb), "rand": fio_rand(rand_mb)}
     sh(f"rm -rf {B}/.cache/fio")
     return result
 
 
-def start(unit, cmd):
-    sh(f"systemd-run --unit={unit} -p RemainAfterExit=yes {ENV} {cmd}")
+def start(unit, cmd, auto=False):
+    env = ENV if auto else f"{ENV} --setenv=NAS_RECLAIM_FREE=0"
+    sh(f"systemd-run --unit={unit} -p RemainAfterExit=yes {env} {cmd}")
 
 
 def stop(unit):
@@ -115,8 +128,8 @@ def finished(unit):
     machine.wait_until_succeeds(f"systemctl show -p SubState --value {unit} | grep -qxE 'exited|failed'", timeout=1800)
 
 
-def start_loop(unit):
-    start(unit, f"/bin/sh -c 'while [ ! -e /run/{unit}.stop ]; do {AT} pass; sleep 2; done'")
+def start_loop(unit, auto=False):
+    start(unit, f"/bin/sh -c 'while [ ! -e /run/{unit}.stop ]; do {AT} pass; sleep 2; done'", auto)
 
 
 def stop_loop(unit):
@@ -130,9 +143,26 @@ def churn(tag, versions=4, mb=48):
     for _ in range(versions):
         sh(f"mkdir -p {B}/churn/{tag} && dd if=/dev/urandom of={B}/{path} bs=1M count={mb} conv=fsync status=none")
         settle()
-    out = sh(f"{AT} keep {B}/churn/{tag} --none")
+    out = sh(f"{PREP} keep {B}/churn/{tag} --none")
     machine.log(out)
     return (versions - 1) * mb
+
+
+def diag(like):
+    inos = f"(SELECT ino FROM paths WHERE path LIKE '{like}%')"
+    for q in [
+        f"SELECT ino, inc, path, lo, hi, since FROM paths WHERE ino IN {inos}",
+        f"SELECT ino, s, e, seg, dead, SUM(n), COUNT(*) FROM lives WHERE ino IN {inos} GROUP BY 1, 2, 3, 4, 5 LIMIT 40",
+        f"SELECT * FROM drops WHERE ino IN {inos}",
+        "SELECT * FROM scan",
+        "SELECT * FROM meta",
+        "SELECT cno, ss FROM checkpoints ORDER BY cno DESC LIMIT 6",
+        "SELECT dead, seg IS NULL, COUNT(*), SUM(n) FROM lives GROUP BY 1, 2",
+        "SELECT seg, SUM(n) FROM lives WHERE dead=1 AND seg IS NOT NULL GROUP BY seg ORDER BY 2 DESC LIMIT 10",
+        "SELECT * FROM gc_runs",
+    ]:
+        machine.log(q + "\n" + sh(f"sqlite3 -header {DB} \"{q}\""))
+    machine.log(sh("lscp -a /dev/mapper/slow | tail -6; lssu /dev/mapper/slow | awk '$4 ~ /d/' | wc -l; lssu /dev/mapper/slow | tail -8"))
 
 
 def dev_stat():
@@ -200,8 +230,9 @@ for level in [0.5, 0.9, 0.95, 0.97]:
         set_fill(max(0.3, level - 0.15))
         dropped = churn(tag)
         set_fill(level)
-        dry = sh(f"{AT} reclaim --dry-run")
+        dry = sh(f"{PREP} reclaim --dry-run")
         machine.log(dry)
+        diag(f"churn/{tag}")
         began = time.time()
         start(f"reclaim-{tag}", f"{AT} reclaim")
         row["reclaim"] = workloads()
@@ -230,10 +261,23 @@ for level in [0.5, 0.9, 0.95, 0.97]:
             set_fill(level)
             _, _, avail = df()
             flood = avail // MB + dropped // 2
-            start_loop(f"passloop-{tag}e")
+            start_loop(f"passloop-{tag}e", auto=True)
+            began = time.time()
+            freed, _ = machine.execute(
+                f"timeout 300 sh -c 'until [ $(df -B1M --output=avail {B} | tail -1) -ge {flood} ]; do sleep 1; done'"
+            )
+            waited = time.time() - began
             code, out = machine.execute(f"dd if=/dev/zero of={B}/.cache/flood bs=1M count={flood} conv=fsync status=none 2>&1")
             stop_loop(f"passloop-{tag}e")
-            row["enospc"] = {"wrote_mb": flood, "avail_mb": avail // MB, "reclaimable_mb": dropped, "ok": code == 0, "dd": out.strip()[-200:]}
+            row["enospc"] = {
+                "wrote_mb": flood,
+                "avail_mb": avail // MB,
+                "reclaimable_mb": dropped,
+                "auto_reclaimed": freed == 0,
+                "auto_reclaim_s": round(waited, 1),
+                "ok": code == 0,
+                "dd": out.strip()[-200:],
+            }
             sh(f"rm -f {B}/.cache/flood")
             reclaim()
         R["levels"][f"{int(level * 100)}%"] = row
@@ -254,6 +298,8 @@ with subtest("CLI timings at the highest fill"):
     R["cli"] = cli
 
 with subtest("no kernel complaints"):
+    sh(f"rm -rf {B}/.cache/bulk {B}/churn")
+    reclaim()
     sh(f"touch {B}/still-writable && sync")
     dmesg = sh("dmesg")
     R["dmesg_warnings"] = len(re.findall(r"WARNING|NILFS error|read-only|Oops", dmesg))

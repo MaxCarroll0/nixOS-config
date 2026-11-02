@@ -719,6 +719,11 @@ It found three bugs the unit-level prototype could not:
   checkpoint, whose `hi` is exclusive, so `forget` left the file visible in exactly that
   checkpoint's view. An unscanned deletion now closes the path one checkpoint later; a scanned
   death still tightens it.
+- A file written and deleted between two passes was never in `paths`, so its blocks matched no
+  rule and stayed live. The pass now adopts an inode it first meets in the event log at the path it
+  was written under, so a brief `.cache/` file is dropped like any other.
+- Re-rendering an open rule after its drops were enforced mixed ranges read back as lists with new
+  tuples, and sorting them raised `TypeError`, so the pass crashed on the next `.cache/` write.
 
 #### On the pi
 
@@ -745,6 +750,62 @@ promoter has done this since it first listed with `lscp -a`; disk2's 260 checkpo
 these. Minor checkpoints are now indexed but never promoted: they hold no file change, so the
 snapshot before them already shows the same tree. A recount now happens only when a pass touched
 an inode or reclaimed a segment, in one scan for every branch that needs it.
+
+#### Evaluation
+
+`tests/nas-eval.{nix,py}` (`checks.x86_64-linux.nas-eval`) is Stage A of the plan: a 3 GB NILFS2
+with production-sized segments (2048 blocks, 8 MiB) on LUKS over `dm-delay` (4 ms per request),
+2,001 snapshots in the cpfile, measured at four fill levels. At each level fio runs a 1 MiB
+sequential write and a 4 KiB random overwrite with an fsync every 32 writes, three times: stock
+(no pass), with the pass looping every 2 s, and with `nas-at reclaim` running. Before the reclaim
+run a 48 MiB file is rewritten four times and stitched `--none`, leaving 144 MiB reclaimable.
+
+Stage B (a scratch NILFS2 on the pi's real LUKS and bcache stack) was not run: no experiments
+happen on the pi. Also scaled down: 2,001 snapshots instead of 500k (`mkcp -s` takes 15 ms each,
+so 500k is two hours of setup), and the disk is small enough that each fio write shrinks with free
+space (256 MiB sequential at 50%, 40 MiB at 97%).
+
+| Fill | Stock seq MB/s, fsync p99 | Pass idle | Reclaim active | GC |
+|---|---|---|---|---|
+| 50% | 340, 27.1 ms | 435, 15.1 ms | 470, 12.4 ms (max 42 ms) | 19 segs, 144.8 MiB in 14.3 s, 0.05 B copied/B freed |
+| 90% | 438, 11.2 ms | 429, 14.0 ms | 489, 11.5 ms (max 15 ms) | 18 segs, 142.1 MiB in 7.1 s, 0.01 |
+| 95% | 310, 10.7 ms | 417, 11.2 ms | 393, 11.7 ms (max 47 ms) | 19 segs, 144.8 MiB in 5.2 s, 0.05 |
+| 97% | 333, 11.1 ms | 322, 10.3 ms | 423, 11.2 ms (max 13 ms) | 19 segs, 144.5 MiB in 4.3 s, 0.05 |
+
+| Check | Pass if | Result |
+|---|---|---|
+| Pass idle vs stock | throughput within 5%, p99 within 10% | **pass on throughput** (-2% to +35%). fsync p99 within 10% at three levels, +25% at 90% (11.2 to 14.0 ms); stock p99 alone moved 13.7 to 27.1 ms between two runs, so this is VM noise |
+| Reclaim active | ≥ 70% throughput, fsync p99 ≤ 2× stock, max ≤ 2 s, ≤ 4 B copied per B freed | **pass**: 115-158% throughput, p99 ≤ 1.1×, max 47 ms, 0.01-0.05 B copied per B freed |
+| 95% full | no ENOSPC while reclaimable space exists, fsync p99 ≤ 1 s | **pass**: 272 MiB written into 200 MiB free; auto reclaim freed the churn in 6.2 s. p99 11.7 ms |
+| 97% full | reported; no ENOSPC, no kernel warnings | **pass**: 200 MiB into 128 MiB free, auto reclaim in 3.2 s; 0 dmesg warnings |
+| View | warm getattr p50 < 1 ms, p99 < 20 ms; seq read ≥ 50% of branch | **pass**: stat 0.025 ms/file warm, 0.58 ms cold (branch 0.019 / 0.068; mean, not percentiles); read 288 vs 471 MB/s (61%) |
+| History pass | 0 bytes read when idle, < 1 s | **pass**: 0 sectors read or written, 0.27 s (pi: 0.34-0.36 s, all reads from the SSD) |
+| CLI (VM db) | `log` < 0.5 s, `top` < 1 s, `keep --dry-run` < 5 s, `--target` < 10 s | `log` 0.29, `top` 0.44, `keep --quantum 3600 --dry-run` 2.2, `--target-ratio 0.5` 4.1 s pass; **`--target 100M` 22.3 s fails** |
+| CLI (pi) | as above | **`top` 4.9 s and `top --by ratio` 5.0 s fail** on disk1's real `lives` (TODO) |
+| Space | freed matches dry run within 2% | **pass**: exact to the block at every level (37,061, 36,384, 37,063, 36,995) |
+| Previous Versions, SnapRAID diff, disk parking over 2 h, db growth per day | | not measured: they need Stage B or a week of the pi |
+
+"Fill" is `used / (used + avail)`. NILFS2 reserves 5% of segments for GC (`mkfs.nilfs2 -m`), so
+`df` never shows more than about 94.5% of the raw device in use; 97% here means 97% of what can
+actually be written.
+
+**Fresh segments are held back from GC.** `nilfs-reclaim` passes the superblock's `ss_prot_seq` as
+`protseq`, and libnilfsgc refuses every segment written since the superblock's log cursor last
+moved, because roll-forward recovery after a crash still needs them. The kernel updates that
+cursor only every few seconds of segment writes, so a file deleted straight after it was written
+shows `would free 336K` until a little more is written. Reclaim prints `N segments newer than the
+superblock's log cursor held back` when this happens; the space is freed by a later pass.
+
+The evaluation found two more bugs:
+
+- Settle ran reclaim automatically whenever free space was below 15%, so at 90% fill the setup's
+  own passes reclaimed the churn before the measured reclaim started. The pass's threshold is
+  `--reclaim-free`, and the test turns it off during setup.
+- **The kernel frees whole DAT entry blocks.** Since Linux 4.4 (`nilfs_palloc_freev`), GC deletes
+  a DAT entry block once every entry in it is free, and `GET_VINFO` on any virtual block number in
+  it then fails the whole batch with `ENOENT`. Probing the runs left in just-cleaned segments hit
+  this and crashed `nas-at reclaim`. `nilfs-lives` now retries such a batch entry by entry and
+  reports the missing ones as freed.
 
 #### Previous Versions over SMB
 

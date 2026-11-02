@@ -11,7 +11,7 @@ pkgs.testers.runNixOSTest {
       state = "/var/lib/nas-checkpoints";
       at = pkgs.writeShellApplication {
         name = "nas-at";
-        text = ''exec ${lib.getExe pkgs.nas-at} --branch /mnt/disks/disk1 --index ${state}/index.db --pool /mnt/disks/disk1 --view /srv/nas-at --metrics ${state}/nas.prom --suspend /run/nas-promote-suspended --gap-default 5 "$@"'';
+        text = ''exec ${lib.getExe pkgs.nas-at} --branch /mnt/disks/disk1 --index ${state}/index.db --pool /mnt/disks/disk1 --view /srv/nas-at --metrics ${state}/nas.prom --suspend /run/nas-promote-suspended --gap-default 5 --reclaim-free "''${NAS_RECLAIM_FREE:-0.15}" "$@"'';
       };
     in
     {

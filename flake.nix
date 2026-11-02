@@ -287,6 +287,10 @@
               pkgs = pkgsFor "x86_64-linux";
               inherit lib;
             };
+            x86_64-linux.nas-eval = import ./tests/nas-eval.nix {
+              pkgs = pkgsFor "x86_64-linux";
+              inherit lib;
+            };
           };
 
       packages.x86_64-linux = {
