@@ -729,7 +729,7 @@ It found three bugs the unit-level prototype could not:
 
 | Measure | Result |
 |---|---|
-| First pass (backfill, disk1 alone has 158,333 segments) | 2h17m wall, 25m52s CPU, 2.4 TB read, 2.1 GB written; peak 812.5 MB RSS + 503 MB swap. The plan's 65 min assumed summary-only reads; `dumpseg` reads whole segments (TODO) |
+| First pass (backfill, disk1 alone has 158,333 segments) | 2h17m wall, 25m52s CPU, 2.4 TB read, 2.1 GB written; peak 812.5 MB RSS + 503 MB swap. The plan's 65 min assumed summary-only reads; the disks' 8 MiB read-ahead turned every summary read into a whole-segment read (fixed, see [Speed](#speed-stitching-top-and-gc)) |
 | Idle pass, as deployed | 4.9 s, 226.5 MB read: `metrics` rescanned `lives` every run |
 | Pass on idle disks, with `history_days` | 10.9-28.6 s, 0.8-1.2 GB read: never actually idle (below), and the recount scanned `lives` once per branch |
 | Idle pass, minor checkpoints left alone | 0.34-0.36 s, 4.7-6.6 MB read (interpreter, from the SSD), 4 KB written; no new checkpoint on any branch, HDD write counters flat. The first pass after the deploy (0.68 s, 53 MB) left the old code's last minor checkpoint unpromoted |
@@ -767,36 +767,51 @@ space (256 MiB sequential at 50%, 40 MiB at 97%).
 
 | Fill | Stock seq MB/s, fsync p99 | Pass idle | Reclaim active | GC |
 |---|---|---|---|---|
-| 50% | 340, 27.1 ms | 435, 15.1 ms | 470, 12.4 ms (max 42 ms) | 19 segs, 144.8 MiB in 14.3 s, 0.05 B copied/B freed |
-| 90% | 438, 11.2 ms | 429, 14.0 ms | 489, 11.5 ms (max 15 ms) | 18 segs, 142.1 MiB in 7.1 s, 0.01 |
-| 95% | 310, 10.7 ms | 417, 11.2 ms | 393, 11.7 ms (max 47 ms) | 19 segs, 144.8 MiB in 5.2 s, 0.05 |
-| 97% | 333, 11.1 ms | 322, 10.3 ms | 423, 11.2 ms (max 13 ms) | 19 segs, 144.5 MiB in 4.3 s, 0.05 |
+| 50% | 384, 13.7 ms | 403, 13.8 ms | 485, 11.3 ms (max 31 ms) | 18 segs, 138.1 MiB in 14.0 s, 0.04 B copied/B freed |
+| 90% | 383, 19.3 ms | 178, 10.9 ms | 476, 11.5 ms (max 50 ms) | 19 segs, 144.8 MiB in 7.6 s, 0.05 |
+| 95% | 350, 10.8 ms | 286, 11.1 ms | 471, 12.4 ms (max 50 ms) | 20 segs, 147.6 MiB in 4.2 s, 0.08 |
+| 97% | 317, 10.9 ms | 308, 11.6 ms | 494, 11.1 ms (max 13 ms) | 18 segs, 142.1 MiB in 3.7 s, 0.01 |
 
 | Check | Pass if | Result |
 |---|---|---|
-| Pass idle vs stock | throughput within 5%, p99 within 10% | **pass on throughput** (-2% to +35%). fsync p99 within 10% at three levels, +25% at 90% (11.2 to 14.0 ms); stock p99 alone moved 13.7 to 27.1 ms between two runs, so this is VM noise |
-| Reclaim active | ≥ 70% throughput, fsync p99 ≤ 2× stock, max ≤ 2 s, ≤ 4 B copied per B freed | **pass**: 115-158% throughput, p99 ≤ 1.1×, max 47 ms, 0.01-0.05 B copied per B freed |
-| 95% full | no ENOSPC while reclaimable space exists, fsync p99 ≤ 1 s | **pass**: 272 MiB written into 200 MiB free; auto reclaim freed the churn in 6.2 s. p99 11.7 ms |
-| 97% full | reported; no ENOSPC, no kernel warnings | **pass**: 200 MiB into 128 MiB free, auto reclaim in 3.2 s; 0 dmesg warnings |
-| View | warm getattr p50 < 1 ms, p99 < 20 ms; seq read ≥ 50% of branch | **pass**: stat 0.025 ms/file warm, 0.58 ms cold (branch 0.019 / 0.068; mean, not percentiles); read 288 vs 471 MB/s (61%) |
-| History pass | 0 bytes read when idle, < 1 s | **pass**: 0 sectors read or written, 0.27 s (pi: 0.34-0.36 s, all reads from the SSD) |
-| CLI (VM db) | `log` < 0.5 s, `top` < 1 s, `keep --dry-run` < 5 s, `--target` < 10 s | `log` 0.29, `top` 0.44, `keep --quantum 3600 --dry-run` 2.2, `--target-ratio 0.5` 4.1 s pass; **`--target 100M` 22.3 s fails** |
-| CLI (pi) | as above | **`top` 4.9 s and `top --by ratio` 5.0 s fail** on disk1's real `lives` (TODO) |
-| Space | freed matches dry run within 2% | **pass**: exact to the block at every level (37,061, 36,384, 37,063, 36,995) |
-| Previous Versions, SnapRAID diff, disk parking over 2 h, db growth per day | | not measured: they need Stage B or a week of the pi |
+| Pass idle vs stock | throughput within 5%, p99 within 10% | **pass on p99** (+1%, -43%, +2%, +6%). **Throughput fails at 90% and 95%** (-53%, -18%); the previous run of the same code was 0% to +41% at every level, and these writes are 62-93 MiB, so a single slow flush dominates. Not separable from VM noise without Stage B |
+| Reclaim active | ≥ 70% throughput, fsync p99 ≤ 2× stock, max ≤ 2 s, ≤ 4 B copied per B freed | **pass**: 124-156% throughput, p99 ≤ 1.15×, max 50 ms, 0.01-0.08 B copied per B freed |
+| 95% full | no ENOSPC while reclaimable space exists, fsync p99 ≤ 1 s | **pass**: 232 MiB written into 160 MiB free; auto reclaim freed the churn in 2.1 s. p99 12.4 ms |
+| 97% full | reported; no ENOSPC, no kernel warnings | **pass**: 184 MiB into 112 MiB free, auto reclaim in 2.1 s; 0 dmesg warnings; 0 sectors read or written over 180 s idle with the pass every 10 s |
+| View | warm getattr p50 < 1 ms, p99 < 20 ms; seq read ≥ 50% of branch | **pass**: stat 0.128 ms/file warm, 0.61 ms cold (branch 0.008 / 0.047; mean, not percentiles); read 341 vs 436 MB/s (78%). Four concurrent readers: branch 392, mergerfs 320, view 272, SMB 198 MB/s, 794 total |
+| Previous Versions | listing < 2 s cold, < 300 ms warm; no mounts beyond those shown | **pass**: `smbclient` listing 0.31 s cold, 0.11 s warm, one mount for the listing, `get @GMT-…` succeeds with no further mount. Two versions listed, not 24 |
+| History pass | 0 bytes read when idle, < 1 s | **pass**: 0 sectors read or written, 0.24 s. After a 256 MiB write: 1.9 s, 3.4 MB read (254 MB before `MADV_RANDOM`) |
+| CLI (VM db) | `log` < 0.5 s, `top` < 1 s, `keep --dry-run` < 5 s, `--target` < 10 s | **pass**: `log` 0.25, `top` 0.26, `top --by ratio` 0.26, `keep --quantum 3600 --dry-run` 0.53, `--target-ratio 0.5` 0.54, `--target 100M` 0.56 s |
+| CLI (pi db) | as above | **pass**: `top` 0.024 s and `keep --target` 0.26 s against a copy of disk1's `index.db` (were 4.9 s and 339-618 s on the pi) |
+| SnapRAID | `diff` after reclaim shows nothing updated or removed | **pass**: after `sync`, a reclaim of 142.2 MiB, then `diff`: 10,006 equal, 0 added, removed, updated or moved; `check` reports `Everything OK` |
+| Space | freed matches dry run within 2% | **pass**: within one block at every level (35,343/35,344, 37,059/37,059, 37,779/37,780, 36,371/36,371) |
+| Disk parking over 2 h, db growth per day | | not measured in the VM: they need Stage B or a week of the pi. The db estimate is in [Speed](#speed-stitching-top-and-gc) |
 
 "Fill" is `used / (used + avail)`. NILFS2 reserves 5% of segments for GC (`mkfs.nilfs2 -m`), so
 `df` never shows more than about 94.5% of the raw device in use; 97% here means 97% of what can
 actually be written.
 
 **Fresh segments are held back from GC.** `nilfs-reclaim` passes the superblock's `ss_prot_seq` as
-`protseq`, and libnilfsgc refuses every segment written since the superblock's log cursor last
-moved, because roll-forward recovery after a crash still needs them. The kernel updates that
-cursor only every few seconds of segment writes, so a file deleted straight after it was written
-shows `would free 336K` until a little more is written. Reclaim prints `N segments newer than the
+`protseq`, and libnilfsgc refuses every segment written since then, because roll-forward recovery
+after a crash still needs them. `ss_prot_seq` is the log cursor of the *older* of the two
+superblock copies. The kernel writes a superblock only when the log has entered a new segment,
+at most every 10 s (`NILFS_SB_FREQ`) or on `sync`, alternating copies, so the protected window
+spans at least the last two superblock writes. A file deleted straight after it was written shows
+`would free 336K` until a little more is written. Reclaim prints `N segments newer than the
 superblock's log cursor held back` when this happens; the space is freed by a later pass.
 
-The evaluation found two more bugs:
+**A full disk of fresh garbage deadlocks.** Ordinary writes fail with `ENOSPC` once clean segments
+fall to the GC reserve, so nothing moves the log, the cursor never advances, and everything
+deletable sits in held-back segments. The tmp churn test hit exactly this: after 3 GB of churn at
+110 MB/s, `rm -rf tmp` left 66 segments held back and the disk at `ENOSPC`. GC writes may use the
+reserve. So when at least 4 segments are held back and free space is under `--reclaim-free`
+(at least 5%), reclaim moves the live blocks out of the fullest dirty segment, which carries the
+log into new segments, `sync`s so a superblock is written, and retries, up to six times. It prints
+`moved N segments to advance that cursor`. In the last run that churn ended with `98 segments
+cleaned, 761.7M freed; moved 1 segments to advance that cursor`, and the fill-level setup needed it
+three more times.
+
+The evaluation found three more bugs:
 
 - Settle ran reclaim automatically whenever free space was below 15%, so at 90% fill the setup's
   own passes reclaimed the churn before the measured reclaim started. The pass's threshold is
@@ -806,6 +821,88 @@ The evaluation found two more bugs:
   it then fails the whole batch with `ENOENT`. Probing the runs left in just-cleaned segments hit
   this and crashed `nas-at reclaim`. `nilfs-lives` now retries such a batch entry by entry and
   reports the missing ones as freed.
+- **`findmnt PATH` also matches a mount whose source is PATH.** A mergerfs pool with a single
+  branch has that branch as its source, so the branch resolved to the pool, looked unmounted,
+  and every pass silently did nothing. The lookup is `findmnt -M` now. The pi's pool has three
+  branches, so its source never equals one of them.
+
+#### Reclaim under churn in `tmp/`
+
+`tmp/` is historyless. The churn writes 48 files of 64 MiB in turn over four names, 3 GiB in all,
+with about 740 MiB free and the pass looping. A file whose write fails with `ENOSPC` is retried
+after 1 s.
+
+| Run | Written of 3,072 MiB | Failed files | MB/s | Min free | Device read | GC |
+|---|---|---|---|---|---|---|
+| unthrottled, pass every 2 s | 2,368 | 11 | 121 | 0 MiB | 72 MB | 4 runs, 261 segs, 1,971 MiB |
+| 110 MB/s, pass every 2 s | 2,752 | 5 | 83 | 8 MiB | 74 MB | 8 runs, 330 segs, 2,498 MiB |
+| 110 MB/s, pass every 30 s | 1,408 | 26 | 34 | 8 MiB | 0.7 MB | 1 run, 98 segs, 764 MiB |
+
+Reclaim keeps up with most of a gigabit link but not all of it. The held-back window is up to two
+superblock writes, 10 s apart, which at 110 MB/s is more than the free space, so a replaced file's
+segments are often still protected when the next write needs them. The pass's 2 s loop is only
+for the test; the pi's pass runs every 15 minutes, so a branch this full under sustained writes
+relies on mergerfs `moveonenospc` moving the file to another branch rather than on reclaim.
+
+#### Against stock NILFS2
+
+`tests/nas-eval-stock.py` (`checks.x86_64-linux.nas-eval-stock`) runs the same disk, fill levels
+and churn with no history patch in use: plain checkpoints and `nilfs_cleanerd` with its shipped
+config (protection period 3600 s, `min_clean_segments` 10%). It ran before the `MADV_RANDOM`
+change, which affects only the history tools.
+
+| | Stock NILFS2 + cleanerd | History + `nas-at reclaim` |
+|---|---|---|
+| Garbage younger than 1 h | never freed (0 MB at every level) | freed on the next pass, minus the held-back window |
+| Garbage aged 2 h (clock moved) | 136 of 144 MiB in 51 s, 26 s, 17 s at 90/95/97%; nothing at 50%, where clean segments exceed 10% | 138-148 MiB in 14.0, 7.6, 4.2, 3.7 s at 50/90/95/97% |
+| GC cost | 2.2-5.1 B written to the device per B freed | 0.01-0.08 B copied per B freed |
+| Write during GC, 97% | 309 MB/s, fsync p99 223 ms | 494 MB/s, fsync p99 11.1 ms |
+| Write beyond free space, 144 MiB reclaimable | `ENOSPC` at 95% and 97%, not recovered within 300 s even after aging | written at both levels, auto reclaim 2.1 s |
+| 3 GiB churn in `tmp/`, ~750 MiB free | 37 of 48 files failed in both runs, 704 MiB written, 16-17 MB/s | 11 / 5 failed, 2,368 / 2,752 MiB written |
+| Idle disk, 180 s | 0 sectors | 0 sectors |
+
+The two GC cost figures are not the same quantity. Stock's is device bytes written while
+cleanerd ran, which counts the segments it rewrites wholesale; the history side counts the live
+blocks in the segments `nilfs-reclaim` cleaned (segment blocks minus blocks freed). Both say the same thing: cleanerd picks
+segments by age and copies whatever is live in them, while reclaim picks only segments whose dead
+fraction is at least 25%.
+
+Without history, the protection period is what keeps recent versions, so cleanerd cannot free
+recent garbage by design; the history system keeps versions by rule instead and frees garbage
+as soon as the log allows.
+
+#### Speed: stitching, `top` and GC
+
+All times below were measured against a copy of the pi's `index.db` on the laptop, before and
+after the change:
+
+| Operation | Before | After | Change |
+|---|---|---|---|
+| Stitch sweep over the 11 quanta (`keep --target`, `--target-ratio`) | 146.7 s (pi: 339-618 s) | 0.26 s | timelines and per-run liveness framed once, every quantum reuses them |
+| `keep --pairs` on `max/` | 12.95 s | 0.14 s | same frame |
+| `top` | 0.91 s (pi: 4.9 s) | 0.024 s | reads `tallies`, not `lives` |
+| Recount after a pass | 4.45 s | 0.03 s | from `tallies` |
+| Reclaim candidate query | 0.37 s | 0.018 s | partial indexes on dead and closed runs |
+| `lssu` before and after reclaim | about 31 s | about 30 ms | lists only the windows around candidate segments (`-a -i LO -n N`), not all 158k |
+
+- **`tallies`.** This table holds one row of counters per (branch, inode, birth checkpoint): blocks,
+  data blocks, current blocks, retained blocks and reclaimable blocks. Triggers on `lives` keep it
+  up to date. Raw ingest gets about 1.75× slower, but the pass ingests a few thousand rows a day.
+  The first pass after the upgrade builds the table once, which took 4.1 s on the pi's db.
+- **`lssu -n` counts printed lines.** It skips clean segments unless `-a` is given. So the scoped
+  windows always pass `-a`, and windows less than 64 segments apart are merged.
+- **libnilfs read whole segments.** `nilfs_get_segment` `pread`s the full 8 MiB unless
+  `nilfs_opt_set_mmap` is set, and even when mapped it reads the summary's `ss_seq` before
+  returning. The pi's HDDs run `read_ahead_kb` 8192, so that first page fault reads around 8 MiB,
+  and a scan of summaries read every byte of the log: after a 256 MiB write the VM's pass read
+  254 MB, and the backfill read 2.4 TB. The patch calls `madvise(MADV_RANDOM)` straight after the
+  `mmap` (an `madvise` from the caller is too late, the first fault has already happened), and
+  `nilfs-lives` and `nilfs-reclaim` turn mmap on. On a loop device at 8 MiB read-ahead, 34 freshly
+  written segments now cost `nilfs-lives` 3.4 MB instead of 256 MB and a reclaim dry run 3.2 MB
+  instead of 260 MB, with identical output. libnilfsgc reads only summaries in userspace (the
+  kernel moves the live blocks), so reclaim gains the same.
+- **db growth.** The db grows by about 158 B for each `lives` row. The pi adds 1,000-3,500 rows a
+  day, so the db grows by 0.15-0.55 MB a day.
 
 #### Previous Versions over SMB
 

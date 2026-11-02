@@ -209,7 +209,7 @@ with subtest("a historyless file written and deleted between passes is reclaimab
         machine.log(dry)
         if blocks(dry) >= 1024:
             break
-        sh(f"head -c 65536 /dev/urandom > {B}/tick-{i} && sync && sleep 6")
+        sh(f"head -c 2097152 /dev/urandom > {B}/tick-{i} && sync && sleep 6")
     diag(".cache/brief")
     assert blocks(dry) >= 1024, dry
 
@@ -239,3 +239,14 @@ with subtest("a pass on a quiet branch creates no checkpoint"):
     newest = sh(f"lscp -a {DEV} | tail -1")
     sh("nas-at pass && sleep 8 && nas-at pass && sleep 8")
     assert sh(f"lscp -a {DEV} | tail -1") == newest, newest
+
+with subtest("tallies match a fresh aggregate of lives"):
+    o = "9223372036854775807"
+    fresh = (
+        f"SELECT branch, ino, s, SUM(n), SUM(n * (off >= 0)), SUM(n * (e = {o})), SUM(n * (e = {o} AND off >= 0)), "
+        f"SUM(n * (e < {o} AND dead = 0 AND seg IS NOT NULL)), SUM(n * (dead = 1 AND seg IS NOT NULL)) FROM lives GROUP BY 1, 2, 3"
+    )
+    kept = "SELECT branch, ino, s, blocks, born, cur, data, ret, rec FROM tallies WHERE blocks > 0"
+    rows = sh(f"sqlite3 {DB} 'SELECT COUNT(*) FROM lives'").strip()
+    differ = sh(f"sqlite3 {DB} 'SELECT COUNT(*) FROM ({fresh} EXCEPT {kept}) UNION ALL SELECT COUNT(*) FROM ({kept} EXCEPT {fresh})'")
+    assert int(rows) > 0 and differ.split() == ["0", "0"], differ

@@ -230,6 +230,7 @@ int main(int argc, char **argv)
 		perror(argv[2]);
 		return 1;
 	}
+	nilfs_opt_set_mmap(nilfs);
 	if (strcmp(argv[1], "follow") == 0)
 		ret = follow(strtoull(argv[3], NULL, 10), strtoull(argv[4], NULL, 10), strtoull(argv[5], NULL, 10),
 			     strtoull(argv[6], NULL, 10), strtoull(argv[7], NULL, 10));

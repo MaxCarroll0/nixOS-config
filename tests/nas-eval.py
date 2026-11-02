@@ -1,36 +1,8 @@
-import json
-import re
-import time
-
-B = "/mnt/disks/disk1"
 DB = "/var/lib/nas-checkpoints/index.db"
 VIEW = "/srv/nas-at"
+SMB = "smbclient //localhost/disk1 -N"
 AT = "/run/current-system/sw/bin/nas-at"
 PREP = f"NAS_RECLAIM_FREE=0 {AT}"
-ENV = "--setenv=PATH=/run/current-system/sw/bin"
-SEG_BLOCKS = 2048
-MB = 1 << 20
-R = {}
-
-
-def sh(cmd):
-    return machine.succeed(cmd)
-
-
-def timed(cmd):
-    start = time.time()
-    out = sh(cmd)
-    return time.time() - start, out
-
-
-def df():
-    size, used, avail = map(int, sh(f"df -B1 --output=size,used,avail {B} | tail -1").split())
-    return size, used, avail
-
-
-def fill():
-    _, used, avail = df()
-    return used / (used + avail)
 
 
 def settle():
@@ -43,93 +15,12 @@ def reclaim():
     return out
 
 
-bulk = [0]
-
-
-def set_fill(target):
-    for _ in range(3):
-        files = sh(f"ls -t {B}/.cache/bulk 2>/dev/null || true").split()
-        _, used, avail = df()
-        excess = used - target * (used + avail)
-        if excess <= 0 or not files:
-            break
-        doomed = files[: max(1, int(excess // (64 * MB)) + 1)]
-        sh(f"cd {B}/.cache/bulk && rm -f {' '.join(doomed)}")
-        reclaim()
-    sh(f"mkdir -p {B}/.cache/bulk")
-    while True:
-        _, used, avail = df()
-        if used + 64 * MB > target * (used + avail):
-            break
-        bulk[0] += 1
-        code, _ = machine.execute(f"dd if=/dev/zero of={B}/.cache/bulk/b{bulk[0]} bs=1M count=64 conv=fsync status=none")
-        if code != 0:
-            break
-    return fill()
-
-
-def fio_json(out):
-    if "{" not in out:
-        return {"jobs": [{"error": out.strip()[-200:] or "no output", "write": {"bw": 0, "iops": 0, "clat_ns": {}}}]}
-    return json.loads(out[out.index("{"):])
-
-
-def pct(d, key):
-    return (d.get("percentile") or {}).get(key, 0) / 1e6
-
-
-def fio(args):
-    code, out = machine.execute(f"mkdir -p {B}/.cache/fio && fio {args} --ioengine=psync --output-format=json 2>/dev/null")
-    job = fio_json(out)["jobs"][0]
-    error = job.get("error") or code
-    return job, ({"error": error} if error else {})
-
-
-def fio_seq(mb):
-    job, err = fio(f"--name=seq --directory={B}/.cache/fio --rw=write --bs=1M --size={mb}M --end_fsync=1")
-    w = job["write"]
-    return {"mb": mb, "MBps": round(w["bw"] / 1024, 1), "clat_p99_ms": round(pct(w["clat_ns"], "99.000000"), 2), **err}
-
-
-def fio_rand(mb):
-    job, err = fio(f"--name=rand --filename={B}/.cache/fio/r --rw=randwrite --bs=4k --size={mb}M --io_size={2 * mb}M --fsync=32")
-    w, s = job["write"], job.get("sync", {}).get("lat_ns", {})
-    return {
-        "mb": mb,
-        "iops": round(w["iops"]),
-        "clat_p99_ms": round(pct(w["clat_ns"], "99.000000"), 2),
-        "fsync_p50_ms": round(pct(s, "50.000000"), 2),
-        "fsync_p99_ms": round(pct(s, "99.000000"), 2),
-        "fsync_p999_ms": round(pct(s, "99.900000"), 2),
-        "fsync_max_ms": round(s.get("max", 0) / 1e6, 2),
-        **err,
-    }
-
-
-def workloads():
-    _, _, avail = df()
-    seq_mb = max(8, min(256, int(avail * 0.3) // MB))
-    rand_mb = max(4, min(64, int(avail * 0.1) // MB))
-    result = {"fill": round(fill(), 3), "seq": fio_seq(seq_mb), "rand": fio_rand(rand_mb)}
-    sh(f"rm -rf {B}/.cache/fio")
-    return result
-
-
 def start(unit, cmd, auto=False):
-    env = ENV if auto else f"{ENV} --setenv=NAS_RECLAIM_FREE=0"
-    sh(f"systemd-run --unit={unit} -p RemainAfterExit=yes {env} {cmd}")
+    run_unit(unit, cmd, "" if auto else "--setenv=NAS_RECLAIM_FREE=0")
 
 
-def stop(unit):
-    sh(f"systemctl stop {unit}; systemctl reset-failed {unit} 2>/dev/null || true")
-
-
-def finished(unit):
-    machine.wait_until_succeeds(f"systemctl show -p SubState --value {unit} | grep -qxE 'exited|failed'", timeout=1800)
-
-
-def start_loop(unit, auto=False):
-    start(unit, f"/bin/sh -c 'while [ ! -e /run/{unit}.stop ]; do {AT} pass; sleep 2; done'", auto)
+def start_loop(unit, auto=False, every=2):
+    start(unit, f"/bin/sh -c 'while [ ! -e /run/{unit}.stop ]; do {AT} pass; sleep {every}; done'", auto)
 
 
 def stop_loop(unit):
@@ -162,22 +53,45 @@ def diag(like):
         "SELECT * FROM gc_runs",
     ]:
         machine.log(q + "\n" + sh(f"sqlite3 -header {DB} \"{q}\""))
-    machine.log(sh("lscp -a /dev/mapper/slow | tail -6; lssu /dev/mapper/slow | awk '$4 ~ /d/' | wc -l; lssu /dev/mapper/slow | tail -8"))
+    machine.log(sh(f"lscp -a {DEV} | tail -6; lssu {DEV} | awk '$4 ~ /d/' | wc -l; lssu {DEV} | tail -8"))
 
 
-def dev_stat():
-    dm = sh("basename $(readlink -f /dev/mapper/slow)").strip()
-    fields = sh(f"cat /sys/block/{dm}/stat").split()
-    return int(fields[2]), int(fields[6])
+def view_mounts():
+    return int(sh("awk '$2 ~ \"^/run/nas-at/\"' /proc/mounts | wc -l").strip())
 
 
-machine.wait_for_unit("multi-user.target")
-sh("dmesg -C")
-sh("head -c 32 /dev/urandom > /etc/k && cryptsetup luksFormat -q --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --key-file /etc/k /dev/vdb")
-sh("cryptsetup open --key-file /etc/k /dev/vdb crypt")
-sh("dmsetup create slow --table \"0 $(blockdev --getsz /dev/mapper/crypt) delay /dev/mapper/crypt 0 4\"")
-sh(f"mkfs.nilfs2 -f -B {SEG_BLOCKS} /dev/mapper/slow")
-sh(f"mkdir -p {B} && mount -t nilfs2 -o nogc,noatime /dev/mapper/slow {B}")
+def read_paths(at, rel):
+    return {"branch": f"{B}/{rel}", "mergerfs": f"{POOL}/{rel}", "view": f"{VIEW}/@{at}/{rel}", "smb": rel}
+
+
+def gc_since(since):
+    count, segs, freed = sh(
+        f"sqlite3 -separator ' ' {DB} \"SELECT COUNT(*), COALESCE(SUM(segs), 0), COALESCE(SUM(freed), 0) FROM gc_runs WHERE at >= {since}\""
+    ).split()
+    return {"runs": int(count), "segments": int(segs), "freed_mb": round(int(freed) / MB, 1)}
+
+
+def tmp_churn(tag, count, mb, rate, every):
+    sh(f"rm -rf {B}/tmp")
+    reclaim()
+    set_fill(0.75, reclaim)
+    since = vm_now()
+    avail = avail_mb()
+    start_loop(f"passloop-{tag}", auto=True, every=every)
+    row = run_tmp_churn(tag, count, mb, rate)
+    stop_loop(f"passloop-{tag}")
+    return {"pass_every_s": every, "avail_before_mb": avail, **row, "gc": gc_since(since)}
+
+
+def quiet_window(tag):
+    settle()
+    sh(f"sleep 8 && {AT} pass")
+    start_loop(f"quiet-{tag}", auto=True, every=10)
+    row = quiet(180)
+    stop_loop(f"quiet-{tag}")
+    return {"pass_every_s": 10, **row}
+
+
 sh("systemctl start nas-history-watch-disk1")
 machine.wait_until_succeeds("test -e /var/lib/nas-checkpoints/events/disk1.jsonl")
 sh(f"{AT} pass")
@@ -185,24 +99,57 @@ sh("systemctl start nas-at-view")
 machine.wait_until_succeeds(f"mountpoint -q {VIEW}")
 
 with subtest("2000 snapshots in the cpfile"):
-    elapsed, _ = timed("for i in $(seq 2000); do mkcp -s /dev/mapper/slow; done")
-    R["snapshots"] = {"n": int(sh("lscp -s /dev/mapper/slow | tail -n +2 | wc -l")), "seconds": round(elapsed, 1)}
+    elapsed, _ = timed(f"for i in $(seq 2000); do mkcp -s {DEV}; done")
+    R["snapshots"] = {"n": int(sh(f"lscp -s {DEV} | tail -n +2 | wc -l")), "seconds": round(elapsed, 1)}
     settle()
 
 with subtest("view against branch: stat walk and sequential read"):
-    sh(f"mkdir -p {B}/many && cd {B}/many && for i in $(seq 2000); do head -c 1024 /dev/urandom > f$i; done")
-    sh(f"mkdir -p {B}/big && dd if=/dev/urandom of={B}/big/seq bs=1M count=256 conv=fsync status=none")
+    make_reading_set()
     settle()
     at = sh(f"sqlite3 {DB} \"SELECT MAX(epoch) FROM checkpoints WHERE branch='{B}'\"").strip()
-    walk = {}
-    for name, root in [("branch", B), ("view", f"{VIEW}/@{at}")]:
-        sh("sync && echo 3 > /proc/sys/vm/drop_caches")
-        cold, _ = timed(f"find {root}/many -type f -exec stat -c %s {{}} + > /dev/null")
-        warm, _ = timed(f"find {root}/many -type f -exec stat -c %s {{}} + > /dev/null")
-        sh("sync && echo 3 > /proc/sys/vm/drop_caches")
-        read, _ = timed(f"cat {root}/big/seq > /dev/null")
-        walk[name] = {"stat_cold_ms_per_file": round(cold * 1000 / 2000, 3), "stat_warm_ms_per_file": round(warm * 1000 / 2000, 3), "seq_read_MBps": round(256 / read, 1)}
+    walk = {"branch": stat_walk(B), "view": stat_walk(f"{VIEW}/@{at}")}
+    for name, path in read_paths(at, "big/seq").items():
+        walk.setdefault(name, {})["seq_read_MBps"] = seq_read(name, path)
+    rates, walk["concurrent_total_MBps"] = concurrent_reads({n: read_paths(at, f"big/r-{n}")[n] for n in ["branch", "mergerfs", "view", "smb"]})
+    for name, rate in rates.items():
+        walk[name]["concurrent_read_MBps"] = rate
     R["view"] = walk
+
+with subtest("Previous Versions over SMB"):
+    sh("echo 3 > /proc/sys/vm/drop_caches")
+    before = view_mounts()
+    cold, out = timed(f"{SMB} -c 'allinfo big/seq'")
+    warm, _ = timed(f"{SMB} -c 'allinfo big/seq'")
+    names = re.findall(r"@GMT-[0-9.-]+", out)
+    pv = {"versions": len(names), "list_cold_s": round(cold, 3), "list_warm_s": round(warm, 3), "mounts_listing": view_mounts() - before}
+    if names:
+        code, got = machine.execute(f"{SMB} -c 'get {names[0]}/big/seq /tmp/pv' 2>&1 && cmp /tmp/pv {B}/big/seq")
+        pv["get_ok"] = code == 0
+        pv["mounts_after_get"] = view_mounts() - before
+        if code:
+            pv["get"] = got.strip()[-300:]
+        sh("rm -f /tmp/pv")
+    else:
+        pv["allinfo"] = out.strip()[-500:]
+    R["previous_versions"] = pv
+
+with subtest("SnapRAID diff after reclaim"):
+    dropped = churn("sr")
+    code, out = machine.execute("snapraid -c /etc/snapraid.conf sync 2>&1")
+    machine.log(out)
+    sr = {"sync_ok": code == 0, "reclaimable_mb": dropped}
+    gc = reclaim()
+    sr["reclaim"] = gc.strip().splitlines()[-1] if gc.strip() else ""
+    code, diff = machine.execute("snapraid -c /etc/snapraid.conf diff 2>&1")
+    machine.log(diff)
+    sr["diff"] = {k: int(n) for n, k in re.findall(r"^\s*(\d+) (equal|added|removed|updated|moved|copied|restored)\s*$", diff, re.M)}
+    code, check = machine.execute("snapraid -c /etc/snapraid.conf check -a 2>&1")
+    machine.log(check)
+    sr["check_ok"] = code == 0
+    sr["check"] = check.strip().splitlines()[-1] if check.strip() else ""
+    R["snapraid"] = sr
+    assert sr["sync_ok"] and sr["check_ok"], out + diff + check
+    assert all(sr["diff"].get(k, 1) == 0 for k in ["removed", "updated", "moved"]), diff
 
 with subtest("an idle pass reads nothing from the device"):
     settle()
@@ -212,28 +159,41 @@ with subtest("an idle pass reads nothing from the device"):
     after = dev_stat()
     R["idle_pass"] = {"seconds": round(elapsed, 3), "sectors_read": after[0] - before[0], "sectors_written": after[1] - before[1]}
 
+with subtest("a pass after a 256 MiB write reads only log summaries"):
+    sh(f"dd if=/dev/urandom of={B}/big/burst bs=1M count=256 conv=fsync status=none && sync && sleep 6")
+    sh("echo 3 > /proc/sys/vm/drop_caches")
+    before = dev_stat()
+    elapsed, _ = timed(f"{AT} pass")
+    after = dev_stat()
+    R["burst_pass"] = {"written_mb": 256, "seconds": round(elapsed, 2), "read_mb": round((after[0] - before[0]) * 512 / MB, 2)}
+    assert R["burst_pass"]["read_mb"] < 32, R["burst_pass"]
+
+with subtest("the device stays quiet with every service running"):
+    R["quiet"] = quiet_window("low")
+
 R["levels"] = {}
 for level in [0.5, 0.9, 0.95, 0.97]:
     with subtest(f"fill {level:.0%}"):
         tag = f"l{int(level * 100)}"
         row = {}
-        set_fill(level)
+        set_fill(level, reclaim)
         row["stock"] = workloads()
         reclaim()
-        set_fill(level)
+        set_fill(level, reclaim)
 
         start_loop(f"passloop-{tag}")
         row["pass"] = workloads()
         stop_loop(f"passloop-{tag}")
         reclaim()
 
-        set_fill(max(0.3, level - 0.15))
+        set_fill(max(0.3, level - 0.15), reclaim)
         dropped = churn(tag)
-        set_fill(level)
+        set_fill(level, reclaim)
         dry = sh(f"{PREP} reclaim --dry-run")
         machine.log(dry)
         diag(f"churn/{tag}")
         began = time.time()
+        before = dev_stat()
         start(f"reclaim-{tag}", f"{AT} reclaim")
         row["reclaim"] = workloads()
         finished(f"reclaim-{tag}")
@@ -256,32 +216,40 @@ for level in [0.5, 0.9, 0.95, 0.97]:
 
         if level >= 0.95:
             reclaim()
-            set_fill(max(0.3, level - 0.15))
+            set_fill(max(0.3, level - 0.15), reclaim)
             dropped = churn(f"{tag}e")
-            set_fill(level)
-            _, _, avail = df()
-            flood = avail // MB + dropped // 2
+            set_fill(level, reclaim)
+            avail = avail_mb()
+            want = avail + dropped // 2
             start_loop(f"passloop-{tag}e", auto=True)
-            began = time.time()
-            freed, _ = machine.execute(
-                f"timeout 300 sh -c 'until [ $(df -B1M --output=avail {B} | tail -1) -ge {flood} ]; do sleep 1; done'"
-            )
-            waited = time.time() - began
-            code, out = machine.execute(f"dd if=/dev/zero of={B}/.cache/flood bs=1M count={flood} conv=fsync status=none 2>&1")
+            freed, waited = wait_for_avail(want, 300)
+            ok, out = flood(want)
             stop_loop(f"passloop-{tag}e")
             row["enospc"] = {
-                "wrote_mb": flood,
-                "avail_mb": avail // MB,
+                "wrote_mb": want,
+                "avail_mb": avail,
                 "reclaimable_mb": dropped,
-                "auto_reclaimed": freed == 0,
-                "auto_reclaim_s": round(waited, 1),
-                "ok": code == 0,
-                "dd": out.strip()[-200:],
+                "auto_reclaimed": freed,
+                "auto_reclaim_s": waited,
+                "ok": ok,
+                "dd": out,
             }
-            sh(f"rm -f {B}/.cache/flood")
             reclaim()
+        if level == 0.97:
+            set_fill(level, reclaim)
+            row["quiet"] = quiet_window(tag)
         R["levels"][f"{int(level * 100)}%"] = row
         machine.log("NAS-EVAL-LEVEL " + json.dumps({tag: row}))
+
+with subtest("reclaim under GBs of churn in a historyless tmp/"):
+    R["tmp_churn"] = {
+        "burst": tmp_churn("burst", 48, 64, 0, 2),
+        "gigabit": tmp_churn("gigabit", 48, 64, 110, 2),
+        "gigabit_pass_30s": tmp_churn("gigabit30", 48, 64, 110, 30),
+    }
+    machine.log("NAS-EVAL-CHURN " + json.dumps(R["tmp_churn"]))
+    sh(f"rm -rf {B}/tmp")
+    reclaim()
 
 with subtest("CLI timings at the highest fill"):
     cli = {}
@@ -298,12 +266,9 @@ with subtest("CLI timings at the highest fill"):
     R["cli"] = cli
 
 with subtest("no kernel complaints"):
-    sh(f"rm -rf {B}/.cache/bulk {B}/churn")
+    sh(f"rm -rf {B}/.cache/bulk {B}/churn {B}/tmp")
     reclaim()
     sh(f"touch {B}/still-writable && sync")
-    dmesg = sh("dmesg")
-    R["dmesg_warnings"] = len(re.findall(r"WARNING|NILFS error|read-only|Oops", dmesg))
+    dmesg = dmesg_warnings()
+    report()
     assert R["dmesg_warnings"] == 0, dmesg
-
-machine.log("NAS-EVAL " + json.dumps(R))
-print("NAS-EVAL " + json.dumps(R))

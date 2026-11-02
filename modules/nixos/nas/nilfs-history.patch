@@ -91,3 +91,14 @@ index fde07d3..c1dcd1b 100644
  	if (unlikely(ret < 0))
  		goto out_lock;
  
+diff --git a/lib/nilfs.c b/lib/nilfs.c
+--- a/lib/nilfs.c
++++ b/lib/nilfs.c
+@@ -1045,6 +1045,7 @@
+ 		addr = mmap(NULL, alloc_size, PROT_READ, MAP_SHARED,
+ 			    nilfs->n_devfd, segstart - page_offset);
+ 		if (likely(addr != MAP_FAILED)) {
++			madvise(addr, alloc_size, MADV_RANDOM);
+ 			segment->mmapped = 1;
+ 			segment->adjusted = (page_offset != 0 ||
+ 					     alloc_size != pagesize);

@@ -194,6 +194,7 @@ int main(int argc, char **argv)
 		perror(argv[optind]);
 		return 1;
 	}
+	nilfs_opt_set_mmap(nilfs);
 	for (size_t i = 0; i < nsegs; i += SEGMENTS_PER_BATCH) {
 		size_t batch = nsegs - i < SEGMENTS_PER_BATCH ? nsegs - i : SEGMENTS_PER_BATCH;
 		struct nilfs_reclaim_params params = { 0 };

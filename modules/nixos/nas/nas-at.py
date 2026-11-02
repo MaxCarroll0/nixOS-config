@@ -38,6 +38,32 @@ CREATE TABLE IF NOT EXISTS lives (
 CREATE INDEX IF NOT EXISTS lives_ino ON lives (branch, ino, s);
 CREATE INDEX IF NOT EXISTS lives_vblk ON lives (branch, s, vblk);
 CREATE INDEX IF NOT EXISTS lives_seg ON lives (branch, seg);
+CREATE INDEX IF NOT EXISTS lives_dead ON lives (branch, seg, s, n) WHERE dead=1 AND seg IS NOT NULL;
+CREATE INDEX IF NOT EXISTS lives_closed ON lives (branch, ino, s, e, n, off, seg, dead) WHERE e<9223372036854775807;
+CREATE TABLE IF NOT EXISTS tallies (
+    branch  TEXT NOT NULL,
+    ino     INTEGER NOT NULL,
+    s       INTEGER NOT NULL,
+    blocks  INTEGER NOT NULL,
+    born    INTEGER NOT NULL,
+    cur     INTEGER NOT NULL,
+    data    INTEGER NOT NULL,
+    ret     INTEGER NOT NULL,
+    rec     INTEGER NOT NULL,
+    PRIMARY KEY (branch, ino, s)
+) WITHOUT ROWID;
+CREATE TRIGGER IF NOT EXISTS lives_tally_insert AFTER INSERT ON lives BEGIN
+    INSERT INTO tallies VALUES (NEW.branch, NEW.ino, NEW.s, TALLY(NEW))
+    ON CONFLICT DO UPDATE SET UPSERT;
+END;
+CREATE TRIGGER IF NOT EXISTS lives_tally_delete AFTER DELETE ON lives BEGIN
+    UPDATE tallies SET UNTALLY(OLD) WHERE branch=OLD.branch AND ino=OLD.ino AND s=OLD.s;
+END;
+CREATE TRIGGER IF NOT EXISTS lives_tally_update AFTER UPDATE ON lives BEGIN
+    UPDATE tallies SET UNTALLY(OLD) WHERE branch=OLD.branch AND ino=OLD.ino AND s=OLD.s;
+    INSERT INTO tallies VALUES (NEW.branch, NEW.ino, NEW.s, TALLY(NEW))
+    ON CONFLICT DO UPDATE SET UPSERT;
+END;
 CREATE TABLE IF NOT EXISTS paths (
     branch  TEXT NOT NULL,
     ino     INTEGER NOT NULL,
@@ -108,6 +134,26 @@ LIVE = 0
 QUANTA = (1, 5, 10, 30, 60, 300, 600, 1800, 3600, 86400, None)
 GMT = "@GMT-%Y.%m.%d-%H.%M.%S"
 BUILTIN = 0
+LSSU_GAP = 64
+TALLIES = {
+    "blocks": "1",
+    "born": "{r}.off>=0",
+    "cur": "{r}.e={open}",
+    "data": "{r}.e={open} AND {r}.off>=0",
+    "ret": "{r}.e<{open} AND {r}.dead=0 AND {r}.seg IS NOT NULL",
+    "rec": "{r}.dead=1 AND {r}.seg IS NOT NULL",
+}
+
+
+def tally(r, form):
+    return ", ".join(form.format(col=col, n=f"{r}.n", when=when.format(r=r, open=OPEN)) for col, when in TALLIES.items())
+
+
+SCHEMA = (
+    SCHEMA.replace("TALLY(NEW)", tally("NEW", "{n} * ({when})"))
+    .replace("UNTALLY(OLD)", tally("OLD", "{col}={col}-{n} * ({when})"))
+    .replace("UPSERT", ", ".join(f"{col}={col}+excluded.{col}" for col in TALLIES))
+)
 
 
 def connect(path, timeout=600):
@@ -119,6 +165,16 @@ def connect(path, timeout=600):
         db.execute("ALTER TABLE checkpoints ADD COLUMN ss INTEGER NOT NULL DEFAULT 1")
         db.execute("CREATE INDEX IF NOT EXISTS checkpoints_ss ON checkpoints (branch, ss, epoch, cno)")
     db.commit()
+    if one(db, "SELECT 1 FROM meta WHERE key='tallies'") is None:
+        db.execute("BEGIN IMMEDIATE")
+        if one(db, "SELECT 1 FROM meta WHERE key='tallies'") is None:
+            db.execute("DELETE FROM tallies")
+            db.execute(
+                f"INSERT INTO tallies SELECT branch, ino, s, {tally('l', 'SUM(CASE WHEN {when} THEN {n} ELSE 0 END)')} "
+                "FROM lives l GROUP BY branch, ino, s"
+            )
+            db.execute("INSERT INTO meta VALUES ('tallies', '1')")
+        db.commit()
     return db
 
 
@@ -138,7 +194,7 @@ def marks(items):
 
 
 def device_of(mount):
-    out = subprocess.run(["findmnt", "-no", "SOURCE", mount], capture_output=True, text=True).stdout
+    out = subprocess.run(["findmnt", "-no", "SOURCE", "-M", mount], capture_output=True, text=True).stdout
     return out.split("\n")[0] or None
 
 
@@ -397,8 +453,8 @@ def mark_dead(db, br, tl, inos):
         drops = load_drops(db, br.path, batch)
         updates = []
         for rowid, ino, s, e, dead in db.execute(
-            f"SELECT rowid, ino, s, e, dead FROM lives WHERE branch=? AND e<? AND seg IS NOT NULL AND ino IN ({marks(batch)})",
-            (br.path, OPEN, *batch),
+            f"SELECT rowid, ino, s, e, dead FROM lives WHERE branch=? AND e<{OPEN} AND seg IS NOT NULL AND ino IN ({marks(batch)})",
+            (br.path, *batch),
         ):
             d = int(e <= tl.protcno and not retained(s, e, drops.get(ino, []), tl.ss))
             if d != dead:
@@ -416,13 +472,10 @@ def recount_days(db, brs):
     bsize = {br.path: br.bsize for br in brs}
     db.execute(f"DELETE FROM history_days WHERE branch IN ({marks(bsize)})", tuple(bsize))
     rows = db.execute(
-        "SELECT l.branch, COALESCE(c.epoch / 86400 * 86400, 0) AS day, SUM(l.cur), SUM(l.ret), SUM(l.rec) "
-        "FROM (SELECT branch, s, SUM(CASE WHEN e=? THEN n ELSE 0 END) AS cur, "
-        "SUM(CASE WHEN e<? AND dead=0 AND seg IS NOT NULL THEN n ELSE 0 END) AS ret, "
-        "SUM(CASE WHEN dead=1 AND seg IS NOT NULL THEN n ELSE 0 END) AS rec "
-        f"FROM lives NOT INDEXED WHERE branch IN ({marks(bsize)}) GROUP BY branch, s) l "
-        "LEFT JOIN checkpoints c ON c.branch=l.branch AND c.cno=l.s GROUP BY l.branch, day",
-        (OPEN, OPEN, *bsize),
+        "SELECT t.branch, COALESCE(c.epoch / 86400 * 86400, 0) AS day, SUM(t.cur), SUM(t.ret), SUM(t.rec) "
+        "FROM tallies t LEFT JOIN checkpoints c ON c.branch=t.branch AND c.cno=t.s "
+        f"WHERE t.branch IN ({marks(bsize)}) GROUP BY t.branch, day",
+        tuple(bsize),
     ).fetchall()
     db.executemany(
         "INSERT INTO history_days VALUES (?, ?, ?, ?, ?)",
@@ -669,11 +722,13 @@ def scope_rows(db, branch, rule, patterns=None):
     return out
 
 
-def runs_of(db, branch, inos, columns="ino, s, e, n, off, seg, dead"):
-    out = {}
+def ino_rows(db, sql, branch, inos, *args):
+    inos = set(inos)
+    if len(inos) > 2000:
+        return [r for r in db.execute(sql.format(inos=""), (branch, *args)) if r[0] in inos]
+    out = []
     for batch in chunks(inos):
-        for row in db.execute(f"SELECT {columns} FROM lives WHERE branch=? AND ino IN ({marks(batch)})", (branch, *batch)):
-            out.setdefault(row[0], []).append(row[1:])
+        out += db.execute(sql.format(inos=f" AND ino IN ({marks(batch)})"), (branch, *batch, *args)).fetchall()
     return out
 
 
@@ -700,31 +755,27 @@ def pin_instants(br, rule, edits_by_path, all_rules):
     return out
 
 
-def plan(db, br, tl, rule, args, all_rules, now, extra_drops=None):
-    scope = scope_rows(db, br.path, rule)
+def frame(db, br, tl, rule, args, all_rules, now, scope=None):
+    if rule.kind == "pin" or rule.mode == "continuous":
+        return None
+    scope = scope_rows(db, br.path, rule) if scope is None else scope
     if not scope:
-        return scope, {}, set(), [], None
-    runs = runs_of(db, br.path, list(scope), "ino, s, e, n, off")
+        return None
+    starts = ino_rows(db, "SELECT ino, s, born FROM tallies WHERE branch=?{inos} AND blocks>0", br.path, scope)
     created = rule.p.get("created_cno", {}).get(br.path, tl.last)
     future = rule.p.get("future") or rule.id == BUILTIN
     w_lo = tl.first_at(rule.lo) if rule.lo else 0
-    if rule.kind == "pin":
-        return scope, {}, set(), [], None
     edits = {}
     edits_by_path = {}
-    for ino, rs in runs.items():
+    for ino, s, _ in starts:
         intervals = scope[ino]
-        for s, _, _, _ in rs:
-            if s < w_lo or not inside(intervals, s):
-                continue
-            edits.setdefault(ino, set()).add(s)
-            for _, path, lo, hi in intervals:
-                if (lo is None or lo <= s) and (hi is None or s < hi):
-                    edits_by_path.setdefault(path, set()).add(s)
+        if s < w_lo or not inside(intervals, s):
+            continue
+        edits.setdefault(ino, set()).add(s)
+        for _, path, lo, hi in intervals:
+            if (lo is None or lo <= s) and (hi is None or s < hi):
+                edits_by_path.setdefault(path, set()).add(s)
     earlier = load_drops(db, br.path, list(edits), below=rule.id if rule.id != BUILTIN else 0)
-    if extra_drops:
-        for ino, r in extra_drops.items():
-            earlier[ino] = merge(earlier.get(ino, []) + r)
     ss = set(tl.ss)
     instants = set()
     for ino, es in edits.items():
@@ -752,12 +803,20 @@ def plan(db, br, tl, rule, args, all_rules, now, extra_drops=None):
             nxt = E[i + 1] if i + 1 < len(E) else None
             if (nxt is not None and tl.epoch[nxt] - tl.epoch[x] >= gap) or (nxt is None and now - tl.epoch[x] >= gap):
                 landmarks.add(x)
-        landmarks |= removal_landmarks(scope, runs, E)
-    R = choose(E, landmarks, pin_marks, rule, tl)
-    return scope, edits, set(R), E, (w_lo, w_hi)
+        growth = {}
+        for ino, s, n in starts:
+            if n:
+                growth.setdefault(ino, {})[s] = n
+        for ino, e, n in ino_rows(
+            db, f"SELECT ino, e, SUM(n) FROM lives WHERE branch=?{{inos}} AND e<{OPEN} AND off>=0 GROUP BY ino, e", br.path, scope
+        ):
+            t = growth.setdefault(ino, {})
+            t[e] = t.get(e, 0) - n
+        landmarks |= removal_landmarks(scope, growth, E)
+    return scope, edits, E, landmarks, pin_marks, (w_lo, w_hi)
 
 
-def removal_landmarks(scope, runs, E):
+def removal_landmarks(scope, growth, E):
     by_path = {}
     for ino, intervals in scope.items():
         for _, path, _, _ in intervals:
@@ -766,14 +825,8 @@ def removal_landmarks(scope, runs, E):
     for path, inos in by_path.items():
         events = {}
         for ino in inos:
-            for s, e, n, off in runs.get(ino, ()):
-                if off < 0:
-                    continue
-                events.setdefault(s, {}).setdefault(ino, 0)
-                events[s][ino] += n
-                if e != OPEN:
-                    events.setdefault(e, {}).setdefault(ino, 0)
-                    events[e][ino] -= n
+            for t, d in growth.get(ino, {}).items():
+                events.setdefault(t, {})[ino] = d
         if len(events) < 2:
             continue
         sizes = dict.fromkeys(inos, 0)
@@ -788,6 +841,18 @@ def removal_landmarks(scope, runs, E):
                     out.add(prior)
             before = after
     return out
+
+
+def stitch(fr, rule, tl):
+    if fr is None:
+        return {}, set()
+    scope, edits, E, landmarks, pins, window = fr
+    R = choose(E, landmarks, pins, rule, tl)
+    if "" in rule.paths and rule.id != BUILTIN:
+        w_lo, w_hi = window
+        kept = set(R)
+        return {}, {c for c in tl.ss if w_lo <= c < w_hi and c not in kept and c < tl.protcno}
+    return gaps(scope, edits, R, window), set()
 
 
 def choose(E, landmarks, pins, rule, tl):
@@ -874,19 +939,9 @@ def one_row(db, branch, ino, inc):
 
 
 def compute(db, br, tl, rule, args, all_rules, now):
-    if rule.kind == "pin":
-        return {}, set()
     if rule.kind == "forget":
         return forget_drops(db, br, tl, rule)[1], set()
-    if rule.mode == "continuous":
-        return {}, set()
-    scope, edits, R, E, window = plan(db, br, tl, rule, args, all_rules, now)
-    if window is None:
-        return {}, set()
-    if "" in rule.paths and rule.id != BUILTIN:
-        w_lo, w_hi = window
-        return {}, {c for c in tl.ss if w_lo <= c < w_hi and c not in R and c < tl.protcno}
-    return gaps(scope, edits, sorted(R), window), set()
+    return stitch(frame(db, br, tl, rule, args, all_rules, now), rule, tl)
 
 
 def enforced_since(db, branch, at):
@@ -995,14 +1050,25 @@ def view_fds(args):
     return False
 
 
-def dirty_segments(br):
-    out = subprocess.run(["lssu", br.device], capture_output=True, text=True, check=True).stdout
+def dirty_segments(br, among=None):
+    if among is None:
+        windows = [[]]
+    else:
+        spans = []
+        for seg in sorted(among):
+            if spans and seg - spans[-1][1] <= LSSU_GAP:
+                spans[-1][1] = seg
+            else:
+                spans.append([seg, seg])
+        windows = [["-a", "-i", str(lo), "-n", str(hi - lo + 1)] for lo, hi in spans]
     segs = set()
-    for line in out.splitlines()[1:]:
-        f = line.split()
-        if len(f) >= 5 and "d" in f[3] and "a" not in f[3] and "e" not in f[3]:
-            segs.add(int(f[0]))
-    return segs
+    for window in windows:
+        out = subprocess.run(["lssu", *window, br.device], capture_output=True, text=True, check=True).stdout
+        for line in out.splitlines()[1:]:
+            f = line.split()
+            if len(f) >= 5 and "d" in f[3] and "a" not in f[3] and "e" not in f[3]:
+                segs.add(int(f[0]))
+    return segs if among is None else segs & set(among)
 
 
 def reclaim(db, br, tl, args, force=False, dry_run=False):
@@ -1010,17 +1076,19 @@ def reclaim(db, br, tl, args, force=False, dry_run=False):
     free = st.f_bavail / st.f_blocks if st.f_blocks else 1
     if not force and free >= args.reclaim_free:
         return None
-    candidates = dirty_segments(br)
     threshold = args.reclaim_dead * br.bps
     head = br.read("segctor/last_pseg_block") // br.bps
     segs = [
         seg
         for seg, dead, oldest in db.execute(
-            "SELECT seg, SUM(n), MIN(s) FROM lives WHERE branch=? AND dead=1 AND seg IS NOT NULL GROUP BY seg ORDER BY 3",
+            "SELECT seg, SUM(n), MIN(s) FROM lives INDEXED BY lives_dead WHERE branch=? AND dead=1 AND seg IS NOT NULL "
+            "GROUP BY seg ORDER BY 3",
             (br.path,),
         )
-        if dead >= threshold and seg in candidates and seg != head
+        if dead >= threshold and seg != head
     ]
+    candidates = dirty_segments(br, segs) if segs else set()
+    segs = [seg for seg in segs if seg in candidates]
     if not segs:
         return {"segments": 0, "freed": 0}
     if dry_run:
@@ -1042,8 +1110,17 @@ def reclaim(db, br, tl, args, force=False, dry_run=False):
         bump(db)
         time.sleep(1)
         result = run_reclaim(br, tl, args, segs, False)
-        after = dirty_segments(br)
-        cleaned = [s for s in segs if s not in after]
+        pushed = []
+        while result.get("protected_segs", 0) >= 4 and starved(br, args) and len(pushed) < 6:
+            seg = push_log(br, tl, args, set(segs) | set(pushed))
+            if seg is None:
+                break
+            pushed.append(seg)
+            again = run_reclaim(br, tl, args, sorted(dirty_segments(br, segs)), False)
+            again["freed_vblks"] = again.get("freed_vblks", 0) + result["freed_vblks"]
+            result = again
+        after = dirty_segments(br, segs + pushed)
+        cleaned = [s for s in segs + pushed if s not in after]
         freed = result["freed_vblks"] * br.bsize
         db.execute("INSERT INTO gc_runs (branch, at, segs, freed) VALUES (?, ?, ?, ?)", (br.path, time.time(), len(cleaned), freed))
         for batch in chunks(cleaned):
@@ -1051,9 +1128,36 @@ def reclaim(db, br, tl, args, force=False, dry_run=False):
                 f"UPDATE lives SET seg=NULL WHERE branch=? AND dead=1 AND seg IN ({marks(batch)})", (br.path, *batch)
             )
         db.commit()
-        return {"segments": len(cleaned), "freed": freed, "cleaned": cleaned, "protected_segs": result.get("protected_segs", 0)}
+        return {
+            "segments": len(cleaned),
+            "freed": freed,
+            "cleaned": cleaned,
+            "protected_segs": result.get("protected_segs", 0),
+            "pushed": len(pushed),
+        }
     finally:
         lock.close()
+
+
+def starved(br, args):
+    st = os.statvfs(br.path)
+    return st.f_bavail < max(args.reclaim_free, 0.05) * st.f_blocks
+
+
+def push_log(br, tl, args, held):
+    head = br.read("segctor/last_pseg_block") // br.bps
+    out = subprocess.run(["lssu", "-i", "0", "-n", "64", br.device], capture_output=True, text=True, check=True).stdout
+    spare = [
+        (int(f[4]), int(f[0]))
+        for f in (line.split() for line in out.splitlines()[1:])
+        if len(f) >= 5 and "d" in f[3] and "a" not in f[3] and "e" not in f[3] and int(f[0]) != head and int(f[0]) not in held
+    ]
+    if not spare:
+        return None
+    seg = max(spare)[1]
+    run_reclaim(br, tl, args, [seg], False)
+    os.sync()
+    return seg
 
 
 def run_reclaim(br, tl, args, segs, dry_run):
@@ -1710,12 +1814,11 @@ def run_top(args):
     rows = []
     for br in h.live():
         sql = (
-            "SELECT p.path, COALESCE(SUM(CASE WHEN l.e=? AND l.off>=0 THEN l.n END), 0), "
-            "COALESCE(SUM(CASE WHEN l.e<? AND l.seg IS NOT NULL THEN l.n END), 0) "
-            "FROM paths p JOIN lives l ON l.branch=p.branch AND l.ino=p.ino "
+            "SELECT p.path, COALESCE(SUM(t.data), 0), COALESCE(SUM(t.ret + t.rec), 0) "
+            "FROM paths p JOIN tallies t ON t.branch=p.branch AND t.ino=p.ino "
             "WHERE p.branch=? AND p.hi IS NULL"
         )
-        params = [OPEN, OPEN, br.path]
+        params = [br.path]
         if rel:
             sql += " AND (p.path=? OR (p.path>=? AND p.path<?))"
             params += [rel, rel + "/", rel + "0"]
@@ -1887,26 +1990,35 @@ def new_rule(h, paths, kind, params, lo=None, hi=None):
     return cur.lastrowid
 
 
-def savings(h, rule, args):
+def savings(h, rule, args, cache):
     now = time.time()
     total_new = total_hist = 0
     for br in h.live():
-        tl = Timeline(h.db, br.path)
-        all_rules = [builtin_rule(args)] + rules(h.db)
-        drops, demote = compute(h.db, br, tl, rule, args, all_rules, now)
-        scope = scope_rows(h.db, br.path, rule)
-        runs = runs_of(h.db, br.path, list(scope), "ino, s, e, n, seg, dead")
-        existing = load_drops(h.db, br.path, list(scope))
+        if br.path not in cache:
+            tl = Timeline(h.db, br.path)
+            all_rules = [builtin_rule(args)] + rules(h.db)
+            scope = scope_rows(h.db, br.path, rule)
+            fr = frame(h.db, br, tl, rule, args, all_rules, now, scope)
+            closed = {}
+            for ino, s, e, n in ino_rows(
+                h.db,
+                f"SELECT ino, s, e, SUM(n) FROM lives WHERE branch=?{{inos}} AND e<{OPEN} AND seg IS NOT NULL AND dead=0 GROUP BY ino, s, e",
+                br.path,
+                scope,
+            ):
+                closed.setdefault(ino, []).append((s, e, n))
+            existing = load_drops(h.db, br.path, list(closed))
+            w_lo = tl.first_at(rule.lo) if rule.lo else 0
+            w_hi = tl.first_after(rule.hi) if rule.hi else OPEN
+            hist = sum(n for rs in closed.values() for s, _, n in rs if w_lo <= s < w_hi) * br.bsize
+            cache[br.path] = tl, fr, closed, existing, hist
+        tl, fr, closed, existing, hist = cache[br.path]
+        drops, demote = stitch(fr, rule, tl)
         ss = [c for c in tl.ss if c not in demote] if demote else tl.ss
-        w_lo = tl.first_at(rule.lo) if rule.lo else 0
-        w_hi = tl.first_after(rule.hi) if rule.hi else OPEN
-        for ino, rs in runs.items():
-            ranges = merge(existing.get(ino, []) + drops.get(ino, []))
-            for s, e, n, seg, dead in rs:
-                if e == OPEN or seg is None or dead:
-                    continue
-                if w_lo <= s < w_hi:
-                    total_hist += n * br.bsize
+        total_hist += hist
+        for ino, rs in closed.items():
+            ranges = merge(existing.get(ino, []) + drops[ino]) if ino in drops else existing.get(ino, [])
+            for s, e, n in rs:
                 if e <= tl.protcno and not retained(s, e, ranges, ss):
                     total_new += n * br.bsize
     return total_new, total_hist
@@ -1936,9 +2048,10 @@ def run_keep(args):
             sys.exit("--target needs a past range")
         params["mode"] = "quantum"
     probe_rule = lambda p: Rule((10**12, json.dumps(paths), "keep", json.dumps(p), lo, hi, time.time(), None))
+    cache = {}
     if args.target or args.target_ratio:
         for q in QUANTA:
-            freed, hist = savings(h, probe_rule(dict(params, q=q)), args)
+            freed, hist = savings(h, probe_rule(dict(params, q=q)), args, cache)
             print(f"  quantum {q or 'inf'}: frees {human(freed)} of {human(hist)} history")
             if freed >= parse_size(args.target) if args.target else hist and freed / hist >= args.target_ratio:
                 params["q"] = q
@@ -1949,7 +2062,7 @@ def run_keep(args):
             if not args.dry_run:
                 sys.exit(1)
             return
-    freed, hist = savings(h, probe_rule(params), args)
+    freed, hist = savings(h, probe_rule(params), args, cache)
     print(f"frees {human(freed)} of {human(hist)} history in range")
     if args.dry_run:
         return
@@ -2066,6 +2179,8 @@ def run_reclaim_cli(args):
             continue
         held = result.get("protected_segs", 0)
         held = f"; {held} segments newer than the superblock's log cursor held back" if held else ""
+        if result.get("pushed"):
+            held += f"; moved {result['pushed']} segments to advance that cursor"
         if args.dry_run:
             blocks = result.get("freed_vblks", 0)
             print(f"{br.name}: would free {human(blocks * br.bsize)} ({blocks} blocks){held}")
