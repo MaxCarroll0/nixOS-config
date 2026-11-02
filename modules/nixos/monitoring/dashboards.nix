@@ -209,13 +209,10 @@ let
   };
 
   nasHistoryByDay = ''
-    SELECT c.epoch / 86400 * 86400 AS time,
-      SUM(CASE WHEN l.e = 9223372036854775807 THEN l.n ELSE 0 END) * 4096 AS current,
-      SUM(CASE WHEN l.e < 9223372036854775807 AND l.dead = 0 THEN l.n ELSE 0 END) * 4096 AS retained,
-      SUM(CASE WHEN l.dead = 1 THEN l.n ELSE 0 END) * 4096 AS reclaimable
-    FROM lives l JOIN checkpoints c ON c.branch = l.branch AND c.cno = l.s
-    WHERE l.seg IS NOT NULL AND c.epoch BETWEEN $__unixEpochFrom() AND $__unixEpochTo()
-    GROUP BY 1 ORDER BY 1
+    SELECT day AS time, SUM(current) AS current, SUM(retained) AS retained, SUM(reclaimable) AS reclaimable
+    FROM history_days
+    WHERE day BETWEEN $__from / 1000 - 86400 AND $__to / 1000
+    GROUP BY day ORDER BY day
   '';
 
   allTimeMaxPower = ''label_replace(max by (instance) (max_over_time(pc:power_watts_max{instance=~"$host"}[10y])), "category", "Max (all time)", "__name__", ".*")'';

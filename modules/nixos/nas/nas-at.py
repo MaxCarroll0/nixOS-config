@@ -93,6 +93,14 @@ CREATE TABLE IF NOT EXISTS scan (
     events_offset INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS history_days (
+    branch      TEXT NOT NULL,
+    day         INTEGER NOT NULL,
+    current     INTEGER NOT NULL,
+    retained    INTEGER NOT NULL,
+    reclaimable INTEGER NOT NULL,
+    PRIMARY KEY (branch, day)
+);
 """
 
 OPEN = 2**63 - 1
@@ -401,6 +409,21 @@ def all_inos(db, branch):
     return [r[0] for r in db.execute("SELECT DISTINCT ino FROM lives WHERE branch=?", (branch,))]
 
 
+def recount_days(db, br):
+    db.execute("DELETE FROM history_days WHERE branch=?", (br.path,))
+    db.execute(
+        "INSERT INTO history_days "
+        "SELECT ?, COALESCE(c.epoch / 86400 * 86400, 0) AS day, SUM(l.cur) * ?, SUM(l.ret) * ?, SUM(l.rec) * ? "
+        "FROM (SELECT s, SUM(CASE WHEN e=? THEN n ELSE 0 END) AS cur, "
+        "SUM(CASE WHEN e<? AND dead=0 AND seg IS NOT NULL THEN n ELSE 0 END) AS ret, "
+        "SUM(CASE WHEN dead=1 AND seg IS NOT NULL THEN n ELSE 0 END) AS rec "
+        "FROM lives NOT INDEXED WHERE branch=? GROUP BY s) l "
+        "LEFT JOIN checkpoints c ON c.branch=? AND c.cno=l.s GROUP BY day",
+        (br.path, br.bsize, br.bsize, br.bsize, OPEN, OPEN, br.path, br.path),
+    )
+    db.commit()
+
+
 def read_events(db, br, args):
     path = os.path.join(args.state, "events", br.name + ".jsonl")
     offset = one(db, "SELECT events_offset FROM scan WHERE branch=?", br.path) or 0
@@ -519,10 +542,11 @@ def sync_dirs(db, br, dirs, cno, recursive=False):
     for ino, rows in gone.items():
         end = cno
         if ino not in renamed:
+            end = cno + 1
             open_runs = one(db, "SELECT COUNT(*) FROM lives WHERE branch=? AND ino=? AND e=?", branch, ino, OPEN)
             death = one(db, "SELECT MAX(e) FROM lives WHERE branch=? AND ino=? AND e<?", branch, ino, OPEN)
             if not open_runs and death is not None:
-                end = min(cno, death)
+                end = min(end, death)
         for rowid, _ in rows:
             db.execute("UPDATE paths SET hi=MAX(COALESCE(lo, 0), ?) WHERE rowid=?", (end, rowid))
     return candidates
@@ -1163,11 +1187,14 @@ class History:
             touched, worked = self.refresh(br, walk=walk, force=force)
             if worked or reclaim_force:
                 results[br.path] = self.settle(br, touched, now, reclaim_force=reclaim_force)
-        self.metrics()
+        self.metrics(recount=set(results))
         return results
 
-    def metrics(self):
+    def metrics(self, recount=None):
         args, db = self.args, self.db
+        for br in self.live():
+            if recount is None or br.path in recount or one(db, "SELECT 1 FROM history_days WHERE branch=?", br.path) is None:
+                recount_days(db, br)
         if not args.metrics:
             return
         lines = [
@@ -1194,21 +1221,20 @@ class History:
             size = st.f_blocks * st.f_frsize
             used = (st.f_blocks - st.f_bfree) * st.f_frsize
             current, retained_b, reclaimable = db.execute(
-                "SELECT COALESCE(SUM(CASE WHEN e=? THEN n END), 0), "
-                "COALESCE(SUM(CASE WHEN e<? AND dead=0 AND seg IS NOT NULL THEN n END), 0), "
-                "COALESCE(SUM(CASE WHEN dead=1 AND seg IS NOT NULL THEN n END), 0) FROM lives WHERE branch=?",
-                (OPEN, OPEN, br.path),
+                "SELECT COALESCE(SUM(current), 0), COALESCE(SUM(retained), 0), COALESCE(SUM(reclaimable), 0) "
+                "FROM history_days WHERE branch=?",
+                (br.path,),
             ).fetchone()
             freed = one(db, "SELECT COALESCE(SUM(freed), 0) FROM gc_runs WHERE branch=?", br.path)
-            tracked = (current + retained_b + reclaimable) * br.bsize
+            tracked = current + retained_b + reclaimable
             lines += [
                 f'nas_checkpoints{{branch="{label}"}} {br.read("checkpoints/checkpoints_number")}',
                 f'nas_checkpoint_snapshots{{branch="{label}"}} {br.read("checkpoints/snapshots_number")}',
                 f'nas_branch_used_ratio{{branch="{label}"}} {used / size if size else 0:.6f}',
                 f'nas_branch_size_bytes{{branch="{label}"}} {size}',
-                f'nas_history_bytes{{branch="{label}",state="current"}} {current * br.bsize}',
-                f'nas_history_bytes{{branch="{label}",state="retained"}} {retained_b * br.bsize}',
-                f'nas_history_bytes{{branch="{label}",state="reclaimable"}} {reclaimable * br.bsize}',
+                f'nas_history_bytes{{branch="{label}",state="current"}} {current}',
+                f'nas_history_bytes{{branch="{label}",state="retained"}} {retained_b}',
+                f'nas_history_bytes{{branch="{label}",state="reclaimable"}} {reclaimable}',
                 f'nas_history_bytes{{branch="{label}",state="freed"}} {freed}',
                 f'nas_history_metadata_bytes{{branch="{label}"}} {max(0, used - tracked)}',
             ]

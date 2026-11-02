@@ -157,9 +157,11 @@ with subtest("pairs on interleaved files: every directory revert is a real state
     assert any(s.startswith("compressed") for s in log_states("proj/f1"))
 
 with subtest("forget hides the path everywhere"):
+    sh("sync")
+    newest = last_cno()
     machine.log(sh(f"nas-at forget {B}/land2 --yes"))
     sh(f"test ! -e {B}/land2")
-    for cno, _ in land2:
+    for cno in [c for c, _ in land2] + [newest]:
         sh(f"test ! -e {VIEW}/@{epoch(cno)}/land2/h")
     assert "tagged: deleted" in sh(f"nas-at log {B}/land2/h")
 
@@ -189,3 +191,14 @@ with subtest("metrics parse"):
             values[found(r'state="(\w+)"', labels)] = float(value)
     assert {"current", "retained", "reclaimable", "freed"} <= set(values), metrics
     assert values["freed"] > 0, metrics
+    days = sh(f"sqlite3 {DB} 'SELECT SUM(current), SUM(retained), SUM(reclaimable) FROM history_days'").strip()
+    assert [float(x) for x in days.split("|")] == [values["current"], values["retained"], values["reclaimable"]], days
+
+with subtest("an idle pass leaves the write-day table alone"):
+    sh("sync && nas-at pass")
+    sh(f"sqlite3 {DB} 'UPDATE history_days SET current = -1'")
+    sh("nas-at pass")
+    assert sh(f"sqlite3 {DB} 'SELECT DISTINCT current FROM history_days'").strip() == "-1"
+    sh(f"touch {B}/idle-probe && sync && sleep 2")
+    sh("nas-at pass")
+    assert "-1" not in sh(f"sqlite3 {DB} 'SELECT current FROM history_days'").split()
