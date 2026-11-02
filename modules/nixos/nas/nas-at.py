@@ -646,6 +646,7 @@ def bound_incarnations(db, branch):
     for rowid, ino, inc, since, present in rows:
         before = one(db, "SELECT MAX(hi) FROM paths WHERE branch=? AND ino=? AND inc<?", branch, ino, inc) or 0
         db.execute("UPDATE paths SET lo=? WHERE rowid=?", (max(before, incarnation_start(db, branch, ino, since, present)), rowid))
+    return {ino for _, ino, _, _, _ in rows}
 
 
 def same_inode(branch, rel, ino):
@@ -1277,7 +1278,9 @@ class History:
         moved = head != db.execute("SELECT sysfs_seq, sysfs_blk FROM scan WHERE branch=?", (br.path,)).fetchone()
         dirs, inos, offset, written_paths = read_events(db, br, args)
         if not (moved or dirs or inos or walk or force):
-            return set(), False
+            bounded = bound_incarnations(db, br.path)
+            db.commit()
+            return bounded, bool(bounded)
         index_branch(db, br.path, promote=True)
         written = set()
         if moved:
@@ -1287,8 +1290,7 @@ class History:
         adopt(db, br.path, written_paths, tl.last)
         synced |= sync_dirs(db, br, dirs, tl.last)
         probe(db, br, (written | inos) - synced)
-        bound_incarnations(db, br.path)
-        touched = written | inos | synced
+        touched = written | inos | synced | bound_incarnations(db, br.path)
         db.execute("UPDATE scan SET events_offset=? WHERE branch=?", (offset, br.path))
         db.commit()
         return touched, True

@@ -197,6 +197,13 @@ with subtest("a reused inode number does not inherit the untracked previous owne
     top = sh(f"nas-at top {B}/reuse")
     machine.log(top)
     assert found(r"(\S+)\s+\S+\s+disk1\s+reuse/new", top) == "0B", top
+    sh("sync && nas-at pass")
+    unbound = f"SELECT COUNT(*) FROM paths WHERE branch='{B}' AND path='reuse/new' AND lo IS NULL"
+    sh(f"sqlite3 {DB} \"UPDATE paths SET lo = NULL WHERE branch='{B}' AND path='reuse/new'\"")
+    assert sh(f"sqlite3 {DB} \"{unbound}\"").strip() == "1"
+    sh("nas-at pass")
+    assert sh(f"sqlite3 {DB} \"{unbound}\"").strip() == "0", "an idle pass left a row unbounded"
+    assert len(log_states("reuse/new")) == 1, log_states("reuse/new")
     machine.log(sh(f"nas-at forget {B}/reuse/new --yes"))
     assert view("reuse", old_cno) == old_tree
 
@@ -225,14 +232,15 @@ with subtest("an open rule re-renders after its drops were enforced"):
 with subtest("a historyless file written and deleted between passes is reclaimable"):
     sh(f"mkdir -p {B}/.cache/brief && dd if=/dev/urandom of={B}/.cache/brief/f bs=1M count=4 conv=fsync status=none")
     sh(f"sync && sleep 6 && rm {B}/.cache/brief/f && sync && sleep 6 && nas-at pass")
+    unshared = 1024 - int(sh(f"cat /sys/fs/nilfs2/$(basename $(realpath {DEV}))/segments/blocks_per_segment"))
     for i in range(8):
         dry = sh("nas-at reclaim --dry-run")
         machine.log(dry)
-        if blocks(dry) >= 1024:
+        if "held back" not in dry and blocks(dry) >= unshared:
             break
         sh(f"head -c 2097152 /dev/urandom > {B}/tick-{i} && sync && sleep 6")
     diag(".cache/brief")
-    assert blocks(dry) >= 1024, dry
+    assert "held back" not in dry and blocks(dry) >= unshared, dry
 
 with subtest("metrics parse"):
     metrics = sh("cat /var/lib/nas-checkpoints/nas.prom")
