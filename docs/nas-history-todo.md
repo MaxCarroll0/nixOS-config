@@ -12,7 +12,7 @@ References: see [NAS history references](nas.md#nas-history-references).
 - [x] Stage B evaluation on the pi's disks, against stock NILFS2 + cleanerd and ext4: all checks pass
       except the pass looping every 10 s, which costs 7-19% throughput. Stock cleanerd failed in all
       three runs (read-only twice)
-- [ ] Find out why stock GC sees an `invalid range [0, 0)` period, and whether `nilfs-reclaim` can
+- [ ] Find out why stock GC sees an `invalid range [0, 0)` period, and whether `nilfs-reclaim` can hit it
 - [x] Summary-only log reads: `nilfs-lives` read whole segments under the disks' 8 MiB read-ahead
       (2.4 TB backfill); `MADV_RANDOM` on the segment mapping cut a 256 MiB scan to 3.4 MB
 - [ ] Upstream the libnilfsgc liveness callback and the `MADV_RANDOM` segment mapping to nilfs-utils
