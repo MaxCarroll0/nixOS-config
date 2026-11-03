@@ -760,10 +760,10 @@ sequential write and a 4 KiB random overwrite with an fsync every 32 writes, thr
 (no pass), with the pass looping every 2 s, and with `nas-at reclaim` running. Before the reclaim
 run a 48 MiB file is rewritten four times and stitched `--none`, leaving 144 MiB reclaimable.
 
-Stage B (a scratch NILFS2 on the pi's real LUKS and bcache stack) was not run: no experiments
-happen on the pi. Also scaled down: 2,001 snapshots instead of 500k (`mkcp -s` takes 15 ms each,
-so 500k is two hours of setup), and the disk is small enough that each fio write shrinks with free
-space (256 MiB sequential at 50%, 40 MiB at 97%).
+Stage A is scaled down: 2,001 snapshots instead of 500k (`mkcp -s` takes 15 ms each, so 500k is
+two hours of setup), and the disk is small enough that each fio write shrinks with free space
+(256 MiB sequential at 50%, 40 MiB at 97%). Stage B, on the pi's own disks, is
+[below](#stage-b-on-the-pis-disks).
 
 | Fill | Stock seq MB/s, fsync p99 | Pass idle | Reclaim active | GC |
 |---|---|---|---|---|
@@ -774,7 +774,7 @@ space (256 MiB sequential at 50%, 40 MiB at 97%).
 
 | Check | Pass if | Result |
 |---|---|---|
-| Pass idle vs stock | throughput within 5%, p99 within 10% | **pass on p99** (+1%, -43%, +2%, +6%). **Throughput fails at 90% and 95%** (-53%, -18%); the previous run of the same code was 0% to +41% at every level, and these writes are 62-93 MiB, so a single slow flush dominates. Not separable from VM noise without Stage B |
+| Pass idle vs stock | throughput within 5%, p99 within 10% | **pass on p99** (+1%, -43%, +2%, +6%). **Throughput fails at 90% and 95%** (-53%, -18%); the previous run of the same code was 0% to +41% at every level, and these writes are 62-93 MiB, so a single slow flush dominates. Stage B on real disks: -7% to -19% throughput, fsync p99 -33% to +11% |
 | Reclaim active | ≥ 70% throughput, fsync p99 ≤ 2× stock, max ≤ 2 s, ≤ 4 B copied per B freed | **pass**: 124-156% throughput, p99 ≤ 1.15×, max 50 ms, 0.01-0.08 B copied per B freed |
 | 95% full | no ENOSPC while reclaimable space exists, fsync p99 ≤ 1 s | **pass**: 232 MiB written into 160 MiB free; auto reclaim freed the churn in 2.1 s. p99 12.4 ms |
 | 97% full | reported; no ENOSPC, no kernel warnings | **pass**: 184 MiB into 112 MiB free, auto reclaim in 2.1 s; 0 dmesg warnings; 0 sectors read or written over 180 s idle with the pass every 10 s |
@@ -870,6 +870,110 @@ fraction is at least 25%.
 Without history, the protection period is what keeps recent versions, so cleanerd cannot free
 recent garbage by design; the history system keeps versions by rule instead and frees garbage
 as soon as the log allows.
+
+#### Stage B: on the pi's disks
+
+`tests/nas-eval-pi.py` runs on the pi itself, against a 40 GiB file on the parity disk (btrfs,
+`chattr +C`) attached as a direct-I/O loop device, under the production LUKS2 settings
+(aes-xts-plain64, 4 KiB sectors) and the production `mkfs.nilfs2` geometry (8 MiB segments, 5%
+reserve). Every service it needs is a private copy: its own `nas-at` index, locks and suspend
+file, a mergerfs pool with the production options, an `smbd` on loopback, the fatrace watcher and
+the view. The live promote is suspended for the duration and nothing touches the live branches.
+fio writes up to 2 GiB sequential and 256 MiB of 4 KiB random overwrite with an fsync every 32
+writes, shrinking with free space. The same script runs three ways on the same stack:
+
+- **history**: 10,001 `mkcp -s` snapshots, the watcher, the view and `nas-at`; stock (no pass),
+  the pass every 10 s, and `nas-at reclaim` freeing a 768 MiB churn stitched `--none`
+- **NILFS2 stock**: plain checkpoints and `nilfs_cleanerd` with its shipped config except
+  `protection_period` 60 s instead of 3600 s, since the pi's clock cannot be moved to age garbage
+  as Stage A did. "cleanerd active" is the same fio run straight after a 768 MiB churn
+- **ext4**: `mkfs.ext4` with default options, mounted `noatime`
+
+Each row is one run, and run-to-run noise is large: history's own no-pass sequential rate ranges
+from 74.7 to 94.1 MB/s across levels.
+
+| Fill | Config | seq MB/s | seq max ms | 4k IOPS | fsync p50 / p99 / max ms |
+|---|---|---|---|---|---|
+| 50% | ext4 | 91.1 | 413 | 25 | 1,183 / 4,463 / 4,448 |
+| | NILFS2 stock, cleanerd idle | 97.6 | 712 | 257 | 88 / 518 / 1,005 |
+| | NILFS2 stock, cleanerd active | 99.2 | 705 | 280 | 88 / 518 / 1,006 |
+| | history, no pass | 94.1 | 718 | 283 | 88 / 321 / 518 |
+| | history, pass every 10 s | 87.2 | 946 | 277 | 88 / 325 / 408 |
+| | history, reclaim active | 74.8 | 836 | 308 | 66 / 308 / 508 |
+| 90% | ext4 | 91.8 | 568 | 22 | 1,283 / 5,268 / 5,263 |
+| | NILFS2 stock, cleanerd idle | 78.4 | 716 | 207 | 133 / 354 / 555 |
+| | NILFS2 stock, cleanerd active | 78.7 | 390 | 204 | 144 / 363 / 462 |
+| | history, no pass | 93.0 | 855 | 275 | 88 / 308 / 428 |
+| | history, pass every 10 s | 75.5 | 761 | 248 | 101 / 342 / 467 |
+| | history, reclaim active | 76.4 | 802 | 266 | 96 / 300 / 386 |
+| 95% | ext4 | 79.3 | 840 | 21 | 1,283 / 4,077 / 4,067 |
+| | NILFS2 stock, cleanerd idle | 73.9 | 655 | 229 | 132 / 354 / 427 |
+| | NILFS2 stock, cleanerd active | 43.0 | 3,149 | 183 | 144 / 417 / 819 |
+| | history, no pass | 74.7 | 577 | 251 | 92 / 489 / 1,618 |
+| | history, pass every 10 s | 69.3 | 480 | 268 | 91 / 325 / 1,605 |
+| | history, reclaim active | 57.6 | 575 | 245 | 97 / 354 / 448 |
+| 97% | ext4 | 85.8 | 35 | 16 | 1,770 / 9,731 / 9,723 |
+| | NILFS2 stock | not measured: cleanerd exited on `invalid range [0, 0)` while the 97% fill was set up |
+| | history, no pass | 91.0 | 209 | 276 | 88 / 308 / 430 |
+| | history, pass every 10 s | 74.7 | 678 | 262 | 89 / 308 / 408 |
+| | history, reclaim active | 66.8 | 638 | 261 | 94 / 363 / 506 |
+
+ext4's random-write numbers are the stack as much as the filesystem: every 4 KiB overwrite lands
+in place, each fsync commits the journal, and each flush goes through the loop device to a btrfs
+fsync on the parity disk. NILFS2 writes the same data as one sequential log, so it does an order
+of magnitude better here.
+
+| | ext4 | NILFS2 stock + cleanerd | History + `nas-at reclaim` |
+|---|---|---|---|
+| 768 MiB of garbage, 50% full | freed at once by `rm` | nothing in 600 s (clean segments above `min_clean_segments`) | 771 MiB in 155 s |
+| same, 90 / 95 / 97% | freed at once | 704 / 696 / - MiB in 155 / 163 / - s | 772 / 773 / 773 MiB in 144 / 136 / 128 s |
+| GC cost | none | 3.86 / 3.92 B written per B freed; cleanerd wrote 56 GB in 51 min and 117 GB in 57 min to a 40 GiB disk | 0.02-0.03 B copied per B freed |
+| Freed vs `--dry-run` | - | - | within one block at every level |
+| Write 384 MiB past free space, 768 MiB reclaimable | n/a (wrote `avail - 256 MiB`) | written at 95% after 167 s of GC; 97% never reached | written at 95% and 97%, auto reclaim 17 s and 19 s |
+| Idle 300 s | 0 sectors at 7% and 97% | 8 sectors read at 7%; 763 MiB read, 852 MiB written at 95% (10 GiB run) | 0 sectors at 12% and 97%, pass every 10 s |
+| 6 GiB churn in `tmp/` at 75%, 24 × 256 MiB | 0 failed, 84 MB/s | never reached at 40 GiB; the 10 GiB trial failed 17 of 24 files, 35 MB/s, then went read-only | 0 failed, 64-70 MB/s, one reclaim run each |
+| Integrity | no kernel messages | **failed in all three runs**: read-only twice, cleanerd dead once (below) | no kernel warnings |
+
+**Stock NILFS2 failed in all three runs.** In a 10 GiB trial the tmp churn ended with
+`cannot delete checkpoints: invalid range [0, 0)` and `error -22 preparing GC`, then 15 s later
+`nilfs_bmap_truncate: broken bmap (inode number=10043)` and a remount read-only. The full 40 GiB
+run failed the same way at 95%: `bad btree node (ino=10111) ... nchildren = 0`, `broken bmap`,
+read-only. A fresh run of just 95% and 97% got through 95%, then cleanerd logged `cannot clean
+segments: Invalid argument` after the same `invalid range [0, 0)` and exited, leaving nothing to
+collect garbage. Kernel 6.18.34, nilfs-utils 2.3.1. cleanerd links the patched libnilfsgc, but the patch
+changes nothing unless `NILFS_RECLAIM_PARAM_LIVE_FILTER` is set, which only `nilfs-reclaim` does,
+so this is the stock code path. An empty period most likely comes from a dead block whose DAT
+entry block was freed and reallocated, so `GET_VINFO` reads zeros: the same kernel behaviour
+`nilfs-lives` already retries around. `nilfs-reclaim` goes through the same ioctls and never
+failed across 4 fill levels, 9 reclaims and 18 GiB of churn, but that is evidence, not immunity. The
+production branches never run cleanerd.
+
+Reads, at 7-12% full:
+
+| | ext4 | NILFS2 stock | History |
+|---|---|---|---|
+| stat walk, 10k files, cold / warm ms per file (branch) | 0.076 / 0.005 | 0.070 / 0.004 | 0.048 / 0.005 |
+| same through mergerfs | 0.070 / 0.005 | 0.083 / 0.005 | 0.096 / 0.005 |
+| same through the view | - | - | 2.39 / 0.147 |
+| 1 GiB sequential read: branch, mergerfs, view, SMB MB/s | 95, 153, -, 80 | 113, 106, -, 87 | 124, 114, 113, 93 |
+| 4 concurrent readers, total MB/s | 70 | 86 | 79 |
+
+History-only checks: 10,001 snapshots took 1,191 s to create; an idle pass took 0.30 s and read 0
+sectors, a pass after a 1 GiB write 4.6 s and 14 MB read; the view mounted one checkpoint. CLI
+against that 10k-snapshot db: `log` 0.29 s, `top` 0.33 s, `keep --dry-run` 3.26 s,
+`--target-ratio` 1.82 s, `--target` 1.68 s.
+
+| Check | Pass if | Stage B result |
+|---|---|---|
+| Pass idle vs stock | throughput within 5%, p99 within 10% | **fails on throughput**: -7%, -19%, -7%, -18%. fsync p99 +1%, +11%, -33%, 0%. The pass read 15-52 MB during each fio run |
+| Reclaim active | ≥ 70% throughput, fsync p99 ≤ 2× stock, max ≤ 2 s, ≤ 4 B copied per B freed | **pass**: 73-82%, p99 0.73-1.18×, max 508 ms, 0.02-0.03. Stock cleanerd at 95%: 58%, max 3.1 s, 3.9 B written per B freed |
+| 95% full | no ENOSPC while reclaimable space exists, fsync p99 ≤ 1 s | **pass**: 2,496 MiB into 2,112 MiB free, p99 ≤ 489 ms; two fsyncs reached 1.6 s with the pass off and on |
+| 97% full | reported; no ENOSPC, no kernel warnings | **pass**: 1,720 MiB into 1,336 MiB free; no warnings; 0 sectors idle |
+| View | warm getattr < 1 ms; seq read ≥ 50% of branch | **pass**: 0.147 ms/file warm (mean), 2.39 cold; 113 vs 124 MB/s (92%) |
+| History pass | 0 bytes read when idle, < 1 s | **pass**: 0 sectors, 0.30 s |
+| CLI | `log` < 0.5 s, `top` < 1 s, `keep --dry-run` < 5 s, `--target` < 10 s | **pass** |
+| Space | freed matches dry run within 2% | **pass**: within one block at every level |
+| Disk parking | diskstats flat for ≥ 2 h | **pass** with the incremental index: disk2 parked at 00:02:30 and disk3 at 00:30:31, 3600 s after their last read, while Stage B ran on parity. disk3's last read, 68 KiB, followed a global `drop_caches` by the test |
 
 #### Speed: stitching, `top` and GC
 
