@@ -1024,7 +1024,7 @@ in
         # kde#523504 again: the greeter dies if the output is driven while it is
         # still initialising, so let the session settle before asserting DPMS.
         ${pkgs.coreutils}/bin/sleep 2
-        ${lib.getExe sessionKscreen} --dpms on
+        ${lib.getExe sessionKscreen} --dpms on || true
       '';
     })
 
@@ -1152,7 +1152,7 @@ in
         '';
       };
 
-      powerManagement.resumeCommands = ''
+      powerManagement.resumeCommands = lib.mkBefore ''
         target=$(cat ${deepSleepTarget} 2>/dev/null || echo 0)
         rm -f ${deepSleepTarget}
         echo 0 > /sys/class/rtc/rtc0/wakealarm
