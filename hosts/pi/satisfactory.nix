@@ -28,6 +28,7 @@ in
       enable = true;
       connectAddress = "79.72.87.71:25565";
       lastBackupFile = "/var/lib/nas-streams/minecraft.last";
+      modsFile = "/var/lib/minecraft-mods/damien-minecraft.zip";
     };
     sshKeyFile = config.sops.secrets.satisfactory-remote-key.path;
     wakePackage = config.local.wake.package;
