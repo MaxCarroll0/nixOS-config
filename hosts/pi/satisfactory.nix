@@ -18,6 +18,7 @@ in
   local.satisfactory.panel = {
     enable = true;
     address = facts.pi.tailscale;
+    trustedProxies = [ "100.125.126.78" ];
     desktop = {
       address = facts.desktopnew.tailscale;
       wakeName = "desktopnew";
@@ -28,7 +29,7 @@ in
       enable = true;
       connectAddress = "79.72.87.71:25565";
       lastBackupFile = "/var/lib/nas-streams/minecraft.last";
-      modsFile = "/var/lib/minecraft-mods/damien-minecraft.zip";
+      modsFile = "/var/lib/minecraft-mods/organfarm-minecraft-modpack.zip";
       backups = {
         view = config.local.nas.checkpoints.viewDir;
         user = "max";
