@@ -1573,6 +1573,7 @@ class View:
         self.streams = [s.split("=", 1) for s in args.stream]
         self.points = sqlite3.connect(args.points, timeout=60, check_same_thread=False) if args.points else None
         self.cache = {}
+        self.settle = args.settle
         self.mounts = Mounts(args.mount_dir, args.lock, args.suspend, args.idle, args.max_mounts, self.cache.clear)
         self.resolver = Resolver(self.index, self.index_lock, self.mounts)
 
@@ -1625,6 +1626,9 @@ class View:
                     yield root, row
 
     def resolve(self, branch, t, rel):
+        settled = time.time() - self.settle
+        if t > settled:
+            return self._resolve(branch, settled, rel)
         key = (branch, t, rel)
         if key in self.cache:
             return self.cache[key]
@@ -2285,6 +2289,7 @@ def main():
     parser.add_argument("--view", default="/srv/nas-at")
     parser.add_argument("--pool", default="/srv/nas")
     parser.add_argument("--idle", type=float, default=600)
+    parser.add_argument("--settle", type=float, default=120)
     parser.add_argument("--max-mounts", type=int, default=48)
     parser.add_argument("--gap-default", type=int, default=600)
     parser.add_argument("--reclaim-free", type=float, default=0.15)
