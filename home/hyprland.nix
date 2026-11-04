@@ -30,6 +30,7 @@ let
   hyprSettings = {
     "general.layout" = "scrolling";
     "general.allow_tearing" = false;
+    "render.cm_auto_hdr" = 0;
 
     "scrolling.column_width" = 0.5;
     "scrolling.explicit_column_widths" = "0.333, 0.5, 0.667, 1.0";
@@ -238,7 +239,13 @@ let
     hyprKey mods key (shell name) desc;
   lockedKey =
     mods: key: dispatch: desc:
-    hyprKey mods key dispatch desc // { flags = [ "locked" ]; };
+    hyprKey mods key dispatch desc
+    // {
+      flags = [
+        "locked"
+        "dont_inhibit"
+      ];
+    };
 
   wpctl = args: "hl.dsp.exec_cmd(${luaStr "wpctl ${args}"})";
 
@@ -251,12 +258,14 @@ let
     volume-up = lockedKey "" "XF86AudioRaiseVolume" (shell "volumeUp") "volume up" // {
       flags = [
         "locked"
+        "dont_inhibit"
         "repeating"
       ];
     };
     volume-down = lockedKey "" "XF86AudioLowerVolume" (shell "volumeDown") "volume down" // {
       flags = [
         "locked"
+        "dont_inhibit"
         "repeating"
       ];
     };

@@ -59,6 +59,7 @@ let
             "locked"
             "repeating"
             "release"
+            "dont_inhibit"
           ]
         );
         default = [ ];
