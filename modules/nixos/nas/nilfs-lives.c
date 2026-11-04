@@ -2,10 +2,12 @@
 
 #include <endian.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <nilfs.h>
 #include "segment.h"
 
@@ -214,6 +216,71 @@ static int probe(void)
 	return 0;
 }
 
+static int read_batch(int fd, struct vec *v, char *buf, size_t bsize, uint64_t *missing)
+{
+	struct nilfs_vinfo vi[VINFO_BATCH];
+
+	for (size_t i = 0; i < v->n; i += VINFO_BATCH) {
+		size_t n = v->n - i < VINFO_BATCH ? v->n - i : VINFO_BATCH;
+
+		for (size_t j = 0; j < n; j++)
+			vi[j].vi_vblocknr = v->b[i + j].vblk;
+		if (nilfs_get_vinfo(nilfs, vi, n) < 0) {
+			if (errno != ENOENT)
+				return -1;
+			for (size_t j = 0; j < n; j++) {
+				if (nilfs_get_vinfo(nilfs, &vi[j], 1) >= 0)
+					continue;
+				if (errno != ENOENT)
+					return -1;
+				vi[j].vi_blocknr = 0;
+			}
+		}
+		for (size_t j = 0; j < n; j++) {
+			uint64_t head[2] = { htole64(v->b[i + j].vblk), htole64(vi[j].vi_blocknr) };
+
+			if (!vi[j].vi_blocknr) {
+				(*missing)++;
+				continue;
+			}
+			if (pread(fd, buf, bsize, (off_t)(vi[j].vi_blocknr * bsize)) != (ssize_t)bsize)
+				return -1;
+			if (fwrite(head, sizeof(head), 1, stdout) != 1 || fwrite(buf, bsize, 1, stdout) != 1)
+				return -1;
+		}
+	}
+	v->n = 0;
+	return 0;
+}
+
+static int read_blocks(const char *dev)
+{
+	struct vec v = { 0 };
+	size_t bsize = nilfs_get_block_size(nilfs);
+	char *buf = malloc(bsize);
+	uint64_t vblk, n, missing = 0;
+	int fd = open(dev, O_RDONLY);
+
+	if (fd < 0 || !buf)
+		return -1;
+	while (scanf("%" SCNu64 " %" SCNu64, &vblk, &n) == 2) {
+		for (uint64_t k = 0; k < n; k++) {
+			struct blk b = { .vblk = vblk + k };
+
+			if (push(&v, b) < 0)
+				return -1;
+		}
+		if (v.n >= VINFO_BATCH * 16 && read_batch(fd, &v, buf, bsize, &missing) < 0)
+			return -1;
+	}
+	if (read_batch(fd, &v, buf, bsize, &missing) < 0)
+		return -1;
+	fprintf(stderr, "missing %" PRIu64 "\n", missing);
+	close(fd);
+	free(buf);
+	return fflush(stdout);
+}
+
 int main(int argc, char **argv)
 {
 	int ret;
@@ -221,7 +288,8 @@ int main(int argc, char **argv)
 	if (argc < 3 || (strcmp(argv[1], "follow") == 0 && argc != 8)) {
 		fputs("usage: nilfs-lives follow DEVICE SEGNUM SEQ BLOCKNR LIMITSEQ LIMITBLOCKNR\n"
 		      "       nilfs-lives segments DEVICE SEGNUM...\n"
-		      "       nilfs-lives probe DEVICE < 'VBLOCKNR COUNT' lines\n",
+		      "       nilfs-lives probe DEVICE < 'VBLOCKNR COUNT' lines\n"
+		      "       nilfs-lives read DEVICE < 'VBLOCKNR COUNT' lines\n",
 		      stderr);
 		return 2;
 	}
@@ -236,6 +304,8 @@ int main(int argc, char **argv)
 			     strtoull(argv[6], NULL, 10), strtoull(argv[7], NULL, 10));
 	else if (strcmp(argv[1], "segments") == 0)
 		ret = whole_segments(argv + 3, argc - 3);
+	else if (strcmp(argv[1], "read") == 0)
+		ret = read_blocks(argv[2]);
 	else
 		ret = probe();
 	nilfs_close(nilfs);
