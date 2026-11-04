@@ -2093,6 +2093,17 @@ window as unsafe to refresh concurrently with a large ingest, restore or sync. K
 `oopsPanic = false` on the pi while this is open, because with the default the next occurrence is
 once again an unexplained reboot rather than a trace.
 
+**It recurred on 2026-11-04 at 18:17**, through the `nas-at` time view rather than promotion. A
+panel download probe mounted checkpoint 8220, which a Minecraft stream push had created 38
+seconds earlier, under light load. The Oops left the dead mount holding the disk1 superblock lock,
+so every later `mount` blocked: each new sandboxed unit hung in `path_mount`, stream pushes
+stopped, and shutdown stalled at the final unmount until a power cycle. Both captured crashes
+mounted a checkpoint minutes or seconds old, so `nas-at` now never resolves a time newer than
+`--settle` (120 s) ago: a request for "now" gets the state as of two minutes earlier. That is a
+mitigation from two samples, not a proven cause. After any reboot the array is locked again and
+every stream push is skipped until `nas-unlock` runs; the first push after that carries the full
+latest state, so an outage leaves a gap in history and nothing else.
+
 ## 23. The sync guard latched on a counter that can never fall
 
 Adding `disk3` on 2026-10-07 was blocked by `nas-snapraid-sync`:
