@@ -286,6 +286,11 @@
       port = 8020;
       allowFrom = [ (import ../facts.nix).desktopnew.tailscale ];
     };
+    streams.satisfactory = {
+      branch = "disk1";
+      port = 8021;
+      allowFrom = [ (import ../facts.nix).desktopnew.tailscale ];
+    };
   };
 
   local.atticClient = {

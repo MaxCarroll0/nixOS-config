@@ -1,4 +1,4 @@
-# Satisfactory start page for friends on a node share, and the restic store for its saves.
+# Game server start page for friends on a node share, with world downloads from the NAS streams.
 
 { config, inputs, ... }:
 
@@ -7,13 +7,16 @@ let
 in
 
 {
-  imports = [
-    inputs.satisfactory.nixosModules.panel
-    inputs.satisfactory.nixosModules.backupStore
-  ];
+  imports = [ inputs.satisfactory.nixosModules.panel ];
 
   sops.secrets.satisfactory-remote-key.owner = "satisfactory-panel";
-  sops.secrets.satisfactory-restic-htpasswd.owner = "restic";
+
+  users.users.satisfactory-saves = {
+    isSystemUser = true;
+    uid = 2777;
+    group = "satisfactory-saves";
+  };
+  users.groups.satisfactory-saves.gid = 2777;
 
   local.satisfactory.panel = {
     enable = true;
@@ -23,7 +26,11 @@ in
       address = facts.desktopnew.tailscale;
       wakeName = "desktopnew";
       sshPort = 2222;
-      lastBackupFile = config.local.satisfactory.backupStore.stampFile;
+      lastBackupFile = "/var/lib/nas-streams/satisfactory.last";
+      backups = {
+        view = config.local.nas.checkpoints.viewDir;
+        user = "satisfactory-saves";
+      };
     };
     minecraft = {
       enable = true;
@@ -37,12 +44,5 @@ in
     };
     sshKeyFile = config.sops.secrets.satisfactory-remote-key.path;
     wakePackage = config.local.wake.package;
-  };
-
-  local.satisfactory.backupStore = {
-    enable = true;
-    address = facts.pi.tailscale;
-    dataDir = "${config.local.nas.dataRoot}/backups/restic";
-    htpasswdFile = config.sops.secrets.satisfactory-restic-htpasswd.path;
   };
 }

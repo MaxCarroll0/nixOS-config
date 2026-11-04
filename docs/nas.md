@@ -2315,9 +2315,16 @@ console save-on (ExecStopPost)                           post-xfer: mkcp -s, poi
   on `enp1s0`.
 - No buffering: if the pi is down or the array locked, that minute is a gap and the next pass
   catches up. A failed transfer takes no snapshot, so only complete points are listed in `points`.
-- Each point writes `/var/lib/nas-streams/<stream>.last` on the pi, and the Satisfactory restic
-  store stamps `/var/lib/satisfactory-backup/last`; the panel reads both, so last-backup times
-  show while the desktop sleeps.
+- Each point writes `/var/lib/nas-streams/<stream>.last` on the pi; the panel reads it, so
+  last-save times show while the desktop sleeps.
+
+**The Satisfactory stream.** `satisfactory-backup.timer` on desktopnew runs every minute while
+the server is up, and once more after it stops. It copies `saved/` to a local stage and repeats
+until the source listing is identical before and after the copy, so a save written mid-copy is
+never pushed. It then pushes the stage to pi:8021 with the same rsync flags. An unchanged listing
+skips the push, so idle minutes take no point. Files keep uid 2777, which the pi maps to
+`satisfactory-saves`, the account its archiver runs as. The 31 restic snapshots from before the
+switch were replayed into the stream with their original capture times.
 - Measured pi cost (synthetic 1 GB tree): about 0.1 CPU-s per idle minute, 1.3 CPU-s for a minute
   rewriting 30 region files; the larger load is reading changed files on the branch.
 - Commands go to the guest's console FIFO (`/run/systemd/minecraft.stdin`); `enable-rcon=false`.
