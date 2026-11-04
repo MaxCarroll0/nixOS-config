@@ -183,7 +183,11 @@ let
   # Chromium picks the kwallet backend under Plasma and then blocks every page
   # load on a wallet this host can never unlock: autologin gives PAM no password.
   chromium = pkgs.chromium.override {
-    commandLineArgs = "--password-store=basic --load-extension=${tabSessionManager}";
+    commandLineArgs = lib.concatStringsSep " " [
+      "--password-store=basic"
+      "--load-extension=${tabSessionManager}"
+      "--enable-features=WaylandWindowDecorations,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL"
+    ];
   };
 
   # age takes ssh recipients directly, so both GUI hosts decrypt the store with
