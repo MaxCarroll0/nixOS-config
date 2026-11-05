@@ -255,7 +255,9 @@ class Store:
             "INSERT INTO versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(oid, point, kind, codec, meta, pack, offset, length, size, h) for oid, kind, codec, meta, pack, offset, length, size, h in self.pending],
         )
-        self.db.execute("UPDATE latest SET point=? WHERE point=-1", (point,))
+        self.db.executemany(
+            "UPDATE latest SET point=? WHERE object=?", [(point, oid) for oid, kind, *_ in self.pending if kind != GONE]
+        )
         self.db.execute("COMMIT")
         return point
 
