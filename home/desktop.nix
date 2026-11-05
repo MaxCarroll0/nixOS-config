@@ -1,6 +1,7 @@
 # Home for the AMD desktop.
 
 {
+  config,
   lib,
   pkgs,
   inputs,
@@ -39,6 +40,16 @@ in
       ExecStart = lib.getExe headless;
     };
   };
+
+  home.activation.caelestiaIdleHeadless = lib.hm.dag.entryAfter [ "caelestiaUnits" ] ''
+    f="${config.xdg.configHome}/caelestia/shell.json"
+    ${lib.getExe pkgs.jq} '.general.idle.timeouts //= [
+      {timeout: 180, idleAction: "lock"},
+      {timeout: 300, idleAction: "dpms off", returnAction: "dpms on"},
+      {timeout: 900, idleAction: ["systemctl", "--user", "start", "--no-block", "desktop-headless.service"]}
+    ]' "$f" > "$f.tmp"
+    mv "$f.tmp" "$f"
+  '';
 
   wayland.windowManager.hyprland.extraConfig = lib.mkAfter ''
     hl.monitor({ output = "HDMI-A-1", disabled = true })
