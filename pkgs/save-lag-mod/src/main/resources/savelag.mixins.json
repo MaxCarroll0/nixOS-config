@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "net.carroll.savelag.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "MinecraftServerAccessor", "MinecraftServerMixin",
+    "PlayerDataStorageMixin",
+    "PlayerListMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

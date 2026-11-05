@@ -1,0 +1,19 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "MIT"
+
+[[mods]]
+modId = "savelag"
+version = "1.0.0"
+displayName = "Save Lag"
+description = "Times every world save and writes player data off the server thread."
+
+[[mixins]]
+config = "savelag.mixins.json"
+
+[[dependencies.savelag]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+ordering = "NONE"
+side = "BOTH"
