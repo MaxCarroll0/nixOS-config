@@ -339,7 +339,9 @@ def file_raw(path, data):
 def ingest(store, mirror, captured, source, full):
     store.begin()
     known = dict((p, (s, m)) for p, s, m in store.db.execute("SELECT path, size, mtime FROM files"))
+    full = full or not known
     seen = set()
+    live = set()
     for dirpath, dirnames, filenames in os.walk(mirror):
         dirnames.sort()
         for name in sorted(filenames):
@@ -357,10 +359,11 @@ def ingest(store, mirror, captured, source, full):
             with open(path, "rb") as f:
                 data = f.read()
             if is_region(rel):
-                ingest_region(store, path, rel, data, full)
+                live |= ingest_region(store, path, rel, data, full)
             else:
                 raw, codec = file_raw(rel, data)
                 store.put(rel, raw, codec, int(st.st_mtime))
+                live.add(rel)
             store.db.execute("INSERT OR REPLACE INTO files VALUES (?, ?, ?)", (rel, *sig))
     for rel in set(known) - seen:
         if is_region(rel):
@@ -369,6 +372,14 @@ def ingest(store, mirror, captured, source, full):
             store.db.execute("DELETE FROM slots WHERE path=?", (rel,))
         store.remove(rel)
         store.db.execute("DELETE FROM files WHERE path=?", (rel,))
+    if full:
+        stale = [
+            key
+            for (key,) in store.db.execute("SELECT o.key FROM latest l JOIN objects o ON o.id = l.object WHERE l.hash IS NOT NULL")
+            if key not in live
+        ]
+        for key in stale:
+            store.remove(key)
     return store.commit(captured, source)
 
 
@@ -390,8 +401,9 @@ def ingest_region(store, path, rel, image, full):
         store.db.execute("DELETE FROM slots WHERE path=? AND idx=?", (rel, idx))
     if entries:
         store.remove(rel)
-    else:
-        store.put(rel, b"", RAW, 0)
+        return {f"{rel}#{idx}" for idx in entries}
+    store.put(rel, b"", RAW, 0)
+    return {rel}
 
 
 def encode_chunk(raw, kind):
