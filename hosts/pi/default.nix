@@ -307,6 +307,15 @@
 
   powerManagement.cpuFreqGovernor = "schedutil";
 
+  # systemd-shutdown pings the watchdog while it waits on D-state processes, so only skipping it bounds a wedged-disk shutdown.
+  systemd.targets = lib.genAttrs [ "reboot" "poweroff" "halt" ] (target: {
+    unitConfig = {
+      JobTimeoutSec = "2min";
+      JobTimeoutAction = "${target}-immediate";
+    };
+  });
+  systemd.settings.Manager.RebootWatchdogSec = lib.mkForce "90s";
+
   environment.systemPackages = [ pkgs.raspberrypi-eeprom ];
 
   nix.settings = {
