@@ -20,6 +20,23 @@ let
     ++ [ cfg.storage.parityMount ]
   );
 
+  heldLocked = "/run/nas-held-locked";
+
+  serverState = pkgs.writeShellApplication {
+    name = "nas-unlock-state";
+    runtimeInputs = [ pkgs.util-linux ];
+    text = ''
+      if [ -e ${heldLocked} ]; then
+        echo held
+        exit 0
+      fi
+      for m in ${mountTargets}; do
+        mountpoint -q "$m" || { echo locked; exit 0; }
+      done
+      echo unlocked
+    '';
+  };
+
   serverUnlock = pkgs.writeShellApplication {
     name = "nas-unlock-local";
     runtimeInputs = [
@@ -30,6 +47,7 @@ let
     text = ''
       key=$(cat)
       [ -n "$key" ] || { echo "no key on stdin" >&2; exit 2; }
+      rm -f ${heldLocked}
 
       opened=0
       for spec in ${lib.escapeShellArgs (disks cfg.storage)} ${lib.escapeShellArg "parity=${ucfg.parityDevice}"}; do
@@ -75,6 +93,7 @@ let
       pkgs.systemd
     ];
     text = ''
+      touch ${heldLocked}
       systemctl stop ${ucfg.target} || true
 
       # luksClose cannot succeed while a branch is still mounted, and the pool
@@ -129,6 +148,25 @@ let
     '';
   };
 
+  clientAutoUnlock = pkgs.writeShellApplication {
+    name = "nas-unlock-auto";
+    runtimeInputs = [
+      pkgs.openssh
+      pkgs.libnotify
+    ];
+    text = ''
+      state=$(ssh -o ConnectTimeout=10 -o BatchMode=yes ${ucfg.host} nas-unlock-state) || exit 0
+      [ "$state" = locked ] || exit 0
+      if out=$(ssh -o ConnectTimeout=10 -o BatchMode=yes ${ucfg.host} "sudo nas-unlock-local" < ${ucfg.keyFile} 2>&1); then
+        notify-send "NAS unlocked after boot" "$out" 2>/dev/null || true
+        echo "$out"
+      else
+        echo "$out" >&2
+        exit 1
+      fi
+    '';
+  };
+
   clientLock = pkgs.writeShellApplication {
     name = "nas-lock";
     runtimeInputs = [
@@ -152,6 +190,7 @@ in
   options.local.nas.unlock = {
     server = lib.mkEnableOption "the pi side of manual unlocking";
     client = lib.mkEnableOption "the laptop side, nas-unlock and nas-lock";
+    auto = lib.mkEnableOption "unlocking whenever the NAS reports locked and was not locked by hand";
 
     host = lib.mkOption {
       type = lib.types.str;
@@ -187,6 +226,7 @@ in
   config = lib.mkMerge [
     (lib.mkIf (cfg.enable && ucfg.server) {
       environment.systemPackages = [
+        serverState
         serverUnlock
         serverLock
       ];
@@ -218,6 +258,24 @@ in
         clientUnlock
         clientLock
       ];
+    })
+
+    (lib.mkIf (ucfg.client && ucfg.auto) {
+      systemd.user.services.nas-unlock-auto = {
+        description = "Unlock the NAS when it comes up locked";
+        unitConfig.ConditionUser = ucfg.allowUser;
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = lib.getExe clientAutoUnlock;
+        };
+      };
+      systemd.user.timers.nas-unlock-auto = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnStartupSec = "1min";
+          OnUnitActiveSec = "2min";
+        };
+      };
     })
   ];
 }

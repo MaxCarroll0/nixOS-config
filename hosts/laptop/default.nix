@@ -30,7 +30,10 @@
   local.gaming.enable = true;
   local.desktop.plasma.enable = false;
 
-  local.nas.unlock.client = true;
+  local.nas.unlock = {
+    client = true;
+    auto = true;
+  };
   local.atticClient = {
     enable = true;
     publicKey = lib.removeSuffix "\n" (builtins.readFile ../../keys/attic-public-key);
