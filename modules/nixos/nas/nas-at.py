@@ -1425,6 +1425,10 @@ class History:
         os.replace(tmp, args.metrics)
 
 
+MOUNT_SPACING = 0.5
+REMOUNT_SETTLE = 10.0
+
+
 class Mounts:
     def __init__(self, base, lock, suspend, idle, limit, on_evict):
         self.base = base
@@ -1434,6 +1438,8 @@ class Mounts:
         self.idle = idle
         self.limit = limit
         self.used = {}
+        self.released = {}
+        self.last_mount = 0.0
         self.guard = threading.Lock()
 
     def path(self, branch, cno):
@@ -1448,12 +1454,21 @@ class Mounts:
             if device is None or (self.suspend and os.path.exists(self.suspend)):
                 self.used.pop(target, None)
                 return None
+            self.wait_for_quiet_root(target)
             mount_checkpoint(self.lock, device, cno, target)
+            self.last_mount = time.monotonic()
             if not os.path.ismount(target):
                 self.used.pop(target, None)
                 return None
         self.evict()
         return target
+
+    def wait_for_quiet_root(self, target):
+        ready = max(self.last_mount + MOUNT_SPACING, self.released.get(target, 0.0) + REMOUNT_SETTLE)
+        delay = ready - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        self.released.pop(target, None)
 
     def evict(self, everything=False):
         now = time.monotonic()
@@ -1467,6 +1482,7 @@ class Mounts:
                         target
                     ):
                         self.used.pop(target, None)
+                        self.released[target] = time.monotonic()
                         evicted = True
                         excess -= 1
                         try:
