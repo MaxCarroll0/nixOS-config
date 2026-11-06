@@ -1,0 +1,93 @@
+diff -ru a/fs/nilfs2/sysfs.c b/fs/nilfs2/sysfs.c
+--- a/fs/nilfs2/sysfs.c
++++ b/fs/nilfs2/sysfs.c
+@@ -204,6 +204,7 @@
+ void nilfs_sysfs_delete_snapshot_group(struct nilfs_root *root)
+ {
+ 	kobject_put(&root->snapshot_kobj);
++	wait_for_completion(&root->snapshot_kobj_unregister);
+ }
+ 
+ /************************************************************************
+diff -ru a/fs/nilfs2/the_nilfs.c b/fs/nilfs2/the_nilfs.c
+--- a/fs/nilfs2/the_nilfs.c
++++ b/fs/nilfs2/the_nilfs.c
+@@ -10,6 +10,7 @@
+ 
+ #include <linux/buffer_head.h>
+ #include <linux/slab.h>
++#include <linux/delay.h>
+ #include <linux/blkdev.h>
+ #include <linux/backing-dev.h>
+ #include <linux/log2.h>
+@@ -877,7 +878,7 @@
+ {
+ 	struct rb_node **p, *parent;
+ 	struct nilfs_root *root, *new;
+-	int err;
++	int err, tries = 0;
+ 
+ 	root = nilfs_lookup_root(nilfs, cno);
+ 	if (root)
+@@ -887,6 +888,30 @@
+ 	if (!new)
+ 		return NULL;
+ 
++	new->cno = cno;
++	new->ifile = NULL;
++	new->nilfs = nilfs;
++	refcount_set(&new->count, 1);
++	atomic64_set(&new->inodes_count, 0);
++	atomic64_set(&new->blocks_count, 0);
++
++	while ((err = nilfs_sysfs_create_snapshot_group(new)) == -EEXIST) {
++		root = nilfs_lookup_root(nilfs, cno);
++		if (root) {
++			kfree(new);
++			return root;
++		}
++		if (++tries > 5000)
++			break;
++		memset(&new->snapshot_kobj, 0, sizeof(new->snapshot_kobj));
++		set_current_state(TASK_UNINTERRUPTIBLE);
++		schedule_timeout(1);
++	}
++	if (err) {
++		kfree(new);
++		return NULL;
++	}
++
+ 	spin_lock(&nilfs->ns_cptree_lock);
+ 
+ 	p = &nilfs->ns_cptree.rb_node;
+@@ -903,29 +928,17 @@
+ 		} else {
+ 			refcount_inc(&root->count);
+ 			spin_unlock(&nilfs->ns_cptree_lock);
++			nilfs_sysfs_delete_snapshot_group(new);
+ 			kfree(new);
+ 			return root;
+ 		}
+ 	}
+ 
+-	new->cno = cno;
+-	new->ifile = NULL;
+-	new->nilfs = nilfs;
+-	refcount_set(&new->count, 1);
+-	atomic64_set(&new->inodes_count, 0);
+-	atomic64_set(&new->blocks_count, 0);
+-
+ 	rb_link_node(&new->rb_node, parent, p);
+ 	rb_insert_color(&new->rb_node, &nilfs->ns_cptree);
+ 
+ 	spin_unlock(&nilfs->ns_cptree_lock);
+ 
+-	err = nilfs_sysfs_create_snapshot_group(new);
+-	if (err) {
+-		kfree(new);
+-		new = NULL;
+-	}
+-
+ 	return new;
+ }
+ 

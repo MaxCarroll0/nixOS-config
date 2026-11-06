@@ -225,6 +225,10 @@ in
       (import ./nilfs-utils.nix { inherit lib; })
     ];
 
+    boot.extraModulePackages = lib.optional (lib.any (d: d.fsType == "nilfs2") (
+      lib.attrValues scfg.dataDisks
+    )) (config.boot.kernelPackages.callPackage ./nilfs2-module.nix { });
+
     environment.systemPackages = [
       pkgs.snapraid
       pkgs.mergerfs

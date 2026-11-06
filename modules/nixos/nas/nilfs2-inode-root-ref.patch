@@ -1,0 +1,44 @@
+diff -ru a/fs/nilfs2/inode.c b/fs/nilfs2/inode.c
+--- a/fs/nilfs2/inode.c
++++ b/fs/nilfs2/inode.c
+@@ -319,6 +319,7 @@
+ 	ii->i_state = BIT(NILFS_I_NEW);
+ 	ii->i_type = NILFS_I_TYPE_NORMAL;
+ 	ii->i_root = root;
++	nilfs_get_root(root);
+ 
+ 	err = nilfs_ifile_create_inode(root->ifile, &ino, &bh);
+ 	if (unlikely(err))
+@@ -527,7 +528,7 @@
+ 	NILFS_I(inode)->i_cno = args->cno;
+ 	NILFS_I(inode)->i_root = args->root;
+ 	NILFS_I(inode)->i_type = args->type;
+-	if (args->root && args->ino == NILFS_ROOT_INO)
++	if (args->root && args->ino != NILFS_IFILE_INO)
+ 		nilfs_get_root(args->root);
+ 	return 0;
+ }
+@@ -847,7 +848,7 @@
+ 	if (!(ii->i_type & NILFS_I_TYPE_BTNC))
+ 		nilfs_detach_btree_node_cache(inode);
+ 
+-	if (ii->i_root && inode->i_ino == NILFS_ROOT_INO)
++	if (ii->i_root && inode->i_ino != NILFS_IFILE_INO)
+ 		nilfs_put_root(ii->i_root);
+ }
+ 
+diff -ru a/fs/nilfs2/the_nilfs.c b/fs/nilfs2/the_nilfs.c
+--- a/fs/nilfs2/the_nilfs.c
++++ b/fs/nilfs2/the_nilfs.c
+@@ -951,6 +951,11 @@
+ 		spin_unlock(&nilfs->ns_cptree_lock);
+ 
+ 		nilfs_sysfs_delete_snapshot_group(root);
++		if (root->ifile) {
++			spin_lock(&root->ifile->i_lock);
++			root->ifile->i_state |= I_DONTCACHE;
++			spin_unlock(&root->ifile->i_lock);
++		}
+ 		iput(root->ifile);
+ 
+ 		kfree(root);
