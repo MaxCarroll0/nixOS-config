@@ -27,6 +27,28 @@ rec {
     serviceConfig = {
       Type = "oneshot";
       ExecStart = lib.getExe collector;
+      LogLevelMax = "notice";
+    };
+  };
+
+  collectorLoop = collector: interval: {
+    wantedBy = [ "multi-user.target" ];
+    unitConfig.StartLimitIntervalSec = 0;
+    serviceConfig = {
+      ExecStart = lib.getExe (
+        pkgs.writeShellApplication {
+          name = "${collector.name}-loop";
+          runtimeInputs = [ pkgs.coreutils ];
+          text = ''
+            while true; do
+              ${lib.getExe collector} || true
+              sleep ${toString interval}
+            done
+          '';
+        }
+      );
+      Restart = "always";
+      RestartSec = 5;
     };
   };
 

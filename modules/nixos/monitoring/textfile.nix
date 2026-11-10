@@ -15,6 +15,7 @@ let
     textfileDir
     writeCollector
     collectorService
+    collectorLoop
     collectorTimer
     ;
 
@@ -606,12 +607,10 @@ in
 
         systemd.services.textfile-pi-firmware = lib.mkIf cfg.piFirmware.enable (
           lib.mkMerge [
-            (collectorService piFirmwareMetrics)
+            (collectorLoop piFirmwareMetrics 1)
             { description = "Publish Raspberry Pi firmware and PMIC telemetry"; }
           ]
         );
-
-        systemd.timers.textfile-pi-firmware = lib.mkIf cfg.piFirmware.enable (collectorTimer "1s");
 
         systemd.services.textfile-memory-by-unit = lib.mkMerge [
           (collectorService memoryByUnit)
