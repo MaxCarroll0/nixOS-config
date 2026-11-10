@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime
 
 SCHEMA = """
@@ -1579,6 +1580,114 @@ class Resolver:
         return out
 
 
+class Deltas:
+    def __init__(self, points, streams, cache_dir, cap):
+        self.points = points
+        self.roots = dict(streams)
+        self.cache_dir = cache_dir
+        self.cap = cap
+        self.stores = {}
+        self.trees = {}
+        self.cached = OrderedDict()
+        self.size = 0
+        self.dirs = {}
+        self.checked = -60.0
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+    def registered(self):
+        if self.points is not None and time.monotonic() - self.checked > 30:
+            try:
+                rows = self.points.execute("SELECT stream, index_dir, data_dir FROM delta_streams").fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+            self.dirs = {name: (index, data) for name, index, data in rows if name in self.roots}
+            self.checked = time.monotonic()
+        return self.dirs
+
+    def store(self, name):
+        if name not in self.stores:
+            import stream_delta
+
+            self.stores[name] = stream_delta.Store(*self.registered()[name], write=False)
+        return self.stores[name]
+
+    def owner(self, rel):
+        for name in self.registered():
+            root = self.roots[name]
+            if rel == root or rel.startswith(root + "/"):
+                return name, rel[len(root) + 1 :]
+        return None
+
+    def point(self, name, t):
+        found = self.store(name).point_at(t)
+        return found[0] if found else None
+
+    def ancestry(self, rel, t):
+        for name in self.registered():
+            root = self.roots[name]
+            if (rel == "" or root.startswith(rel + "/")) and self.point(name, t) is not None:
+                yield root[len(rel) + 1 :].split("/", 1)[0] if rel else root.split("/", 1)[0]
+
+    def tree(self, name, point):
+        key = (name, point)
+        if key not in self.trees:
+            if len(self.trees) >= 8:
+                self.trees.clear()
+            files = self.store(name).tree(point)
+            dirs = {rel.rsplit("/", 1)[0] for rel in files if "/" in rel}
+            for d in list(dirs):
+                while "/" in d:
+                    d = d.rsplit("/", 1)[0]
+                    dirs.add(d)
+            self.trees[key] = (files, dirs)
+        return self.trees[key]
+
+    def real(self, name, t, sub):
+        point = self.point(name, t)
+        if point is None:
+            raise OSError(errno.ENOENT, sub)
+        if sub == "":
+            return None
+        files, dirs = self.tree(name, point)
+        if sub in dirs:
+            return None
+        if sub not in files:
+            raise OSError(errno.ENOENT, sub)
+        return self.render(name, point, sub, files[sub])
+
+    def children(self, name, t, sub):
+        files, dirs = self.tree(name, self.point(name, t))
+        prefix = sub + "/" if sub else ""
+        return sorted({rel[len(prefix) :].split("/", 1)[0] for group in (files, dirs) for rel in group if rel.startswith(prefix)})
+
+    def render(self, name, point, sub, entry):
+        store = self.store(name)
+        version = store.region_version(point, sub) if entry is None else entry[3]
+        path = os.path.join(self.cache_dir, name, f"v{version}", sub)
+        if path in self.cached:
+            self.cached.move_to_end(path)
+            return path
+        data, external = store.render(version, sub, entry)
+        if external:
+            raise OSError(errno.EFBIG, sub)
+        stamp = store.captured(version) if entry is None else entry[2]
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".tmp", "wb") as f:
+            f.write(data)
+        os.utime(path + ".tmp", (stamp, stamp))
+        os.rename(path + ".tmp", path)
+        self.cached[path] = len(data)
+        self.size += len(data)
+        while self.size > self.cap and len(self.cached) > 1:
+            old, n = self.cached.popitem(last=False)
+            self.size -= n
+            try:
+                os.unlink(old)
+            except FileNotFoundError:
+                pass
+        return path
+
+
 class View:
     def __init__(self, args):
         self.branches = args.branch
@@ -1588,6 +1697,7 @@ class View:
         self.generation = generation(self.index)
         self.streams = [s.split("=", 1) for s in args.stream]
         self.points = sqlite3.connect(args.points, timeout=60, check_same_thread=False) if args.points else None
+        self.deltas = Deltas(self.points, self.streams, args.delta_cache, args.delta_cache_bytes)
         self.cache = {}
         self.settle = args.settle
         self.mounts = Mounts(args.mount_dir, args.lock, args.suspend, args.idle, args.max_mounts, self.cache.clear)
@@ -1627,15 +1737,19 @@ class View:
         except sqlite3.OperationalError:
             return None
 
+    def point_streams(self):
+        delta = self.deltas.registered()
+        return [(name, root) for name, root in self.streams if name not in delta]
+
     def stream_point(self, rel, t):
-        for name, root in self.streams:
+        for name, root in self.point_streams():
             if rel == root or rel.startswith(root + "/"):
                 row = self.point_at(name, t)
                 return ("point", row) if row else ("none",)
         return None
 
     def stream_ancestry(self, rel, t):
-        for name, root in self.streams:
+        for name, root in self.point_streams():
             if rel == "" or root.startswith(rel + "/"):
                 row = self.point_at(name, t)
                 if row:
@@ -1684,16 +1798,24 @@ class View:
         t, rel = self.split(path)
         if t is None:
             return None
+        owned = self.deltas.owner(rel)
+        if owned is not None:
+            return self.deltas.real(owned[0], t, owned[1])
         self.refresh()
         for branch in self.branches:
             found = self.resolve(branch, t, rel)
             if found is not None:
                 return found[1]
+        if any(self.deltas.ancestry(rel, t)):
+            return None
         raise OSError(errno.ENOENT, path)
 
     def listing(self, path):
         t, rel = self.split(path)
-        names = set()
+        owned = self.deltas.owner(rel)
+        if owned is not None:
+            return self.deltas.children(owned[0], t, owned[1])
+        names = set(self.deltas.ancestry(rel, t))
         for branch in self.branches:
             found = self.resolve(branch, t, rel)
             if found is None or not os.path.isdir(found[1]):
@@ -2296,6 +2418,8 @@ def main():
     parser.add_argument("--state")
     parser.add_argument("--points")
     parser.add_argument("--stream", action="append", default=[])
+    parser.add_argument("--delta-cache", default="/var/cache/nas-at-delta")
+    parser.add_argument("--delta-cache-bytes", type=int, default=6 << 30)
     parser.add_argument("--historyless", action="append")
     parser.add_argument("--lock", default="/run/nas-nilfs-write.lock")
     parser.add_argument("--history-lock", default="/run/nas-history.lock")

@@ -14,38 +14,24 @@ let
   facts = import ../../../hosts/facts.nix;
 
   branchPath = st: "${scfg.diskRoot}/${st.branch}";
-
-  streamDelta = pkgs.writeShellApplication {
-    name = "stream-delta";
-    runtimeInputs = [ (pkgs.python3.withPackages (ps: [ ps.zstandard ])) ];
-    text = ''exec python3 ${./stream-delta.py} "$@"'';
-  };
+  mirrorDir = name: "${stateDir}/mirror/${name}";
+  indexDir = name: "${cfg.streamIndexDir}/${name}";
+  dataDir = st: "${branchPath st}/${st.data}";
+  deltaArgs = name: st: "--index ${indexDir name} --data ${dataDir st}";
 
   point = pkgs.writeShellApplication {
     name = "nas-stream-point";
     runtimeInputs = [
-      pkgs.nilfs-utils
       pkgs.util-linux
-      pkgs.sqlite
-      streamDelta
+      pkgs.stream-delta
     ];
     text = ''
       [ "$RSYNC_EXIT_STATUS" = 0 ] || exit 0
       now=$(date +%s)
-      cno=NULL
-      id=$now
-      if [ "$(findmnt -no FSTYPE "$1")" = nilfs2 ]; then
-        cno=$(mkcp -s -p "$(findmnt -no SOURCE "$1")")
-        id=$cno
-      fi
-      echo "$now" > ${stateDir}/"$RSYNC_MODULE_NAME".last
-      sqlite3 ${cfg.streamPointsDb} \
-        "CREATE TABLE IF NOT EXISTS points (stream TEXT, id TEXT, captured REAL, applied REAL, branch TEXT, cno INTEGER, stall_ms INTEGER, bytes INTEGER, PRIMARY KEY (stream, id));
-         INSERT INTO points VALUES ('$RSYNC_MODULE_NAME', '$id', $now, $now, '$1', $cno, NULL, 0);"
-      store=${cfg.streamDeltaDir}/"$RSYNC_MODULE_NAME"
-      if [ -e "$store/ready" ]; then
-        stream-delta --store "$store" ingest --mirror "$2" --captured "$now" --source "point:$id" \
-          || logger -t nas-stream-delta "ingest of $RSYNC_MODULE_NAME point $id failed"
+      if stream-delta --index "$1" --data "$2" ingest --mirror "$3" --captured "$now" --source "push:$now"; then
+        echo "$now" > ${stateDir}/"$RSYNC_MODULE_NAME".last
+      else
+        logger -t nas-stream-delta "ingest of $RSYNC_MODULE_NAME at $now failed"
       fi
     '';
   };
@@ -54,27 +40,44 @@ let
     name: st:
     pkgs.writeText "nas-stream-${name}.conf" ''
       [${name}]
-      path = ${branchPath st}/${st.root}
+      path = ${mirrorDir name}
       use chroot = no
       read only = no
       write only = yes
       uid = root
       gid = root
-      post-xfer exec = ${lib.getExe point} ${branchPath st} ${branchPath st}/${st.root}
+      post-xfer exec = ${lib.getExe point} ${indexDir name} ${dataDir st} ${mirrorDir name}
     '';
+
+  register = pkgs.writeShellApplication {
+    name = "nas-stream-register";
+    runtimeInputs = [ pkgs.sqlite ];
+    text = ''
+      sqlite3 ${cfg.streamPointsDb} \
+        "CREATE TABLE IF NOT EXISTS delta_streams (stream TEXT PRIMARY KEY, index_dir TEXT NOT NULL, data_dir TEXT NOT NULL);
+         DELETE FROM delta_streams;
+         ${
+           lib.concatStrings (
+             lib.mapAttrsToList (
+               name: st: "INSERT INTO delta_streams VALUES ('${name}', '${indexDir name}', '${dataDir st}');"
+             ) cfg.streams
+           )
+         }"
+    '';
+  };
 in
 
 {
   options.local.nas.streamPointsDb = lib.mkOption {
     type = lib.types.str;
     default = "${stateDir}/points.db";
-    description = "Capture time to checkpoint for every stream point.";
+    description = "Stream registry shared with the time view.";
   };
 
-  options.local.nas.streamDeltaDir = lib.mkOption {
+  options.local.nas.streamIndexDir = lib.mkOption {
     type = lib.types.str;
-    default = "${stateDir}/delta";
-    description = "Per-stream delta stores; a store ingests only once its ready marker exists.";
+    default = "${stateDir}/index";
+    description = "Per-stream delta index caches, rebuildable from the packs.";
   };
 
   options.local.nas.streams = lib.mkOption {
@@ -86,12 +89,17 @@ in
           options = {
             branch = lib.mkOption {
               type = lib.types.str;
-              description = "Data disk the stream mirror lives on.";
+              description = "Data disk the delta packs live on.";
+            };
+            data = lib.mkOption {
+              type = lib.types.str;
+              default = "backups/delta/${name}";
+              description = "Delta packs, relative to the branch.";
             };
             root = lib.mkOption {
               type = lib.types.str;
               default = "backups/streams/${name}";
-              description = "Stream tree, relative to the branch and the pool.";
+              description = "Where the time view shows the stream, relative to the pool.";
             };
             port = lib.mkOption {
               type = lib.types.port;
@@ -116,10 +124,22 @@ in
 
     systemd.tmpfiles.rules = [
       "d ${stateDir} 0755 root root - -"
-      "d ${cfg.streamDeltaDir} 0700 root root - -"
+      "d ${stateDir}/mirror 0700 root root - -"
+      "d ${cfg.streamIndexDir} 0700 root root - -"
     ];
 
-    environment.systemPackages = [ streamDelta ];
+    environment.systemPackages = [ pkgs.stream-delta ];
+
+    local.nas.checkpoints.historyless = lib.mkOptionDefault (
+      lib.unique (
+        lib.concatLists (
+          lib.mapAttrsToList (_: st: [
+            st.data
+            st.root
+          ]) cfg.streams
+        )
+      )
+    );
 
     systemd.sockets = lib.mapAttrs' (
       name: st:
@@ -151,7 +171,8 @@ in
         lib.nameValuePair "nas-stream-${name}@" {
           unitConfig.ConditionPathIsMountPoint = branchPath st;
           serviceConfig = {
-            ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${branchPath st}/${st.root}";
+            LogLevelMax = "notice";
+            ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${mirrorDir name} ${dataDir st}";
             ExecStart = "${pkgs.util-linux}/bin/flock ${cfg.nilfsWriteLock} ${lib.getExe pkgs.rsync} --daemon --config=${rsyncdConf name st}";
             StandardInput = "socket";
             StandardOutput = "inherit";
@@ -161,14 +182,28 @@ in
         }
       ) cfg.streams
       // {
+        nas-stream-register = {
+          wantedBy = [ "multi-user.target" ];
+          before = [ "nas-at-view.service" ];
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            ExecStart = lib.getExe register;
+          };
+        };
+
         nas-stream-compact = {
-          script = ''
-            for store in ${cfg.streamDeltaDir}/*/; do
-              [ -e "$store/ready" ] || continue
-              stream-delta --store "$store" compact --to-level 19 --limit 4
-            done
-          '';
-          path = [ streamDelta ];
+          script = lib.concatStrings (
+            lib.mapAttrsToList (name: st: ''
+              if mountpoint -q ${branchPath st}; then
+                stream-delta ${deltaArgs name st} compact --to-level 19 --limit 4 --lock ${cfg.nilfsWriteLock}
+              fi
+            '') cfg.streams
+          );
+          path = [
+            pkgs.stream-delta
+            pkgs.util-linux
+          ];
           serviceConfig = {
             Type = "oneshot";
             Nice = 19;

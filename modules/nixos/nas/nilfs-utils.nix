@@ -1,4 +1,4 @@
-# nilfs-utils 2.3.1 with the history liveness filter, plus nilfs-reclaim, nilfs-lives and nas-at.
+# nilfs-utils 2.3.1 with the history liveness filter, plus nilfs-reclaim, nilfs-lives, stream-delta and nas-at.
 
 { lib }:
 
@@ -37,6 +37,17 @@ final: prev: {
       -I${final.nilfs-utils.src}/include -o $out/bin/nilfs-lives ${./nilfs-lives.c} -lnilfsgc -lnilfs
   '';
 
+  stream-delta-lib = final.runCommand "stream-delta-lib" { } ''
+    mkdir -p $out
+    cp ${./stream_delta.py} $out/stream_delta.py
+  '';
+
+  stream-delta = final.writeShellApplication {
+    name = "stream-delta";
+    runtimeInputs = [ (final.python3.withPackages (ps: [ ps.zstandard ])) ];
+    text = ''exec python3 ${final.stream-delta-lib}/stream_delta.py "$@"'';
+  };
+
   nas-at = final.writeShellApplication {
     name = "nas-at";
     runtimeInputs = [
@@ -46,7 +57,12 @@ final: prev: {
       final.systemd
     ];
     text = ''
-      exec ${final.python3.withPackages (ps: [ ps.fusepy ])}/bin/python3 ${./nas-at.py} "$@"
+      PYTHONPATH=${final.stream-delta-lib} exec ${
+        final.python3.withPackages (ps: [
+          ps.fusepy
+          ps.zstandard
+        ])
+      }/bin/python3 ${./nas-at.py} "$@"
     '';
   };
 }
