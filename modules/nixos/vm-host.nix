@@ -376,7 +376,10 @@ in
   imports = [
     nixvirt.nixosModules.default
     ./wake-endpoint.nix
+    ./vm-guard.nix
   ];
+
+  local.vmGuard.enable = true;
 
   boot.kernelModules = [ "kvm-amd" ];
 
@@ -532,6 +535,7 @@ in
       StandardInput = "socket";
       StandardOutput = "socket";
       StandardError = "journal";
+      LogLevelMax = "notice";
       User = remoteUser;
       RuntimeMaxSec = 10;
     };

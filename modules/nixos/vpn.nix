@@ -18,13 +18,17 @@ let
 
   novpnGid = 700;
 
+  unitSlice =
+    unit:
+    config.systemd.services.${lib.removeSuffix ".service" unit}.serviceConfig.Slice or "system.slice";
+
   bypassRules =
     unit:
     pkgs.writeText "${unitTableName unit}.nft" ''
       table inet ${unitTableName unit} {
         chain output {
           type route hook output priority mangle + 1; policy accept;
-          socket cgroupv2 level 2 "system.slice/${unit}" counter meta mark set 0xca6c
+          socket cgroupv2 level 2 "${unitSlice unit}/${unit}" counter meta mark set 0xca6c
         }
       }
     '';
