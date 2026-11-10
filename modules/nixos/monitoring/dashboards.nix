@@ -273,6 +273,10 @@ let
     + "and on(instance) (${liveHost upMetric})";
 
   gatedSmooth = expression: "(${expression}) and on(instance) (${liveHost "host:up"})";
+  hddDrive =
+    expression:
+    "(${expression}) * on(instance, chip) group_left(drive) drive_hwmon_info "
+    + ''or label_replace((${expression}) unless on(instance, chip) drive_hwmon_info, "drive", "$1", "name", "(.+)")'';
 
   energyBucketSum =
     metric: range:
@@ -2682,11 +2686,11 @@ let
         targets = [
           (target {
             expr = ''disk:read_bytes{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} read";
+            legend = "{{instance}} {{drive}} read";
           })
           (target {
             expr = ''disk:written_bytes{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} write";
+            legend = "{{instance}} {{drive}} write";
           })
         ];
       })
@@ -2696,7 +2700,7 @@ let
         targets = [
           (target {
             expr = ''disk:io_time{instance=~"$host"}'';
-            legend = "{{instance}} {{device}}";
+            legend = "{{instance}} {{drive}}";
           })
         ];
       })
@@ -3646,11 +3650,11 @@ let
         targets = [
           (target {
             expr = gatedSmooth ''avg_over_time(disk:read_bytes{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
-            legend = "{{instance}} {{device}} read";
+            legend = "{{instance}} {{drive}} read";
           })
           (target {
             expr = gatedSmooth ''avg_over_time(disk:written_bytes{instance=~"$host"}[''${smoothspan}] offset -''${smooth})'';
-            legend = "{{instance}} {{device}} write";
+            legend = "{{instance}} {{drive}} write";
           })
         ];
       })
@@ -3927,7 +3931,7 @@ let
         targets = [
           (target {
             expr = ''round(drive:standby{instance=~"$host"})'';
-            legend = "{{instance}} {{device}}";
+            legend = "{{instance}} {{drive}}";
           })
         ];
       })
@@ -3942,7 +3946,7 @@ let
         targets = [
           (target {
             expr = ''round(drive:selftest_running{instance=~"$host"})'';
-            legend = "{{instance}} {{device}}";
+            legend = "{{instance}} {{drive}}";
           })
         ];
       })
@@ -3955,7 +3959,7 @@ let
         targets = [
           (target {
             expr = ''drive:sample_age_seconds{instance=~"$host"}'';
-            legend = "{{instance}} {{device}}";
+            legend = "{{instance}} {{drive}}";
           })
         ];
       })
@@ -3967,8 +3971,8 @@ let
         unit = "celsius";
         targets = [
           (target {
-            expr = ''sensor:temp_celsius{instance=~"$host",name=~"HDD.*"}'';
-            legend = "{{instance}} {{name}}";
+            expr = hddDrive ''sensor:temp_celsius{instance=~"$host",name=~"HDD.*"}'';
+            legend = "{{instance}} {{drive}}";
           })
         ];
       })
@@ -3981,15 +3985,15 @@ let
         targets = [
           (target {
             expr = ''drive:reallocated_sectors{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} reallocated";
+            legend = "{{instance}} {{drive}} reallocated";
           })
           (target {
             expr = ''drive:pending_sectors{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} pending";
+            legend = "{{instance}} {{drive}} pending";
           })
           (target {
             expr = ''drive:uncorrectable_sectors{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} uncorrectable";
+            legend = "{{instance}} {{drive}} uncorrectable";
           })
         ];
       })
@@ -4002,7 +4006,7 @@ let
         targets = [
           (target {
             expr = ''drive:crc_errors{instance=~"$host"}'';
-            legend = "{{instance}} {{device}}";
+            legend = "{{instance}} {{drive}}";
           })
         ];
       })
@@ -4015,11 +4019,11 @@ let
         targets = [
           (target {
             expr = ''drive:start_stop_count{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} start-stop";
+            legend = "{{instance}} {{drive}} start-stop";
           })
           (target {
             expr = ''drive:load_cycle_count{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} load cycles";
+            legend = "{{instance}} {{drive}} load cycles";
           })
         ];
       })
@@ -4060,11 +4064,11 @@ let
         targets = [
           (target {
             expr = ''disk:read_bytes{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} read";
+            legend = "{{instance}} {{drive}} read";
           })
           (target {
             expr = ''disk:written_bytes{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} write";
+            legend = "{{instance}} {{drive}} write";
           })
         ];
       })
@@ -4077,11 +4081,11 @@ let
         targets = [
           (target {
             expr = ''disk:read_latency_seconds{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} read";
+            legend = "{{instance}} {{drive}} read";
           })
           (target {
             expr = ''disk:write_latency_seconds{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} write";
+            legend = "{{instance}} {{drive}} write";
           })
         ];
       })
@@ -4093,11 +4097,11 @@ let
         targets = [
           (target {
             expr = ''disk:io_time{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} busy";
+            legend = "{{instance}} {{drive}} busy";
           })
           (target {
             expr = ''disk:queue_depth{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} queue";
+            legend = "{{instance}} {{drive}} queue";
           })
         ];
       })
@@ -4109,7 +4113,7 @@ let
         targets = [
           (target {
             expr = ''disk:iops{instance=~"$host"}'';
-            legend = "{{instance}} {{device}}";
+            legend = "{{instance}} {{drive}}";
           })
         ];
       })
@@ -4166,11 +4170,11 @@ let
         targets = [
           (target {
             expr = ''ssd:written_bytes{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} written";
+            legend = "{{instance}} {{drive}} written";
           })
           (target {
             expr = ''ssd:wear_ratio{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} wear";
+            legend = "{{instance}} {{drive}} wear";
           })
         ];
       })
@@ -4215,12 +4219,12 @@ let
         overrides = [ (dimmed ".*peak$") ];
         targets = [
           (target {
-            expr = gatedSmooth ''avg_over_time(sensor:temp_celsius{instance=~"$host",name=~"HDD.*"}[''${smoothspan}] offset -''${smooth})'';
-            legend = "{{instance}} {{name}}";
+            expr = hddDrive (gatedSmooth ''avg_over_time(sensor:temp_celsius{instance=~"$host",name=~"HDD.*"}[''${smoothspan}] offset -''${smooth})'');
+            legend = "{{instance}} {{drive}}";
           })
           (target {
-            expr = ''max_over_time((sensor:temp_celsius_max{instance=~"$host",name=~"HDD.*"} or sensor:temp_celsius{instance=~"$host",name=~"HDD.*"})[''${smoothspan}:] offset -''${smooth})'';
-            legend = "{{instance}} {{name}} peak";
+            expr = hddDrive ''max_over_time((sensor:temp_celsius_max{instance=~"$host",name=~"HDD.*"} or sensor:temp_celsius{instance=~"$host",name=~"HDD.*"})[''${smoothspan}:] offset -''${smooth})'';
+            legend = "{{instance}} {{drive}} peak";
           })
         ];
       })
@@ -4285,7 +4289,7 @@ let
         targets = [
           (target {
             expr = ''drive:power_on_hours_max{instance=~"$host"} or drive:power_on_hours{instance=~"$host"}'';
-            legend = "{{instance}} {{device}}";
+            legend = "{{instance}} {{drive}}";
           })
         ];
       })
@@ -4298,11 +4302,11 @@ let
         targets = [
           (target {
             expr = ''drive:reallocated_sectors_max{instance=~"$host"} or drive:reallocated_sectors{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} reallocated";
+            legend = "{{instance}} {{drive}} reallocated";
           })
           (target {
             expr = ''drive:pending_sectors_max{instance=~"$host"} or drive:pending_sectors{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} pending";
+            legend = "{{instance}} {{drive}} pending";
           })
         ];
       })
@@ -4314,11 +4318,11 @@ let
         targets = [
           (target {
             expr = ''drive:start_stop_count_max{instance=~"$host"} or drive:start_stop_count{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} start-stop";
+            legend = "{{instance}} {{drive}} start-stop";
           })
           (target {
             expr = ''drive:load_cycle_count_max{instance=~"$host"} or drive:load_cycle_count{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} load cycles";
+            legend = "{{instance}} {{drive}} load cycles";
           })
         ];
       })
@@ -4332,8 +4336,8 @@ let
         max = 1;
         targets = [
           (target {
-            expr = ''1 - avg by (instance, device) (avg_over_time(drive:standby{instance=~"$host"}[1d]))'';
-            legend = "{{instance}} {{device}}";
+            expr = ''1 - avg by (instance, device, drive) (avg_over_time(drive:standby{instance=~"$host"}[1d]))'';
+            legend = "{{instance}} {{drive}}";
             interval = "1d";
           })
         ];
@@ -4347,8 +4351,8 @@ let
         decimals = 1;
         targets = [
           (target {
-            expr = ''(1 - avg by (instance, device) (avg_over_time(drive:standby{instance=~"$host"}[$__range]))) * $__range_s / 3600'';
-            legend = "{{instance}} {{device}}";
+            expr = ''(1 - avg by (instance, device, drive) (avg_over_time(drive:standby{instance=~"$host"}[$__range]))) * $__range_s / 3600'';
+            legend = "{{instance}} {{drive}}";
             instant = true;
           })
         ];
@@ -4362,11 +4366,11 @@ let
         targets = [
           (target {
             expr = ''ssd:written_bytes_max{instance=~"$host"} or ssd:written_bytes{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} written";
+            legend = "{{instance}} {{drive}} written";
           })
           (target {
             expr = ''ssd:wear_ratio_max{instance=~"$host"} or ssd:wear_ratio{instance=~"$host"}'';
-            legend = "{{instance}} {{device}} wear";
+            legend = "{{instance}} {{drive}} wear";
           })
         ];
       })

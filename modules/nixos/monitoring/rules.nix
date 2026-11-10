@@ -34,6 +34,24 @@ let
 
   coefficient = metric: "max by (instance) (${metric})";
   perDisk = metric: "max by (instance, device) (${metric})";
+  withDriveName =
+    expr:
+    "(${expr}) * on(instance, device) group_left(drive) drive_label_info "
+    + ''or label_replace((${expr}) unless on(instance, device) drive_label_info, "drive", "$1", "device", "(.+)")'';
+  deviceSeries = [
+    "drive:"
+    "ssd:"
+    "disk:"
+  ];
+  nameDevices = lib.mapAttrs (
+    record: expr:
+    if
+      lib.any (p: lib.hasPrefix p record) deviceSeries && !lib.any (p: lib.hasInfix p expr) deviceSeries
+    then
+      withDriveName expr
+    else
+      expr
+  );
   perFan = metric: "max by (instance, fan) (${metric})";
 
   freshNode = ''max by (instance) ((up{job="node"} == 1) and (timestamp(up{job="node"}) > time() - 5))'';
@@ -116,7 +134,7 @@ let
     }
     {
       record = "drive:standby";
-      expr = ''${perDisk "pc_disk_standby"} and on(instance, device) smart_device_info{rotational="1"}'';
+      expr = withDriveName ''${perDisk "pc_disk_standby"} and on(instance, device) smart_device_info{rotational="1"}'';
     }
     {
       record = "pc:disk_activity";
@@ -918,7 +936,7 @@ in
     {
       name = "system";
       interval = "1s";
-      rules = toRules (systemRules // networkRules);
+      rules = toRules (nameDevices systemRules // networkRules);
     }
     {
       name = "system-slow";
@@ -928,7 +946,7 @@ in
     {
       name = "capacity";
       interval = "5m";
-      rules = toRules (capacityRules // driveRules);
+      rules = toRules (capacityRules // nameDevices driveRules);
     }
     {
       name = "downsample";
@@ -1161,7 +1179,7 @@ in
         value = 0;
         for' = "0s";
         severity = "critical";
-        summary = "{{ $labels.device }} on {{ $labels.instance }} reports its own SMART self-assessment as failing.";
+        summary = "{{ $labels.drive }} ({{ $labels.device }}) on {{ $labels.instance }} reports its own SMART self-assessment as failing.";
       })
       (threshold {
         uid = "smart-pending-sectors";
@@ -1170,7 +1188,7 @@ in
         value = 0;
         for' = "0s";
         severity = "critical";
-        summary = "{{ $labels.device }} on {{ $labels.instance }} has sectors it cannot read and has not yet reallocated.";
+        summary = "{{ $labels.drive }} ({{ $labels.device }}) on {{ $labels.instance }} has sectors it cannot read and has not yet reallocated.";
       })
       (threshold {
         uid = "smart-reallocated-sectors";
@@ -1178,7 +1196,7 @@ in
         expr = "drive:reallocated_sectors";
         value = cfg.alerts.reallocatedSectors;
         for' = "15m";
-        summary = "{{ $labels.device }} on {{ $labels.instance }} has remapped bad sectors.";
+        summary = "{{ $labels.drive }} ({{ $labels.device }}) on {{ $labels.instance }} has remapped bad sectors.";
       })
       (threshold {
         uid = "smart-uncorrectable-sectors";
@@ -1187,7 +1205,7 @@ in
         value = 0;
         for' = "15m";
         severity = "critical";
-        summary = "{{ $labels.device }} on {{ $labels.instance }} has sectors that could not be corrected.";
+        summary = "{{ $labels.drive }} ({{ $labels.device }}) on {{ $labels.instance }} has sectors that could not be corrected.";
       })
       (threshold {
         uid = "smart-crc-errors";
@@ -1195,7 +1213,7 @@ in
         expr = "increase(drive:crc_errors[6h])";
         value = 0;
         for' = "15m";
-        summary = "{{ $labels.device }} on {{ $labels.instance }} is seeing link errors, which points at the cable or bridge rather than the platter.";
+        summary = "{{ $labels.drive }} ({{ $labels.device }}) on {{ $labels.instance }} is seeing link errors, which points at the cable or bridge rather than the platter.";
       })
       (threshold {
         uid = "smart-selftest-failed";
@@ -1203,7 +1221,7 @@ in
         expr = "drive:selftest_failed";
         value = 0;
         for' = "15m";
-        summary = "The last self-test on {{ $labels.device }} on {{ $labels.instance }} did not complete cleanly.";
+        summary = "The last self-test on {{ $labels.drive }} ({{ $labels.device }}) on {{ $labels.instance }} did not complete cleanly.";
       })
       (threshold {
         uid = "smart-stale";
@@ -1212,7 +1230,7 @@ in
         value = cfg.alerts.smartStaleSeconds;
         for' = "30m";
         valueFormat = "humanizeDuration";
-        summary = "{{ $labels.device }} on {{ $labels.instance }} has not been readable for a long time; it may have been removed or the collector is stuck.";
+        summary = "{{ $labels.drive }} ({{ $labels.device }}) on {{ $labels.instance }} has not been readable for a long time; it may have been removed or the collector is stuck.";
       })
       (threshold {
         uid = "ssd-wear-high";
@@ -1220,7 +1238,7 @@ in
         expr = "ssd:wear_ratio";
         value = cfg.alerts.ssdWearRatio;
         for' = "1h";
-        summary = "{{ $labels.device }} on {{ $labels.instance }} has used most of its rated write endurance.";
+        summary = "{{ $labels.drive }} ({{ $labels.device }}) on {{ $labels.instance }} has used most of its rated write endurance.";
       })
       (threshold {
         uid = "memory-thrashing";
@@ -1241,11 +1259,11 @@ in
       (threshold {
         uid = "disk-latency-high";
         title = "Disk latency high";
-        expr = "max by (instance, device) (disk:read_latency_seconds)";
+        expr = "max by (instance, device, drive) (disk:read_latency_seconds)";
         value = cfg.alerts.diskLatencySeconds;
         for' = "10m";
         valueFormat = "humanizeDuration";
-        summary = "Reads from {{ $labels.device }} on {{ $labels.instance }} are taking far longer than they should.";
+        summary = "Reads from {{ $labels.drive }} ({{ $labels.device }}) on {{ $labels.instance }} are taking far longer than they should.";
       })
       (threshold {
         uid = "inodes-low";
