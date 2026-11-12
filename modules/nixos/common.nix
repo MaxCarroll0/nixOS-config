@@ -9,8 +9,6 @@
 
 let
   flakePath = "/home/max/.config/nix";
-  # root has no SSH identity of its own; reuse max's, which the origin remote accepts.
-  gitSshCommand = "${pkgs.openssh}/bin/ssh -i /home/max/.ssh/id_ed25519 -o UserKnownHostsFile=/home/max/.ssh/known_hosts";
   cfg = config.local.users;
   wakePeers = lib.attrNames (config.local.wake.peers or { });
 
@@ -21,6 +19,8 @@ let
     name = "nixos-upgrade-allowed";
     runtimeInputs = [
       pkgs.git
+      pkgs.gnugrep
+      pkgs.util-linux
       pkgs.coreutils
       config.nix.package
     ];
@@ -40,12 +40,9 @@ let
 
       [ -d ${flakePath}/.git ] || verdict 0 none "no clone to guard"
 
-      git config --global --add safe.directory ${flakePath}
-      git -C ${flakePath} fetch -q origin || verdict 1 fetch-failed "cannot reach origin"
-
-      if [ -n "$(git -C ${flakePath} status --porcelain --ignore-submodules=dirty)" ]; then
-        verdict 1 dirty-clone "the clone has uncommitted changes, which an upgrade would discard"
-      fi
+      git config --global --get-all safe.directory | grep -qxF ${flakePath} \
+        || git config --global --add safe.directory ${flakePath}
+      runuser -u max -- git -C ${flakePath} fetch -q origin || verdict 1 fetch-failed "cannot reach origin"
 
       running=$(nixos-version --configuration-revision 2>/dev/null || true)
 
@@ -281,6 +278,7 @@ in
 {
   imports = [
     ./dev-build.nix
+    ./flake-sync.nix
     ./peer-transport.nix
     ./nix-observer.nix
     ./unclean-boot.nix
@@ -294,12 +292,6 @@ in
       alice = "alice-password-hash";
     };
     description = "Accounts whose password hash comes from sops.";
-  };
-
-  options.local.update.ownsInputBump = lib.mkOption {
-    type = lib.types.bool;
-    default = false;
-    description = "Whether this host bumps flake inputs and pushes them. Exactly one host should.";
   };
 
   config = {
@@ -452,31 +444,12 @@ in
 
     # An upgrade must never move a host backwards. ExecCondition, not preStart:
     # a non-zero condition skips the unit cleanly instead of marking it failed.
-    systemd.services.nixos-upgrade.environment.GIT_SSH_COMMAND = gitSshCommand;
     systemd.services.nixos-upgrade.serviceConfig.ExecCondition = lib.getExe upgradeAllowed;
-
-    systemd.services.nixos-upgrade.preStart = /* bash */ ''
-      if [ -d ${flakePath}/.git ]; then
-        ${pkgs.git}/bin/git config --global --add safe.directory ${flakePath}
-        ${pkgs.git}/bin/git -C ${flakePath} merge --ff-only origin/HEAD
-        ${lib.optionalString config.local.update.ownsInputBump ''
-          ${config.nix.package}/bin/nix flake update --flake ${flakePath}
-          if ! ${pkgs.git}/bin/git -C ${flakePath} diff --quiet -- flake.lock; then
-            ${pkgs.git}/bin/git -C ${flakePath} commit -q -m "flake: bump every input" -- flake.lock
-            # A rejected push means another host already bumped; its lock wins,
-            # so drop ours rather than leaving the clone diverged from origin.
-            ${pkgs.git}/bin/git -C ${flakePath} push -q origin HEAD \
-              || ${pkgs.git}/bin/git -C ${flakePath} reset -q --hard origin/HEAD
-          fi
-        ''}
-        ${pkgs.coreutils}/bin/chown -R max:users ${flakePath}/.git ${flakePath}/flake.lock
-      fi
-    '';
 
     system.autoUpgrade = {
       enable = lib.mkDefault false;
       allowReboot = true;
-      flake = "${flakePath}#${config.networking.hostName}";
+      flake = "git+file://${flakePath}?ref=refs/remotes/origin/main#${config.networking.hostName}";
       flags = [ "-L" ];
       dates = "weekly";
       randomizedDelaySec = "45min";

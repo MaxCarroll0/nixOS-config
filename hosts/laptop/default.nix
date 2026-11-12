@@ -191,7 +191,6 @@
   '';
 
   system.autoUpgrade.enable = true;
-  local.update.ownsInputBump = true;
 
   local.build.host = {
     enable = true;

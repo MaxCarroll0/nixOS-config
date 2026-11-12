@@ -143,14 +143,6 @@
     NIXOS_OZONE_WL = "1";
   };
 
-  services.home-manager.autoUpgrade = {
-    enable = true;
-    useFlake = true;
-    flakeDir = "/home/max/.config/nix";
-    frequency = "weekly";
-    preSwitchCommands = [ "nix flake update" ];
-  };
-
   systemd.user.services.sudo-agent = {
     Unit = {
       Description = "SSH agent for explicit sudo grants";
