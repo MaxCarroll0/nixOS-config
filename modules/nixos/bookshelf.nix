@@ -507,6 +507,14 @@ in
       };
     };
 
+    reference = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = cfg.link.enable;
+        description = "A service that fills the reference catalogue with every IMSLP work when started.";
+      };
+    };
+
     audit = {
       enable = lib.mkEnableOption "a daily report of rows breaking a rule the writes enforce";
 
@@ -936,6 +944,34 @@ in
         User = cfg.user;
         Group = cfg.user;
         MemoryMax = "192M";
+        WorkingDirectory = cfg.stateDir;
+        ReadWritePaths = [ cfg.stateDir ];
+        Nice = 19;
+        IOSchedulingClass = "idle";
+      };
+    };
+
+    systemd.services.bookshelf-reference = lib.mkIf cfg.reference.enable {
+      restartIfChanged = false;
+      description = "Fetch IMSLP works the reference catalogue lacks";
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      inherit environment;
+      serviceConfig = hardening // {
+        Type = "oneshot";
+        ExecStart =
+          map (step: "${lib.getExe cfg.package} --database ${cfg.databasePath} --catalogue ${step}")
+            [
+              "worklist"
+              "piano"
+              "details --limit 1000000"
+              "people"
+              "wikidata"
+              "reindex"
+            ];
+        User = cfg.user;
+        Group = cfg.user;
+        MemoryMax = "600M";
         WorkingDirectory = cfg.stateDir;
         ReadWritePaths = [ cfg.stateDir ];
         Nice = 19;
