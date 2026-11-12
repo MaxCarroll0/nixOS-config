@@ -45,6 +45,8 @@ let
       (toString ccfg.landmarkGap)
       "--rotate-bytes"
       (toString ccfg.rotateBytes)
+      "--reclaim-free"
+      (toString (ccfg.reclaimFreePercent / 100.0))
     ]
     ++ lib.concatMap (p: [
       "--historyless"
@@ -64,6 +66,28 @@ let
   at = pkgs.writeShellApplication {
     name = "nas-at";
     text = ''exec ${lib.getExe pkgs.nas-at} ${lib.escapeShellArgs atArgs} "$@"'';
+  };
+
+  lowSpace = pkgs.writeShellApplication {
+    name = "nas-low-space";
+    runtimeInputs = with pkgs; [
+      coreutils
+      systemd
+      util-linux
+    ];
+    text = ''
+      last=-60
+      while sleep 15; do
+        for branch in ${lib.escapeShellArgs branchPaths}; do
+          mountpoint -q "$branch" || continue
+          read -r avail total < <(stat -f -c '%a %b' "$branch")
+          if (( avail * 100 < total * ${toString ccfg.reclaimFreePercent} && SECONDS - last >= 60 )); then
+            systemctl start --no-block nas-checkpoint-promote.service
+            last=$SECONDS
+          fi
+        done
+      done
+    '';
   };
 
   unmountView = pkgs.writeShellApplication {
@@ -151,6 +175,12 @@ in
       description = "How often the history pass runs.";
     };
 
+    reclaimFreePercent = lib.mkOption {
+      type = lib.types.ints.between 1 99;
+      default = 15;
+      description = "Free space below which a branch is reclaimed, checked every 15 s.";
+    };
+
     suspendFile = lib.mkOption {
       type = lib.types.str;
       default = "/run/nas-promote-suspended";
@@ -223,6 +253,19 @@ in
             ExecStart = "${lib.getExe at} pass";
           };
           unitConfig.ConditionPathExists = "!${ccfg.suspendFile}";
+        };
+
+        nas-low-space = {
+          description = "Start the history pass as soon as a NILFS2 branch runs low on space";
+          wantedBy = [ "multi-user.target" ];
+          after = map mountUnit (lib.attrNames nilfsBranches);
+          serviceConfig = {
+            ExecStart = lib.getExe lowSpace;
+            Restart = "always";
+            RestartSec = 30;
+            Nice = 10;
+            MemoryMax = "16M";
+          };
         };
 
         nas-history-walk = {
