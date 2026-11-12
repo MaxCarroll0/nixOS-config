@@ -267,6 +267,19 @@ let
     '';
   };
 
+  # sddm 0.21 respawns the greeter after a session ends with an empty socket
+  # name, so it exits at once ("QLocalSocket::connectToServer: Invalid name")
+  # and leaves seat0 dark until sddm itself restarts.
+  reviveGreeter = pkgs.writeShellApplication {
+    name = "revive-greeter";
+    runtimeInputs = [ pkgs.systemd ];
+    text = ''
+      systemctl is-active --quiet display-manager.service || exit 0
+      [ -z "$(loginctl show-seat seat0 --property=Sessions --value)" ] || exit 0
+      systemctl restart display-manager.service
+    '';
+  };
+
   usbSuspendDelayMs = toString (cfg.idle.usb.suspendDelayMinutes * 60 * 1000);
 
   # Switch events are skipped: an audio interface reporting a jack is not a
@@ -306,6 +319,7 @@ let
             done
             ${lib.getExe sessionKscreen} --dpms on
             rm -f ${forcedOff}
+            ${lib.getExe reviveGreeter}
           fi
         fi
       done
@@ -1025,6 +1039,7 @@ in
         # still initialising, so let the session settle before asserting DPMS.
         ${pkgs.coreutils}/bin/sleep 2
         ${lib.getExe sessionKscreen} --dpms on || true
+        ${lib.getExe reviveGreeter} || true
       '';
     })
 
