@@ -930,7 +930,7 @@ in
 
     systemd.services.bookshelf-link = lib.mkIf cfg.link.enable {
       restartIfChanged = false;
-      description = "Link contents lines to catalogue works";
+      description = "Link contents lines to catalogue works, then hear their recordings";
       after = [
         "network-online.target"
         "bookshelf.service"
@@ -940,7 +940,10 @@ in
       startAt = cfg.link.startAt;
       serviceConfig = hardening // {
         Type = "oneshot";
-        ExecStart = "${lib.getExe cfg.package} --link --database ${cfg.databasePath}";
+        ExecStart = map (step: "${lib.getExe cfg.package} ${step} --database ${cfg.databasePath}") [
+          "--link"
+          "--recordings"
+        ];
         User = cfg.user;
         Group = cfg.user;
         MemoryMax = "192M";
