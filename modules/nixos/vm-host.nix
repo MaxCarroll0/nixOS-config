@@ -212,16 +212,34 @@ let
 
   idleShutdownMinutes = 10;
   shutdownGraceMinutes = 6;
-  lastActive = "/run/${domainName}-last-active";
-  shutdownRequested = "/run/${domainName}-shutdown-requested";
+  idleCountdown = "${domainName}-idle-shutdown";
   idleStatus = "/run/${domainName}-idle.json";
 
   virsh = "virsh -c qemu:///system";
+
+  shutdownRun = pkgs.writeShellApplication {
+    name = "${domainName}-shutdown-run";
+    runtimeInputs = [
+      config.virtualisation.libvirtd.package
+      pkgs.coreutils
+    ];
+    text = ''
+      run=$1
+      [ "$(${virsh} domid ${domainName} 2>/dev/null)" = "$run" ] || exit 0
+      ${virsh} shutdown ${domainName}
+      for _ in $(seq ${toString (shutdownGraceMinutes * 12)}); do
+        [ "$(${virsh} domid ${domainName} 2>/dev/null)" = "$run" ] || exit 0
+        sleep 5
+      done
+      ${virsh} destroy ${domainName}
+    '';
+  };
 
   shutdownWhenIdle = pkgs.writeShellApplication {
     name = "${domainName}-shutdown-when-idle";
     runtimeInputs = [
       config.virtualisation.libvirtd.package
+      config.systemd.package
       pkgs.coreutils
       pkgs.jq
       config.local.power.keepAwakePackage
@@ -233,11 +251,11 @@ let
         if [[ "$n" =~ ^[0-9]+$ ]]; then echo "$n"; else echo 0; fi
       }
 
-      now=$(date +%s)
       running=false
       locks=0
       logins=0
       readyAt=0
+      run=$(${virsh} domid ${domainName} 2>/dev/null) || run=-
       case "$(${virsh} domstate ${domainName})" in
         running | "in shutdown")
           running=true
@@ -247,46 +265,35 @@ let
           ;;
       esac
 
-      if [ "$running" = false ] || [ $((locks + logins)) -gt 0 ] || [ ! -e ${lastActive} ]; then
-        echo "$now" > ${lastActive}
-        rm -f ${shutdownRequested}
-      fi
-      activeUntil=$(cat ${lastActive})
-      if [ "$readyAt" -gt "$activeUntil" ] && [ "$readyAt" -le "$now" ]; then
-        activeUntil=$readyAt
-      fi
-      shutsDownAt=$(( activeUntil + ${toString (idleShutdownMinutes * 60)} ))
       idle=false
-      starting=false
-      if [ "$running" = true ] && [ $((locks + logins)) -eq 0 ]; then
-        idle=true
-        [ "$readyAt" -gt 0 ] || starting=true
-      fi
+      [ "$running" = true ] && [ $((locks + logins)) -eq 0 ] && idle=true
 
-      jq -cn --argjson locks "$locks" --argjson logins "$logins" --argjson idle "$idle" --argjson starting "$starting" \
-        --argjson shutsDownAt "$shutsDownAt" --argjson updated "$now" \
-        --argjson stopping "$([ -e ${shutdownRequested} ] && echo true || echo false)" \
-        --argjson idleAfter ${toString (idleShutdownMinutes * 60)} \
-        '{locks:$locks,logins:$logins,starting:$starting,stopping:$stopping,updated:$updated,idleAfter:$idleAfter,shutsDownAt:(if $idle then $shutsDownAt else null end)}' \
-        > ${idleStatus}.tmp
-      mv ${idleStatus}.tmp ${idleStatus}
-
-      if [ "$running" = false ]; then
-        keep-awake --release ${domainName}
-      elif [ "$idle" = true ]; then
+      if [ "$idle" = true ]; then
+        systemctl is-active -q ${idleCountdown}@"$run".timer ${idleCountdown}@"$run".service \
+          || systemctl start ${idleCountdown}@"$run".timer
         keep-awake --take ${domainName} --drain --for 3m --why "${domainName} idle" >/dev/null
       else
-        keep-awake --take ${domainName} --for 3m --why "${domainName} in use" >/dev/null
-      fi
-
-      if [ "$idle" = true ] && [ "$now" -ge "$shutsDownAt" ]; then
-        if [ ! -e ${shutdownRequested} ]; then
-          echo "$now" > ${shutdownRequested}
-          ${virsh} shutdown ${domainName}
-        elif [ $((now - $(cat ${shutdownRequested}))) -ge ${toString (shutdownGraceMinutes * 60)} ]; then
-          ${virsh} destroy ${domainName}
+        systemctl stop '${idleCountdown}@*.timer'
+        if [ "$running" = true ]; then
+          keep-awake --take ${domainName} --for 3m --why "${domainName} in use" >/dev/null
+        else
+          keep-awake --release ${domainName}
         fi
       fi
+
+      shutsDownAt=$(systemctl list-timers --output=json ${idleCountdown}@"$run".timer \
+        | jq '.[0].next // empty | . / 1000000 | floor') || true
+      stopping=false
+      systemctl is-active -q ${idleCountdown}@"$run".service && stopping=true
+
+      jq -cn --argjson locks "$locks" --argjson logins "$logins" \
+        --argjson starting "$([ "$idle" = true ] && [ "$readyAt" -eq 0 ] && echo true || echo false)" \
+        --argjson stopping "$stopping" --argjson updated "$(date +%s)" \
+        --argjson shutsDownAt "''${shutsDownAt:-null}" \
+        --argjson idleAfter ${toString (idleShutdownMinutes * 60)} \
+        '{locks:$locks,logins:$logins,starting:$starting,stopping:$stopping,updated:$updated,idleAfter:$idleAfter,shutsDownAt:$shutsDownAt}' \
+        > ${idleStatus}.tmp
+      mv ${idleStatus}.tmp ${idleStatus}
     '';
   };
 
@@ -487,6 +494,20 @@ in
     serviceConfig = {
       Type = "oneshot";
       ExecStart = lib.getExe shutdownWhenIdle;
+    };
+  };
+
+  systemd.timers."${idleCountdown}@" = {
+    timerConfig = {
+      OnActiveSec = "${toString idleShutdownMinutes}min";
+      RemainAfterElapse = false;
+    };
+  };
+
+  systemd.services."${idleCountdown}@" = {
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = "${lib.getExe shutdownRun} %i";
     };
   };
 
