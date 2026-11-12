@@ -6,6 +6,7 @@
   pkgs,
   pkgs-unstable,
   claude-code,
+  codex-cli,
   ...
 }:
 
@@ -29,7 +30,7 @@ in
         d.en-science
       ]))
       (pkgs-unstable.claude-agent-acp.override { inherit claude-code; })
-      pkgs-unstable.codex-acp
+      (pkgs-unstable.codex-acp.override { codex = codex-cli; })
       (pkgs.writeShellScriptBin "agda-desktop" ''
         remote_command='/home/max/.nix-profile/bin/direnv exec /home/max/part-iii/hazel-type-slicing-formalism agda'
         printf -v remote_args ' %q' "$@"

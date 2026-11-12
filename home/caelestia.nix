@@ -33,6 +33,7 @@ let
           ++ [
             ./patches/caelestia-wm.patch
             ./patches/caelestia-vpn.patch
+            ./patches/caelestia-click-popouts.patch
           ]
           ++ cfg.caelestia.patches;
         postPatch = (old.postPatch or "") + ''
