@@ -62,6 +62,11 @@
       url = "github:sdaqo/anipy-cli/v3.8.16";
     };
 
+    ani-cli = {
+      url = "github:pystardust/ani-cli";
+      flake = false;
+    };
+
     nixos-hardware.url = "github:NixOS/nixos-hardware";
 
     deploy-rs = {
@@ -194,6 +199,7 @@
             claude-code = inputs.claude-code.packages.${system}.default;
             codex-cli = inputs.codex-cli.packages.${system}.default;
             anipySrc = inputs.anipy-cli;
+            aniCliSrc = inputs.ani-cli;
             inherit inputs;
           };
         };

@@ -6,6 +6,7 @@
   curd,
   codex-cli,
   anipySrc,
+  aniCliSrc,
   ...
 }:
 
@@ -59,14 +60,17 @@ let
     dontCheckRuntimeDeps = true;
   };
 
+  aniCliUpstreamVersion = lib.pipe "${aniCliSrc}/ani-cli" [
+    builtins.readFile
+    (lib.splitString "\n")
+    (lib.findFirst (lib.hasPrefix "version_number=") "version_number=\"unknown\"")
+    (builtins.match "version_number=\"([^\"]*)\"")
+    lib.head
+  ];
+
   aniCliHianime = pkgs-unstable.ani-cli.overrideAttrs (old: {
-    version = "5.1.4-megaplay";
-    src = pkgs-unstable.fetchFromGitHub {
-      owner = "pystardust";
-      repo = "ani-cli";
-      rev = "dc43f329a8a19b4c82939d0c857aa8298cdafe55";
-      hash = "sha256-AoCdBsJ+cNhCiGzx47JnKFDvydLp+U1VM6oRRPm/2xE=";
-    };
+    version = "${aniCliUpstreamVersion}-megaplay";
+    src = aniCliSrc;
     patches = (old.patches or [ ]) ++ [ ./patches/ani-cli-megaplay.patch ];
     runtimeInputs = (old.runtimeInputs or [ ]) ++ [ pkgs-unstable.openssl ];
   });
