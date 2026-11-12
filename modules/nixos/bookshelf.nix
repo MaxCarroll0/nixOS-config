@@ -493,6 +493,20 @@ in
       };
     };
 
+    link = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = cfg.works.enable;
+        description = "Link contents lines to catalogue works and stream their IMSLP detail.";
+      };
+
+      startAt = lib.mkOption {
+        type = lib.types.str;
+        default = "*-*-* 04:30:00";
+        description = "When the daily link pass runs.";
+      };
+    };
+
     audit = {
       enable = lib.mkEnableOption "a daily report of rows breaking a rule the writes enforce";
 
@@ -896,6 +910,29 @@ in
       serviceConfig = hardening // {
         Type = "oneshot";
         ExecStart = "${lib.getExe cfg.package} --enrich-works --slice ${toString cfg.works.slice} --database ${cfg.databasePath}";
+        User = cfg.user;
+        Group = cfg.user;
+        MemoryMax = "192M";
+        WorkingDirectory = cfg.stateDir;
+        ReadWritePaths = [ cfg.stateDir ];
+        Nice = 19;
+        IOSchedulingClass = "idle";
+      };
+    };
+
+    systemd.services.bookshelf-link = lib.mkIf cfg.link.enable {
+      restartIfChanged = false;
+      description = "Link contents lines to catalogue works";
+      after = [
+        "network-online.target"
+        "bookshelf.service"
+      ];
+      wants = [ "network-online.target" ];
+      inherit environment;
+      startAt = cfg.link.startAt;
+      serviceConfig = hardening // {
+        Type = "oneshot";
+        ExecStart = "${lib.getExe cfg.package} --link --database ${cfg.databasePath}";
         User = cfg.user;
         Group = cfg.user;
         MemoryMax = "192M";
