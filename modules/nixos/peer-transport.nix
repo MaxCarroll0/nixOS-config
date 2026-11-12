@@ -23,6 +23,11 @@ let
         type = lib.types.str;
         description = "Stable Tailscale IPv4 address used outside the LAN.";
       };
+      sshPort = lib.mkOption {
+        type = lib.types.port;
+        default = 2222;
+        description = "OpenSSH port reached through the ${name}-lan alias.";
+      };
     };
   };
 
@@ -118,6 +123,16 @@ in
     };
 
     environment.systemPackages = [ connect ];
+
+    programs.ssh.extraConfig = lib.concatMapStrings (peer: ''
+      Host ${peer.name}-lan
+        HostName ${peer.name}
+        Port ${toString peer.sshPort}
+        HostKeyAlias ${peer.name}-lan
+        Ciphers aes128-gcm@openssh.com
+        Compression no
+        ProxyCommand ${connect}/bin/peer-connect %h %p
+    '') peers;
 
     systemd.services = lib.mapAttrs' (name: forward:
       let

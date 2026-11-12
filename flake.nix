@@ -269,9 +269,9 @@
         activationTimeout = 900;
 
         nodes = {
-          laptop = mkNode "laptop" "100.112.109.20" false;
-          desktopnew = mkNode "desktopnew" "100.106.140.88" false;
-          pi = mkNode "pi" "100.117.13.66" false;
+          laptop = mkNode "laptop" "laptop-lan" false;
+          desktopnew = mkNode "desktopnew" "desktopnew-lan" false;
+          pi = mkNode "pi" "pi-lan" false;
         };
       };
 
