@@ -57,7 +57,8 @@ let
       mkdir -p "$state"
       [ -d "$repo/.git" ] || git clone -q "$(git -C "$work" remote get-url origin)" "$repo"
 
-      platforms=$(printf '"%s" ' $(nix config show system) $(nix config show extra-platforms))
+      read -ra platformList <<< "$(nix config show system) $(nix config show extra-platforms)"
+      platforms=$(printf '"%s" ' "''${platformList[@]}")
 
       regressions() {
         jq -rn --slurpfile old "$1" --slurpfile new "$2" -f ${headRegressions}
