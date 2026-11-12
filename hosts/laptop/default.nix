@@ -55,6 +55,9 @@
 
   services.thermald.enable = true;
 
+  hardware.graphics.extraPackages = [ pkgs.intel-media-driver ];
+  environment.sessionVariables.LIBVA_DRIVER_NAME = "iHD";
+
   local.monitoring = {
     exporter.enable = true;
     smart.enable = true;
@@ -115,7 +118,11 @@
     }
   ];
   systemd.sleep.settings.Sleep.AllowHibernation = lib.mkForce true;
-  services.upower.criticalPowerAction = "Hibernate";
+  services.upower = {
+    criticalPowerAction = "Hibernate";
+    percentageCritical = 12;
+    percentageAction = 8;
+  };
   # The stock unit rewrites a resized swapfile with dd, outlasting the swap device's 90s timeout.
   systemd.services.mkswap-swapfile.preStart = ''
     if [[ "$(stat -c %s /swapfile 2>/dev/null || echo 0)" != "$((12 * 1024 * 1024 * 1024))" ]] \
