@@ -6,3 +6,4 @@ result-*
 \#*\#
 TAGS
 __pycache__/
+.claude/
