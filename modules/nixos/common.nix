@@ -232,6 +232,8 @@ in
       };
     };
 
+    systemd.services.nh-clean.serviceConfig.ExecCondition = "${pkgs.bash}/bin/sh -c 'test \"$(${pkgs.coreutils}/bin/df --output=avail -B1G /nix/store | tail -n1)\" -lt 20'";
+
     systemd.services.nh-clean.preStart = /* bash */ ''
       ${projectClosureRetention}/bin/project-closure-retention --apply
     '';
