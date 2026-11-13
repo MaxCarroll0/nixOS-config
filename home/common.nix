@@ -167,8 +167,10 @@ let
     '';
   };
 
+  lazyFlake = "/home/max/.config/nix";
+
   # Run the call apps under the novpn group (split tunnel, see configuration.nix).
-  zoom-novpn = pkgs.writeShellScriptBin "zoom-novpn" ''
+  zoomNovpnEager = pkgs.writeShellScriptBin "zoom-novpn" ''
     export ZOOM_URL="$1"
     if [ -n "$ZOOM_URL" ]; then
       exec /run/wrappers/bin/sg novpn -c '${pkgs.zoom-us}/bin/zoom "$ZOOM_URL"'
@@ -176,6 +178,25 @@ let
       exec /run/wrappers/bin/sg novpn -c '${pkgs.zoom-us}/bin/zoom'
     fi
   '';
+
+  zoomNovpnLazy = pkgs.writeShellScriptBin "zoom-novpn" ''
+    export ZOOM_URL="$1"
+    out="${lazyFlake}/result-lazy-zoom"
+    if [ ! -x "$out/bin/zoom" ]; then
+      ${pkgs.libnotify}/bin/notify-send "Zoom" "Preparing Zoom, the first launch takes a minute"
+      if ! nix build --out-link "$out" "${lazyFlake}#zoom-us"; then
+        ${pkgs.libnotify}/bin/notify-send "Zoom" "Build failed"
+        exit 1
+      fi
+    fi
+    if [ -n "$ZOOM_URL" ]; then
+      exec /run/wrappers/bin/sg novpn -c "\"$out/bin/zoom\" \"\$ZOOM_URL\""
+    else
+      exec /run/wrappers/bin/sg novpn -c "\"$out/bin/zoom\""
+    fi
+  '';
+
+  zoomNovpn = if config.local.lazy.zoom.enable then zoomNovpnLazy else zoomNovpnEager;
 
   # Tab Session Manager is built from source with backup defaults patched in; it has no managed-storage schema.
   tabSessionManager = pkgs.callPackage ../pkgs/tab-session-manager.nix { };
@@ -225,6 +246,7 @@ in
     ./hyprland.nix
     ./workspaces.nix
     ./nas-alerts.nix
+    ./lazy.nix
   ];
 
   fonts.fontconfig.enable = true;
@@ -235,7 +257,7 @@ in
     chromium
     curdWrapped
     curd-cf-refresh
-    zoom-novpn
+    zoomNovpn
     google-meet
     pkgs.discord
     arxiv-latex-mcp

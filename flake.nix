@@ -290,10 +290,19 @@
               inherit lib;
               variant = "stock";
             };
+            x86_64-linux.build-offload = (pkgsFor "x86_64-linux").runCommand "build-offload-test" {
+              nativeBuildInputs = [ (pkgsFor "x86_64-linux").python3 ];
+            } ''
+              python3 ${./tests/build-offload.py} ${./modules/nixos}
+              python3 ${./tests/nix-observer-wake.py} ${./modules/nixos}
+              touch $out
+            '';
           };
 
       packages.x86_64-linux = {
         deploy-rs = inputs.deploy-rs.packages.x86_64-linux.default;
+
+        zoom-us = (pkgsFor "x86_64-linux").zoom-us;
 
         bookshelf = inputs.bookshelf.packages.x86_64-linux.default;
 

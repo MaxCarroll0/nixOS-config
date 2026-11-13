@@ -43,16 +43,37 @@ uncommitted snapshot is not upgraded over.
 
 desktopnew builds for the other hosts. It is only woken for builds worth the wake, and a build
 proceeds locally if it cannot be reached. Project builds (cabal, dune, cargo, ...) can run there
-too; the choice is made from the measured local build time, so small builds stay local.
+too; the choice is made from the measured local build time, so small builds stay local. A
+remote build's outputs stay on desktopnew and are fetched on demand; the builder keeps the
+project's tree, artefacts and dev shell between runs and drops them only under disk pressure.
 
 | Command | Does |
 |---|---|
 | `dev-build CMD` | run a project's own build here or on desktopnew |
+| `dev-build ls`, `cat PATH`, `get PATH` | list, print or copy what the remote build wrote |
+| `dev-build run [-p PORT] CMD` | run a command on desktopnew in the project, with PORT forwarded here |
+| `dev-build status` | timings, where each command last ran, whether desktopnew still holds the tree |
 | `vm-guard CMD` | run a heavy command on desktopnew without lagging the game VM |
 | `nix-watch LOG` | one progress line a minute from a captured build log |
 
-Source: `modules/nixos/build-client.nix`, `build-offload.py`, `dev-build.nix`, `vm-guard.nix`,
+Source: `modules/nixos/build-client.nix`, `build-offload.py`, `dev-build.sh`, `vm-guard.nix`,
 `nix-observer.nix`, `server/build-host.nix`.
+
+## Disk
+
+Space is reclaimed continuously rather than by one nightly sweep: the laptop collects in small
+steps whenever free space drops under its target, including when files are added, and the
+nightly clean only runs under pressure. Anything rederivable is fair game, ordered by cost:
+quick project builds first, fetched sources last, toolchains and other slow builds kept while
+space allows. The last cleanly booted generation is always kept. The performance tab of the
+desktop shell shows the store by those tiers and the space taken by real files.
+
+| Command | Does |
+|---|---|
+| `project-closure-retention` | report or evict project closures by tier against the budget |
+| `project-scratch-clean` | report or remove recorded build artefacts, scratch dirs and caches |
+
+Source: `modules/nixos/disk.nix` and the scripts beside it.
 
 ## Power
 
