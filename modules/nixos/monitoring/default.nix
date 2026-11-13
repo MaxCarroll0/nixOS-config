@@ -251,7 +251,7 @@ in
     exporter.hwmonChipExclude = lib.mkOption {
       type = lib.types.str;
       default = "";
-      description = "Additional regex of hwmon chips node_exporter must not read.";
+      description = "Regex of hwmon chips that node_exporter must not read; default empty.";
     };
 
     exporter.scrapeCadenceOverrides = lib.mkOption {
@@ -261,26 +261,26 @@ in
             collector = lib.mkOption {
               type = lib.types.enum [ "hwmon" ];
               default = "hwmon";
-              description = "Collector whose metrics use the overridden cadence.";
+              description = "Collector whose metrics use the overridden scrape cadence; default hwmon.";
             };
             match = lib.mkOption {
               type = lib.types.str;
-              description = "Regex matching node_exporter chip labels assigned to this cadence.";
+              description = "Regex matching the node_exporter chip labels that use this cadence.";
             };
             interval = lib.mkOption {
               type = lib.types.str;
-              description = "Systemd duration between samples.";
+              description = "Systemd time span between samples, for example 5s.";
             };
             onlyWhenActive = lib.mkOption {
               type = lib.types.bool;
               default = false;
-              description = "Sample matched drive sensors only while their disk is active.";
+              description = "Whether matched drive sensors are sampled only while their disk is active; default off.";
             };
           };
         }
       );
       default = { };
-      description = "Named metric-source overrides sampled independently of the main exporter cadence.";
+      description = "Named scrape cadence overrides, sampled independently of the main exporter cadence; default none.";
     };
 
     server.enable = lib.mkEnableOption "the Prometheus tiers";
@@ -290,23 +290,22 @@ in
     grafana.domain = lib.mkOption {
       type = lib.types.str;
       default = "localhost";
-      description = "Name Grafana believes it is served as, which its redirects are built from.";
+      description = "Hostname Grafana believes it is served as, used to build redirects; default localhost.";
     };
 
     grafana.anonymousViewer = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = "Let a request carrying no identity read the dashboards.";
+      description = "Whether a request without an identity may read the dashboards; default off.";
     };
 
     piFirmware.enable = lib.mkEnableOption "Raspberry Pi firmware and PMIC telemetry";
 
-    # Linux 5.10 made these root-only over the PLATYPUS side channel; without
-    # this the rapl collector sees nothing.
+    # Since Linux 5.10 the RAPL counters are root-only; the rapl collector sees nothing otherwise.
     userReadable = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = "Relax RAPL energy counters to the powermon group.";
+      description = "Whether the RAPL energy counters are readable by the powermon group; default off.";
     };
 
     sensorNames = lib.mkOption {
@@ -315,7 +314,7 @@ in
       example = {
         "k10temp:temp1" = "CPU Tctl";
       };
-      description = "Map of \"chip:sensor\" to the caption shown on graphs.";
+      description = "Map of chip:sensor to the caption shown on graphs; default none.";
     };
 
     targets = lib.mkOption {
@@ -324,14 +323,14 @@ in
       example = {
         pi = "${facts.pi.tailscale}:9100";
       };
-      description = "Extra node_exporter instances to scrape, keyed by instance label.";
+      description = "Extra node_exporter targets to scrape, as host:port keyed by instance label; default none.";
     };
 
     totalPower = {
       tariffPencePerKwh = lib.mkOption {
         type = lib.types.number;
         default = 25;
-        description = "Electricity price used for the cost panels.";
+        description = "Electricity price in pence per kWh used for the cost panels; default 25.";
       };
     };
 
@@ -339,13 +338,13 @@ in
       hires = lib.mkOption {
         type = lib.types.str;
         default = "7d";
-        description = "How long the 1-second tier is kept.";
+        description = "Retention of the 1-second tier; default 7d.";
       };
 
       longterm = lib.mkOption {
         type = lib.types.str;
         default = "2y";
-        description = "How long the 1-minute tier is kept.";
+        description = "Retention of the 1-minute tier; default 2y.";
       };
     };
 
@@ -353,84 +352,84 @@ in
       cpuTempCelsius = lib.mkOption {
         type = lib.types.number;
         default = 85;
-        description = "CPU temperature that raises a warning.";
+        description = "CPU temperature in degrees Celsius that raises a warning; default 85.";
       };
       cpuCriticalCelsius = lib.mkOption {
         type = lib.types.number;
         default = 95;
-        description = "CPU temperature that raises a critical alert.";
+        description = "CPU temperature in degrees Celsius that raises a critical alert; default 95.";
       };
       gpuTempCelsius = lib.mkOption {
         type = lib.types.number;
         default = 90;
-        description = "GPU temperature that raises a warning.";
+        description = "GPU temperature in degrees Celsius that raises a warning; default 90.";
       };
       nvmeTempCelsius = lib.mkOption {
         type = lib.types.number;
         default = 70;
-        description = "NVMe temperature that raises a warning.";
+        description = "NVMe temperature in degrees Celsius that raises a warning; default 70.";
       };
       driveTempCelsius = lib.mkOption {
         type = lib.types.number;
         default = 50;
-        description = "Spinning disk temperature that raises a warning.";
+        description = "Spinning disk temperature in degrees Celsius that raises a warning; default 50.";
       };
       vrmTempCelsius = lib.mkOption {
         type = lib.types.number;
         default = 100;
-        description = "Board VRM temperature that raises a warning.";
+        description = "Board VRM temperature in degrees Celsius that raises a warning; default 100.";
       };
       powerWatts = lib.mkOption {
         type = lib.types.number;
         default = 400;
-        description = "Sustained total draw that raises a warning.";
+        description = "Sustained total draw in watts that raises a warning; default 400.";
       };
       filesystemFreeRatio = lib.mkOption {
         type = lib.types.number;
         default = 0.1;
-        description = "Free space fraction below which a filesystem alerts.";
+        description = "Free space fraction below which a filesystem alerts; default 0.1.";
       };
 
       inodeFreeRatio = lib.mkOption {
         type = lib.types.number;
         default = 0.1;
-        description = "Free inode fraction below which a filesystem alerts.";
+        description = "Free inode fraction below which a filesystem alerts; default 0.1.";
       };
 
       reallocatedSectors = lib.mkOption {
         type = lib.types.number;
         default = 0;
-        description = "Remapped sector count a drive may reach before alerting.";
+        description = "Reallocated sector count at which a drive alerts; default 0.";
       };
 
       smartStaleSeconds = lib.mkOption {
         type = lib.types.number;
         default = 172800;
-        description = "Age of the newest SMART read before a drive is treated as unreadable.";
+        description = "Seconds since the newest SMART read after which a drive counts as unreadable; default 172800.";
       };
 
       ssdWearRatio = lib.mkOption {
         type = lib.types.number;
         default = 0.8;
-        description = "Fraction of rated write endurance consumed before alerting.";
+        description = "Fraction of rated write endurance consumed at which a drive alerts; default 0.8.";
       };
 
       thrashScore = lib.mkOption {
         type = lib.types.number;
         default = 0.25;
-        description = "Combined major-fault and memory-stall score that counts as thrashing.";
+        description = "Pressure score at which the machine counts as thrashing; default 0.25.";
       };
 
       swapInPagesPerSecond = lib.mkOption {
         type = lib.types.number;
         default = 200;
-        description = "Sustained pages read back from swap per second before alerting.";
+        description = "Pages per second read back from swap at which an alert fires; default 200.";
       };
 
       diskLatencySeconds = lib.mkOption {
         type = lib.types.number;
         default = 0.5;
-        description = "Mean read latency above which a drive alerts.";
+        description = "Mean read latency in seconds above which a drive alerts; default 0.5.";
       };
     };
   };
@@ -536,7 +535,6 @@ in
       };
     })
 
-    # node_exporter runs as its own user, so it needs the group too.
     (lib.mkIf cfg.userReadable {
       users.groups.powermon = { };
       users.users.max.extraGroups = [ "powermon" ];
@@ -792,8 +790,7 @@ in
         };
       };
 
-      # admin_password only applies when grafana first creates its database, so an existing
-      # install keeps the old password and the break-glass path silently does not work.
+      # admin_password applies only when Grafana first creates its database.
       systemd.services.grafana-admin-password = {
         description = "Reset the Grafana admin password from sops";
         wantedBy = [ "multi-user.target" ];
