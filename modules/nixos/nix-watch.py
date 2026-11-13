@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # One status line per minute for a nix build or deploy log written with NIX_OBSERVER_PLAIN=1.
-# Progress goes to stderr; stdout carries only STALLED, FLAT, verdict and EXIT lines.
+# Every line names the stage, its progress, the current derivation, log growth, elapsed and time in stage.
 
 import argparse
 import os
@@ -32,6 +32,8 @@ def stage_of(data, tail):
         return "COPY"
     if b"from 'https://" in tail:
         return "DOWNLOAD"
+    if b"from 'ssh://" in tail:
+        return "SEED"
     if b'"action":"start"' in tail and b".drv" in tail:
         return "BUILD"
     if b'"type":112' in tail:
@@ -59,12 +61,17 @@ def sample(path):
     }, tail
 
 
-def describe(signals, delta, stalled, tail):
+def minutes(seconds):
+    return "%dm" % round(seconds / 60)
+
+
+def describe(signals, delta, stalled, tail, started, stage_since):
     done, expected, running, failed = signals["progress"]
     pct = f"{done * 100 // expected}% ({done}/{expected})" if expected else "n/a"
     alarms = ALARM.findall(tail)
     head = "STALLED %d" % stalled if stalled else signals["stage"]
-    line = "%s %s %s %s run=%d fail=%d +%dB" % (
+    now = time.time()
+    line = "%s %s %s %s run=%d fail=%d +%dB t=%s stage=%s" % (
         datetime.now().strftime("%H:%M:%S"),
         head,
         pct,
@@ -72,6 +79,8 @@ def describe(signals, delta, stalled, tail):
         running,
         failed,
         delta,
+        minutes(now - started),
+        minutes(now - stage_since),
     )
     if alarms:
         line += " | " + alarms[-1].decode(errors="replace").strip()[:160]
@@ -91,7 +100,7 @@ def launch(log, command):
             env=env,
             start_new_session=True,
         )
-    print("launched pid=%d log=%s: %s" % (child.pid, log, " ".join(command)), file=sys.stderr, flush=True)
+    print("launched pid=%d log=%s: %s" % (child.pid, log, " ".join(command)), flush=True)
 
 
 def main():
@@ -102,26 +111,35 @@ def main():
         argv, command = argv[:split], argv[split + 1 :]
     parser = argparse.ArgumentParser(
         prog="nix-watch",
-        usage="nix-watch [--interval SECONDS] LOG [-- COMMAND ...]",
-        description="One status line per minute for a nix log. With a COMMAND, start it detached into LOG first.",
+        usage="nix-watch [--interval SECONDS] [--ticks N] LOG [-- COMMAND ...]",
+        description="One status line per minute for a nix log. With a COMMAND, start it detached into LOG first; with --ticks, return after N lines (exit 3) while it runs.",
     )
     parser.add_argument("log")
     parser.add_argument("--interval", type=float, default=60.0, help="seconds between lines")
+    parser.add_argument("--ticks", type=int, default=0, help="return after this many lines with exit 3 while the job runs")
     options = parser.parse_args(argv)
     if command:
         launch(options.log, command)
     flat = {"bytes": 0, "progress": 0, "drv": 0, "stage": 0}
     previous = None
+    started = time.time()
+    stage_since = started
+    ticks = 0
     while True:
+        if options.ticks and ticks >= options.ticks:
+            print("RUNNING log=%s" % options.log, flush=True)
+            return 3
         data, signals, tail = sample(options.log)
         delta = signals["bytes"] - (previous["bytes"] if previous else 0)
         if previous is not None:
             for key in flat:
                 flat[key] = flat[key] + 1 if signals[key] == previous[key] else 0
+            if signals["stage"] != previous["stage"]:
+                stage_since = time.time()
         exits = EXIT.findall(data)
         if exits:
             verdicts = VERDICT.findall(data)
-            print(describe(signals, delta, 0, tail), file=sys.stderr, flush=True)
+            print(describe(signals, delta, 0, tail, started, stage_since), flush=True)
             if verdicts:
                 print("verdict: " + VERDICT.search(data).group(0).decode(errors="replace"), flush=True)
             print("EXIT=%s log=%s" % (exits[-1].decode(), options.log), flush=True)
@@ -134,8 +152,11 @@ def main():
             )
             return 2
         stalled = flat["bytes"] if flat["bytes"] >= STALL_MINUTES else 0
-        print(describe(signals, delta, stalled, tail), file=sys.stdout if stalled else sys.stderr, flush=True)
+        print(describe(signals, delta, stalled, tail, started, stage_since), flush=True)
         previous = signals
+        ticks += 1
+        if options.ticks and ticks >= options.ticks:
+            continue
         time.sleep(options.interval)
 
 

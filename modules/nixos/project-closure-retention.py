@@ -39,6 +39,7 @@ class Project:
     roots: list[Path] = field(default_factory=list)
     store_paths: list[str] = field(default_factory=list)
     last_used: float = 0
+    last_built: float = 0
     closure: set[str] = field(default_factory=set)
 
 
@@ -92,7 +93,14 @@ def discover_projects(gcroots: Path) -> dict[Path, Project]:
         project = projects.setdefault(project_path, Project(project_path))
         project.roots.append(target)
         project.store_paths.append(store_path)
-        project.last_used = max(project.last_used, target.lstat().st_mtime)
+        link = target.lstat()
+        used = [link.st_mtime, link.st_atime]
+        try:
+            used.append(os.stat(store_path).st_atime)
+        except OSError:
+            pass
+        project.last_used = max(project.last_used, *used)
+        project.last_built = max(project.last_built, link.st_mtime)
     return projects
 
 
@@ -168,6 +176,8 @@ def plan(
         victim, totals = max(
             options,
             key=lambda option: (
+                int((now - option[0].last_used) // DAY),
+                now - option[0].last_built,
                 option[1][2] == 0,
                 option[1][1] > 0,
                 option[1][1] + option[1][3],
@@ -283,7 +293,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true", help="ask angrr to remove selected roots")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--gcroots", type=Path, default=Path("/nix/var/nix/gcroots/auto"))
-    parser.add_argument("--protect-days", type=int, default=3)
+    parser.add_argument("--protect-days", type=int, default=0)
     parser.add_argument("--budget-gib", type=int, help="evict until retained project closures fit")
     parser.add_argument("--need-gib", type=int, help="evict until this much is freed")
     parser.add_argument("--max-freed-gib", type=int, default=40, help="bound on --need-gib")
