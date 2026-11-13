@@ -1,4 +1,4 @@
-# Nix build hook: build locally while a sleeping builder wakes, then hand the rest over.
+# Nix build hook: build locally while the builder wakes, then hand everything remaining over to it.
 
 import fcntl
 import json
@@ -13,22 +13,6 @@ STATE_DIR = os.environ.get("NIX_OFFLOAD_STATE", "/run/nix-offload")
 MACHINES = os.path.join(STATE_DIR, "machines")
 # preferLocalBuild is present but empty when false; structuredAttrs puts it in __json.
 LOCAL_ONLY = (b'"preferLocalBuild","1"', b'"preferLocalBuild":true')
-HEAVY = (
-    "linux-",
-    "emacs-",
-    "ghc-",
-    "llvm-",
-    "clang-",
-    "gcc-",
-    "rustc-",
-    "chromium-",
-    "firefox-",
-    "electron-",
-    "qtwebengine-",
-    "webkitgtk-",
-)
-
-
 def read_exact(count):
     out = bytearray()
     while len(out) < count:
@@ -115,10 +99,6 @@ def offloadable(drv):
     except OSError:
         return False
     return not any(marker in content for marker in LOCAL_ONLY)
-
-
-def heavy(drv):
-    return os.path.basename(drv).split("-", 1)[-1].startswith(HEAVY)
 
 
 def detached(argv):
@@ -314,7 +294,7 @@ class Offload:
 
             builders, asleep = self.reachable()
             worthwhile = offloadable(drv)
-            if worthwhile and heavy(drv) and self.usable(asleep, system, features):
+            if worthwhile and self.usable(asleep, system, features):
                 self.wake(asleep)
             if worthwhile and self.usable(builders, system, features):
                 self.hold_awake(builders)
@@ -322,7 +302,7 @@ class Offload:
                 self.stop_child()
             if not builders:
                 if self.usable(asleep, system, features) and self.announce_once("unreachable"):
-                    self.notify("1;31", "no builder reachable: building locally")
+                    self.notify("1;31", "no builder reachable: building locally until one answers")
                 self.answer("decline")
                 continue
             if not self.child:

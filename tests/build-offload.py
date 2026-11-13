@@ -80,7 +80,7 @@ def run(tmp, replies, probe, requests, grace=0, machines=None, setting="@/dev/nu
         "builders": [
             {
                 "host": "desktopnew",
-                "systems": ["x86_64-linux"],
+                "systems": ["x86_64-linux", "aarch64-linux"],
                 "features": ["big-parallel", "kvm"],
                 "uri": "ssh-ng://nixremote@desktopnew-builder",
                 "probe": ["true"] if probe else ["false"],
@@ -139,14 +139,20 @@ def main():
         verdicts, _, woken = run(
             case("asleep"), ["# decline\n"], False, [request(drv=str(heavy))], grace=0
         )
-        failures += check("unreachable builder declines locally", verdicts, ["decline"])
+        failures += check("a heavy build proceeds locally while the builder wakes", verdicts, ["decline"])
         failures += check("unreachable builder is woken for a heavy build", woken, True)
+
+        verdicts, _, woken = run(
+            case("foreign"), ["# decline\n"], False, [request(system="aarch64-linux", drv=str(light))], grace=0
+        )
+        failures += check("a foreign system proceeds locally while the builder wakes", verdicts, ["decline"])
+        failures += check("a foreign system wakes the builder", woken, True)
 
         verdicts, _, woken = run(
             case("light"), ["# decline\n"], False, [request(drv=str(light))], grace=0
         )
-        failures += check("a light build does not wake the builder", woken, False)
-        failures += check("a light build still declines locally", verdicts, ["decline"])
+        failures += check("a light build wakes the builder too", woken, True)
+        failures += check("a light build proceeds locally while the builder wakes", verdicts, ["decline"])
 
         verdicts, _, _ = run(
             case("grace"), ["# decline\n"], True, [request()], grace=600
@@ -162,7 +168,7 @@ def main():
             case("unsupported"),
             ["# decline\n"],
             True,
-            [request(system="aarch64-linux")],
+            [request(system="riscv64-linux")],
             grace=0,
         )
         failures += check(
