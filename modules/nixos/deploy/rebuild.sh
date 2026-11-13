@@ -157,7 +157,8 @@ if [ -n "$target" ]; then
     fi
   fi
 
-  export NIX_CONFIG="accept-flake-config = true"
+  export NIX_CONFIG="accept-flake-config = true
+eval-cache = false"
 
   # shellcheck disable=SC2194
   case " $REBUILD_WAKE_PEERS " in
@@ -169,6 +170,22 @@ if [ -n "$target" ]; then
 
   deployTarget="$source#$target"
   [ -n "$profile" ] && deployTarget="$source#$target.$profile"
+
+  live=$(timeout 30 ssh -o BatchMode=yes "$target" 'readlink -f /run/current-system ~/.local/state/nix/profiles/home-manager 2>/dev/null' 2>/dev/null || true)
+  if [ -n "$live" ]; then
+    echo "seeding the store with what $target runs"
+    # shellcheck disable=SC2086
+    nix copy --no-check-sigs --from "ssh://$target" $live || echo "warning: could not copy $target's live closure; unchanged paths may rebuild" >&2
+  fi
+
+  rootsDir="$stateDir/roots"
+  mkdir -p "$rootsDir"
+  rootProfiles=(system home)
+  [ -n "$profile" ] && rootProfiles=("$profile")
+  for rootProfile in "${rootProfiles[@]}"; do
+    echo "building $target $rootProfile profile, rooted at $rootsDir/$target-$rootProfile"
+    nix build --out-link "$rootsDir/$target-$rootProfile" "${pinArgs[@]}" "$source#deploy.nodes.$target.profiles.$rootProfile.path"
+  done
 
   deployAuthOpts=()
   if [ "${REBUILD_SSH_AGENT_SUDO:-0}" = 1 ]; then
