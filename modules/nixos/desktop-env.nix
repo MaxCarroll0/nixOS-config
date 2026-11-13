@@ -28,12 +28,22 @@ let
       { passthru.providedSessions = [ "hyprland-nowait" ]; };
 
   # KDE askpass keeps sudo passwords out of the invoking terminal.
+  askpassTimed = pkgs.writeShellApplication {
+    name = "askpass-timed";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      status=0
+      timeout 180 ${askpass} "$@" || status=$?
+      if [ "$status" -eq 124 ]; then
+        echo "askpass: timed out after 3m" >&2
+      fi
+      exit "$status"
+    '';
+  };
+
   sudoRequest = pkgs.writeShellApplication {
     name = "sudo-request";
-    runtimeInputs = [
-      pkgs.kdePackages.ksshaskpass
-      pkgs.tailscale
-    ];
+    runtimeInputs = [ pkgs.tailscale ];
     text = ''
       if [ "''${1:-}" = "--host" ]; then
         if [ "$#" -lt 3 ]; then
@@ -43,22 +53,30 @@ let
         host="$2"
         shift 2
         printf -v command '%q ' "$@"
-        password="$(${askpass} "Authorize sudo on $host: $command")" || exit
-        [ -n "$password" ] || exit 1
-        printf '%s\n' "$password" \
-          | tailscale ssh "$host" "/run/wrappers/bin/sudo -k; /run/wrappers/bin/sudo -S -p \"\" -- $command; status=\$?; /run/wrappers/bin/sudo -k; exit \$status"
-        status=$?
-        unset password
+        prompt="Authorize sudo on $host: $command"
+        sudoCommand=(tailscale ssh "$host" "/run/wrappers/bin/sudo -k; /run/wrappers/bin/sudo -S -p \"\" -- $command; status=\$?; /run/wrappers/bin/sudo -k; exit \$status")
       else
         if [ "$#" -eq 0 ]; then
           echo "usage: sudo-request COMMAND [ARG ...]" >&2
           exit 2
         fi
-        /run/wrappers/bin/sudo -k
-        status=0
-        SUDO_ASKPASS=${askpass} /run/wrappers/bin/sudo --askpass -- "$@" || status=$?
-        /run/wrappers/bin/sudo -k
+        printf -v command '%q ' "$@"
+        prompt="Authorize sudo: $command"
+        sudoCommand=(/run/wrappers/bin/sudo -S -p "" -- "$@")
       fi
+
+      status=0
+      password="$(${lib.getExe askpassTimed} "$prompt")" || status=$?
+      if [ "$status" -eq 124 ]; then
+        echo "sudo-request: timed out" >&2
+        exit 124
+      fi
+      [ "$status" -eq 0 ] && [ -n "$password" ] || exit 1
+
+      status=0
+      printf '%s\n' "$password" | "''${sudoCommand[@]}" || status=$?
+      unset password
+      /run/wrappers/bin/sudo -k
       exit "$status"
     '';
   };
@@ -72,7 +90,7 @@ let
         exit 2
       fi
 
-      export SSH_ASKPASS=${askpass}
+      export SSH_ASKPASS=${lib.getExe askpassTimed}
       export SSH_ASKPASS_REQUIRE=force
       export DISPLAY="''${DISPLAY:-:0}"
       export REBUILD_SSH_AGENT_SUDO=1
@@ -120,7 +138,7 @@ let
 
       SSH_AUTH_SOCK="$agentSocket" ${sshAdd} -D >/dev/null
       SSH_AUTH_SOCK="$agentSocket" \
-        SSH_ASKPASS=${askpass} \
+        SSH_ASKPASS=${lib.getExe askpassTimed} \
         SSH_ASKPASS_REQUIRE=force \
         DISPLAY="''${DISPLAY:-:0}" \
         ${sshAdd} -t "$duration" "$HOME/.ssh/id_ed25519"
