@@ -17,8 +17,8 @@ let
   freeGiB =
     {
       laptop = {
-        min = 20;
-        max = 40;
+        min = 5;
+        max = 10;
       };
       desktopnew = {
         min = 40;

@@ -41,8 +41,8 @@ uncommitted snapshot is not upgraded over.
 
 ## Builds
 
-desktopnew builds for the other hosts. It is only woken for builds worth the wake, and a build
-proceeds locally if it cannot be reached. Project builds (cabal, dune, cargo, ...) can run there
+desktopnew builds for the other hosts. Any derivation nix allows to leave the host wakes it; the
+build proceeds locally until it answers and everything still pending then goes to it. Project builds (cabal, dune, cargo, ...) can run there
 too; the choice is made from the measured local build time, so small builds stay local. A
 remote build's outputs stay on desktopnew and are fetched on demand; the builder keeps the
 project's tree, artefacts and dev shell between runs and drops them only under disk pressure.
@@ -54,23 +54,25 @@ project's tree, artefacts and dev shell between runs and drops them only under d
 | `dev-build run [-p PORT] CMD` | run a command on desktopnew in the project, with PORT forwarded here |
 | `dev-build status` | timings, where each command last ran, whether desktopnew still holds the tree |
 | `vm-guard CMD` | run a heavy command on desktopnew without lagging the game VM |
-| `nix-watch LOG` | one progress line a minute from a captured build log |
+| `nix-watch LOG [-- CMD]` | one progress line a minute from a build log, starting CMD into it first if given |
 
 Source: `modules/nixos/build-client.nix`, `build-offload.py`, `dev-build.sh`, `vm-guard.nix`,
 `nix-observer.nix`, `server/build-host.nix`.
 
 ## Disk
 
-Space is reclaimed continuously rather than by one nightly sweep: the laptop collects in small
-steps whenever free space drops under its target, including when files are added, and the
-nightly clean only runs under pressure. Anything rederivable is fair game, ordered by cost:
-quick project builds first, fetched sources last, toolchains and other slow builds kept while
-space allows. The last cleanly booted generation is always kept. The performance tab of the
-desktop shell shows the store by those tiers and the space taken by real files.
+Space is reclaimed only under pressure and least recently used first: whenever free space drops
+under the target, including when files are added, the laptop reclaims just the deficit, taking
+recorded build artefacts, scratch dirs and caches first, then whole project closures, then dead
+store paths, each oldest-use first. Nothing is deleted for age alone; generations are expired
+daily to the last ten. Every deploy roots the deployed closure of its target here, so an
+unchanged host never rebuilds. The performance tab of the desktop shell shows the store by tier
+and the space taken by real files.
 
 | Command | Does |
 |---|---|
 | `project-closure-retention` | report or evict project closures by tier against the budget |
+| `store-collect --need-gib N` | report or delete dead store paths, oldest first, until N GiB is freed |
 | `project-scratch-clean` | report or remove recorded build artefacts, scratch dirs and caches |
 
 Source: `modules/nixos/disk.nix` and the scripts beside it.

@@ -26,6 +26,17 @@ let
     '';
   };
 
+  collect = pkgs.writeShellApplication {
+    name = "store-collect";
+    runtimeInputs = [
+      config.nix.package
+      pkgs.python3
+    ];
+    text = ''
+      exec python3 ${./store-collect.py} "$@"
+    '';
+  };
+
   scratchClean = pkgs.writeShellApplication {
     name = "project-scratch-clean";
     runtimeInputs = [
@@ -58,7 +69,7 @@ let
     '';
   };
 
-  freeGiB = ''df --output=avail -B1G /nix/store | tail -n1'';
+  freeGiB = "df --output=avail -B1G /nix/store | tail -n1";
 
   resourceLimits = {
     CPUWeight = "idle";
@@ -116,14 +127,32 @@ in
   };
 
   config = {
-    environment.systemPackages = [ scratchClean ];
+    environment.systemPackages = [
+      collect
+      scratchClean
+    ];
 
-    systemd.services.nh-clean = {
-      preStart = ''
-        ${cfg.retention}/bin/project-closure-retention --apply
+    systemd.services.generation-expire = {
+      description = "Keep the last 10 generations of every profile";
+      path = [ config.nix.package ];
+      serviceConfig = resourceLimits // {
+        Type = "oneshot";
+      };
+      script = ''
+        for profile in /nix/var/nix/profiles/system /nix/var/nix/profiles/default \
+            /nix/var/nix/profiles/per-user/*/* ${home}/.local/state/nix/profiles/*; do
+          case "$profile" in *-link) continue ;; esac
+          [ -L "$profile" ] || continue
+          nix-env --profile "$profile" --delete-generations +10
+        done
       '';
-      serviceConfig = resourceLimits // lib.optionalAttrs pressure.enable {
-        ExecCondition = "${pkgs.bash}/bin/sh -c 'test \"$(${freeGiB})\" -lt ${toString pressure.minFreeGiB}'";
+    };
+
+    systemd.timers.generation-expire = {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = "daily";
+        Persistent = true;
       };
     };
 
@@ -137,16 +166,18 @@ in
         Type = "oneshot";
       };
       script = ''
-        free=$(${freeGiB})
-        if [ "$free" -ge ${toString pressure.minFreeGiB} ]; then
-          exit 0
-        fi
-        deficit=$(( ${toString pressure.minFreeGiB} - free + 5 ))
-        if [ "$deficit" -gt ${toString pressure.maxFreedGiB} ]; then
-          deficit=${toString pressure.maxFreedGiB}
-        fi
-        ${cfg.retention}/bin/project-closure-retention --apply --need-gib "$deficit" --max-freed-gib ${toString pressure.maxFreedGiB}
-        nix-collect-garbage --max-freed $(( deficit * ${toString gib} ))
+        reclaim() {
+          local free need
+          free=$(${freeGiB})
+          [ "$free" -lt ${toString pressure.minFreeGiB} ] || exit 0
+          need=$(( ${toString pressure.minFreeGiB} - free + 5 ))
+          [ "$need" -le ${toString pressure.maxFreedGiB} ] || need=${toString pressure.maxFreedGiB}
+          "$@" "$need"
+        }
+        reclaim ${pkgs.util-linux}/bin/runuser -u ${cfg.user} -- ${lib.getExe scratchClean} \
+          --apply --home ${home} --state ${home}/.local/state/dev-build --need-gib
+        reclaim ${cfg.retention}/bin/project-closure-retention --apply --max-freed-gib ${toString pressure.maxFreedGiB} --need-gib
+        reclaim ${lib.getExe collect} --apply --need-gib
       '';
     };
 
@@ -186,10 +217,10 @@ in
     };
 
     systemd.user.services.project-scratch-clean = {
-      description = "Remove rederivable build outputs, shell temp dirs and caches";
+      description = "Report reclaimable build outputs, shell temp dirs and caches";
       serviceConfig = resourceLimits // {
         Type = "oneshot";
-        ExecStart = "${lib.getExe scratchClean} --apply";
+        ExecStart = lib.getExe scratchClean;
       };
     };
 

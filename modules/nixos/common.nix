@@ -244,11 +244,6 @@ in
     programs.nh = {
       enable = true;
       flake = flakePath;
-      clean = {
-        enable = true;
-        dates = "daily";
-        extraArgs = "--keep 10 --keep-since 14d";
-      };
     };
 
     local.users.sopsPasswords.max = "max-password-hash";

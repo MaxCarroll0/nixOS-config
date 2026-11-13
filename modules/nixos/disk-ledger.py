@@ -39,7 +39,7 @@ def all_sizes():
         capture_output=True,
         text=True,
     ).stdout
-    return {path: info["narSize"] for path, info in json.loads(output).items()}
+    return {path: info["narSize"] for path, info in json.loads(output).items() if info}
 
 
 def resolve(path):

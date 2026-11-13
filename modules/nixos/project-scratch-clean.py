@@ -6,26 +6,28 @@ import time
 from pathlib import Path
 
 
-DAY = 24 * 60 * 60
-PROJECT_IDLE_DAYS = 14
-SHELL_TEMP_DAYS = 1
-SCRATCHPAD_DAYS = 7
-CACHE_DAYS = {
-    ".cache/nix-logs": 30,
-    ".cache/drkonqi": 30,
-    ".cache/chromium": 30,
-    ".cache/chromium-headless": 30,
-    ".cache/mozilla": 30,
-    ".cache/thumbnails": 30,
-    ".cache/mesa_shader_cache": 60,
-    ".cache/go-build": 60,
-    ".cache/mpv": 60,
-    ".cache/ghcide": 60,
-    ".cache/curd": 60,
-    ".cache/caelestia": 60,
-    ".cache/fontconfig": 90,
-    ".cache/plasma_theme_default.kcache": 90,
-}
+GIB = 1024**3
+CACHES = [
+    ".cache/nix-logs",
+    ".cache/drkonqi",
+    ".cache/chromium",
+    ".cache/chromium-headless",
+    ".cache/mozilla",
+    ".cache/thumbnails",
+    ".cache/mesa_shader_cache",
+    ".cache/go-build",
+    ".cache/mpv",
+    ".cache/ghcide",
+    ".cache/curd",
+    ".cache/caelestia",
+    ".cache/fontconfig",
+    ".cache/plasma_theme_default.kcache",
+    ".cache/pip",
+    ".cache/npm",
+    ".cargo/registry/cache",
+    ".cabal/packages",
+    ".opam/download-cache",
+]
 
 
 
@@ -43,13 +45,15 @@ def size_of(path):
     return total
 
 
-def newest(path):
-    latest = path.lstat().st_mtime
+def last_used(path):
+    stat = path.lstat()
+    latest = max(stat.st_mtime, stat.st_atime)
     if path.is_dir() and not path.is_symlink():
         for root, dirs, files in os.walk(path):
             for name in dirs + files:
                 try:
-                    latest = max(latest, os.lstat(os.path.join(root, name)).st_mtime)
+                    entry = os.lstat(os.path.join(root, name))
+                    latest = max(latest, entry.st_mtime, entry.st_atime)
                 except OSError:
                     continue
     return latest
@@ -79,44 +83,43 @@ def manifest_paths(root, manifest):
     return paths
 
 
-def artefact_candidates(state, now):
-    candidates = []
+def artefact_candidates(state):
+    rows = []
     for record in state.glob("*/artefacts"):
         root_file = record.with_name("root")
-        if not root_file.exists() or now - record.lstat().st_mtime < PROJECT_IDLE_DAYS * DAY:
+        if not root_file.exists():
             continue
         root = Path(root_file.read_text().strip())
         if not root.is_dir() or clean_worktree(root) is False:
             continue
-        candidates.extend(manifest_paths(root, record))
-    return candidates
+        used = record.lstat().st_mtime
+        rows.extend((used, path, "artefact", remove) for path in manifest_paths(root, record))
+    return rows
 
 
-def shell_temp_candidates(now):
-    temp = Path("/tmp")
+def shell_temp_candidates():
     return [
-        entry
-        for entry in temp.glob("nix-shell.*")
-        if entry.lstat().st_uid == os.getuid() and now - entry.lstat().st_mtime > SHELL_TEMP_DAYS * DAY
+        (entry.lstat().st_mtime, entry, "nix-shell temp", remove)
+        for entry in Path("/tmp").glob("nix-shell.*")
+        if entry.lstat().st_uid == os.getuid()
     ]
 
 
-def scratchpad_candidates(now):
-    candidates = []
-    for scratchpad in Path("/tmp/claude-%d" % os.getuid()).glob("*/*/scratchpad"):
-        for entry in scratchpad.iterdir():
-            if now - newest(entry) > SCRATCHPAD_DAYS * DAY:
-                candidates.append(entry)
-    return candidates
+def scratchpad_candidates():
+    return [
+        (last_used(entry), entry, "scratchpad", remove)
+        for scratchpad in Path("/tmp/claude-%d" % os.getuid()).glob("*/*/scratchpad")
+        for entry in scratchpad.iterdir()
+    ]
 
 
-def cache_candidates(home, now):
-    candidates = []
-    for relative, days in CACHE_DAYS.items():
+def cache_candidates(home):
+    rows = []
+    for relative in CACHES:
         entry = home / relative
-        if entry.exists() and now - newest(entry) > days * DAY:
-            candidates.append(entry)
-    return candidates
+        if entry.exists():
+            rows.append((last_used(entry), entry, "cache", remove))
+    return rows
 
 
 def remove(path):
@@ -134,8 +137,8 @@ def offload_candidates(root):
         marker = path / ".dev-build-last-used"
         if path.is_symlink() or not path.is_dir() or not marker.exists():
             continue
-        rows.append((marker.lstat().st_mtime, path))
-    return sorted(rows)
+        rows.append((marker.lstat().st_mtime, path, "offload", remove_offload))
+    return rows
 
 
 def remove_offload(path):
@@ -144,42 +147,10 @@ def remove_offload(path):
     shutil.rmtree(path)
 
 
-def free_bytes():
-    return shutil.disk_usage("/nix/store").free
-
-
-def reclaim_offload(options):
-    root = os.environ.get("SCRATCH_OFFLOAD_DIR", "")
-    if not root:
-        return
-    target = int(os.environ.get("SCRATCH_MIN_FREE_BYTES", "0"))
-    rows = offload_candidates(Path(root))
-    free = free_bytes()
-    pressure = free < target
-    total = 0
-    for last, path in rows:
-        size = size_of(path)
-        total += size
-    print(
-        f"offload: {len(rows)} projects, {total / 1024**3:.2f} GiB; "
-        f"free {free / 1024**3:.1f} GiB, target {target / 1024**3:.1f} GiB; "
-        f"{'under pressure' if pressure else 'not under pressure, nothing reclaimed'}"
-    )
-    removed = 0
-    for last, path in rows:
-        when = time.strftime("%Y-%m-%d", time.localtime(last))
-        print(f"  {path} (last used {when})")
-        if options.apply and pressure and free_bytes() < target:
-            removed += size_of(path)
-            remove_offload(path)
-            print("    removed")
-    if options.apply and pressure:
-        print(f"offload removed {removed / 1024**3:.2f} GiB")
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Remove rederivable build and cache leftovers")
-    parser.add_argument("--apply", action="store_true")
+    parser = argparse.ArgumentParser(description="Reclaim rederivable build and cache leftovers, least recently used first")
+    parser.add_argument("--apply", action="store_true", help="remove; needs --need-gib")
+    parser.add_argument("--need-gib", type=float, help="stop once this much has been reclaimed")
     parser.add_argument("--home", type=Path, default=Path.home())
     parser.add_argument(
         "--state",
@@ -187,29 +158,31 @@ def main():
         default=Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "dev-build",
     )
     options = parser.parse_args()
+    if options.apply and options.need_gib is None:
+        parser.error("--apply needs --need-gib")
 
-    now = time.time()
-    groups = [
-        ("recorded build artefacts", artefact_candidates(options.state, now)),
-        ("nix-shell temp", shell_temp_candidates(now)),
-        ("scratchpad", scratchpad_candidates(now)),
-        ("cache", cache_candidates(options.home, now)),
-    ]
-
-    total = 0
-    for label, paths in groups:
-        size = 0
-        for path in paths:
-            size += size_of(path)
-            if options.apply:
-                remove(path)
-        total += size
-        print(f"{label}: {len(paths)} entries, {size / 1024**3:.2f} GiB")
-        for path in paths:
-            print(f"  {path}")
-    verb = "removed" if options.apply else "would remove"
-    print(f"{verb} {total / 1024**3:.2f} GiB")
-    reclaim_offload(options)
+    rows = sorted(
+        artefact_candidates(options.state)
+        + shell_temp_candidates()
+        + scratchpad_candidates()
+        + cache_candidates(options.home)
+        + offload_candidates(Path(os.environ.get("SCRATCH_OFFLOAD_DIR", "") or "/nonexistent")),
+        key=lambda row: row[0],
+    )
+    need = (options.need_gib or 0) * GIB
+    reclaimed = 0
+    print(f"{len(rows)} reclaimable entries, least recently used first" + (f"; need {need / GIB:.1f} GiB" if need else ""))
+    for used, path, kind, removal in rows:
+        if need and reclaimed >= need:
+            break
+        size = size_of(path)
+        when = time.strftime("%Y-%m-%d", time.localtime(used))
+        print(f"  {when} {size / GIB:6.2f} GiB {kind:14} {path}")
+        if options.apply:
+            removal(path)
+        reclaimed += size
+    verb = "reclaimed" if options.apply else "would reclaim"
+    print(f"{verb} {reclaimed / GIB:.2f} GiB")
 
 
 if __name__ == "__main__":
