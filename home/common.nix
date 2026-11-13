@@ -137,9 +137,7 @@ let
     doCheck = false;
   };
 
-  # Both curd providers (allanime, animepahe) are Cloudflare-gated; curd's plain
-  # Go client can't pass the challenge. FlareSolverr solves it once, this patch
-  # makes curd replay the cf_clearance + matching UA on every provider request.
+  # Both curd providers are Cloudflare-gated; the patch replays FlareSolverr's cf_clearance and UA.
   curdPatched = overrides.againstVersion "curd" "2.0.5" (lib.removeSuffix "\n" curd.version) (
     curd.overrideAttrs (old: {
       postPatch = (old.postPatch or "") + ''
@@ -179,13 +177,10 @@ let
     fi
   '';
 
-  # Session management is Tab Session Manager, built from source with its
-  # backup defaults patched in: the extension has no managed-storage schema, so
-  # a policy install would still leave the settings to be clicked in by hand.
+  # Tab Session Manager is built from source with backup defaults patched in; it has no managed-storage schema.
   tabSessionManager = pkgs.callPackage ../pkgs/tab-session-manager.nix { };
 
-  # Chromium picks the kwallet backend under Plasma and then blocks every page
-  # load on a wallet this host can never unlock: autologin gives PAM no password.
+  # Chromium picks the kwallet backend under Plasma and blocks page loads on a wallet autologin cannot unlock.
   chromium = pkgs.chromium.override {
     commandLineArgs = lib.concatStringsSep " " [
       "--password-store=basic"
@@ -194,8 +189,7 @@ let
     ];
   };
 
-  # age takes ssh recipients directly, so both GUI hosts decrypt the store with
-  # the key they already have and nothing new goes into sops.
+  # age takes ssh recipients directly, so each host decrypts with the key it already has.
   browser-sync = pkgs.writeShellApplication {
     name = "browser-sync";
     runtimeInputs = with pkgs; [
@@ -307,8 +301,7 @@ in
   };
   xdg.configFile."mimeapps.list".force = true;
 
-  # Nothing can unlock the wallet on an autologin host, so kwalletd only ever
-  # prompts; disabled, it fails the request instead.
+  # Nothing can unlock the wallet on an autologin host; disabled, kwalletd fails requests instead of prompting.
   xdg.configFile."kwalletrc" = {
     force = true;
     text = ''
@@ -353,16 +346,14 @@ in
     };
   };
 
-  # Writable copy (not a store symlink) so curd can rewrite it at runtime;
-  # replaced on every switch so the repo file stays the source of truth.
+  # A writable copy, replaced on every switch, so the repo file stays the source of truth.
   home.activation.curdConf = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
     run mkdir -p "$HOME/.config/curd"
     run rm -f "$HOME/.config/curd/curd.conf"
     run install -m644 ${../curd.conf} "$HOME/.config/curd/curd.conf"
   '';
 
-  # Rendered by the system sops config with owner = max; this cannot reference
-  # NixOS config, so the path is spelled out.
+  # Home config cannot reference NixOS config, so the sops path is spelled out.
   home.activation.exercismConf = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
     if [ -r /run/secrets/exercism-API ]; then
       run ${pkgs.exercism}/bin/exercism configure \
