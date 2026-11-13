@@ -101,6 +101,7 @@ snapshotRevision() {
 rev=$(snapshotRevision)
 headRev=$(git -C "$flake" rev-parse HEAD)
 deployRef="refs/deploys/$rebuildTarget"
+previouslyDeployed=$(git -C "$flake" rev-parse -q --verify "$deployRef" 2>/dev/null || true)
 if [ "$rev" != "$headRev" ]; then
   echo "snapshot ${rev:0:7} (tree differs from HEAD ${headRev:0:7}):"
   git -C "$flake" diff --stat HEAD "$rev" | sed 's/^/  /'
@@ -143,7 +144,7 @@ if [ -n "$target" ]; then
       if ! git -C "$flake" cat-file -e "$running^{commit}" 2>/dev/null; then
         echo "warning: $target runs $running, a commit this clone does not have; deploying over it blind" >&2
       elif ! git -C "$flake" merge-base --is-ancestor "$running" "$rev" \
-          && [ "$running" != "$(git -C "$flake" rev-parse -q --verify "$deployRef@{0}" 2>/dev/null || true)" ] \
+          && [ "$running" != "$previouslyDeployed" ] \
           && [ "$supersede" = 0 ]; then
         echo "error: $target runs ${running:0:7} ($(git -C "$flake" log -1 --format=%s "$running")), which ${rev:0:7} does not descend from." >&2
         echo "  It was deployed from elsewhere. Pass --supersede to replace it, or land it first." >&2
