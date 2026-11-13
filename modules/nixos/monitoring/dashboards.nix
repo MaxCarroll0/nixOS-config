@@ -844,7 +844,6 @@ let
     }
   ];
 
-  # Greedy row packing: panels keep their declared width and wrap at 24 columns.
   layout =
     panels:
     (lib.foldl'
@@ -1155,8 +1154,7 @@ let
   tariffVariable = textboxVariable "tariff" "Electricity (p/kWh)" "20.88";
 
   resolutionVariable = {
-    # Keep this distinct from the old `res` URL parameter so bookmarked/live
-    # dashboard URLs cannot silently override the long-term default.
+    # Distinct from the old res URL parameter, so bookmarked URLs cannot override the default.
     name = "resolution";
     label = "Resolution";
     type = "datasource";
@@ -1174,8 +1172,7 @@ let
     datasource:
     let
       metric = if datasource == "prometheus-archive" then "host:up:1h" else "host:up";
-      # Historical series created before host relabelling must not surface as
-      # selectable hosts in Grafana.
+      # Series from before host relabelling would otherwise show as selectable hosts.
       hostSelector = ''{instance!~"127[.]0[.]0[.]1(:[0-9]+)?"}'';
     in
     {
@@ -1509,7 +1506,7 @@ let
         w = 5;
         h = 5;
         decimals = 2;
-        description = "Load average is the one-minute average number of runnable tasks plus tasks waiting in uninterruptible I/O. This divides it by each host's logical CPU count: 100% means one task per CPU; higher values mean work is queueing.";
+        description = "One-minute load average per logical CPU; 100% means one runnable task per CPU.";
         unit = "percentunit";
         targets = [
           (target {
@@ -1551,7 +1548,7 @@ let
       })
       (ts {
         title = "Pressure stall";
-        description = "The share of time tasks were unable to run because CPU, I/O, or memory was unavailable.";
+        description = "Percentage of time tasks were stalled waiting for CPU, I/O or memory.";
         w = 24;
         h = 6;
         unit = "percentunit";
@@ -1572,7 +1569,7 @@ let
       })
       (ts {
         title = "Equivalent wall power while awake (24h)";
-        description = "Height is comparable mains-equivalent power while observed; horizontal span is time awake. Filled area approximates recorded energy. Power is modelled without a wall meter; missing telemetry remains a gap.";
+        description = "Modelled mains-equivalent power in watts against awake time; gaps mark missing telemetry.";
         w = 24;
         h = 9;
         timeFrom = "24h";
@@ -1605,7 +1602,7 @@ let
       })
       (barGauge {
         title = "Peak equivalent wall power (24h)";
-        description = "Highest one-second mains-equivalent draw in the past day. Modelled without a wall meter.";
+        description = "Peak modelled mains-equivalent draw in watts over the past day.";
         w = 24;
         h = 5;
         datasource = {
@@ -1740,7 +1737,7 @@ let
       })
       (table {
         title = "System session summary";
-        description = "Current awake session, maximum session and recorded reachable time over 7 days, shown in days, hours and minutes. Missing telemetry is unknown, not uptime.";
+        description = "Current awake session, longest session and reachable time over 7 days, in days, hours and minutes.";
         w = 24;
         h = 7;
         datasource = {
@@ -1806,8 +1803,7 @@ let
                 value = 172800;
               }
               {
-                # A down host has no running session; keep that cell neutral
-                # rather than treating zero as the worst uptime.
+                # Zero would read as the worst uptime, so a down host gets a neutral cell.
                 id = "mappings";
                 value = [
                   {
@@ -1910,7 +1906,7 @@ let
       })
       (ts {
         title = "Load pressure";
-        description = "Load average is the one-minute average number of runnable tasks plus tasks waiting in uninterruptible I/O. This divides it by each host's logical CPU count: 100% means one task per CPU; higher values mean work is queueing.";
+        description = "One-minute load average per logical CPU; 100% means one runnable task per CPU.";
         w = 24;
         unit = "percentunit";
         targets = [
@@ -1977,7 +1973,7 @@ let
       })
       (ts {
         title = "Major temperatures";
-        description = "Shows case, CPU and hottest temperatures.";
+        description = "Case, CPU and hottest temperatures in degrees Celsius.";
         w = 24;
         h = 7;
         unit = "celsius";
@@ -2109,7 +2105,7 @@ let
       })
       (annotationList {
         title = "Alert history";
-        description = "Every Grafana alert state transition, recorded as annotations in Grafana's own store.";
+        description = "Every alert state transition, recorded as Grafana annotations.";
         w = 24;
         h = 14;
         options = {
@@ -2254,7 +2250,7 @@ let
       })
       (ts {
         title = "Modelled mains power, broken down";
-        description = "Non-overlapping components of the mains-equivalent power model, including conversion loss. The unstacked line is their combined total; a wall-meter reading can differ from this estimate.";
+        description = "Watts of each modelled mains-power component, including conversion loss; the unstacked line is the total.";
         w = 24;
         h = 9;
         unit = "watt";
@@ -2300,7 +2296,7 @@ let
       })
       (ts {
         title = "Model against measured wall power";
-        description = "Populated once a metered plug is scraped. The gap is what the coefficients still get wrong, and is what they should be refitted against.";
+        description = "Modelled minus metered watts; populated only once a metered plug is scraped.";
         w = 12;
         h = 8;
         unit = "watt";
@@ -2321,7 +2317,7 @@ let
       })
       (ts {
         title = "Pi PMIC rail power";
-        description = "Measured PMIC output rails; this excludes USB and other direct 5 V loads, so it is not wall power.";
+        description = "Measured PMIC output rails in watts, excluding USB and other direct 5 V loads.";
         w = 12;
         h = 8;
         unit = "watt";
@@ -2346,13 +2342,13 @@ let
       })
       (ts {
         title = "Major temperatures";
-        description = "The hottest major sensor, CPU and case/enclosure temperature; use the selectable panel below for individual sensors.";
+        description = "Hottest major sensor in degrees Celsius, across CPU and case temperatures.";
         unit = "celsius";
         targets = majorTemperatureTargets;
       })
       (ts {
         title = "Selected temperatures";
-        description = "Use the Sensors picker above to keep only the entries you want; click a legend entry to isolate it temporarily.";
+        description = "Individual sensor temperatures in degrees Celsius, filtered by the Sensors picker.";
         unit = "celsius";
         targets = [
           (target {
@@ -2373,7 +2369,7 @@ let
       })
       (ts {
         title = "Temperature against fan speed";
-        description = "Fan speed as a share of each fan's configured maximum, on the right axis. Use the Smoothing picker to make the lag between a temperature rise and the fan response easier to inspect.";
+        description = "Fan speed as a percentage of each fan's maximum, on the right axis.";
         w = 24;
         h = 9;
         unit = "celsius";
@@ -2458,7 +2454,7 @@ let
     panels = livePanels [
       (stat {
         title = "Unclean resets";
-        description = "Boots that followed a power loss or hard reset rather than a clean shutdown.";
+        description = "Count of boots after a power loss or hard reset rather than a clean shutdown.";
         w = 6;
         h = 4;
         targets = [
@@ -2470,7 +2466,7 @@ let
       })
       (stat {
         title = "Since last unclean reset";
-        description = "Time since the most recent hard reset. Rising is healthy; a drop to zero means it just happened.";
+        description = "Time since the most recent hard reset, in days.";
         unit = "s";
         w = 6;
         h = 4;
@@ -2483,7 +2479,7 @@ let
       })
       (ts {
         title = "Unclean resets over time";
-        description = "Each step is a host coming back from a hard reset. Flat is healthy.";
+        description = "Each step is a host returning from a hard reset.";
         w = 12;
         h = 4;
         targets = [
@@ -2516,7 +2512,7 @@ let
       })
       (status {
         title = "CPU core heatmap";
-        description = "One row per logical core. Colour shows utilisation over time without trying to draw every core as an overlapping line.";
+        description = "Utilisation per logical core over time, one row each.";
         w = 24;
         h = 10;
         unit = "percentunit";
@@ -2533,7 +2529,7 @@ let
       })
       (table {
         title = "CPU cores now";
-        description = "Sorted by utilisation so hot or saturated logical cores rise to the top without drawing every core as a line.";
+        description = "Logical cores sorted by utilisation, as a percentage.";
         w = 24;
         h = 9;
         unit = "percentunit";
@@ -2612,7 +2608,7 @@ let
       })
       (ts {
         title = "Memory — $capacity machines";
-        description = "Used excludes reclaimable cache, so it tracks what the machine actually needs. The dashed line is installed capacity.";
+        description = "Memory used excluding reclaimable cache, in bytes; the dashed line is installed capacity.";
         w = 8;
         h = 8;
         unit = "bytes";
@@ -2638,7 +2634,7 @@ let
       })
       (ts {
         title = "Memory by service";
-        description = "Memory charged to each systemd unit cgroup, so host pressure can be attributed to a service. Includes page cache charged to the unit, which is reclaimable, so this sums above what the host reports as used.";
+        description = "Memory charged to each systemd unit cgroup, in bytes; includes reclaimable page cache, so the sum exceeds host used memory.";
         w = 24;
         h = 10;
         unit = "bytes";
@@ -2663,7 +2659,7 @@ let
       })
       (ts {
         title = "Pressure stall";
-        description = "The share of time work was stalled waiting on a resource. Catches contention that CPU utilisation alone hides.";
+        description = "Share of time work was stalled waiting on CPU, I/O or memory, as a percentage.";
         unit = "percentunit";
         targets = [
           (target {
@@ -2736,7 +2732,7 @@ let
       })
       (ts {
         title = "Load pressure";
-        description = "Load average is the one-minute average number of runnable tasks plus tasks waiting in uninterruptible I/O. This divides it by each host's logical CPU count: 100% means one task per CPU; higher values mean work is queueing.";
+        description = "One-minute load average per logical CPU; 100% means one runnable task per CPU.";
         unit = "percentunit";
         targets = [
           (target {
@@ -2747,7 +2743,7 @@ let
       })
       (ts {
         title = "Major temperatures";
-        description = "Thermals alongside utilisation make load, throttling and cooling response easy to correlate.";
+        description = "CPU temperature and utilisation over time.";
         w = 24;
         h = 9;
         unit = "celsius";
@@ -2756,7 +2752,6 @@ let
     ];
   };
 
-  # History folder: 1-minute aggregates, smoothed by the $smooth variable.
 
   historyPower = dashboard {
     uid = "power";
@@ -2785,7 +2780,7 @@ let
       energyCoverage
       (stat {
         title = "Device load (DC)";
-        description = "Power used by the device before supply conversion loss, regardless of AC state.";
+        description = "Modelled DC power draw in watts, before supply conversion loss.";
         w = 12;
         h = 5;
         unit = "watt";
@@ -2861,7 +2856,7 @@ let
       })
       (ts {
         title = "Mains power";
-        description = "Solid line is the smoothed mean; dashed lines are the true per-minute maximum and minimum, so peaks survive whatever smoothing window is selected.";
+        description = "Smoothed mean as a solid line, with the per-minute maximum and minimum dashed.";
         w = 24;
         h = 9;
         unit = "watt";
@@ -2883,7 +2878,7 @@ let
       })
       (ts {
         title = "Power by component";
-        description = "Non-overlapping components of the mains-power model; a wall meter can differ from this estimate.";
+        description = "Modelled mains-power components in watts, stacked without overlap.";
         w = 24;
         h = 9;
         unit = "watt";
@@ -2922,7 +2917,7 @@ let
       })
       (bar {
         title = "Daily energy and cost";
-        description = "Energy is on the left axis; cost is on the right.";
+        description = "Energy on the left axis; cost on the right.";
         w = 24;
         h = 8;
         unit = "kwatth";
@@ -2945,7 +2940,7 @@ let
       })
       (bar {
         title = "Monthly energy and cost";
-        description = "Energy is on the left axis; cost is on the right.";
+        description = "Energy on the left axis; cost on the right.";
         w = 24;
         h = 8;
         unit = "kwatth";
@@ -2989,7 +2984,7 @@ let
       })
       (ts {
         title = "Temperature envelope";
-        description = "For one or two selected sensors this acts as a sausage plot: the solid mean sits between the true minimum and maximum for each smoothing window.";
+        description = "Mean with a min and max band per smoothing window, for one or two selected sensors.";
         unit = "celsius";
         overrides = [ (dimmed ".*(peak|floor)$") ];
         targets = [
@@ -3022,7 +3017,7 @@ let
       })
       (xy {
         title = "Fan speed against temperature";
-        description = "Each point is one smoothing window. A fan curve that is holding temperature traces a tight band; a scattered cloud means the fan is not tracking the load.";
+        description = "Fan speed against temperature, one point per smoothing window.";
         w = 12;
         h = 9;
         unit = "celsius";
@@ -3130,7 +3125,7 @@ let
       })
       (nodeGraph {
         title = "Host-to-host tailnet transfer map";
-        description = "Directed edges show the current smoothed send rate. Select hosts above to focus the map; hover an edge for throughput.";
+        description = "Smoothed tailnet send rate between hosts, drawn as directed edges.";
         w = 24;
         h = 14;
         unit = "Bps";
@@ -3167,7 +3162,7 @@ let
       })
       (status {
         title = "Traffic between hosts";
-        description = "A heatmap-like matrix over time: each row is a source → destination tailnet pair and colour is throughput. This is total peer traffic; protocol-level splits such as SSH need flow telemetry that node_exporter and Tailscale do not expose.";
+        description = "Throughput between each tailnet source and destination pair over time; total peer traffic only.";
         w = 24;
         h = 11;
         unit = "Bps";
@@ -3183,7 +3178,7 @@ let
       })
       (table {
         title = "Tailnet source map";
-        description = "Directed traffic between tailnet nodes: each row is one host's send rate to one peer. Byte counters reset when tailscaled restarts, which the rate() underneath handles.";
+        description = "Send rate per tailnet peer pair, in bytes per second.";
         w = 12;
         h = 9;
         unit = "Bps";
@@ -3239,7 +3234,7 @@ let
       })
       (ts {
         title = "Direct against relayed tailnet traffic";
-        description = "A rising DERP share means peers stopped reaching each other directly.";
+        description = "Share of tailnet traffic relayed through DERP servers, as a percentage.";
         unit = "Bps";
         targets = [
           (target {
@@ -3260,7 +3255,7 @@ let
       })
       (table {
         title = "WireGuard handshake age";
-        description = "A tunnel can be up and still pass no return traffic. Handshake age climbing while bytes flow one way is the signature of two hosts sharing one Proton credential.";
+        description = "Seconds since each WireGuard tunnel's last handshake, alongside bytes in each direction.";
         unit = "s";
         targets = [
           (target {
@@ -3342,7 +3337,7 @@ let
       })
       (stat {
         title = "Awake since";
-        description = "Time since the last boot or resume; suspended time is not counted.";
+        description = "Time since the last boot or resume, excluding suspended time.";
         w = 12;
         h = 5;
         unit = "s";
@@ -3357,7 +3352,7 @@ let
       })
       (table {
         title = "Devices";
-        description = "Current tailnet inventory, ordered with offline devices first. Online state is colour-coded and handshake age highlights stale peers.";
+        description = "Tailnet devices with online state and handshake age, offline first.";
         w = 24;
         h = 9;
         options = {
@@ -3511,7 +3506,7 @@ let
       })
       (ts {
         title = "Load pressure";
-        description = "Load average is the one-minute average number of runnable tasks plus tasks waiting in uninterruptible I/O. This divides it by each host's logical CPU count: 100% means one task per CPU; higher values mean work is queueing.";
+        description = "One-minute load average per logical CPU; 100% means one runnable task per CPU.";
         unit = "percentunit";
         targets = [
           (target {
@@ -3549,7 +3544,7 @@ let
       })
       (ts {
         title = "Memory";
-        description = "Solid is memory in use, dashed is installed capacity. Headroom is the gap between them.";
+        description = "Memory in use as a solid line; the dashed line is installed capacity.";
         w = 12;
         h = 8;
         unit = "bytes";
@@ -3660,7 +3655,7 @@ let
       })
       (ts {
         title = "Clock speed against its ceiling";
-        description = "How far below the maximum scaling frequency the cores are actually running. A floor that rises under load is thermal or power throttling.";
+        description = "Percentage below each core's maximum scaling frequency.";
         unit = "percentunit";
         targets = [
           (target {
@@ -3683,7 +3678,7 @@ let
       })
       (stat {
         title = "Days until full";
-        description = "Linear extrapolation appears only while free space has a measurable downward trend; flat and growing filesystems are shown as stable.";
+        description = "Projected time until each filesystem is full, from a linear trend; shown only while free space is falling.";
         unit = "d";
         decimals = 1;
         mappings = [
@@ -3718,7 +3713,7 @@ let
       })
       (ts {
         title = "Prometheus tier health";
-        description = "Head series in each tier. A hi-res tier that stops growing, or scrape durations approaching the interval, means the one-second scrape is no longer keeping up.";
+        description = "Head series per VictoriaMetrics retention tier.";
         datasource = {
           type = "prometheus";
           uid = "prometheus";
@@ -3750,7 +3745,7 @@ let
       })
       (ts {
         title = "Major temperatures";
-        description = "Use this beside CPU, memory and I/O charts to correlate workload with thermal response.";
+        description = "Temperatures in degrees Celsius over time.";
         w = 24;
         h = 9;
         unit = "celsius";
@@ -3759,10 +3754,8 @@ let
     ];
   };
 
-  # Archive folder: hourly aggregates, kept indefinitely.
 
-  # The hires tier only keeps three hours, so anything reaching further back has
-  # to stay pinned to the minute tier whatever resolution is selected.
+  # The hires tier keeps three hours only; older ranges stay on the minute tier.
   longLookback =
     expr:
     lib.any (w: lib.hasInfix "[${w}]" expr) [
@@ -3854,7 +3847,7 @@ let
     panels = livePanels [
       (stat {
         title = "Drives healthy";
-        description = "Counts drives whose own SMART self-assessment is passing.";
+        description = "Count of drives whose SMART self-assessment passes.";
         w = 6;
         h = 5;
         unit = "short";
@@ -3881,7 +3874,7 @@ let
       })
       (stat {
         title = "Pending sectors";
-        description = "Sectors the drive cannot read and has not yet remapped. Any non-zero value is worth acting on.";
+        description = "Count of unreadable sectors not yet remapped (pending sectors).";
         w = 6;
         h = 5;
         unit = "short";
@@ -3908,7 +3901,7 @@ let
       })
       (stat {
         title = "Drives spinning";
-        description = "How many rotational drives are currently spun up. Every spinning drive is roughly 4-5 W.";
+        description = "Count of rotational drives currently spun up.";
         w = 6;
         h = 5;
         unit = "short";
@@ -3922,7 +3915,7 @@ let
       })
       (timeline {
         title = "Drive spin state";
-        description = "One row per drive over time: spinning or parked, the same shape as host reachability.";
+        description = "Spinning or parked state per drive over time.";
         w = 24;
         h = 8;
         min = 0;
@@ -3937,7 +3930,7 @@ let
       })
       (timeline {
         title = "Self-test activity";
-        description = "One row per drive: whether a SMART self-test is running.";
+        description = "Whether a SMART self-test is running, per drive.";
         w = 24;
         h = 6;
         min = 0;
@@ -3952,7 +3945,7 @@ let
       })
       (ts {
         title = "SMART reading age";
-        description = "How long ago each drive was last readable. This climbs while a drive is parked, which is expected; a value climbing past a day means the drive is gone or the collector is stuck.";
+        description = "Seconds since each drive was last readable; climbs while parked.";
         w = 12;
         h = 8;
         unit = "s";
@@ -3965,7 +3958,7 @@ let
       })
       (ts {
         title = "Drive temperature";
-        description = "Live HDD temperatures; parked drives and unavailable readings are omitted.";
+        description = "HDD temperatures in degrees Celsius, omitting parked drives.";
         w = 12;
         h = 8;
         unit = "celsius";
@@ -3978,7 +3971,7 @@ let
       })
       (ts {
         title = "Surface defects";
-        description = "Reallocated, pending and uncorrectable sectors. Growth in any of these is the clearest warning a drive is on its way out.";
+        description = "Reallocated, pending and uncorrectable sector counts per drive.";
         w = 12;
         h = 8;
         unit = "short";
@@ -3999,7 +3992,7 @@ let
       })
       (ts {
         title = "Interface CRC errors";
-        description = "Link-level errors, which indict the cable or USB bridge rather than the platter.";
+        description = "CRC and link error counts per drive.";
         w = 12;
         h = 7;
         unit = "short";
@@ -4012,7 +4005,7 @@ let
       })
       (ts {
         title = "Head and motor cycles";
-        description = "Start-stop and load-unload counts. Aggressive spin-down trades power for these, and both are rated in the low hundreds of thousands.";
+        description = "Start-stop and load-unload cycle counts per drive.";
         w = 12;
         h = 7;
         unit = "short";
@@ -4043,7 +4036,7 @@ let
       })
       (ts {
         title = "Inode headroom";
-        description = "Exhausting inodes fails writes even when there is free space.";
+        description = "Inode usage as a percentage of each filesystem's inodes.";
         w = 12;
         h = 7;
         unit = "percentunit";
@@ -4074,7 +4067,7 @@ let
       })
       (ts {
         title = "Latency";
-        description = "Mean service time per request. A spinning drive waking from standby shows as a large transient here.";
+        description = "Mean I/O service time per request, in milliseconds.";
         w = 12;
         h = 7;
         unit = "s";
@@ -4119,7 +4112,7 @@ let
       })
       (ts {
         title = "Memory thrashing";
-        description = "The score combines major faults with memory stall time: swap traffic alone is ordinary paging, and a stall alone can be plain I/O, but sustained together they mean the machine is re-reading pages it just evicted.";
+        description = "Pressure score combining major faults and memory stall time.";
         w = 12;
         h = 8;
         unit = "percentunit";
@@ -4141,7 +4134,7 @@ let
       })
       (ts {
         title = "Paging and swap";
-        description = "Major faults hit disk. Swap-in climbing alongside them is the mechanical signature of thrashing.";
+        description = "Major page faults per second, and swap-in rate.";
         w = 12;
         h = 8;
         unit = "short";
@@ -4162,7 +4155,7 @@ let
       })
       (ts {
         title = "SSD write pressure";
-        description = "Bytes written to flash, and the share of endurance consumed. Once an SSD fronts the spinning disks as a cache, a rising write rate with a falling hit ratio is the signal that the cache is thrashing rather than helping.";
+        description = "Bytes written to SSD flash, and percentage of rated endurance used.";
         w = 12;
         h = 8;
         unit = "bytes";
@@ -4180,7 +4173,7 @@ let
       })
       (ts {
         title = "Cache hit ratio";
-        description = "Populated once an SSD cache layer exists in front of the spinning disks; empty until then.";
+        description = "Cache hit ratio of the SSD layer in front of the spinning disks; empty until one exists.";
         w = 12;
         h = 8;
         unit = "percentunit";
@@ -4282,7 +4275,7 @@ let
     panels = [
       (ts {
         title = "Power-on hours";
-        description = "Total spinning hours per drive. Consumer drives are rated around 8760 hours a year of duty.";
+        description = "Spinning hours per drive, as a running total.";
         w = 12;
         h = 9;
         unit = "h";
@@ -4295,7 +4288,7 @@ let
       })
       (ts {
         title = "Defect growth";
-        description = "The shape matters more than the value: a flat line is a healthy drive, any sustained slope is a dying one.";
+        description = "Spinning-hour slope per drive; a rising slope means more running time.";
         w = 12;
         h = 9;
         unit = "short";
@@ -4328,7 +4321,7 @@ let
       })
       (ts {
         title = "Time spun up per day";
-        description = "Fraction of each day a drive was spinning. The whole point of spin-down is to keep this low; a drive pinned near 1 is costing about 4-5 W continuously.";
+        description = "Fraction of each day a drive spent spinning, from zero to one.";
         w = 24;
         h = 9;
         unit = "percentunit";
@@ -4344,7 +4337,7 @@ let
       })
       (barGauge {
         title = "Spun-up time over range";
-        description = "Total hours each drive spent spinning across the selected range.";
+        description = "Spinning hours per drive over the selected range.";
         w = 12;
         h = 8;
         unit = "h";
@@ -4655,7 +4648,7 @@ let
       })
       (ts {
         title = "Energy use over time";
-        description = "Electricity attributed to device use per interval, stacked by host; missing telemetry is not extrapolated.";
+        description = "Device energy use per interval, stacked by host.";
         w = 24;
         h = 9;
         unit = "kwatth";
@@ -4758,7 +4751,7 @@ let
       })
       (stat {
         title = "Downtime over range";
-        description = "Recorded unreachable seconds. Missing history is excluded and shown separately as coverage.";
+        description = "Seconds each host was unreachable per day.";
         w = 12;
         h = 5;
         unit = "s";
@@ -4787,7 +4780,7 @@ let
       })
       (bar {
         title = "Tailscale uptime per day";
-        description = "Same geometry as the energy-per-day bars, so the two line up when read side by side.";
+        description = "Energy per day as bars.";
         w = 24;
         h = 9;
         unit = "percentunit";
@@ -4892,7 +4885,7 @@ let
       })
       (ts {
         title = "Memory used against installed";
-        description = "Daily mean and peak against capacity. Over a year this is what tells you whether the machine is growing into its RAM.";
+        description = "Daily mean and peak memory use in bytes, against capacity.";
         w = 24;
         h = 10;
         unit = "bytes";
@@ -4995,7 +4988,7 @@ let
     panels = [
       (ts {
         title = "Daily temperature envelope";
-        description = "Daily minimum, mean and maximum per sensor. Over a year this separates seasonal ambient drift from cooling that is genuinely degrading.";
+        description = "Daily minimum, mean and maximum temperature per sensor.";
         w = 24;
         h = 10;
         unit = "celsius";
@@ -5047,7 +5040,7 @@ let
       })
       (ts {
         title = "Fan speed per degree above ambient";
-        description = "Rising over months means the fans are working harder for the same temperature, which is what dust buildup looks like.";
+        description = "Fan speed per fan over time, as a percentage of maximum.";
         w = 12;
         h = 8;
         targets = [
@@ -5120,7 +5113,7 @@ let
       })
       (barGauge {
         title = "Stored by age";
-        description = "How much data has not been touched recently. The right-hand buckets are the deletion candidates.";
+        description = "Bytes by time since last access, in age buckets.";
         unit = "bytes";
         w = 12;
         h = 8;
@@ -5173,7 +5166,7 @@ let
       })
       (ts {
         title = "Age mix over time";
-        description = "Whether the array is accumulating cold data faster than it is being used.";
+        description = "Cold-data accumulation rate per branch.";
         unit = "bytes";
         w = 24;
         h = 8;
@@ -5188,7 +5181,7 @@ let
       })
       (stat {
         title = "Branch fullness";
-        description = "Space is given back only when nas-at keep or forget drops history and the pass reclaims it. A full NILFS2 stops accepting writes.";
+        description = "Space reclaimed from NILFS2 history, in bytes.";
         unit = "percentunit";
         w = 8;
         h = 4;
@@ -5201,7 +5194,7 @@ let
       })
       (stat {
         title = "Retained checkpoints";
-        description = "Promoted checkpoints. Only a promoted checkpoint is mountable, so this is what is recoverable.";
+        description = "Count of promoted checkpoints per branch.";
         w = 8;
         h = 4;
         targets = [
@@ -5212,7 +5205,7 @@ let
       })
       (stat {
         title = "Reclaimable history";
-        description = "Blocks every rule has dropped, freed once the history pass reclaims their segments.";
+        description = "Blocks dropped by every retention rule, awaiting reclaim.";
         unit = "bytes";
         w = 8;
         h = 4;
@@ -5220,7 +5213,7 @@ let
       })
       (ts {
         title = "History bytes";
-        description = "File blocks still current, history kept by the rules, and history waiting for reclaim.";
+        description = "File blocks by state: current, kept by rules, or awaiting reclaim.";
         unit = "bytes";
         w = 12;
         h = 8;
@@ -5241,7 +5234,7 @@ let
       })
       (ts {
         title = "History by write day";
-        description = "Bytes grouped by the day they were written: still current, kept as history, or reclaimable.";
+        description = "Bytes per day written, by state: current, history or reclaimable.";
         unit = "bytes";
         w = 12;
         h = 8;
@@ -5263,7 +5256,7 @@ let
       })
       (ts {
         title = "Checkpoint growth";
-        description = "Checkpoints accrue with write volume, not with time, so this tracks churn.";
+        description = "Checkpoints created per day.";
         w = 12;
         h = 8;
         targets = [
@@ -5279,7 +5272,7 @@ let
       })
       (ts {
         title = "Space consumed per day";
-        description = "Extrapolate against free space to estimate when a branch stops accepting writes.";
+        description = "Projected days until a branch runs out of free space.";
         unit = "bytes";
         w = 12;
         h = 8;
@@ -5292,7 +5285,7 @@ let
       })
       (ts {
         title = "Read-ahead volume";
-        description = "Bytes warmed by nas-prefetch. Sustained traffic here defeats the 1h spindown.";
+        description = "Bytes read by nas-prefetch per interval.";
         unit = "Bps";
         w = 12;
         h = 8;
@@ -5305,7 +5298,7 @@ let
       })
       (ts {
         title = "Read-ahead decisions";
-        description = "Skipped opens are the per-folder cooldown working; near-zero skips with steady warms means it is not engaging.";
+        description = "Prefetch opens skipped by the per-folder cooldown, against warms done.";
         w = 12;
         h = 8;
         targets = [
