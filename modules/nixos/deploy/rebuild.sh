@@ -62,6 +62,11 @@ export NIX_OBSERVER_TARGET="${target:-$host}"
 rebuildTarget="$NIX_OBSERVER_TARGET"
 rebuildAction="$action"
 
+pinArgs=()
+pinOut=$(nix eval --raw --impure --expr "let p = import \"$flake/lib/pins.nix\" { root = \"$flake\"; host = \"$rebuildTarget\"; }; in builtins.concatStringsSep \"\\n\" p.argv") || exit 1
+[ -n "$pinOut" ] && mapfile -t pinArgs <<< "$pinOut"
+opts+=("${pinArgs[@]}")
+
 mkdir -p "$stateDir"
 if [ ! -t 1 ]; then
   export NIX_OBSERVER_PLAIN="${NIX_OBSERVER_PLAIN:-1}"
@@ -165,8 +170,11 @@ if [ -n "$target" ]; then
     deployAuthOpts+=(--interactive-sudo false)
   fi
 
+  deployBuildOpts=()
+  [ "${#pinArgs[@]}" -gt 0 ] && deployBuildOpts=(-- "${pinArgs[@]}")
+
   printf -v deployCmd '%q ' nix run "$source#deploy-rs" -- \
-    --skip-checks "${deployAuthOpts[@]}" "$deployTarget" "${deployOpts[@]}" "$@"
+    --skip-checks "${deployAuthOpts[@]}" "$deployTarget" "${deployOpts[@]}" "$@" "${deployBuildOpts[@]}"
 
   status=0
   if getent group novpn >/dev/null 2>&1; then
