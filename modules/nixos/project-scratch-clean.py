@@ -1,5 +1,4 @@
 import argparse
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -9,7 +8,6 @@ from pathlib import Path
 
 DAY = 24 * 60 * 60
 PROJECT_IDLE_DAYS = 14
-PROJECT_OUTPUTS = ("dist-newstyle", "_build", "target", ".direnv")
 SHELL_TEMP_DAYS = 1
 SCRATCHPAD_DAYS = 7
 CACHE_DAYS = {
@@ -30,11 +28,6 @@ CACHE_DAYS = {
 }
 
 
-def load_retention():
-    spec = importlib.util.spec_from_file_location("retention", os.environ["RETENTION_MODULE"])
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def size_of(path):
@@ -75,20 +68,27 @@ def clean_worktree(project):
     return status == ""
 
 
-def project_candidates(retention, gcroots, now):
+def manifest_paths(root, manifest):
+    paths = []
+    for line in manifest.read_text().splitlines():
+        if not line or line.startswith(".dev-build-"):
+            continue
+        target = root / line
+        if target.exists() or target.is_symlink():
+            paths.append(target)
+    return paths
+
+
+def artefact_candidates(state, now):
     candidates = []
-    for path, project in retention.discover_projects(gcroots).items():
-        if now - project.last_used < PROJECT_IDLE_DAYS * DAY:
+    for record in state.glob("*/artefacts"):
+        root_file = record.with_name("root")
+        if not root_file.exists() or now - record.lstat().st_mtime < PROJECT_IDLE_DAYS * DAY:
             continue
-        if clean_worktree(path) is not True:
+        root = Path(root_file.read_text().strip())
+        if not root.is_dir() or clean_worktree(root) is False:
             continue
-        for name in PROJECT_OUTPUTS:
-            target = path / name
-            if target.exists() or target.is_symlink():
-                candidates.append(target)
-        for entry in path.glob("result*"):
-            if entry.is_symlink():
-                candidates.append(entry)
+        candidates.extend(manifest_paths(root, record))
     return candidates
 
 
@@ -126,17 +126,71 @@ def remove(path):
         shutil.rmtree(path)
 
 
+def offload_candidates(root):
+    if not root.is_dir():
+        return []
+    rows = []
+    for path in root.iterdir():
+        marker = path / ".dev-build-last-used"
+        if path.is_symlink() or not path.is_dir() or not marker.exists():
+            continue
+        rows.append((marker.lstat().st_mtime, path))
+    return sorted(rows)
+
+
+def remove_offload(path):
+    for link in sorted(path.glob(".dev-build-profile*")):
+        link.unlink()
+    shutil.rmtree(path)
+
+
+def free_bytes():
+    return shutil.disk_usage("/nix/store").free
+
+
+def reclaim_offload(options):
+    root = os.environ.get("SCRATCH_OFFLOAD_DIR", "")
+    if not root:
+        return
+    target = int(os.environ.get("SCRATCH_MIN_FREE_BYTES", "0"))
+    rows = offload_candidates(Path(root))
+    free = free_bytes()
+    pressure = free < target
+    total = 0
+    for last, path in rows:
+        size = size_of(path)
+        total += size
+    print(
+        f"offload: {len(rows)} projects, {total / 1024**3:.2f} GiB; "
+        f"free {free / 1024**3:.1f} GiB, target {target / 1024**3:.1f} GiB; "
+        f"{'under pressure' if pressure else 'not under pressure, nothing reclaimed'}"
+    )
+    removed = 0
+    for last, path in rows:
+        when = time.strftime("%Y-%m-%d", time.localtime(last))
+        print(f"  {path} (last used {when})")
+        if options.apply and pressure and free_bytes() < target:
+            removed += size_of(path)
+            remove_offload(path)
+            print("    removed")
+    if options.apply and pressure:
+        print(f"offload removed {removed / 1024**3:.2f} GiB")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Remove rederivable build and cache leftovers")
     parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--gcroots", type=Path, default=Path("/nix/var/nix/gcroots/auto"))
     parser.add_argument("--home", type=Path, default=Path.home())
+    parser.add_argument(
+        "--state",
+        type=Path,
+        default=Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "dev-build",
+    )
     options = parser.parse_args()
 
-    retention = load_retention()
     now = time.time()
     groups = [
-        ("project outputs", project_candidates(retention, options.gcroots, now)),
+        ("recorded build artefacts", artefact_candidates(options.state, now)),
         ("nix-shell temp", shell_temp_candidates(now)),
         ("scratchpad", scratchpad_candidates(now)),
         ("cache", cache_candidates(options.home, now)),
@@ -155,6 +209,7 @@ def main():
             print(f"  {path}")
     verb = "removed" if options.apply else "would remove"
     print(f"{verb} {total / 1024**3:.2f} GiB")
+    reclaim_offload(options)
 
 
 if __name__ == "__main__":

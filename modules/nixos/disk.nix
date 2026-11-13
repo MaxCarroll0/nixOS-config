@@ -33,7 +33,8 @@ let
       pkgs.python3
     ];
     text = ''
-      export RETENTION_MODULE=${./project-closure-retention.py}
+      export SCRATCH_OFFLOAD_DIR=${if cfg.offload.enable then "${home}/offload" else ""}
+      export SCRATCH_MIN_FREE_BYTES=${toString (pressure.minFreeGiB * gib)}
       exec python3 ${./project-scratch-clean.py} "$@"
     '';
   };
@@ -52,6 +53,7 @@ let
       export LEDGER_RUNTIME_DIR=/run/user/${uid}
       export LEDGER_UID=${uid}
       export LEDGER_TEXTFILE=/var/lib/node-exporter-textfile/disk-ledger.prom
+      export LEDGER_OFFLOAD_DIR=${if cfg.offload.enable then "${home}/offload" else ""}
       exec python3 ${./disk-ledger.py}
     '';
   };
@@ -71,6 +73,12 @@ in
       type = lib.types.str;
       default = "max";
       description = "User whose home, caches and runtime directory the disk units manage.";
+    };
+
+    offload.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = config.networking.hostName == "desktopnew";
+      description = "Whether ~/offload build trees are in the ledger and reclaimed under pressure.";
     };
 
     uid = lib.mkOption {
@@ -95,7 +103,7 @@ in
 
       minFreeGiB = lib.mkOption {
         type = lib.types.int;
-        default = 20;
+        default = if config.networking.hostName == "desktopnew" then 40 else 20;
         description = "Free space in GiB on /nix/store below which pressure reclaim runs.";
       };
 
