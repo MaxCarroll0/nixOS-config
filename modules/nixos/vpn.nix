@@ -33,11 +33,7 @@ let
       }
     '';
 
-  # Own table per unit, loaded after the unit exists: a missing cgroup path
-  # aborts the whole nft transaction, which must not take the killswitch with it.
-  # PartOf the unit too: nft resolves the cgroup path to an ID at load time, so a
-  # restart of the unit leaves the rule pointing at a dead cgroup and the traffic
-  # unmarked. Restarting alongside it re-resolves against the new cgroup.
+  # nft resolves the unit's cgroup to an ID at load time, so the table is PartOf the unit.
   bypassService = unit: {
     name = unitTableName unit;
     value = {
@@ -92,8 +88,7 @@ let
 
   disableTable = "vpn-disabled";
 
-  # Marking what the tunnel would have carried reuses the split tunnel the kill
-  # switch already accepts, so disabling reloads no table but this one.
+  # Reuses the split-tunnel mark the kill switch accepts, so disabling reloads only this table.
   disableRules = pkgs.writeText "${disableTable}.nft" ''
     table inet ${disableTable} {
       chain output {
@@ -240,9 +235,7 @@ let
     map (i: ''"${i}"'') ([ cfg.interface ] ++ cfg.allowInterfaces)
   );
 
-  # NetworkManager fires "up" only once an interface reaches full L3 activation,
-  # so this catches SSID switches, WiFi drops, cable plugs and suspend/resume
-  # alike, not just the boot race.
+  # NetworkManager fires "up" only at full L3 activation, so this also catches SSID switches and resume.
   protonReconnect = pkgs.writeShellScript "proton-reconnect" ''
     action="$2"
     [ "$action" = "up" ] && [ "$1" != lo ] || exit 0
@@ -257,81 +250,81 @@ in
   options.local.vpn.interface = lib.mkOption {
     type = lib.types.str;
     default = "proton";
-    description = "Name of the WireGuard interface carrying the tunnel.";
+    description = "Name of the WireGuard interface carrying the tunnel; default proton.";
   };
 
   options.local.vpn.enable = lib.mkOption {
     type = lib.types.bool;
     default = true;
     readOnly = true;
-    description = "Whether the Proton split tunnel module is present.";
+    description = "Whether the Proton split tunnel is set up; default on.";
   };
 
   options.local.vpn.bypassUnits = lib.mkOption {
     type = lib.types.listOf lib.types.str;
     default = [ ];
-    description = "Units whose sockets are marked 0xca6c, routed around the tunnel.";
+    description = "Units whose sockets bypass the tunnel via fwmark 0xca6c; default none.";
   };
 
   options.local.vpn.allowInterfaces = lib.mkOption {
     type = lib.types.listOf lib.types.str;
     default = [ ];
-    description = "Extra output interfaces the kill switch accepts.";
+    description = "Extra output interfaces the kill switch accepts; default none.";
   };
 
   options.local.vpn.bypassResolver = lib.mkOption {
     type = lib.types.str;
     default = "1.1.1.1";
-    description = "Resolver for novpn traffic, reachable off the tunnel.";
+    description = "Resolver used by bypassed (novpn) traffic; default 1.1.1.1.";
   };
 
   options.local.vpn.usernameSecret = lib.mkOption {
     type = lib.types.str;
     default = "proton-username";
-    description = "Sops secret holding the Proton account username.";
+    description = "Sops secret holding the Proton account username; default proton-username.";
   };
 
   options.local.vpn.passwordSecret = lib.mkOption {
     type = lib.types.str;
     default = "proton-password";
-    description = "Sops secret holding the Proton account password.";
+    description = "Sops secret holding the Proton account password; default proton-password.";
   };
 
   options.local.vpn.healthProbe = lib.mkOption {
     type = lib.types.str;
     default = "1.1.1.1";
-    description = "Address pinged through the tunnel to accept a new peer.";
+    description = "Address pinged through the tunnel to confirm a new peer works; default 1.1.1.1.";
   };
 
   options.local.vpn.moderateNat = lib.mkOption {
     type = lib.types.bool;
     default = false;
-    description = "Request Proton's Moderate NAT, so peers behind the tunnel can connect directly.";
+    description = "Whether to request Proton's Moderate NAT for direct peer connections; default off.";
   };
 
   options.local.vpn.selection = {
     countries = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      description = "Exit countries the picker may choose from; empty disables picking.";
+      description = "Exit countries the picker may choose from; empty disables picking, default none.";
     };
 
     secureCore = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = "Restrict the picker to Secure Core servers.";
+      description = "Whether the picker is restricted to Secure Core servers; default off.";
     };
 
     p2p = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Restrict the picker to P2P servers.";
+      description = "Whether the picker is restricted to P2P servers; default on.";
     };
 
     poolSize = lib.mkOption {
       type = lib.types.ints.positive;
       default = 7;
-      description = "Pick at random among this many lowest-scoring servers.";
+      description = "Number of lowest-load servers the picker chooses among at random; default 7.";
     };
 
     menuCountries = lib.mkOption {
@@ -347,14 +340,14 @@ in
           "US"
         ]
       );
-      description = "Countries the desktop VPN controller offers.";
+      description = "Countries offered by the desktop VPN controller.";
     };
 
     rotateEvery = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       example = "6h";
-      description = "Systemd interval at which to re-pick a server, or null.";
+      description = "Systemd time span between automatic server re-picks; default null, meaning never.";
     };
   };
 
@@ -493,11 +486,8 @@ in
       });
     '';
 
-    # Fail-closed VPN kill switch: drop all egress except loopback, the tunnel
-    # interfaces, WireGuard's own marked packets, LAN, and DHCP. Active even
-    # before a tunnel comes up, so the real IP can't leak in the boot race.
-    # 0xca6c is the fwmark wg-quick puts on encrypted packets (table 51820);
-    # 0xca6d covers a brief overlap during a tunnel restart.
+    # Fail-closed: all egress is dropped except loopback, the tunnel, WireGuard's marks, LAN and DHCP.
+    # 0xca6c is the fwmark wg-quick puts on encrypted packets; 0xca6d covers a tunnel restart.
     networking.nftables.enable = true;
     networking.nftables.tables.vpn-killswitch = {
       family = "inet";
@@ -518,12 +508,7 @@ in
       '';
     };
 
-    # Split tunnel: traffic from the "novpn" group bypasses the VPN. Marking it
-    # 0xca6c makes wg-quick's rules route it out the physical link instead of the
-    # tunnel, and the kill switch above already accepts that mark.
-    # The reroute happens after the socket already picked the tunnel source IP,
-    # so masquerade rewrites it to the physical address (matched by skgid, not
-    # the mark, to leave WireGuard's own encrypted packets untouched).
+    # Marked novpn traffic leaves the physical link; masquerade by skgid rewrites its tunnel source address.
     networking.nftables.tables.novpn-split = {
       family = "inet";
       content = ''
@@ -541,8 +526,7 @@ in
       '';
     };
 
-    # resolv.conf points at the tunnel resolver, which bypassed traffic cannot
-    # reach by definition. Send its queries to a resolver on the physical link.
+    # resolv.conf points at the tunnel resolver, which bypassed traffic cannot reach.
     networking.nftables.tables.novpn-dns = {
       family = "ip";
       content = ''
@@ -557,8 +541,7 @@ in
       '';
     };
 
-    # Split-tunnel replies arrive on the physical link though the route to their
-    # source is via the tunnel; strict reverse-path filtering would drop them.
+    # Replies to bypassed traffic arrive on the physical link, so strict rp_filter would drop them.
     networking.firewall.checkReversePath = "loose";
   };
 }
