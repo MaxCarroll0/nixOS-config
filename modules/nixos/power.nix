@@ -19,87 +19,7 @@ let
       pkgs.jq
       pkgs.gnuplot
     ];
-    text = ''
-      interval="''${1:-5}"
-      history="''${2:-24 hours}"
-      declare -A before
-      available=0
-      domains=0
-      for d in /sys/class/powercap/*/; do
-        [ -e "$d/energy_uj" ] || continue
-        available=$((available + 1))
-        [ -r "$d/energy_uj" ] || continue
-        before["$d"]=$(cat "$d/energy_uj")
-        domains=$((domains + 1))
-      done
-      if [ "$domains" -eq 0 ]; then
-        if [ "$available" -eq 0 ]; then
-          echo "no powercap energy counters found." >&2
-        else
-          echo "no readable powercap domains." >&2
-          echo "energy_uj is root-only since Linux 5.10; set" >&2
-          echo "local.monitoring.userReadable = true, or run this as root." >&2
-        fi
-        exit 1
-      fi
-      sleep "$interval"
-      for d in /sys/class/powercap/*/; do
-        [ -r "$d/energy_uj" ] || continue
-        name=$(cat "$d/name" 2>/dev/null || basename "$d")
-        after=$(cat "$d/energy_uj")
-        delta=$(( after - ''${before["$d"]} ))
-        # The counter wraps at max_energy_range_uj.
-        if [ "$delta" -lt 0 ]; then
-          range=$(cat "$d/max_energy_range_uj" 2>/dev/null || echo 0)
-          [ "$range" -gt 0 ] || continue
-          delta=$(( delta + range ))
-        fi
-        printf '%-24s %6.2f W\n' "$name" "$(echo "scale=2; $delta / 1000000 / $interval" | bc)"
-      done
-
-      start=$(date --date="$history ago" +%s)
-      end=$(date +%s)
-      reports=$(mktemp --directory)
-      trap 'rm -rf "$reports"' EXIT
-
-      graph() {
-        key="$1"
-        title="$2"
-        query="$3"
-        report="$reports/$key"
-
-        if ! curl --fail --silent --show-error --get \
-          --data-urlencode "query=$query" \
-          --data-urlencode "start=$start" \
-          --data-urlencode "end=$end" \
-          --data-urlencode "step=60" \
-          http://127.0.0.1:9091/api/v1/query_range \
-          | jq -r '.data.result[0].values[]? | "\(.[0]) \(.[1])"' > "$report"; then
-          echo "could not read historical $title data" >&2
-          return
-        fi
-
-        if [ ! -s "$report" ]; then
-          echo "no historical $title data yet" >&2
-          return
-        fi
-
-        printf '\n%s, last %s\n' "$title" "$history"
-        gnuplot <<EOF
-      set terminal dumb 100 20
-      set xdata time
-      set timefmt "%s"
-      set format x "%H:%M"
-      set ylabel "W"
-      set yrange [0:*]
-      plot "$report" using 1:2 with lines title "$title"
-      EOF
-      }
-
-      graph total "Total" "avg1m:pc_power_watts"
-      graph cpu "CPU" "avg1m:pc_cpu_power_watts"
-      graph gpu "GPU" "avg1m:pc_gpu_power_watts"
-    '';
+    text = builtins.readFile ./power-report.sh;
   };
 
   powerStats = pkgs.writeShellApplication {
@@ -109,48 +29,7 @@ let
       pkgs.curl
       pkgs.jq
     ];
-    text = ''
-      metric_query() {
-        case "$1" in
-          total) echo 'avg1m:pc_power_watts' ;;
-          cpu) echo 'avg1m:pc_cpu_power_watts' ;;
-          gpu) echo 'avg1m:pc_gpu_power_watts' ;;
-        esac
-      }
-
-      stat() {
-        agg="$1"
-        query="$2"
-        range="$3"
-        curl --fail --silent --show-error --get \
-          --data-urlencode "query=''${agg}_over_time((''${query})[''${range}:1m])" \
-          http://127.0.0.1:9091/api/v1/query \
-          | jq -r '(.data.result[0].value[1] // "n/a") as $v
-                   | if $v == "n/a" then $v else ($v | tonumber | (. * 100 | round) / 100 | tostring) end'
-      }
-
-      printf '%-12s %-6s %8s %8s %8s\n' metric range min avg max
-      for key in total cpu gpu; do
-        query=$(metric_query "$key")
-        for range in 24h 7d 30d; do
-          min=$(stat min "$query" "$range")
-          avg=$(stat avg "$query" "$range")
-          max=$(stat max "$query" "$range")
-          printf '%-12s %-6s %8s %8s %8s\n' "$key" "$range" "$min" "$avg" "$max"
-        done
-      done
-    '';
-  };
-
-  powertopSnapshot = pkgs.writeShellApplication {
-    name = "powertop-snapshot";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.powertop
-    ];
-    text = ''
-      exec powertop --quiet --csv="/var/log/powertop/$(date --utc +%Y%m%dT%H%M%SZ).csv" --time=10
-    '';
+    text = builtins.readFile ./power-stats.sh;
   };
 
   # kscreen-doctor has to reach the Wayland session, which a root unit can only
@@ -381,55 +260,7 @@ let
       procps
       systemd
     ];
-    text = ''
-      resident=$(systemctl show -p MainPID --value nix-daemon.service 2>/dev/null || echo 0)
-      for pid in $(pgrep -x nix-daemon || true); do
-        if [ "$pid" != "$resident" ]; then
-          exit 0
-        fi
-      done
-
-      if [ "$resident" != 0 ] && pgrep -P "$resident" >/dev/null 2>&1; then
-        exit 0
-      fi
-
-      if pgrep -f "[.]tailscaled-wrapped be-child ssh" >/dev/null 2>&1; then
-        exit 0
-      fi
-
-      threshold=$(( $(date +%s) - ${toString (cfg.idle.autosuspend.idleMinutes * 60)} ))
-      for pty in /dev/pts/*; do
-        [ -c "$pty" ] || continue
-        case "$pty" in
-          */ptmx) continue ;;
-        esac
-        atime=$(stat -c %X "$pty" 2>/dev/null || echo 0)
-        if [ "$atime" -gt "$threshold" ]; then
-          exit 0
-        fi
-      done
-
-      # Seatless sessions are skipped because tailscaled registers one per SSH
-      # command, each of them type tty and never idle.
-      for session in $(loginctl list-sessions --no-legend | awk '{print $1}'); do
-        [ "$(loginctl show-session "$session" -p Class --value)" = user ] || continue
-        [ -n "$(loginctl show-session "$session" -p Seat --value)" ] || continue
-
-        # IdleHint is never set under Wayland; the screen lock is, by KDE.
-        if [ "$(loginctl show-session "$session" -p Type --value)" = tty ]; then
-          if [ "$(loginctl show-session "$session" -p IdleHint --value)" != yes ]; then
-            exit 0
-          fi
-          continue
-        fi
-
-        if [ "$(loginctl show-session "$session" -p LockedHint --value)" != yes ]; then
-          exit 0
-        fi
-      done
-
-      exit 1
-    '';
+    text = builtins.replaceStrings [ "@idleSeconds@" ] [ (toString (cfg.idle.autosuspend.idleMinutes * 60)) ] (builtins.readFile ./session-activity.sh);
   };
 
   keepAwake = pkgs.writeShellApplication {
@@ -438,131 +269,7 @@ let
       coreutils
       systemd
     ];
-    text = ''
-      usage() {
-        printf '%s\n' \
-          'keep-awake [--why REASON] [--shutdown] [--drain] [--] COMMAND [ARGS...]' \
-          'keep-awake --for DURATION [--why REASON] [--shutdown] [--drain]' \
-          'keep-awake --take NAME [--why REASON] [--for DURATION] [--shutdown] [--drain]' \
-          'keep-awake --release NAME|all' \
-          'keep-awake --list' \
-          "" \
-          'Holds a block inhibitor so the idle watcher leaves the host alone.' \
-          '--drain blocks suspend without restarting the idle countdown.' \
-          'DURATION accepts 90, 30m, 2h.'
-      }
-
-      seconds() {
-        case "$1" in
-          *h) echo $(( ''${1%h} * 3600 )) ;;
-          *m) echo $(( ''${1%m} * 60 )) ;;
-          *s) echo "''${1%s}" ;;
-          *) echo "$1" ;;
-        esac
-      }
-
-      # Tailscale SSH exports a usable user bus but no XDG_RUNTIME_DIR.
-      unit_scope() {
-        if [ "$(id -u)" = 0 ]; then
-          echo system
-        elif [ -n "''${XDG_RUNTIME_DIR:-}" ] || [ -n "''${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
-          echo user
-        else
-          echo system
-        fi
-      }
-
-      scoped_systemctl() {
-        if [ "$(unit_scope)" = user ]; then
-          systemctl --user "$@"
-        else
-          systemctl "$@"
-        fi
-      }
-
-      run_scoped() {
-        if [ "$(unit_scope)" = user ]; then
-          systemd-run --user "$@"
-        else
-          systemd-run "$@"
-        fi
-      }
-
-      why="keep-awake"
-      what="sleep"
-      who="keep-awake"
-      duration=""
-      name=""
-      release=""
-      list=0
-
-      while [ $# -gt 0 ]; do
-        case "$1" in
-          --why) why="$2"; shift 2 ;;
-          --for) duration="$2"; shift 2 ;;
-          --take) name="$2"; shift 2 ;;
-          --release) release="$2"; shift 2 ;;
-          --list) list=1; shift ;;
-          --shutdown) what="sleep:shutdown"; shift ;;
-          --drain) who="keep-awake-drain"; shift ;;
-          -h|--help) usage; exit 0 ;;
-          --) shift; break ;;
-          -*) echo "unknown option $1" >&2; usage >&2; exit 2 ;;
-          *) break ;;
-        esac
-      done
-
-      if [ "$list" -eq 1 ]; then
-        systemd-inhibit --list --no-pager
-        exit 0
-      fi
-
-      if [ -n "$release" ]; then
-        if [ "$release" = all ]; then
-          scoped_systemctl stop 'keep-awake-*' 2>/dev/null || true
-        else
-          scoped_systemctl stop "keep-awake-$release.service" 2>/dev/null || true
-        fi
-        exit 0
-      fi
-
-      if [ -n "$name" ]; then
-        unit="keep-awake-$name"
-        secs=$(seconds "''${duration:-24h}")
-        if scoped_systemctl is-active --quiet "$unit.service" 2>/dev/null; then
-          if [ -z "$duration" ]; then
-            exit 0
-          fi
-          scoped_systemctl stop "$unit.service" 2>/dev/null || true
-        fi
-        run_scoped --quiet --collect --unit "$unit" \
-          --property=RuntimeMaxSec="$secs" \
-          --description="keep-awake: $why" \
-          -- systemd-inhibit --mode=block --what="$what" --who="$who" --why="$why" \
-            -- ${pkgs.coreutils}/bin/sleep "$secs"
-        echo "$unit"
-        exit 0
-      fi
-
-      if [ -n "$duration" ]; then
-        secs=$(seconds "$duration")
-        unit="keep-awake-$(date +%s)-$$"
-        run_scoped --quiet --collect --unit "$unit" \
-          --property=RuntimeMaxSec="$secs" \
-          --description="keep-awake: $why" \
-          -- systemd-inhibit --mode=block --what="$what" --who="$who" --why="$why" \
-            -- ${pkgs.coreutils}/bin/sleep "$secs"
-        echo "$unit"
-        exit 0
-      fi
-
-      if [ $# -eq 0 ]; then
-        usage >&2
-        exit 2
-      fi
-
-      exec systemd-inhibit --mode=block --what="$what" --who="$who" --why="$why" -- "$@"
-    '';
+    text = builtins.replaceStrings [ "@sleep@" ] [ "${pkgs.coreutils}/bin/sleep" ] (builtins.readFile ./keep-awake.sh);
   };
 
   keepAwakeActive = pkgs.writeShellApplication {
@@ -619,28 +326,7 @@ let
         gawk
         systemd
       ];
-      text = ''
-        alarm=/sys/class/rtc/rtc0/wakealarm
-        target=$(( $(date +%s) + ${toString (hours * 3600)} ))
-
-        # Writing a wakealarm that is already armed fails EBUSY.
-        echo 0 > "$alarm"
-        echo "$target" > "$alarm"
-        echo "$target" > ${deepSleepTarget}
-
-        # systemctl suspend returns once logind accepts the request, not on
-        # resume, so whether to power off is decided by resumeCommands.
-        # A refused suspend must disarm both, or the next resume reads a target
-        # already in the past and escalates to poweroff.
-        # Not --check-inhibitors=yes: that also refuses whenever any user is
-        # logged in, and the autologin session on tty1 never goes away. The
-        # default still lets logind honour block inhibitors.
-        if ! systemctl suspend; then
-          echo 0 > "$alarm"
-          rm -f ${deepSleepTarget}
-          exit 1
-        fi
-      '';
+      text = builtins.replaceStrings [ "@hoursSeconds@" "@deepSleepTarget@" ] [ (toString (hours * 3600)) deepSleepTarget ] (builtins.readFile ./suspend-then-power-off.sh);
     };
 in
 
@@ -1184,29 +870,6 @@ in
         retention.time = 24 * 60 * 60;
       };
 
-      systemd.services.powertop-snapshot = {
-        description = "Record device power states and wakeups";
-        serviceConfig = {
-          ExecStart = lib.getExe powertopSnapshot;
-          LogsDirectory = "powertop";
-          LogsDirectoryMode = "0750";
-          Type = "oneshot";
-        };
-      };
-
-      systemd.timers.powertop-snapshot = {
-        wantedBy = [ "timers.target" ];
-        timerConfig = {
-          OnBootSec = "5m";
-          OnUnitActiveSec = "15m";
-          Persistent = true;
-          RandomizedDelaySec = "30s";
-        };
-      };
-
-      systemd.tmpfiles.rules = [
-        "d /var/log/powertop 0750 root root 30d"
-      ];
     })
   ];
 }
