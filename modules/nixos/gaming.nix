@@ -21,8 +21,7 @@ let
     exec /run/wrappers/bin/sg novpn -c "${program}$args"
   '';
 
-  # hiPrio so this shadows the package's own bin/steam, which the desktop entry,
-  # the steam:// handlers and the gamescope session all resolve off PATH.
+  # hiPrio shadows the package's bin/steam, which desktop entries and gamescope resolve off PATH.
   steamNovpn = lib.hiPrio (pkgs.writeShellScriptBin "steam" (novpn "${steamPkg}/bin/steam"));
 
   heroicNovpn = lib.hiPrio (pkgs.writeShellScriptBin "heroic" (novpn (lib.getExe pkgs.heroic)));
@@ -52,9 +51,7 @@ in
       gamescopeSession.enable = true;
       protontricks.enable = true;
       extraCompatPackages = [ pkgs.proton-ge-bin ];
-      # extraLibraries feeds multiPkgs, so MangoHud gets a 32-bit build too, but
-      # it contributes only the library: the Vulkan loader finds no layer without
-      # the manifest that extraPkgs installs.
+      # MangoHud's 32-bit library needs the layer manifest that extraPkgs installs.
       package = pkgs.steam.override {
         extraLibraries = p: [ p.mangohud ];
         extraPkgs = p: [ p.mangohud ];
@@ -68,8 +65,7 @@ in
     programs.gamescope.capSysNice = true;
     programs.gamemode.enable = true;
 
-    # A game holds an idle inhibitor, never a sleep one, and a paused game drops
-    # below the load threshold, so without this the idle watcher suspends it.
+    # Games hold idle inhibitors, not sleep ones, and a paused game falls below the load threshold.
     programs.gamemode.settings =
       lib.mkIf ((config.local ? power) && config.local.power.idle.autosuspend.keepAwake)
         {

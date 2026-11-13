@@ -14,9 +14,7 @@ let
 
   slice = "nixbuild";
 
-  # Every incoming build shares one slice, so the cap holds however many
-  # connections the client opens. A scope that cannot be created would take
-  # remote builds down with it, hence the probe.
+  # One slice caps all incoming builds however many connections open; the probe guards a slice that cannot be created.
   capped = pkgs.writeShellScript "nix-daemon-capped" ''
     scope="${pkgs.systemd}/bin/systemd-run --user --scope --quiet --slice=${slice}"
     if $scope ${pkgs.coreutils}/bin/true 2>/dev/null; then
@@ -25,8 +23,7 @@ let
     exec ${daemon}
   '';
 
-  # The key buys a Nix protocol session, not a shell. This must stay in step
-  # with protocol = "ssh-ng" on the client; plain ssh:// wants nix-store --serve.
+  # The key buys a Nix protocol session, not a shell; it must match protocol = "ssh-ng" on the client.
   forcedCommand =
     key: ''command="${if cfg.cpuQuota == null then daemon else capped}",restrict ${key}'';
 in
@@ -78,8 +75,7 @@ in
         };
       };
 
-      # trusted-users lets the client push unsigned paths and override settings.
-      # That is a trust relationship between two machines you own, not a sandbox.
+      # trusted-users is a trust grant between machines the owner controls, not a sandbox.
       nix.settings.trusted-users = [ "nixremote" ];
       nix.nrBuildUsers = 64;
 

@@ -57,9 +57,7 @@ let
           *) echo "refusing to sync: $dev does not report SMART PASSED" >&2; exit 1 ;;
         esac
 
-        # smartctl exit bit 3 is DISK FAILING and bit 4 a pre-fail attribute past threshold.
-        # Bit 5 is a usage counter past threshold, which never falls again once tripped, so
-        # treating it as fatal would block parity for the remaining life of the drive.
+        # smartctl bit 3 is DISK FAILING and bit 4 a pre-fail attribute; bit 5 (usage) must not block parity.
         if [ $((rc & 8)) -ne 0 ] || [ $((rc & 16)) -ne 0 ]; then
           echo "refusing to sync: $dev reports a failing pre-fail attribute" >&2
           exit 1
@@ -78,8 +76,7 @@ let
 
       snapraid --conf ${snapraidConf} touch
 
-      # Parity is rewritten in place, so a mass deletion synced in is unrecoverable. diff exits
-      # non-zero whenever anything differs, so the gate reads the counts rather than the status.
+      # diff exits non-zero on any difference, so the gate reads the counts, not the status.
       diff_out=$(snapraid --conf ${snapraidConf} diff || true)
       removed=$(printf '%s\n' "$diff_out" | awk '$2 == "removed" { print $1; exit }')
       updated=$(printf '%s\n' "$diff_out" | awk '$2 == "updated" { print $1; exit }')

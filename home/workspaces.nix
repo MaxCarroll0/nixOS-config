@@ -11,8 +11,7 @@ let
   overrides = import ../lib/overrides.nix { inherit lib; };
   cfg = config.local.workspaces;
 
-  # nixpkgs still pins the 2025 build, whose .deb AWS has deleted, and its fixup
-  # is written against a dcv/ subdirectory the 2026 bundle no longer has.
+  # nixpkgs pins the 2025 .deb that AWS deleted; its fixup expects a dcv/ directory the 2026 bundle lacks.
   aws-workspaces =
     overrides.againstVersion "aws-workspaces" "2025.0.5296" pkgs.aws-workspaces.version
       (pkgs.callPackage ../pkgs/aws-workspaces.nix { });
@@ -21,8 +20,7 @@ let
     builtins.readFile ./workspaces-box-provision.sh
   );
 
-  # Fallback for when AWS rotates the .deb and the packaged client stops
-  # building: apt inside the container tracks upstream on its own.
+  # Container fallback for when AWS rotates the .deb; apt inside tracks upstream.
   workspaces-box = pkgs.writeShellApplication {
     name = "workspaces-box";
     runtimeInputs = with pkgs; [

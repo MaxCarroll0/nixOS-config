@@ -43,8 +43,7 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    # Stays root-owned: the unit is DynamicUser and pulls this in via
-    # LoadCredential, which reads it as root before entering the sandbox.
+    # Stays root-owned: LoadCredential reads it as root before the DynamicUser sandbox starts.
     sops.secrets.cloudflared-credentials = {
       restartUnits = [ "cloudflared-tunnel-${cfg.tunnelId}.service" ];
     };
@@ -84,8 +83,7 @@ in
       }) cfg.hostnames;
     };
 
-    # Loopback-only on a high port, so it needs no binding capabilities at all
-    # and can refuse every address but localhost.
+    # Loopback on a high port needs no binding capabilities.
     systemd.services.nginx.serviceConfig = {
       CapabilityBoundingSet = [ "" ];
       AmbientCapabilities = lib.mkForce [ "" ];

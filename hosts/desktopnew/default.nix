@@ -1,4 +1,4 @@
-# New AMD desktop hardware (Gigabyte board, post 2026-08-11 swap).
+# AMD desktop hardware on a Gigabyte board.
 
 {
   config,
@@ -10,8 +10,7 @@
 }:
 
 let
-  # VRM MOS is excluded: measured identical at 380 and 2169 rpm, so it is heated
-  # by conduction from CPU package power and airflow cannot move it.
+  # VRM MOS is excluded: its temperature follows CPU package power, not airflow.
   caseTemp = pkgs.writeShellApplication {
     name = "case-temp-millicelsius";
     runtimeInputs = [ pkgs.coreutils ];
@@ -55,8 +54,7 @@ in
     "x-systemd.automount"
   ];
 
-  # This host's own key, so sudo-grant's agent can satisfy pam_ssh_agent_auth;
-  # keys/max.pub is a different key and lives on no host's disk here.
+  # This host's own key: keys/max.pub lives on no host's disk here.
   users.users.max.openssh.authorizedKeys.keyFiles = [ ../../keys/max-desktopnew.pub ];
 
   local.server.ssh.lanInterfaces = [ "enp5s0" ];
@@ -71,15 +69,13 @@ in
 
   environment.systemPackages = [
     caseTemp
-    # cec-ctl, to ask the HDMI panel whether it is actually on.
+    # cec-ctl queries the HDMI panel's power state.
     pkgs.v4l-utils
   ];
-  # arctic_fan_controller, for the 10-port USB fan controller, is new in 7.2.
+  # arctic_fan_controller drives the 10-port USB fan controller; it needs kernel 7.2.
   boot.kernelPackages = pkgs-unstable.linuxPackages_testing;
 
-  # The panel is indistinguishable off from on over HPD, DPMS, EDID, HDA ELD and
-  # DDC/CI -- all measured identical 2026-10-10. CEC is the only channel left,
-  # and CEC_CORE without MEDIA_CEC_SUPPORT builds the notifier but no /dev/cec*.
+  # CEC is the only channel that reports the panel's power state; /dev/cec* needs MEDIA_CEC_SUPPORT.
   boot.kernelPatches = [
     {
       name = "media-cec-support";
@@ -114,29 +110,16 @@ in
     "gigabyte_wmi:temp6" = "VSoC MOS";
   };
 
-  # Focusrite firmware does not survive a USB resume; it dropped off the bus.
-  # The G403 goes silent once parked and a replug is the only way back.
+  # The Focusrite and G403 do not recover from a USB park without a replug.
   local.power.idle.usb.neverSuspend = [
     "1235:8202"
     "046d:c08f"
   ];
 
-  # RESET_RESUME for the Focusrite: reset it on resume instead of restoring
-  # state it cannot restore. Measured 2026-10-09, once it has dropped off the
-  # bus nothing short of a replug brings it back -- a verified port disable
-  # toggle and a full xhci_hcd unbind/rebind both left it absent -- so the only
-  # thing left is to stop it dropping off in the first place. Untested through
-  # a suspend as of writing.
+  # RESET_RESUME: the Focusrite is reset on resume rather than restored; once off the bus it stays off.
   boot.kernelParams = [ "usbcore.quirks=1235:8202:b" ];
 
-  # Both latch a wake as S3 is entered, resuming within milliseconds: serio0
-  # raises IRQ 1 with no PS/2 keyboard attached, and the Promontory root hubs
-  # assert PME with every device unbound.
-  #
-  # Measured 2026-10-08: sparing usb1 so a keypress could resume the host put
-  # that straight back, suspending and exiting 4-5 s later every 11 minutes,
-  # which also dropped the Focusrite off the bus. A keypress cannot wake this
-  # board from S3; the power button, Wake-on-LAN and the RTC alarm can.
+  # serio0 and the Promontory root hubs latch an immediate S3 wake; a keypress cannot wake this board.
   local.power.idle.disableWakeSources = [
     "/sys/bus/serio/devices/serio0"
     "/sys/bus/pci/devices/0000:02:00.0/usb*"

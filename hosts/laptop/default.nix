@@ -130,8 +130,7 @@
     ];
   };
 
-  # Enabling sshd is also what generates /etc/ssh/ssh_host_ed25519_key, which
-  # sops.age.sshKeyPaths picks up by default.
+  # Enabling sshd also generates /etc/ssh/ssh_host_ed25519_key, which sops picks up.
   local.server.ssh = {
     port = 22;
     lanInterfaces = [

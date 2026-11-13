@@ -49,10 +49,7 @@ in
           inherit (cfg) port;
           openFirewall = true;
           useRoutingFeatures = if cfg.advertiseRoutes == [ ] then "none" else "server";
-          # MagicDNS lives at 100.100.100.100, which wg-quick's redirect rule
-          # captures into the tunnel. Its ip-rule priority cannot be beaten:
-          # wg-quick inserts below whatever exists, down to 0. Use the tunnel's
-          # own resolver instead; tailnet names resolve via tailscale directly.
+          # wg-quick's redirect captures MagicDNS at 100.100.100.100; use the tunnel resolver instead.
           extraUpFlags =
             [ "--accept-dns=false" ]
             ++ lib.optional cfg.ssh "--ssh"
@@ -70,9 +67,7 @@ in
         # Use native nftables backend.
         systemd.services.tailscaled.environment.TS_DEBUG_FIREWALL_MODE = "nftables";
 
-        # Tailnet SSH sessions live inside tailscaled, so restarting it during a
-        # switch kills the deploy that asked for the restart. The new daemon
-        # takes over at the next reboot instead.
+        # Restarting tailscaled mid-switch kills the deploy's own tailnet SSH session; the new daemon waits for reboot.
         systemd.services.tailscaled.restartIfChanged = false;
 
       }
@@ -88,8 +83,7 @@ in
         };
 
         systemd.services.tailscaled-autoconnect = {
-          # Enrollment must not hold up or fail a system activation. Start it
-          # from a timer and retry transient failures in the background.
+          # Enrolment runs from a timer so a failure cannot fail the system activation.
           wantedBy = lib.mkForce [ ];
           after = [
             "network-online.target"

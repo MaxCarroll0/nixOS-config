@@ -13,8 +13,7 @@ let
 
   disks = scfg: lib.mapAttrsToList (name: d: "${name}=${d.device}") cfg.storage.dataDisks;
 
-  # SnapRAID's sync and scrub exit 0 unless every branch *and* parity is
-  # mounted, so leaving parity out makes them silent no-ops.
+  # SnapRAID exits 0 unless every branch and parity is mounted, so missing parity is a silent no-op.
   mountTargets = lib.escapeShellArgs (
     lib.mapAttrsToList (n: _: "${cfg.storage.diskRoot}/${n}") cfg.storage.dataDisks
     ++ [ cfg.storage.parityMount ]
@@ -96,10 +95,7 @@ let
       touch ${heldLocked}
       systemctl stop ${ucfg.target} || true
 
-      # luksClose cannot succeed while a branch is still mounted, and the pool
-      # holds every branch open, so it has to come down first. Only stopping the
-      # .mount unit propagates to the PartOf= watchers; a bare umount leaves
-      # their fatrace descriptors holding the branch busy.
+      # Stop the .mount unit: only that reaches the PartOf= watchers, a bare umount leaves them holding the branch.
       systemctl stop "$(systemd-escape -p --suffix=mount ${cfg.dataRoot})" || true
       umount ${lib.escapeShellArg cfg.dataRoot} 2>/dev/null || true
       for m in ${mountTargets}; do

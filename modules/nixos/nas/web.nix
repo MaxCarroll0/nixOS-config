@@ -39,7 +39,7 @@ in
     workerCommand = lib.mkOption {
       type = lib.types.str;
       default = "${pkgs.copyparty}/bin/copyparty -i 127.0.0.1 -p 0 -v %h::rw --no-crt -q";
-      description = "Application run per account. %h is that account's home. It needs no auth or multi-tenancy: it only ever runs as one user and sees one home.";
+      description = "Command run per account for its file browser; %h expands to that account's home.";
     };
   };
 

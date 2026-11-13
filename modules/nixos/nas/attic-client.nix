@@ -56,9 +56,7 @@ let
     text = ''
       install -d -m 0700 ${stateDir}
 
-      # Recover a batch if the previous service invocation was interrupted,
-      # then detach the current queue without holding the build hook's lock
-      # during the potentially long network upload.
+      # Recover interrupted batches first, then detach the queue without holding the build hook's lock.
       (
         flock 9
         if [ -s ${stateDir}/pending ]; then
@@ -74,8 +72,7 @@ let
         exit 0
       fi
 
-      # A single collected path makes attic reject the whole batch, and the
-      # requeue below would then retry it forever.
+      # attic rejects a whole batch on one bad path, and the requeue would retry it forever.
       while read -r path; do
         [ -e "$path" ] && printf '%s\n' "$path"
       done < ${stateDir}/pending > ${stateDir}/pending.valid

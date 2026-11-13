@@ -228,8 +228,7 @@ in
       services.displayManager.sddm.wayland.enable = true;
       # weston's kiosk shell stops repainting after S3 resume and on output hotplug.
       services.displayManager.sddm.wayland.compositor = "kwin";
-      # kwallet is disabled outright in home/common.nix, so kwallet-pam has nothing
-      # to unlock and only leaves kwalletd prompting for the rest of the session.
+      # kwallet is disabled in home/common.nix, so kwallet-pam has nothing to unlock.
       security.pam.services = lib.mkIf plasma {
         login.kwallet.enable = lib.mkForce false;
         kde.kwallet.enable = lib.mkForce false;

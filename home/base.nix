@@ -21,7 +21,6 @@
       "AGENTS.md"
       "CLAUDE.md"
 
-      # Editor / OS / local state
       "TAGS"
       ".direnv/"
       "result"
@@ -30,60 +29,47 @@
       ".vscode/"
       ".idea/"
 
-      # Exercism
       ".exercism/"
 
-      # Rust
       "target/"
 
-      # TypeScript / Node / Bun
       "node_modules/"
       "dist/"
       "build/"
       ".next/"
       "*.tsbuildinfo"
 
-      # Python
       "__pycache__/"
       "*.pyc"
       "*.pyo"
       ".venv/"
       "*.egg-info/"
 
-      # OCaml
       "_build/"
       "*.install"
 
-      # Haskell
       "dist-newstyle/"
       ".stack-work/"
       "*.hi"
       "*.o"
 
-      # Scala
       ".bloop/"
       ".metals/"
 
-      # F# / .NET
       "bin/"
       "obj/"
 
-      # Clojure
       ".cpcache/"
       ".lsp/"
       ".clj-kondo/"
 
-      # Common Lisp
       "*.fasl"
 
-      # Idris
       "*.ibc"
       "*.ttc"
 
-      # Agda
       "*.agdai"
 
-      # Lean4
       ".lake/"
       "*.olean"
     ];
@@ -104,9 +90,6 @@
     };
   };
 
-  #programs.opam = {
-  #    enable = true;
-  #  };
 
   programs.direnv = {
     enable = true;

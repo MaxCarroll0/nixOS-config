@@ -60,8 +60,7 @@ in
   };
 
   config = lib.mkIf (cfg.enable && acfg.enable) {
-    # A stable account lets sops hand the initialized signing database to
-    # atticd before the service starts.
+    # A stable account lets sops hand the signing database to atticd before start.
     users.users.atticd = {
       isSystemUser = true;
       group = "atticd";
@@ -74,8 +73,7 @@ in
       settings = {
         listen = "127.0.0.1:${toString acfg.port}";
         allowed-hosts = [ acfg.hostname ];
-        # Every client reaches this stable loopback port; peer-transport then
-        # selects the Pi's LAN address or its tailnet address.
+        # Clients use one stable loopback port; peer-transport picks the LAN or tailnet address.
         api-endpoint = "https://${acfg.hostname}:${toString acfg.clientPort}/";
         require-proof-of-possession = false;
         database.url = "sqlite://${acfg.dataDir}/server.db?mode=rwc";
@@ -84,8 +82,7 @@ in
           path = "${acfg.dataDir}/store";
         };
         chunking = {
-          # The Pi serves one SSD on a trusted gigabit LAN. Whole NARs avoid
-          # FastCDC CPU work while retaining Attic's whole-NAR deduplication.
+          # Whole NARs avoid FastCDC CPU work and keep Attic's whole-NAR deduplication.
           nar-size-threshold = 0;
           min-size = 16384;
           avg-size = 65536;

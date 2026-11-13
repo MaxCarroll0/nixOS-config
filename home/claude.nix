@@ -45,10 +45,7 @@ in
     };
   };
 
-  # The sops export is a one-time bootstrap, not continuously authoritative
-  # state: OAuth refresh tokens evolve locally and can become stale after use.
-  # A clean device also needs the exported active slot copied into Claude
-  # Code's live credential file.
+  # The sops export is a one-time bootstrap: OAuth refresh tokens evolve locally, so it goes stale.
   home.activation.claudeSwapAccounts = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
     _marker="$HOME/.local/state/claude-swap/accounts-bootstrap-v1"
     if [ ! -e "$_marker" ] && [ -r ${accountBootstrap} ]; then
