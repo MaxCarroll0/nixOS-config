@@ -86,18 +86,6 @@ let
     '';
   };
 
-  projectClosureRetention = pkgs.writeShellApplication {
-    name = "project-closure-retention";
-    runtimeInputs = [
-      config.nix.package
-      pkgs.angrr
-      pkgs.python3
-    ];
-    text = ''
-      exec python3 ${./project-closure-retention.py} "$@"
-    '';
-  };
-
 in
 
 {
@@ -109,6 +97,7 @@ in
     ./nix-observer.nix
     ./unclean-boot.nix
     ./last-good-boot.nix
+    ./disk.nix
   ];
 
   options.local.users.sopsPasswords = lib.mkOption {
@@ -232,12 +221,6 @@ in
       };
     };
 
-    systemd.services.nh-clean.serviceConfig.ExecCondition = "${pkgs.bash}/bin/sh -c 'test \"$(${pkgs.coreutils}/bin/df --output=avail -B1G /nix/store | tail -n1)\" -lt 20'";
-
-    systemd.services.nh-clean.preStart = /* bash */ ''
-      ${projectClosureRetention}/bin/project-closure-retention --apply
-    '';
-
     local.users.sopsPasswords.max = "max-password-hash";
     users.mutableUsers = false;
 
@@ -333,7 +316,7 @@ in
     environment.systemPackages = [
       editSecrets
       nixConfig
-      projectClosureRetention
+      config.local.disk.retention
       pkgs.nix-sweep
       pkgs.git
     ];
