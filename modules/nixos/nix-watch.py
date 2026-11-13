@@ -87,9 +87,20 @@ def describe(signals, delta, stalled, tail, started, stage_since):
     return line
 
 
+def busy(path):
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False
+    return bool(data) and not EXIT.search(data) and time.time() - path.stat().st_mtime < 900
+
+
 def launch(log, command):
     path = Path(log)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if busy(path):
+        print("log busy: %s is being written by a job without EXIT= yet; pick another path" % log, file=sys.stderr)
+        sys.exit(4)
     env = dict(os.environ, NIX_OBSERVER_PLAIN="1")
     with path.open("wb") as out:
         child = subprocess.Popen(
