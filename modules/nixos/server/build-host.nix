@@ -12,6 +12,24 @@ let
 
   daemon = "${config.nix.package}/bin/nix-daemon --stdio";
 
+  gib = 1024 * 1024 * 1024;
+
+  freeGiB =
+    {
+      laptop = {
+        min = 20;
+        max = 40;
+      };
+      desktopnew = {
+        min = 40;
+        max = 80;
+      };
+    }
+    .${config.networking.hostName} or {
+      min = 10;
+      max = 200;
+    };
+
   slice = "nixbuild";
 
   # Every incoming build shares one slice, so the cap holds however many
@@ -88,8 +106,8 @@ in
         cores = 0;
         sandbox = true;
         sandbox-fallback = false;
-        min-free = 10 * 1024 * 1024 * 1024;
-        max-free = 200 * 1024 * 1024 * 1024;
+        min-free = freeGiB.min * gib;
+        max-free = freeGiB.max * gib;
         auto-allocate-uids = true;
         experimental-features = [
           "auto-allocate-uids"
