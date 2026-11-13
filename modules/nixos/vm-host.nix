@@ -244,57 +244,7 @@ let
       pkgs.jq
       config.local.power.keepAwakePackage
     ];
-    text = ''
-      count() {
-        local n
-        n=$("$1") || n=0
-        if [[ "$n" =~ ^[0-9]+$ ]]; then echo "$n"; else echo 0; fi
-      }
-
-      running=false
-      locks=0
-      logins=0
-      readyAt=0
-      run=$(${virsh} domid ${domainName} 2>/dev/null) || run=-
-      case "$(${virsh} domstate ${domainName})" in
-        running | "in shutdown")
-          running=true
-          locks=$(count ${lib.getExe guestLockCount})
-          logins=$(count ${lib.getExe guestLoginCount})
-          readyAt=$(count ${lib.getExe guestServerReadyAt})
-          ;;
-      esac
-
-      idle=false
-      [ "$running" = true ] && [ $((locks + logins)) -eq 0 ] && idle=true
-
-      if [ "$idle" = true ]; then
-        systemctl is-active -q ${idleCountdown}@"$run".timer ${idleCountdown}@"$run".service \
-          || systemctl start ${idleCountdown}@"$run".timer
-        keep-awake --take ${domainName} --drain --for 3m --why "${domainName} idle" >/dev/null
-      else
-        systemctl stop '${idleCountdown}@*.timer'
-        if [ "$running" = true ]; then
-          keep-awake --take ${domainName} --for 3m --why "${domainName} in use" >/dev/null
-        else
-          keep-awake --release ${domainName}
-        fi
-      fi
-
-      shutsDownAt=$(systemctl list-timers --output=json ${idleCountdown}@"$run".timer \
-        | jq '.[0].next // empty | . / 1000000 | floor') || true
-      stopping=false
-      systemctl is-active -q ${idleCountdown}@"$run".service && stopping=true
-
-      jq -cn --argjson locks "$locks" --argjson logins "$logins" \
-        --argjson starting "$([ "$idle" = true ] && [ "$readyAt" -eq 0 ] && echo true || echo false)" \
-        --argjson stopping "$stopping" --argjson updated "$(date +%s)" \
-        --argjson shutsDownAt "''${shutsDownAt:-null}" \
-        --argjson idleAfter ${toString (idleShutdownMinutes * 60)} \
-        '{locks:$locks,logins:$logins,starting:$starting,stopping:$stopping,updated:$updated,idleAfter:$idleAfter,shutsDownAt:$shutsDownAt}' \
-        > ${idleStatus}.tmp
-      mv ${idleStatus}.tmp ${idleStatus}
-    '';
+    text = builtins.replaceStrings [ "@virsh@" "@domainName@" "@idleCountdown@" "@idleStatus@" "@guestLockCount@" "@guestLoginCount@" "@guestServerReadyAt@" "@idleAfter@" ] [ "${virsh}" "${domainName}" "${idleCountdown}" "${idleStatus}" "${lib.getExe guestLockCount}" "${lib.getExe guestLoginCount}" "${lib.getExe guestServerReadyAt}" "${toString (idleShutdownMinutes * 60)}" ] (builtins.readFile ./vm-host-shutdown-when-idle.sh);
   };
 
   resume = pkgs.writeShellApplication {
@@ -329,53 +279,7 @@ let
       config.virtualisation.libvirtd.package
       pkgs.jq
     ];
-    text = ''
-      state() { ${virsh} domstate ${domainName} 2>/dev/null || echo unknown; }
-      status_json() {
-        local current idle='{}'
-        current=$(state)
-        if [ "$current" = running ] && [ -r ${idleStatus} ]; then
-          idle=$(cat ${idleStatus})
-        fi
-        jq -cn --arg state "$current" --argjson idle "$idle" '{state:$state} + $idle'
-      }
-
-      case "''${1:-}" in
-        remote)
-          case "''${SSH_ORIGINAL_COMMAND:-}" in
-            start)
-              ${lib.getExe resume} >&2
-              echo '{"ok":true}'
-              ;;
-            stop)
-              if [ "$(state)" = paused ]; then
-                ${virsh} resume ${domainName} >/dev/null
-              fi
-              ${virsh} shutdown ${domainName} >&2
-              echo '{"ok":true}'
-              ;;
-            status) status_json ;;
-            *)
-              echo "usage: start | stop | status" >&2
-              exit 2
-              ;;
-          esac
-          ;;
-        status-http)
-          while IFS= read -r -t 2 line; do
-            line=''${line%$'\r'}
-            [ -z "$line" ] && break
-          done
-          body=$(status_json)
-          printf 'HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \
-            "''${#body}" "$body"
-          ;;
-        *)
-          echo "usage: ${domainName}-control remote | status-http" >&2
-          exit 2
-          ;;
-      esac
-    '';
+    text = builtins.replaceStrings [ "@virsh@" "@domainName@" "@idleStatus@" "@resume@" ] [ "${virsh}" "${domainName}" "${idleStatus}" "${lib.getExe resume}" ] (builtins.readFile ./vm-host-control.sh);
   };
 in
 
