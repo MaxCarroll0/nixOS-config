@@ -974,6 +974,7 @@ in
             ];
         User = cfg.user;
         Group = cfg.user;
+        MemoryHigh = "500M";
         MemoryMax = "600M";
         WorkingDirectory = cfg.stateDir;
         ReadWritePaths = [ cfg.stateDir ];
