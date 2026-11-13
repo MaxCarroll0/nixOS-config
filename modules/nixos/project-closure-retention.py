@@ -13,7 +13,24 @@ from pathlib import Path
 
 
 GIB = 1024**3
+DAY = 24 * 60 * 60
 RESULT_NAME = re.compile(r"result(?:-.+)?$")
+EXPENSIVE = (
+    "linux-",
+    "emacs-",
+    "ghc-",
+    "llvm-",
+    "clang-",
+    "gcc-",
+    "rustc-",
+    "chromium-",
+    "firefox-",
+    "electron-",
+    "qtwebengine-",
+    "webkitgtk-",
+)
+FETCHED = re.compile(r"(?:^|-)source$|\.(?:tar(?:\.[a-z0-9]+)?|tgz|tbz2|txz|zip|crate|gem|whl)$|\.patch$")
+TIERS = (1, 2, 3)
 
 
 @dataclass
@@ -23,6 +40,22 @@ class Project:
     store_paths: list[str] = field(default_factory=list)
     last_used: float = 0
     closure: set[str] = field(default_factory=set)
+
+
+def tier_of(store_path: str) -> int:
+    name = os.path.basename(store_path).split("-", 1)[-1]
+    if FETCHED.search(name):
+        return 3
+    if name.startswith(EXPENSIVE):
+        return 2
+    return 1
+
+
+def tier_bytes(paths: set[str], sizes: dict[str, int]) -> dict[int, int]:
+    totals = {tier: 0 for tier in TIERS}
+    for path in paths:
+        totals[tier_of(path)] += sizes[path]
+    return totals
 
 
 def project_for(root: Path) -> Path | None:
@@ -93,47 +126,63 @@ def query_sizes(paths: set[str]) -> dict[str, int]:
     return sizes
 
 
-def select_evictions(
+def plan(
     projects: dict[Path, Project],
     sizes: dict[str, int],
     now: float,
     protect_days: int,
-    maximum: int,
-    minimum: int,
-    maximum_bytes: int,
-) -> tuple[list[tuple[Project, int]], int]:
-    remaining = dict(projects)
+    budget_bytes: int | None,
+    need_bytes: int | None,
+) -> tuple[list[tuple[Project, dict[int, int]]], int, int]:
     references = collections.Counter(
-        store_path for project in remaining.values() for store_path in project.closure
+        store_path for project in projects.values() for store_path in project.closure
     )
-    retained_bytes = sum(sizes[path] for path in references)
-    protected_after = now - protect_days * 24 * 60 * 60
-    evictions: list[tuple[Project, int]] = []
+    retained = sum(sizes[path] for path in references)
+    freed = 0
+    remaining = dict(projects)
+    floor = now - protect_days * DAY
+    evictions: list[tuple[Project, dict[int, int]]] = []
 
-    while (len(remaining) > maximum or retained_bytes > maximum_bytes) and len(remaining) > minimum:
-        candidates = [project for project in remaining.values() if project.last_used < protected_after]
-        if not candidates:
+    def exclusive(project: Project) -> dict[int, int]:
+        totals = {tier: 0 for tier in TIERS}
+        for store_path in project.closure:
+            if references[store_path] == 1:
+                totals[tier_of(store_path)] += sizes[store_path]
+        return totals
+
+    def satisfied() -> bool:
+        within_budget = budget_bytes is None or retained <= budget_bytes
+        enough_freed = need_bytes is None or freed >= need_bytes
+        return within_budget and enough_freed
+
+    while not satisfied():
+        options = []
+        for project in remaining.values():
+            if project.last_used >= floor:
+                continue
+            totals = exclusive(project)
+            if sum(totals.values()):
+                options.append((project, totals))
+        if not options:
             break
-        oldest_day = min(datetime.datetime.fromtimestamp(p.last_used).date() for p in candidates)
-        bucket = [
-            project
-            for project in candidates
-            if datetime.datetime.fromtimestamp(project.last_used).date() == oldest_day
-        ]
-
-        def marginal_size(project: Project) -> int:
-            return sum(sizes[path] for path in project.closure if references[path] == 1)
-
-        victim = max(bucket, key=lambda project: (marginal_size(project), str(project.path)))
-        marginal = marginal_size(victim)
-        evictions.append((victim, marginal))
+        victim, totals = max(
+            options,
+            key=lambda option: (
+                option[1][2] == 0,
+                option[1][1] > 0,
+                option[1][1] + option[1][3],
+                str(option[0].path),
+            ),
+        )
         del remaining[victim.path]
         for store_path in victim.closure:
             references[store_path] -= 1
             if references[store_path] == 0:
-                retained_bytes -= sizes[store_path]
+                retained -= sizes[store_path]
+                freed += sizes[store_path]
+        evictions.append((victim, totals))
 
-    return evictions, retained_bytes
+    return evictions, retained, freed
 
 
 def angrr_config(roots: list[Path], protect_days: int) -> str:
@@ -169,35 +218,53 @@ def format_size(size: int) -> str:
     return f"{size / GIB:.1f} GiB"
 
 
+def format_tiers(totals: dict[int, int]) -> str:
+    labels = {1: "cheap local", 2: "expensive local", 3: "fetched"}
+    return "; ".join(f"{labels[tier]} {format_size(totals[tier])}" for tier in TIERS)
+
+
 def self_test() -> None:
-    day = 24 * 60 * 60
-    now = 100 * day
-    projects: dict[Path, Project] = {}
-    sizes: dict[str, int] = {"shared": 10}
-    for index in range(42):
-        path = Path(f"/project/{index:02d}")
-        unique = f"unique-{index}"
-        sizes[unique] = index + 1
-        projects[path] = Project(
-            path=path,
-            last_used=now - (10 + index // 2) * day,
-            closure={"shared", unique},
-        )
-    recent = Project(
-        Path("/project/recent-large"),
-        last_used=now - day,
-        closure={"recent-large"},
-    )
-    projects[recent.path] = recent
-    sizes["recent-large"] = 10_000
+    now = 100 * DAY
 
-    evictions, _ = select_evictions(projects, sizes, now, 3, 40, 10, 10**9)
-    assert len(evictions) == 3
-    assert all(project.path != recent.path for project, _ in evictions)
-    assert [str(project.path) for project, _ in evictions[:2]] == ["/project/41", "/project/40"]
+    def project(name: str, days: float, paths: set[str]) -> Project:
+        return Project(Path(name), last_used=now - days * DAY, closure=paths)
 
-    evictions, _ = select_evictions(projects, sizes, now, 3, 40, 10, 0)
-    assert len(projects) - len(evictions) == 10
+    sizes = {
+        "/nix/store/aaa-foo": 10,
+        "/nix/store/bbb-ghc-9.10": 100,
+        "/nix/store/ccc-src.tar.gz": 30,
+        "/nix/store/ddd-bar": 5,
+    }
+    assert tier_of("/nix/store/aaa-foo") == 1
+    assert tier_of("/nix/store/bbb-ghc-9.10") == 2
+    assert tier_of("/nix/store/ccc-src.tar.gz") == 3
+    assert tier_of("/nix/store/eee-source") == 3
+
+    def projects() -> dict[Path, Project]:
+        built = [
+            project("/p/cheap", 10, {"/nix/store/aaa-foo"}),
+            project("/p/heavy", 11, {"/nix/store/bbb-ghc-9.10"}),
+            project("/p/fetched", 12, {"/nix/store/ccc-src.tar.gz"}),
+            project("/p/recent", 1, {"/nix/store/ddd-bar"}),
+        ]
+        return {item.path: item for item in built}
+
+    names = lambda evictions: [victim.path.name for victim, _ in evictions]
+
+    evictions, _, _ = plan(projects(), sizes, now, 3, 0, None)
+    assert names(evictions) == ["cheap", "fetched", "heavy"], names(evictions)
+    assert "recent" not in names(evictions)
+
+    evictions, _, freed = plan(projects(), sizes, now, 3, None, 10)
+    assert names(evictions) == ["cheap"] and freed == 10
+
+    evictions, retained, _ = plan(projects(), sizes, now, 3, 110, None)
+    assert names(evictions) == ["cheap", "fetched"], names(evictions)
+    assert retained == 105
+
+    evictions, _, freed = plan(projects(), sizes, now, 3, None, 10**12)
+    assert freed == 140 and "recent" not in names(evictions)
+
     root = Path("/project/a/.direnv/flake-profile")
     config = angrr_config([root], 3)
     assert 'period = "3d"' in config
@@ -211,15 +278,15 @@ def self_test() -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Retain project closures using day-bucketed LRU"
+        description="Retain project closures by tier, against a byte budget or a free-space need"
     )
     parser.add_argument("--apply", action="store_true", help="ask angrr to remove selected roots")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--gcroots", type=Path, default=Path("/nix/var/nix/gcroots/auto"))
     parser.add_argument("--protect-days", type=int, default=3)
-    parser.add_argument("--max-projects", type=int, default=40)
-    parser.add_argument("--min-projects", type=int, default=10)
-    parser.add_argument("--max-size-gib", type=int, default=90)
+    parser.add_argument("--budget-gib", type=int, help="evict until retained project closures fit")
+    parser.add_argument("--need-gib", type=int, help="evict until this much is freed")
+    parser.add_argument("--max-freed-gib", type=int, default=40, help="bound on --need-gib")
     return parser.parse_args()
 
 
@@ -228,52 +295,55 @@ def main() -> None:
     if args.self_test:
         self_test()
         return
-    if args.min_projects > args.max_projects:
-        raise SystemExit("--min-projects cannot exceed --max-projects")
 
     projects = discover_projects(args.gcroots)
     if not projects:
         print("No project GC roots found")
         return
     populate_closures(projects)
-    sizes = query_sizes(set().union(*(project.closure for project in projects.values())))
-    initial_bytes = sum(sizes.values())
-    evictions, retained_bytes = select_evictions(
-        projects,
-        sizes,
-        time.time(),
-        args.protect_days,
-        args.max_projects,
-        args.min_projects,
-        args.max_size_gib * GIB,
+    union = set().union(*(project.closure for project in projects.values()))
+    sizes = query_sizes(union)
+
+    budget = args.budget_gib
+    if budget is None and args.need_gib is None:
+        budget = 90
+    budget_bytes = None if budget is None else budget * GIB
+    need_bytes = None
+    if args.need_gib is not None:
+        need_bytes = min(args.need_gib, args.max_freed_gib) * GIB
+
+    evictions, retained, freed = plan(
+        projects, sizes, time.time(), args.protect_days, budget_bytes, need_bytes
     )
 
-    mode = "Evict" if args.apply else "Would evict"
     print(
-        f"Projects: {len(projects)}; project closure union: {format_size(initial_bytes)}; "
-        f"target: <= {args.max_projects} projects and <= {args.max_size_gib} GiB"
+        f"Projects: {len(projects)}; project closure union: "
+        f"{format_size(sum(sizes[path] for path in union))}"
     )
-    for project, marginal in evictions:
+    print(f"Tiers (all projects): {format_tiers(tier_bytes(union, sizes))}")
+    mode = "Evict" if args.apply else "Would evict"
+    for project, totals in evictions:
         used = (
             datetime.datetime.fromtimestamp(project.last_used)
             .astimezone()
             .strftime("%Y-%m-%d %H:%M")
         )
-        print(f"{mode}: {project.path} (last used {used}; marginal {format_size(marginal)})")
+        print(f"{mode}: {project.path} (last used {used}; {format_tiers(totals)})")
 
-    if args.apply:
+    if need_bytes is not None and freed < need_bytes:
+        print(f"Free-space need not reachable: freed {format_size(freed)} of {format_size(need_bytes)}")
+
+    if args.apply and evictions:
         selected_roots = [root for project, _ in evictions for root in project.roots]
         remove_with_angrr(selected_roots, args.protect_days)
 
+    evicted = {project.path for project, _ in evictions}
+    kept = set().union(*(p.closure for path, p in projects.items() if path not in evicted))
     print(
         f"Retained: {len(projects) - len(evictions)} projects; "
-        f"project closure union: {format_size(retained_bytes)}"
+        f"closure union {format_size(retained)}; {format_tiers(tier_bytes(kept, sizes))}"
     )
-    if (
-        len(projects) - len(evictions) > args.max_projects
-        or retained_bytes > args.max_size_gib * GIB
-    ):
-        print("Targets remain exceeded because protected or minimum-retained projects cannot be evicted")
+    print(f"Freed: {format_size(freed)}")
 
 
 if __name__ == "__main__":
