@@ -31,7 +31,7 @@
 
     bookshelf = {
       url = "git+ssh://git@github.com/MaxCarroll0/bookshelf?ref=main";
-      flake = false;
+      inputs.nixpkgs.follows = "nixpkgs";
     };
 
     satisfactory = {
@@ -289,7 +289,7 @@
       packages.x86_64-linux = {
         deploy-rs = inputs.deploy-rs.packages.x86_64-linux.default;
 
-        bookshelf = (pkgsFor "x86_64-linux").callPackage "${inputs.bookshelf}/package.nix" { };
+        bookshelf = inputs.bookshelf.packages.x86_64-linux.default;
 
         installer-iso =
           (lib.nixosSystem {

@@ -1,6 +1,11 @@
 # Raspberry Pi 5: always-on server, no VPN, remote build client.
 
-{ lib, pkgs, ... }:
+{
+  lib,
+  pkgs,
+  inputs,
+  ...
+}:
 
 {
   imports = [
@@ -34,7 +39,8 @@
     ../../modules/nixos/build-client.nix
     ../../modules/nixos/pam-ssh-agent-sudo.nix
     ../../modules/nixos/browser-sync.nix
-    ../../modules/nixos/bookshelf.nix
+    inputs.bookshelf.nixosModules.default
+    ../../modules/nixos/mdns-aliases.nix
     ./satisfactory.nix
   ];
 
@@ -368,6 +374,7 @@
     tls = {
       enable = true;
       certificate = ../../keys/bookshelf.crt;
+      keyFile = ../../secrets/bookshelf-tls-key.pem;
     };
     lan = {
       enable = true;
