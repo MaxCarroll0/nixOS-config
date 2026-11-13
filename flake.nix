@@ -27,7 +27,10 @@
       flake = false;
     };
 
-    emacs-overlay.url = "github:nix-community/emacs-overlay";
+    emacs-overlay = {
+      url = "github:nix-community/emacs-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     bookshelf = {
       url = "git+ssh://git@github.com/MaxCarroll0/bookshelf?ref=main";
@@ -56,6 +59,7 @@
 
     anipy-cli = {
       url = "github:sdaqo/anipy-cli/v3.8.16";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
 
     ani-cli = {
