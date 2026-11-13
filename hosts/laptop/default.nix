@@ -6,23 +6,19 @@
   imports = [
     ./hardware.nix
     ../../modules/nixos/common.nix
+    ../../modules/nixos/roles/member.nix
     ../../modules/nixos/containers.nix
     ../../modules/nixos/desktop-env.nix
     ../../modules/nixos/gaming.nix
     ../../modules/nixos/vpn.nix
     ../../modules/nixos/wake.nix
-    ../../modules/nixos/monitoring
     ../../modules/nixos/build-client.nix
     ../../modules/nixos/torrent.nix
     ../../modules/nixos/storage.nix
-    ../../modules/nixos/server/ssh.nix
-    ../../modules/nixos/server/tailscale.nix
     ../../modules/nixos/server/build-host.nix
     ../../modules/nixos/pam-ssh-agent-sudo.nix
     ../../modules/nixos/nas/accounts.nix
     ../../modules/nixos/nas/unlock.nix
-    ../../modules/nixos/nas/attic-client.nix
-    ../../modules/nixos/nas/client.nix
   ];
 
   networking.hostName = "laptop";
@@ -34,24 +30,11 @@
     client = true;
     auto = true;
   };
-  local.atticClient = {
-    enable = true;
-    publicKey = lib.removeSuffix "\n" (builtins.readFile ../../keys/attic-public-key);
-  };
-  local.nasClient.enable = true;
   sops.secrets."nas-luks-key" = {
     sopsFile = ../../secrets/nas.yaml;
     owner = "max";
     mode = "0400";
   };
-
-  networking.hosts."100.117.13.66" = [
-    "observatory"
-    "grafana"
-    "pi.grafana"
-    "bookshelf"
-    "books"
-  ];
 
   services.thermald.enable = true;
 
@@ -59,10 +42,6 @@
   environment.sessionVariables.LIBVA_DRIVER_NAME = "iHD";
 
   local.monitoring = {
-    exporter.enable = true;
-    smart.enable = true;
-    userReadable = true;
-    telemetry.journalGateway.enable = true;
     sensorNames = {
       "coretemp:temp1" = "CPU package";
       "nvme:temp1" = "NVMe";
@@ -154,22 +133,15 @@
   # Enabling sshd is also what generates /etc/ssh/ssh_host_ed25519_key, which
   # sops.age.sshKeyPaths picks up by default.
   local.server.ssh = {
-    enable = true;
-    allowUsers = [ "max" ];
+    port = 22;
     lanInterfaces = [
       "wlo1"
       "enp0s31f6"
     ];
   };
-  local.server.tailscale = {
-    enable = true;
-    ssh = true;
-    authKeySecret = "tailscale-auth-key";
-  };
 
   local.wake.peers.desktopnew.timeoutSeconds = 120;
   users.users.max.openssh.authorizedKeys.keyFiles = [
-    ../../keys/max.pub
     ../../keys/max-desktopnew.pub
   ];
 

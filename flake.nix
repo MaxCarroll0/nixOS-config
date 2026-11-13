@@ -131,6 +131,8 @@
       # backwards, so a dirty deploy must stay distinguishable from a commit.
       revision = self.rev or "${self.dirtyRev or "unknown"}";
 
+      facts = import ./hosts/facts.nix;
+
       mkHost =
         {
           modules ? [ ],
@@ -151,7 +153,7 @@
           ++ modules;
           specialArgs = {
             pkgs-unstable = pkgsUnstableFor system;
-            inherit inputs;
+            inherit inputs facts;
           };
         };
 
@@ -170,7 +172,7 @@
           specialArgs = {
             pkgs-unstable = pkgsUnstableFor "aarch64-linux";
             inherit (inputs) nixos-raspberrypi;
-            inherit inputs;
+            inherit inputs facts;
           };
         };
 
@@ -193,7 +195,7 @@
             codex-cli = inputs.codex-cli.packages.${system}.default;
             anipySrc = inputs.anipy-cli;
             aniCliSrc = inputs.ani-cli;
-            inherit inputs;
+            inherit inputs facts;
           };
         };
 

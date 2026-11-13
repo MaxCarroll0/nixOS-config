@@ -4,6 +4,7 @@
   config,
   pkgs,
   lib,
+  facts,
   ...
 }:
 
@@ -11,7 +12,6 @@ let
   flakePath = "/home/max/.config/nix";
   cfg = config.local.users;
 
-  facts = import ../../hosts/facts.nix;
   selfName = config.networking.hostName;
 
   pinsFile = ../../hosts + "/${selfName}/pins.nix";

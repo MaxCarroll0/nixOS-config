@@ -9,7 +9,7 @@
 }:
 
 let
-  cfg = config.local.atticClient;
+  cfg = config.local.nas.attic.client;
   endpoint = "https://cache:${toString cfg.proxyPort}";
   stateDir = "/var/lib/attic-upload";
 
@@ -133,7 +133,7 @@ let
   };
 in
 {
-  options.local.atticClient = {
+  options.local.nas.attic.client = {
     enable = lib.mkEnableOption "the LAN-first Attic cache client";
     peer = lib.mkOption {
       type = lib.types.str;

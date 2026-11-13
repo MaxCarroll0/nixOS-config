@@ -3,6 +3,7 @@
 {
   config,
   lib,
+  facts,
   ...
 }:
 
@@ -30,7 +31,7 @@ in
 
     serverAddress = lib.mkOption {
       type = lib.types.str;
-      default = "100.117.13.66";
+      default = facts.pi.tailscale;
       description = "Tailnet address of the metrics server.";
     };
   };

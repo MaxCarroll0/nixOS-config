@@ -5,12 +5,12 @@
   lib,
   pkgs,
   inputs,
+  facts,
   ...
 }:
 
 let
   nixvirt = inputs.NixVirt;
-  facts = import ../../hosts/facts.nix;
 
   domainName = "damien-fedora";
   guestMac = "52:54:00:f1:3d:01";

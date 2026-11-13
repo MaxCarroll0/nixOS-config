@@ -1,41 +1,23 @@
 # Shared by every AMD desktop host: workstation, remote builder, SSH host, web origin.
 
-{ lib, pkgs, ... }:
+{ lib, pkgs, facts, ... }:
 
 {
   imports = [
     ../modules/nixos/common.nix
+    ../modules/nixos/roles/member.nix
     ../modules/nixos/desktop-env.nix
     ../modules/nixos/gaming.nix
     ../modules/nixos/vpn.nix
     ../modules/nixos/wake.nix
     ../modules/nixos/power.nix
-    ../modules/nixos/monitoring
     ../modules/nixos/fancontrol.nix
     ../modules/nixos/storage.nix
     ../modules/nixos/wifi.nix
-    ../modules/nixos/server/ssh.nix
-    ../modules/nixos/server/tailscale.nix
     ../modules/nixos/server/build-host.nix
     ../modules/nixos/server/web.nix
-    ../modules/nixos/nas/attic-client.nix
-    ../modules/nixos/nas/client.nix
     ../modules/nixos/pam-ssh-agent-sudo.nix
   ];
-
-  networking.hosts."100.117.13.66" = [
-    "observatory"
-    "grafana"
-    "pi.grafana"
-    "bookshelf"
-    "books"
-  ];
-
-  local.atticClient = {
-    enable = true;
-    publicKey = lib.removeSuffix "\n" (builtins.readFile ../keys/attic-public-key);
-  };
-  local.nasClient.enable = true;
 
   local.vpn.selection = {
     countries = [ "UK" ];
@@ -53,19 +35,6 @@
       randomEncryption.enable = true;
     }
   ];
-
-  local.server.ssh = {
-    enable = true;
-    port = 2222;
-    allowUsers = [ "max" ];
-  };
-  local.server.tailscale = {
-    enable = true;
-    ssh = true;
-    authKeySecret = "tailscale-auth-key";
-  };
-
-  users.users.max.openssh.authorizedKeys.keyFiles = [ ../keys/max.pub ];
 
   users.users.max.linger = true;
 
@@ -116,22 +85,17 @@
   };
 
   local.monitoring = {
-    exporter.enable = true;
-    smart.enable = true;
     server.enable = false;
     grafana.enable = false;
-    userReadable = true;
 
     exporter.scrapeCadenceOverrides.nvme = {
       match = "^nvme_nvme0$";
       interval = "5s";
     };
 
-    telemetry.journalGateway.enable = true;
-
     targets = {
-      pi = "100.117.13.66:9100";
-      laptop = "100.112.109.20:9100";
+      pi = "${facts.pi.tailscale}:9100";
+      laptop = "${facts.laptop.tailscale}:9100";
     };
 
     totalPower.tariffPencePerKwh = 20.88;

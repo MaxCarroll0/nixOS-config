@@ -9,11 +9,11 @@
 
 let
   cfg = config.local.nas;
-  acfg = cfg.cache-server;
+  acfg = cfg.cacheServer;
 in
 
 {
-  options.local.nas.cache-server = {
+  options.local.nas.cacheServer = {
     enable = lib.mkEnableOption "the Attic binary cache";
 
     dataDir = lib.mkOption {

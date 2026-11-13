@@ -4,6 +4,7 @@
   config,
   pkgs,
   lib,
+  facts,
   ...
 }:
 
@@ -11,7 +12,6 @@ let
   cfg = config.local.nas;
   scfg = cfg.storage;
   stateDir = "/var/lib/nas-streams";
-  facts = import ../../../hosts/facts.nix;
 
   branchPath = st: "${scfg.diskRoot}/${st.branch}";
   mirrorDir = name: "${stateDir}/mirror/${name}";

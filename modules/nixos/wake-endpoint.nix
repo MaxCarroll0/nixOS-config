@@ -4,12 +4,12 @@
   config,
   lib,
   pkgs,
+  facts,
   ...
 }:
 
 let
   cfg = config.local.wakeEndpoint;
-  facts = import ../../hosts/facts.nix;
   peerUrl = "http://${facts.${cfg.peer}.tailscale}:${toString cfg.port}/";
 in
 

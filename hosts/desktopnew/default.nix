@@ -5,12 +5,11 @@
   lib,
   pkgs,
   pkgs-unstable,
+  facts,
   ...
 }:
 
 let
-  facts = import ../facts.nix;
-
   # VRM MOS is excluded: measured identical at 380 and 2169 rpm, so it is heated
   # by conduction from CPU package power and airflow cannot move it.
   caseTemp = pkgs.writeShellApplication {

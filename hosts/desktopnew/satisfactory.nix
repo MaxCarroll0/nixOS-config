@@ -1,10 +1,6 @@
 # Satisfactory dedicated server, started from the pi's panel and backed up to the pi.
 
-{ config, inputs, ... }:
-
-let
-  facts = import ../facts.nix;
-in
+{ config, inputs, facts, ... }:
 
 {
   imports = [ inputs.satisfactory.nixosModules.server ];

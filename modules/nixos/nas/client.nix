@@ -3,7 +3,7 @@
 { config, pkgs, lib, utils, ... }:
 
 let
-  cfg = config.local.nasClient;
+  cfg = config.local.nas.client;
   setPassword = pkgs.writeShellApplication {
     name = "nas-set-password";
     runtimeInputs = [ pkgs.coreutils ];
@@ -25,7 +25,7 @@ let
   };
 in
 {
-  options.local.nasClient = {
+  options.local.nas.client = {
     enable = lib.mkEnableOption "automatic LAN-first NAS mount";
     peer = lib.mkOption { type = lib.types.str; default = "pi"; };
     share = lib.mkOption { type = lib.types.str; default = "max"; };

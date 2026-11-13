@@ -4,6 +4,7 @@
   lib,
   pkgs,
   inputs,
+  facts,
   ...
 }:
 
@@ -11,14 +12,12 @@
   imports = [
     ./hardware.nix
     ../../modules/nixos/common.nix
+    ../../modules/nixos/roles/member.nix
     ../../modules/nixos/wifi.nix
     ../../modules/nixos/wake.nix
     ../../modules/nixos/wake-endpoint.nix
     ../../modules/nixos/power.nix
-    ../../modules/nixos/monitoring
-    ../../modules/nixos/server/ssh.nix
-    ../../modules/nixos/server/tailscale.nix
-    ../../modules/nixos/net-watchdog.nix
+    ../../modules/nixos/server/net-watchdog.nix
     ../../modules/nixos/service-priority.nix
     ../../modules/nixos/flight-recorder.nix
     ../../modules/nixos/storage.nix
@@ -28,8 +27,6 @@
     ../../modules/nixos/nas/index.nix
     ../../modules/nixos/nas/cache.nix
     ../../modules/nixos/nas/attic.nix
-    ../../modules/nixos/nas/attic-client.nix
-    ../../modules/nixos/nas/client.nix
     ../../modules/nixos/nas/unlock.nix
     ../../modules/nixos/nas/checkpoints.nix
     ../../modules/nixos/nas/prefetch.nix
@@ -48,22 +45,14 @@
   boot.kernelParams = [ "psi=1" ];
   boot.kernel.sysctl."net.ipv4.ip_nonlocal_bind" = 1;
   boot.kernelModules = [ "drivetemp" ];
-  networking.hosts."100.117.13.66" = [
-    "observatory"
-    "grafana"
-    "pi.grafana"
-    "bookshelf"
-    "books"
-  ];
-
   # auth.proxy auto-assigns Admin, and an empty value overwrites a client-sent header.
   services.nginx.appendHttpConfig = ''
     map $server_addr $grafana_user_login {
-      100.117.13.66 "MaxCarroll0@github";
+      ${facts.pi.tailscale} "MaxCarroll0@github";
       default "";
     }
     map $server_addr $grafana_user_name {
-      100.117.13.66 "Max";
+      ${facts.pi.tailscale} "Max";
       default "";
     }
   '';
@@ -82,7 +71,7 @@
       ];
       listen = [
         {
-          addr = "100.117.13.66";
+          addr = facts.pi.tailscale;
           port = 80;
         }
         {
@@ -144,9 +133,6 @@
   local.wakeEndpoint.peer = "desktopnew";
 
   local.server.ssh = {
-    enable = true;
-    port = 2222;
-    allowUsers = [ "max" ];
     lanInterfaces = [
       "wld0"
       "end0"
@@ -158,14 +144,7 @@
     ];
   };
 
-  local.server.tailscale = {
-    enable = true;
-    ssh = true;
-    authKeySecret = "tailscale-auth-key";
-  };
-
   users.users.max.openssh.authorizedKeys.keyFiles = [
-    ../../keys/max.pub
     ../../keys/max-desktopnew.pub
   ];
 
@@ -193,24 +172,20 @@
   };
 
   local.monitoring = {
-    exporter.enable = true;
     exporter.scrapeCadenceOverrides.drive-temperatures = {
       match = "^target[0-9]+:0:0_";
       interval = "1m";
       onlyWhenActive = true;
     };
     piFirmware.enable = true;
-    smart.enable = true;
     grafana.anonymousViewer = true;
     grafana.domain = "pi";
     smart.selfTest.enable = true;
     server.enable = true;
     grafana.enable = true;
-    userReadable = true;
-    telemetry.journalGateway.enable = true;
     targets = {
-      desktopnew = "100.106.140.88:9100";
-      laptop = "100.112.109.20:9100";
+      desktopnew = "${facts.desktopnew.tailscale}:9100";
+      laptop = "${facts.laptop.tailscale}:9100";
     };
     sensorNames = {
       "cpu_thermal:temp1" = "SoC";
@@ -250,7 +225,7 @@
     enable = true;
     dataRoot = "/srv/nas";
     smb.enable = true;
-    cache-server.enable = true;
+    cacheServer.enable = true;
     cache.enable = true;
     index.enable = true;
     accounts.nastest = {
@@ -289,20 +264,14 @@
     streams.minecraft = {
       branch = "disk1";
       port = 8020;
-      allowFrom = [ (import ../facts.nix).desktopnew.tailscale ];
+      allowFrom = [ facts.desktopnew.tailscale ];
     };
     streams.satisfactory = {
       branch = "disk1";
       port = 8021;
-      allowFrom = [ (import ../facts.nix).desktopnew.tailscale ];
+      allowFrom = [ facts.desktopnew.tailscale ];
     };
   };
-
-  local.atticClient = {
-    enable = true;
-    publicKey = lib.removeSuffix "\n" (builtins.readFile ../../keys/attic-public-key);
-  };
-  local.nasClient.enable = true;
 
   local.power = {
     instrument = true;
@@ -351,7 +320,7 @@
 
   local.bookshelf = {
     enable = true;
-    tailnetAddress = "100.117.13.66";
+    tailnetAddress = facts.pi.tailscale;
     identityLogin = "MaxCarroll0@github";
     refresh.enable = true;
     refresh.usedSlice = 120;

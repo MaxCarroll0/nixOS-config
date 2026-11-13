@@ -1,10 +1,6 @@
 # Game server start page for friends on a node share, with world downloads from the NAS streams.
 
-{ config, inputs, ... }:
-
-let
-  facts = import ../facts.nix;
-in
+{ config, inputs, facts, ... }:
 
 {
   imports = [ inputs.satisfactory.nixosModules.panel ];

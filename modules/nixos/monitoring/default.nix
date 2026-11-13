@@ -4,6 +4,7 @@
   config,
   pkgs,
   lib,
+  facts,
   ...
 }:
 
@@ -321,7 +322,7 @@ in
       type = lib.types.attrsOf lib.types.str;
       default = { };
       example = {
-        pi = "100.117.13.66:9100";
+        pi = "${facts.pi.tailscale}:9100";
       };
       description = "Extra node_exporter instances to scrape, keyed by instance label.";
     };
