@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 # One status line per minute for a nix build or deploy log written with NIX_OBSERVER_PLAIN=1.
+# Progress goes to stderr; stdout carries only STALLED, FLAT, verdict and EXIT lines.
 
 import argparse
+import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -75,11 +78,38 @@ def describe(signals, delta, stalled, tail):
     return line
 
 
+def launch(log, command):
+    path = Path(log)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, NIX_OBSERVER_PLAIN="1")
+    with path.open("wb") as out:
+        child = subprocess.Popen(
+            ["bash", "-c", '"$@"; echo "EXIT=$?"', "nix-watch", *command],
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
+    print("launched pid=%d log=%s: %s" % (child.pid, log, " ".join(command)), file=sys.stderr, flush=True)
+
+
 def main():
-    parser = argparse.ArgumentParser(prog="nix-watch")
+    argv = sys.argv[1:]
+    command = []
+    if "--" in argv:
+        split = argv.index("--")
+        argv, command = argv[:split], argv[split + 1 :]
+    parser = argparse.ArgumentParser(
+        prog="nix-watch",
+        usage="nix-watch [--interval SECONDS] LOG [-- COMMAND ...]",
+        description="One status line per minute for a nix log. With a COMMAND, start it detached into LOG first.",
+    )
     parser.add_argument("log")
     parser.add_argument("--interval", type=float, default=60.0, help="seconds between lines")
-    options = parser.parse_args()
+    options = parser.parse_args(argv)
+    if command:
+        launch(options.log, command)
     flat = {"bytes": 0, "progress": 0, "drv": 0, "stage": 0}
     previous = None
     while True:
@@ -91,7 +121,7 @@ def main():
         exits = EXIT.findall(data)
         if exits:
             verdicts = VERDICT.findall(data)
-            print(describe(signals, delta, 0, tail), flush=True)
+            print(describe(signals, delta, 0, tail), file=sys.stderr, flush=True)
             if verdicts:
                 print("verdict: " + VERDICT.search(data).group(0).decode(errors="replace"), flush=True)
             print("EXIT=%s log=%s" % (exits[-1].decode(), options.log), flush=True)
@@ -104,7 +134,7 @@ def main():
             )
             return 2
         stalled = flat["bytes"] if flat["bytes"] >= STALL_MINUTES else 0
-        print(describe(signals, delta, stalled, tail), flush=True)
+        print(describe(signals, delta, stalled, tail), file=sys.stdout if stalled else sys.stderr, flush=True)
         previous = signals
         time.sleep(options.interval)
 
