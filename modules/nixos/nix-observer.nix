@@ -33,6 +33,13 @@ let
       exec python3 ${./nix-observer.py} "$@"
     '';
   };
+  watch = pkgs.writeShellApplication {
+    name = "nix-watch";
+    runtimeInputs = [ pkgs.python3 ];
+    text = ''
+      exec python3 ${./nix-watch.py} "$@"
+    '';
+  };
   observedWrapper =
     name: binary:
     pkgs.writeShellApplication {
@@ -71,7 +78,10 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    environment.systemPackages = [ observer ];
+    environment.systemPackages = [
+      observer
+      watch
+    ];
 
     security.wrappers =
       lib.genAttrs nixCommands (
