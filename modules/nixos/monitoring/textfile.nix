@@ -60,8 +60,7 @@ let
           done
         done | sort -u
 
-        # Several drives share the chip name "drivetemp", so they can only be told
-        # apart by node_exporter's per-device chip label.
+        # Drives share the chip name "drivetemp"; node_exporter's per-device label tells them apart.
         echo '# HELP node_sensor_chip Friendly name for a hwmon sensor, keyed by chip and sensor.'
         echo '# TYPE node_sensor_chip gauge'
         echo '# HELP node_drive_bay Controller port a drive is attached to.'
@@ -446,8 +445,7 @@ let
     emit user.slice /sys/fs/cgroup/user.slice
   '';
 
-  # Kernel uptime counts time spent suspended, so boot time cannot answer
-  # "how long has this host been awake".
+  # Kernel uptime counts suspended time, so boot time cannot answer how long the host has been awake.
   awakeSince = writeCollector "awake-since" [ pkgs.gawk ] ''
     if [ "''${1:-}" = resume ]; then
       since=$(date +%s)

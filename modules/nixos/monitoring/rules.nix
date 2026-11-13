@@ -5,8 +5,7 @@
 let
   cfg = config.local.monitoring;
 
-  # The chip-keyed name wins where it exists; chip_name cannot separate sibling
-  # chips that share a driver, such as one drivetemp per disk.
+  # chip_name cannot separate sibling chips that share a driver, such as one drivetemp per disk.
   named =
     metric:
     let
@@ -349,8 +348,7 @@ let
     "host:awake_since_seconds" = "node_awake_since_seconds";
   };
 
-  # Installed hardware, not a workload signal: evaluated on its own slow group
-  # so a value that changes only when the machine is opened up costs nothing.
+  # Installed hardware, not a workload signal: evaluated on its own slow group.
   capacityRules = {
     "mem:total_bytes" = "node_memory_MemTotal_bytes";
     "mem:capacity_info" = "pc_memory_capacity_info";
@@ -395,8 +393,7 @@ let
     "ts:peer_tx_bytes" = "rate(tailscale_peer_tx_bytes_total[1m])";
     "ts:peer_online" = "tailscale_peer_online";
     "ts:peer_direct" = "tailscale_peer_direct";
-    # A peer that has never handshaken reports epoch 0; without the guard its
-    # age reads as the whole Unix epoch.
+    # A peer that has never handshaken reports epoch 0.
     "ts:handshake_age_seconds" =
       "(time() - tailscale_peer_last_handshake_seconds)"
       + " and (tailscale_peer_last_handshake_seconds > 0)";
@@ -406,8 +403,7 @@ let
     "wg:tx_bytes" = "rate(wireguard_peer_tx_bytes_total[1m])";
   };
 
-  # Peaks must descend through max_over_time at every hop, never through the mean,
-  # or two downsampling passes average them away.
+  # Peaks descend through max_over_time at every hop, never through the mean.
   aggregations = {
     avg = "avg_over_time";
     max = "max_over_time";
@@ -902,9 +898,7 @@ let
 
   minuteRollup = rollup "1m" (metric: _agg: downsampled.${metric}.source);
 
-  # Same aggregates as the rollups, but recorded under the names federation
-  # would have relabelled them to, so a backfill can write straight into the
-  # tier it repairs.
+  # Same aggregates as the rollups, under the names federation relabels them to.
   repairRollup =
     window: sourceOf:
     lib.flatten (
