@@ -123,12 +123,12 @@ if [ -n "$target" ]; then
     *) echo "error: $action is not a deploy action" >&2; exit 2 ;;
   esac
 
-  exec 9>"$stateDir/$target.lock"
+  exec 9>>"$stateDir/$target.lock"
   if ! flock -n 9; then
     echo "error: another deploy to $target is running: $(cat "$stateDir/$target.lock" 2>/dev/null)" >&2
     exit 75
   fi
-  printf 'pid %s since %s\n' $$ "$(date -Is)" >&9
+  printf 'pid %s since %s\n' $$ "$(date -Is)" > "$stateDir/$target.lock"
 
   if activating; then
     git -C "$flake" fetch -q origin '+refs/deploys/*:refs/remotes/deploys/*' 2>/dev/null || true
