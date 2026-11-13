@@ -82,6 +82,10 @@ dirty=$(git -C "$flake" status --porcelain --untracked-files=normal -- . ':!CLAU
 ahead=$(git -C "$flake" rev-list --count "$main..HEAD" 2>/dev/null || echo 0)
 behind=$(git -C "$flake" rev-list --count "HEAD..$main" 2>/dev/null || echo 0)
 echo "this clone: HEAD $(git -C "$flake" rev-parse --short HEAD), $ahead ahead / $behind behind origin/main, $dirty uncommitted paths"
+flakeSyncState=/var/lib/flake-sync
+if [ -s "$flakeSyncState/lag" ]; then echo "flake-sync: $(cat "$flakeSyncState/lag")"; fi
+held=$(jq -r 'keys | join(", ")' "$flakeSyncState/held.json" 2>/dev/null || true)
+if [ -n "$held" ]; then echo "held back on $self: $held"; fi
 for ref in $(git -C "$flake" for-each-ref --format='%(refname:short)' refs/deploys/ 2>/dev/null); do
   r=$(git -C "$flake" rev-parse "$ref")
   git -C "$flake" merge-base --is-ancestor "$r" "$main" && continue
