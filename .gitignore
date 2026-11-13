@@ -1,1 +1,8 @@
 /keys/generated/
+result
+result-*
+*.log
+*~
+\#*\#
+TAGS
+__pycache__/

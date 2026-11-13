@@ -21,6 +21,22 @@
         "type": "github"
       }
     },
+    "ani-cli": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794060093,
+        "narHash": "sha256-ZZzyCSCD+lf5AxK9txvVXJzN4EfUPt9ipuZqKQbm/l0=",
+        "owner": "pystardust",
+        "repo": "ani-cli",
+        "rev": "2cc8ae2c27324c8e684e4dc4223698c1f6caec03",
+        "type": "github"
+      },
+      "original": {
+        "owner": "pystardust",
+        "repo": "ani-cli",
+        "type": "github"
+      }
+    },
     "anipy-cli": {
       "inputs": {
         "nixpkgs": "nixpkgs",
@@ -252,26 +268,6 @@
       "original": {
         "owner": "serokell",
         "repo": "deploy-rs",
-        "type": "github"
-      }
-    },
-    "disko": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1792526520,
-        "narHash": "sha256-3hSJlv8mUVnZPMWK2+CM7a9O+nR6Z4mCh27NfLCmTPc=",
-        "owner": "nix-community",
-        "repo": "disko",
-        "rev": "cedd626e11b635470fa6f9fdb8ad79b0075dd7f9",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-community",
-        "repo": "disko",
         "type": "github"
       }
     },
@@ -536,36 +532,6 @@
         "type": "github"
       }
     },
-    "hyprland-plugins": {
-      "inputs": {
-        "hyprland": [
-          "hyprland"
-        ],
-        "nixpkgs": [
-          "hyprland-plugins",
-          "hyprland",
-          "nixpkgs"
-        ],
-        "systems": [
-          "hyprland-plugins",
-          "hyprland",
-          "systems"
-        ]
-      },
-      "locked": {
-        "lastModified": 1792508453,
-        "narHash": "sha256-y+V5RFJcjnV1+ZzImkfiSJ97iDIflanjP2OR9lemvTs=",
-        "owner": "hyprwm",
-        "repo": "hyprland-plugins",
-        "rev": "d2427d4d15b36df40468f5a58bbd67cdba19835d",
-        "type": "github"
-      },
-      "original": {
-        "owner": "hyprwm",
-        "repo": "hyprland-plugins",
-        "type": "github"
-      }
-    },
     "hyprland-protocols": {
       "inputs": {
         "nixpkgs": [
@@ -788,24 +754,6 @@
         "type": "github"
       }
     },
-    "nixos-hardware": {
-      "inputs": {
-        "nixpkgs": "nixpkgs_4"
-      },
-      "locked": {
-        "lastModified": 1793355509,
-        "narHash": "sha256-/Zs18x+IW4LuVH0rKxra0WPRgsk0DQsi0Bwkf8sOC5c=",
-        "owner": "NixOS",
-        "repo": "nixos-hardware",
-        "rev": "04c6b94fa104bc23650983a4513aea196794d321",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "repo": "nixos-hardware",
-        "type": "github"
-      }
-    },
     "nixos-images": {
       "inputs": {
         "nixos-stable": [
@@ -837,7 +785,7 @@
         "argononed": "argononed",
         "flake-compat": "flake-compat_3",
         "nixos-images": "nixos-images",
-        "nixpkgs": "nixpkgs_5"
+        "nixpkgs": "nixpkgs_4"
       },
       "locked": {
         "lastModified": 1792868452,
@@ -936,19 +884,6 @@
     },
     "nixpkgs_4": {
       "locked": {
-        "lastModified": 1789546076,
-        "narHash": "sha256-vWkSk5bbfTqdtMoSgD9FshACO8JCvXTFi+3cqEp0mH0=",
-        "rev": "b1b875982b17dabde9b4a37f3e229e74913e6db3",
-        "type": "tarball",
-        "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1074753.b1b875982b17/nixexprs.tar.xz"
-      },
-      "original": {
-        "type": "tarball",
-        "url": "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz"
-      }
-    },
-    "nixpkgs_5": {
-      "locked": {
         "lastModified": 1792615934,
         "narHash": "sha256-MlvRfa1O5Cqc2/a+gG+l9TSuowEoCKCmrJ1d9oAVm0I=",
         "owner": "NixOS",
@@ -963,7 +898,7 @@
         "type": "github"
       }
     },
-    "nixpkgs_6": {
+    "nixpkgs_5": {
       "locked": {
         "lastModified": 1793410479,
         "narHash": "sha256-HzgjxrLY4AEc0044ZuM5CHbLSWLZgDlay1idmzvvpJs=",
@@ -1051,6 +986,7 @@
     "root": {
       "inputs": {
         "NixVirt": "NixVirt",
+        "ani-cli": "ani-cli",
         "anipy-cli": "anipy-cli",
         "bookshelf": "bookshelf",
         "caelestia-dots": "caelestia-dots",
@@ -1059,18 +995,14 @@
         "codex-cli": "codex-cli",
         "curd": "curd",
         "deploy-rs": "deploy-rs",
-        "disko": "disko",
         "emacs-overlay": "emacs-overlay",
         "home-manager": "home-manager",
         "hyprland": "hyprland",
-        "hyprland-plugins": "hyprland-plugins",
-        "nixos-hardware": "nixos-hardware",
         "nixos-raspberrypi": "nixos-raspberrypi",
-        "nixpkgs": "nixpkgs_6",
+        "nixpkgs": "nixpkgs_5",
         "nixpkgs-unstable": "nixpkgs-unstable",
         "satisfactory": "satisfactory",
-        "sops-nix": "sops-nix",
-        "ani-cli": "ani-cli"
+        "sops-nix": "sops-nix"
       }
     },
     "satisfactory": {
@@ -1309,22 +1241,6 @@
       "original": {
         "owner": "hyprwm",
         "repo": "xdg-desktop-portal-hyprland",
-        "type": "github"
-      }
-    },
-    "ani-cli": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1794060093,
-        "narHash": "sha256-ZZzyCSCD+lf5AxK9txvVXJzN4EfUPt9ipuZqKQbm/l0=",
-        "owner": "pystardust",
-        "repo": "ani-cli",
-        "rev": "2cc8ae2c27324c8e684e4dc4223698c1f6caec03",
-        "type": "github"
-      },
-      "original": {
-        "owner": "pystardust",
-        "repo": "ani-cli",
         "type": "github"
       }
     }

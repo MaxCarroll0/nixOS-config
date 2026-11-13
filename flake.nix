@@ -17,10 +17,6 @@
     };
 
     hyprland.url = "github:hyprwm/Hyprland";
-    hyprland-plugins = {
-      url = "github:hyprwm/hyprland-plugins";
-      inputs.hyprland.follows = "hyprland";
-    };
 
     caelestia-shell = {
       url = "github:caelestia-dots/shell";
@@ -67,8 +63,6 @@
       flake = false;
     };
 
-    nixos-hardware.url = "github:NixOS/nixos-hardware";
-
     deploy-rs = {
       url = "github:serokell/deploy-rs";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -76,11 +70,6 @@
 
     NixVirt = {
       url = "github:AshleyYakeley/NixVirt/v0.6.0";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    disko = {
-      url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -240,23 +229,16 @@
       nixosConfigurations = {
         laptop = mkHost { module = ./hosts/laptop; };
         desktopnew = mkHost { module = ./hosts/desktopnew; };
-        desktop_old = mkHost { module = ./hosts/desktop_old; };
       }
-      // lib.mapAttrs (_: module: mkPi { inherit module; }) piHosts
-      // {
-        # Retire once both machines have switched to the per-host names.
-        nixos = mkHost { module = ./hosts/laptop; };
-      };
+      // lib.mapAttrs (_: module: mkPi { inherit module; }) piHosts;
 
       homeConfigurations = {
         "max@laptop" = mkHome { module = ./home/laptop.nix; };
         "max@desktopnew" = mkHome { module = ./home/desktop.nix; };
-        "max@desktop_old" = mkHome { module = ./home/desktop.nix; };
         "max@pi" = mkHome {
           module = ./home/pi.nix;
           system = "aarch64-linux";
         };
-        max = mkHome { module = ./home/laptop.nix; };
       };
 
       deploy = {

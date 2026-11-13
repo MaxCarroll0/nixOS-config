@@ -29,10 +29,4 @@
   damien-fedora = {
     tailnetAddress = "100.113.63.17";
   };
-
-  desktop_old = {
-    mac = "70:85:c2:54:c6:89";
-    interface = "enp6s0";
-    systems = [ "x86_64-linux" ];
-  };
 }
