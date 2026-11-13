@@ -10,7 +10,6 @@
 let
   flakePath = "/home/max/.config/nix";
   cfg = config.local.users;
-  wakePeers = lib.attrNames (config.local.wake.peers or { });
 
   facts = import ../../hosts/facts.nix;
   selfName = config.networking.hostName;
@@ -68,147 +67,6 @@ let
   );
   wakeable = lib.filterAttrs (name: f: name != selfName && f ? mac) facts;
 
-  rebuild = pkgs.writeShellApplication {
-    name = "rebuild";
-    runtimeInputs = [
-      pkgs.git
-      pkgs.coreutils
-      pkgs.getent
-      pkgs.util-linux
-    ];
-    text = ''
-      host="${config.networking.hostName}"
-      flake="${flakePath}"
-      opts=()
-      rebuildStarted=$SECONDS
-      rebuildKind=rebuild
-      rebuildTarget="$host"
-      rebuildAction=switch
-
-      logRebuildCompletion() {
-        rebuildExit=$?
-        trap - EXIT
-        if [ "$rebuildExit" -eq 0 ]; then
-          rebuildStatus=success
-        else
-          rebuildStatus=failed
-        fi
-        logger -t nix-observer-summary -- "{\"event\":\"nix_rebuild\",\"status\":\"$rebuildStatus\",\"exit_code\":$rebuildExit,\"duration_seconds\":$((SECONDS - rebuildStarted)),\"host\":\"$host\",\"project\":\"nix\",\"kind\":\"$rebuildKind\",\"target\":\"$rebuildTarget\",\"action\":\"$rebuildAction\",\"alert_eligible\":true}"
-        exit "$rebuildExit"
-      }
-      trap logRebuildCompletion EXIT
-
-      target=""
-      profile=""
-      while true; do
-        case "''${1:-}" in
-          --local)
-            opts+=(--option builders "")
-            shift ;;
-          --mixed)
-            opts+=(--option builders "@/etc/nix/machines")
-            shift ;;
-          --host)
-            target="''${2:?--host needs a node name}"
-            shift 2 ;;
-          --profile)
-            profile="''${2:?--profile needs system or home}"
-            shift 2 ;;
-          *) break ;;
-        esac
-      done
-
-      action="''${1:-switch}"
-      [ $# -gt 0 ] && shift
-
-      export NIX_OBSERVER_KIND=rebuild
-      export NIX_OBSERVER_TARGET="''${target:-$host}"
-      rebuildTarget="$NIX_OBSERVER_TARGET"
-      rebuildAction="$action"
-
-      untracked=$(git -C "$flake" ls-files --others --exclude-standard -- '*.nix' 'secrets/*' || true)
-      if [ -n "$untracked" ]; then
-        mapfile -t untrackedFiles <<< "$untracked"
-        echo "warning: untracked files, invisible to the flake:" >&2
-        printf '  %s\n' "''${untrackedFiles[@]}" >&2
-      fi
-
-      moved=$(git -C "$flake" submodule status --recursive 2>/dev/null | sed -n 's/^+//p' || true)
-      if [ -n "$moved" ]; then
-        echo "warning: a submodule is not at its committed revision; the flake builds the locked input, not this:" >&2
-        printf '  %s\n' "$moved" >&2
-      fi
-
-      if [ -n "$target" ]; then
-        deployOpts=()
-        case "$action" in
-          switch) ;;
-          boot) deployOpts+=(--boot) ;;
-          test) deployOpts+=(--test) ;;
-          dry-activate) deployOpts+=(--dry-activate) ;;
-          home)
-            echo "error: --host deploys the home profile alongside the system" >&2
-            exit 2 ;;
-          *)
-            echo "error: $action is not a deploy action" >&2
-            exit 2 ;;
-        esac
-
-        export NIX_CONFIG="accept-flake-config = true"
-
-        # shellcheck disable=SC2194
-        case " ${lib.concatStringsSep " " wakePeers} " in
-          *" $target "*)
-            if command -v wake-peer >/dev/null 2>&1; then
-              wake-peer "$target" || echo "warning: could not wake $target" >&2
-            fi
-            ;;
-        esac
-
-        deployTarget="$flake#$target"
-        [ -n "$profile" ] && deployTarget="$flake#$target.$profile"
-
-        deployAuthOpts=()
-        if [ "''${REBUILD_SSH_AGENT_SUDO:-0}" = 1 ]; then
-          deployAuthOpts+=(--interactive-sudo false)
-        fi
-
-        printf -v deployCmd '%q ' nix run "$flake#deploy-rs" -- \
-          --skip-checks "''${deployAuthOpts[@]}" "$deployTarget" "''${deployOpts[@]}" "$@"
-
-        if getent group novpn >/dev/null 2>&1; then
-          /run/wrappers/bin/sg novpn -c "$deployCmd"
-          exit $?
-        fi
-        ${pkgs.bash}/bin/bash -c "$deployCmd"
-        exit $?
-      fi
-
-      case "$action" in
-        switch|boot)
-          if [ -n "''${SSH_CONNECTION:-}" ]; then
-            echo "error: remote session; activating here has no rollback guarantee" >&2
-            echo "  from your workstation: rebuild --host $host $action" >&2
-            exit 1
-          fi ;;
-      esac
-
-      case "$action" in
-        home)
-          export NIX_OBSERVER_KIND=home-rebuild
-          rebuildKind=home-rebuild
-          home-manager switch --flake "$flake#max@$host" "''${opts[@]}" "$@" ;;
-        build|dry-build|repl)
-          nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
-        switch|boot|test|dry-activate)
-          nixos-rebuild build --flake "$flake#$host" "''${opts[@]}" "$@"
-          sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
-        *)
-          sudo nixos-rebuild "$action" --flake "$flake#$host" "''${opts[@]}" "$@" ;;
-      esac
-    '';
-  };
-
   editSecrets = pkgs.writeShellApplication {
     name = "edit-secrets";
     text = ''
@@ -240,43 +98,11 @@ let
     '';
   };
 
-  activateDetached = pkgs.writeShellApplication {
-    name = "activate-detached";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.systemd
-    ];
-    text = ''
-      user="''${1:?deploy-rs passes the activation user as the first argument}"
-      shift
-
-      unit="deploy-activate-$$-$(date +%s)"
-
-      journalctl --unit "$unit" --follow --output cat --no-pager --since "-1 min" &
-      follower=$!
-      trap 'kill "$follower" 2>/dev/null || true' EXIT
-
-      # A transient unit outlives the ssh session it was started from, so a
-      # tailscaled restart mid-switch can no longer kill activate-rs and leave
-      # the host stranded between generations with no magic rollback left.
-      status=0
-      systemd-run \
-        --quiet --wait --collect \
-        --property=CollectMode=inactive-or-failed \
-        --unit="$unit" \
-        --uid="$user" \
-        --setenv=PATH="$PATH" \
-        -- "$@" || status=$?
-
-      sleep 1
-      exit "$status"
-    '';
-  };
-
 in
 
 {
   imports = [
+    ./deploy.nix
     ./dev-build.nix
     ./flake-sync.nix
     ./peer-transport.nix
@@ -503,8 +329,6 @@ in
     nixpkgs.config.allowUnfree = true;
 
     environment.systemPackages = [
-      rebuild
-      activateDetached
       editSecrets
       nixConfig
       projectClosureRetention
