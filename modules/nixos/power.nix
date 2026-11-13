@@ -32,8 +32,6 @@ let
     text = builtins.readFile ./power-stats.sh;
   };
 
-  # kscreen-doctor has to reach the Wayland session, which a root unit can only
-  # do by borrowing the seat user's bus.
   sessionKscreen = pkgs.writeShellApplication {
     name = "session-kscreen";
     runtimeInputs = [
@@ -57,8 +55,7 @@ let
     '';
   };
 
-  # PowerDevil goes on believing the output is on, so a blank driven from
-  # outside it is undone by nothing but whoever left this stamp behind.
+  # PowerDevil keeps believing the output is on; this stamp keeps it blank.
   forcedOff = "/run/dpms-forced-off";
   parked = "/run/usb-idle-parked";
   lastInput = "/run/usb-last-input";
@@ -93,8 +90,6 @@ let
     exit 0
   '';
 
-  # Matched by interface class as well as id, so swapping in a different audio
-  # interface or keyboard does not need the exclusion list editing.
   neverSuspend = pkgs.writeShellScript "usb-never-suspend" (
     lib.optionalString (cfg.idle.usb.neverSuspend != [ ]) ''
       id="$(cat "$1/idVendor" 2>/dev/null || true):$(cat "$1/idProduct" 2>/dev/null || true)"
@@ -112,14 +107,11 @@ let
     + "exit 1\n"
   );
 
-  # A device the port never brought up stays invisible until it is replugged;
-  # cycling the port's power is that replug, without the walk to the machine.
   resetEmptyPorts = pkgs.writeShellApplication {
     name = "usb-reset-empty-ports";
     runtimeInputs = [ pkgs.coreutils ];
     text = ''
-      # Normal enumeration has to finish first, or a slow device gets cycled
-      # halfway up and has to start again.
+      # Sleep first: a device cycled mid-enumeration starts over.
       sleep "''${1:-15}"
 
       empty=()
@@ -130,10 +122,7 @@ let
       done
       [ ''${#empty[@]} -gt 0 ] || exit 0
 
-      # Cut every port first and settle once. Toggling one port straight back
-      # is not a power cycle the device ever sees -- measured 2026-10-08, 26
-      # ports cycled that way and the Focusrite stayed dark -- and settling
-      # each in turn would cost two seconds a port on every resume.
+      # A port toggled straight back is not a power cycle the device sees: cut all, then settle once.
       for port in "''${empty[@]}"; do
         echo 1 > "$port/disable" || true
       done
@@ -146,9 +135,7 @@ let
     '';
   };
 
-  # sddm 0.21 respawns the greeter after a session ends with an empty socket
-  # name, so it exits at once ("QLocalSocket::connectToServer: Invalid name")
-  # and leaves seat0 dark until sddm itself restarts.
+  # sddm 0.21 respawns the greeter with an empty socket name and it exits at once.
   reviveGreeter = pkgs.writeShellApplication {
     name = "revive-greeter";
     runtimeInputs = [ pkgs.systemd ];
@@ -161,8 +148,7 @@ let
 
   usbSuspendDelayMs = toString (cfg.idle.usb.suspendDelayMinutes * 60 * 1000);
 
-  # Switch events are skipped: an audio interface reporting a jack is not a
-  # user asking for their peripherals back.
+  # Switch events are skipped: a jack report is not user input.
   inputWake = pkgs.writeShellApplication {
     name = "input-wake";
     runtimeInputs = [
@@ -171,8 +157,7 @@ let
       pkgs.systemd
     ];
     text = ''
-      # Without this the park clock would already read ten minutes old on a
-      # fresh boot, and the peripherals would go down before anyone touched them.
+      # Seeded at boot so a fresh boot does not park peripherals before anyone touches them.
       touch ${lastInput}
 
       last=0
@@ -182,8 +167,7 @@ let
           *) continue ;;
         esac
 
-        # EPOCHSECONDS, not date: motion arrives hundreds of times a second and
-        # a fork each would cost more than the parking saves.
+        # EPOCHSECONDS avoids a fork per input event.
         now=$EPOCHSECONDS
         [ $((now - last)) -ge 5 ] || continue
         last=$now
@@ -212,8 +196,7 @@ let
       pkgs.systemd
     ];
     text = ''
-      # Parking with no watcher running would strand the peripherals: nothing
-      # else turns them back on.
+      # Parking without a watcher would strand the peripherals with nothing to unpark them.
       systemctl is-active --quiet input-wake.service || exit 0
 
       if [ -e ${parked} ]; then
@@ -281,8 +264,7 @@ let
       systemd
     ];
     text = ''
-      # A block lock on idle is not a claim about work: Steam and KDE take one
-      # whenever a game or video plays, which would pin the host awake forever.
+      # Steam and KDE take block inhibitors during play, so they do not count as work.
       pids=$(busctl --json=short call org.freedesktop.login1 /org/freedesktop/login1 \
         org.freedesktop.login1.Manager ListInhibitors \
         | jq -r '.data[0][]
@@ -332,18 +314,18 @@ in
 
 {
   options.local.power = {
-    instrument = lib.mkEnableOption "below, powertop snapshots and the power CLI tools";
+    instrument = lib.mkEnableOption "below and the power CLI tools";
 
     idle.optimise = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Cut idle draw without suspending. Applies under every policy.";
+      description = "Cuts idle draw without suspending, under every idle policy; default on.";
     };
 
     oopsPanic = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Reboot on a kernel Oops; turn off to keep the trace for diagnosis.";
+      description = "Whether a kernel Oops reboots the host; default on.";
     };
 
     idle.policy = lib.mkOption {
@@ -353,11 +335,7 @@ in
         "autosuspend"
       ];
       default = "always-on";
-      description = ''
-        always-on   never suspends; anything hosted here stays reachable
-        scheduled   suspends between sleepAt and wakeAt, RTC wakeup
-        autosuspend suspends whenever idle checks all report inactive
-      '';
+      description = "Idle policy: always-on never suspends, scheduled suspends between sleepAt and wakeAt, autosuspend suspends when idle checks report inactive; default always-on.";
     };
 
     idle.scheduled.sleepAt = lib.mkOption {
@@ -378,84 +356,83 @@ in
     idle.autosuspend.loadThreshold = lib.mkOption {
       type = lib.types.float;
       default = 2.5;
-      description = "Load average above which the host counts as busy.";
+      description = "Load average above which the host counts as busy; default 2.5.";
     };
 
     idle.autosuspend.watchPorts = lib.mkOption {
       type = lib.types.listOf lib.types.port;
       default = [ 22 ];
-      description = "A direct connection to any of these counts as activity; Tailscale SSH is invisible here.";
+      description = "TCP ports whose direct connections count as activity; default [ 22 ].";
     };
 
     idle.autosuspend.powerOffAfterHours = lib.mkOption {
       type = lib.types.nullOr lib.types.int;
       default = null;
-      description = "Escalate from suspend to power off after this long still idle.";
+      description = "Hours still idle before suspend escalates to power off; null never escalates.";
     };
 
     idle.autosuspend.keepAwake = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Honour block inhibitors and ship the keep-awake helper.";
+      description = "Whether block inhibitors are honoured and the keep-awake helper is installed; default on.";
     };
 
     idle.autosuspend.keepAwakeGroup = lib.mkOption {
       type = lib.types.str;
       default = "wheel";
-      description = "Members may hold the host awake from a session with no seat.";
+      description = "Groups allowed to hold the host awake from a session with no seat; default wheel.";
     };
 
     idle.autosuspend.maxHoldHours = lib.mkOption {
       type = lib.types.nullOr lib.types.int;
       default = null;
-      description = "Stop honouring an inhibitor once its holder is this old.";
+      description = "Hours after which an inhibitor stops holding the host awake; null means no limit.";
     };
 
     idle.autosuspend.watchInterfaces = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = lib.optional (cfg.wakeOnLan.interface != null) cfg.wakeOnLan.interface;
       defaultText = lib.literalExpression "[ config.local.power.wakeOnLan.interface ]";
-      description = "Traffic on these counts as activity.";
+      description = "Network interfaces whose traffic counts as activity; default the Wake-on-LAN interface.";
     };
 
     idle.autosuspend.bandwidthThreshold = lib.mkOption {
       type = lib.types.int;
-      # An idle host already sits near 0.5 MB/s on telemetry and scrapes alone,
-      # while a real download runs 13 MB/s and up.
+      # Idle telemetry runs near 0.5 MB/s; a download runs 13 MB/s and up.
       default = 1000000;
-      description = "Bytes per second, each direction, above which traffic counts as work.";
+      description = "Bytes per second in each direction above which network traffic counts as activity; default 1000000.";
     };
 
     idle.disableWakeSources = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
       example = [ "/sys/bus/usb/devices/usb1" ];
-      description = "Sysfs device paths, globs allowed, that must not wake the host.";
+      description = "Sysfs device paths (globs allowed) whose wakeup is disabled before suspend; default none.";
     };
 
     idle.usb.neverSuspend = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
       example = [ "1235:8202" ];
-      description = "USB vendor:product ids that must keep runtime power management off.";
+      description = "USB vendor:product ids that keep runtime power management off; default none.";
     };
 
     idle.usb.neverSuspendClasses = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ "01" ];
-      description = "USB interface classes, in hex, that must keep runtime power management off.";
+      description = "USB interface class codes, in hex, that keep runtime power management off; default [ \"01\" ].";
     };
 
     idle.usb.suspendDelayMinutes = lib.mkOption {
       type = lib.types.int;
       default = 10;
-      description = "Minutes of inactivity before a USB device parks itself.";
+      description = "Minutes of inactivity before a USB device parks itself; default 10.";
     };
 
     idle.usb.resetEmptyPorts = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Power-cycle hub ports that report no device, to force re-enumeration.";
+      description = "Whether hub ports reporting no device are power-cycled to force re-enumeration; default on.";
     };
 
     keepAwakePackage = lib.mkOption {
@@ -463,7 +440,7 @@ in
       readOnly = true;
       default = keepAwake;
       defaultText = lib.literalExpression "keep-awake";
-      description = "The keep-awake helper, for modules that hold leases of their own.";
+      description = "The keep-awake package, exposed for modules that hold their own leases; read only.";
     };
 
     wakeOnLan.interface = lib.mkOption {
@@ -474,7 +451,7 @@ in
     wakeOnLan.mac = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Recorded here for the client side; Nix cannot set the BIOS.";
+      description = "MAC address that peers wake this host with; default null, meaning no wake.";
     };
   };
 
@@ -524,8 +501,7 @@ in
           interface-name = cfg.wakeOnLan.interface;
           autoconnect = true;
         };
-        # NM_SETTING_WIRED_WAKE_ON_LAN_MAGIC. The keyfile parser rejects the
-        # name "magic" here: it only accepts the numeric flag.
+        # NetworkManager's keyfile parser rejects the name "magic" and takes only 64.
         "802-3-ethernet".wake-on-lan = 64;
         ipv4.method = "auto";
         ipv6.method = "auto";
@@ -549,8 +525,7 @@ in
         ACTION=="add|change", SUBSYSTEM=="pci", DRIVERS=="r8169", ATTR{power/wakeup}="enabled"
       '';
 
-      # r8169 clears the WoL bit during shutdown, so S5 wake needs it re-armed
-      # after the network stack is gone but before power is cut.
+      # The r8169 driver clears the WoL bit during shutdown.
       systemd.services.wake-on-lan-shutdown = {
         description = "Re-arm Wake-on-LAN across shutdown";
         wantedBy = [ "final.target" ];
@@ -573,14 +548,12 @@ in
 
       hardware.bluetooth.powerOnBoot = false;
 
-      # A parked input device that never had remote wakeup armed cannot resume
-      # itself, so neither a keypress nor mouse movement reaches the session.
+      # A parked input device without remote wakeup armed cannot resume itself.
       services.udev.extraRules = ''
         ACTION=="add", SUBSYSTEM=="scsi_host", KERNEL=="host*", ATTR{link_power_management_policy}="med_power_with_dipm"
         ACTION=="add|change", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", TEST=="power/control", ATTR{power/autosuspend_delay_ms}="${usbSuspendDelayMs}", ATTR{power/control}="auto"
         ACTION=="add|change", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"
       ''
-      # Later rules win, so the exceptions have to follow the blanket ones.
       + lib.concatMapStrings (
         id:
         let
@@ -594,8 +567,7 @@ in
       systemd.services.usb-autosuspend = {
         description = "Re-pin USB runtime power management after powertop";
         after = [ "powertop.service" ];
-        # powertop is itself ordered after multi-user.target, so pulling this in
-        # from that target too made systemd drop the job to break the cycle.
+        # Pulling this in from multi-user.target too makes systemd drop the job.
         wantedBy = [ "powertop.service" ];
         serviceConfig.Type = "oneshot";
         script = ''
@@ -690,8 +662,7 @@ in
         };
       };
 
-      # The host can be idle and still ineligible for suspend: a long build or a
-      # live SSH session holds it awake, and the peripherals should park anyway.
+      # Parking runs even when a build or live SSH session holds the host awake.
       systemd.services.usb-idle-park = {
         description = "Park peripherals once manual input has stopped";
         serviceConfig = {
@@ -714,15 +685,12 @@ in
 
       powerManagement.resumeCommands = ''
         ${pkgs.systemd}/bin/systemctl start wake-soft-hardware.service
-        # disableWakeSources disarms the root hubs on the way down and nothing
-        # used to arm them again, so a parked keyboard could not wake itself
-        # through them and a keypress never reached the session.
+        # Re-arms the root hubs that disableWakeSources disarmed, so a keypress can wake the session.
         ${pkgs.systemd}/bin/systemctl start usb-autosuspend.service
         ${lib.optionalString cfg.idle.usb.resetEmptyPorts "${lib.getExe resetEmptyPorts} 5 || true"}
         ${pkgs.coreutils}/bin/rm -f ${parked} ${forcedOff}
         ${pkgs.coreutils}/bin/touch ${lastInput}
-        # kde#523504 again: the greeter dies if the output is driven while it is
-        # still initialising, so let the session settle before asserting DPMS.
+        # KDE bug 523504: the greeter dies if DPMS is driven while it is still initialising.
         ${pkgs.coreutils}/bin/sleep 2
         ${lib.getExe sessionKscreen} --dpms on || true
         ${lib.getExe reviveGreeter} || true
@@ -756,7 +724,6 @@ in
 
       systemd.services.scheduled-suspend = {
         serviceConfig.Type = "oneshot";
-        # wakeAt is a time of day; pick its next occurrence.
         script = ''
           now=$(${pkgs.coreutils}/bin/date +%s)
           target=$(${pkgs.coreutils}/bin/date -d '${cfg.idle.scheduled.wakeAt}' +%s)
@@ -819,8 +786,7 @@ in
     (lib.mkIf (cfg.idle.policy == "autosuspend" && cfg.idle.autosuspend.keepAwake) {
       environment.systemPackages = [ keepAwake ];
 
-      # login1 ships these as allow_active, so a session with no seat - every SSH
-      # login, and the lingering user manager a lease runs under - is refused.
+      # login1 ships these as allow_active, so a session with no seat is refused.
       security.polkit.enable = true;
       security.polkit.extraConfig = ''
         polkit.addRule(function (action, subject) {
