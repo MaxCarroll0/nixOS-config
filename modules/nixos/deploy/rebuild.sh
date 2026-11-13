@@ -110,13 +110,17 @@ if [ "$rev" = "$headRev" ]; then
   source="git+file://$flake?rev=$rev"
 else
   snapshotRef="$deployRef.pending"
-  activating && snapshotRef="$deployRef"
   git -C "$flake" update-ref "$snapshotRef" "$rev"
-  if activating && ! git -C "$flake" push -q --force origin "$rev:$deployRef" 2>/dev/null; then
-    echo "warning: could not push $deployRef to origin; other machines cannot inspect this deploy" >&2
-  fi
   source="git+file://$flake?ref=$snapshotRef&rev=$rev"
 fi
+
+recordDeployed() {
+  [ "$rev" != "$headRev" ] || return 0
+  git -C "$flake" update-ref "$deployRef" "$rev"
+  if ! git -C "$flake" push -q --force origin "$rev:$deployRef" 2>/dev/null; then
+    echo "warning: could not push $deployRef to origin; other machines cannot inspect this deploy" >&2
+  fi
+}
 
 if [ -n "$target" ]; then
   deployOpts=()
@@ -190,12 +194,13 @@ if [ -n "$target" ]; then
       now=$(timeout 30 ssh -o BatchMode=yes "$target" nixos-version --configuration-revision 2>/dev/null || true)
       failed=$(timeout 30 ssh -o BatchMode=yes "$target" systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | paste -sd, || true)
       if [ "$now" = "$rev" ]; then
+        recordDeployed
         echo "VERIFIED: $target runs ${rev:0:7}${failed:+; failed units: $failed}"
       else
         echo "ROLLED BACK: $target runs ${now:-unknown}, expected ${rev:0:7}" >&2
         exit 4
       fi ;;
-    boot) echo "STAGED: ${rev:0:7} becomes current on the next boot of $target" ;;
+    boot) recordDeployed; echo "STAGED: ${rev:0:7} becomes current on the next boot of $target" ;;
   esac
   if activating && [ "$rev" != "$headRev" ]; then
     echo "deployed snapshot ${rev:0:7} to $target; uncommitted: $(git -C "$flake" diff --shortstat HEAD "$rev")"
@@ -224,6 +229,7 @@ case "$action" in
     nixos-rebuild build --flake "$source#$host" "${opts[@]}" "$@"
     sudo nixos-rebuild "$action" --flake "$source#$host" "${opts[@]}" "$@"
     if activating && [ "$rev" != "$headRev" ]; then
+      recordDeployed
       echo "activated snapshot ${rev:0:7}; uncommitted: $(git -C "$flake" diff --shortstat HEAD "$rev")"
     fi ;;
   *)
