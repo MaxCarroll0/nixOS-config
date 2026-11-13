@@ -50,7 +50,8 @@ def main():
     failures = 0
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
-        remote = drv(tmp, "curl-8.0", local=False)
+        remote = drv(tmp, "linux-6.18", local=False)
+        light = drv(tmp, "curl-8.0", local=False)
         local = drv(tmp, "nuke-refs", local=True)
 
         woken = observe(tmp, ["these 2 derivations will be built:", "  " + local])
@@ -84,6 +85,35 @@ def main():
             "the json stream form wakes too",
             woken,
             [["builder-wake", "--async", "desktopnew"]],
+        )
+
+        woken = observe(tmp, ["these 2 derivations will be built:", "  " + light])
+        failures += check("a light derivation never wakes the builder", woken, [])
+
+        woken = observe(
+            tmp,
+            ["these 2 derivations will be built:", "  " + light, "  " + remote],
+        )
+        failures += check(
+            "a heavy derivation after a light one still wakes",
+            woken,
+            [["builder-wake", "--async", "desktopnew"]],
+        )
+
+        failures += check(
+            "nix-shell -p is a tool shell",
+            observer.runs_tool_shell("nix-shell", ["-p", "python3"]),
+            True,
+        )
+        failures += check(
+            "nix shell is a tool shell",
+            observer.runs_tool_shell("nix", ["shell", "nixpkgs#jq"]),
+            True,
+        )
+        failures += check(
+            "nix build is not a tool shell",
+            observer.runs_tool_shell("nix", ["build", ".#x"]),
+            False,
         )
 
         woken = observe(tmp, ["  " + remote, "building '%s'" % remote])

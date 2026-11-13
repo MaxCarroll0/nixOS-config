@@ -7,11 +7,13 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
 import syslog
 import tempfile
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -22,6 +24,20 @@ PLAN_DRV = re.compile(r"([^\s\"]+\.drv)")
 OFFLOAD_BUILDERS = "/etc/nix/offload-builders"
 # preferLocalBuild is present but empty when false; structuredAttrs puts it in __json.
 LOCAL_ONLY = (b'"preferLocalBuild","1"', b'"preferLocalBuild":true')
+HEAVY = (
+    "linux-",
+    "emacs-",
+    "ghc-",
+    "llvm-",
+    "clang-",
+    "gcc-",
+    "rustc-",
+    "chromium-",
+    "firefox-",
+    "electron-",
+    "qtwebengine-",
+    "webkitgtk-",
+)
 
 BUILD_LOG = 101
 BUILD_PHASE = 104
@@ -169,7 +185,7 @@ class Observer:
                 content = handle.read()
         except OSError:
             return
-        if any(marker in content for marker in LOCAL_ONLY):
+        if any(marker in content for marker in LOCAL_ONLY) or not heavy(match.group(1)):
             return
         self.wake_settled = True
         try:
@@ -448,6 +464,77 @@ def add_log_options(argv):
     return argv + options
 
 
+def heavy(drv):
+    return os.path.basename(drv).split("-", 1)[-1].startswith(HEAVY)
+
+
+def runs_tool_shell(command, argv):
+    if command == "nix-shell":
+        return True
+    words = [arg for arg in argv if not arg.startswith("-")]
+    return command == "nix" and bool(words) and words[0] in {"shell", "run", "develop"}
+
+
+def process_tree(pid):
+    found = [pid]
+    for task in Path("/proc/%d/task" % pid).glob("*"):
+        try:
+            children = (task / "children").read_text().split()
+        except OSError:
+            continue
+        for child in children:
+            found.extend(process_tree(int(child)))
+    return found
+
+
+def path_store_tops(pid):
+    try:
+        environ = Path("/proc/%d/environ" % pid).read_bytes()
+    except OSError:
+        return set()
+    tops = set()
+    for entry in environ.split(b"\0"):
+        if not entry.startswith(b"PATH="):
+            continue
+        for directory in entry[5:].decode(errors="replace").split(":"):
+            parts = directory.split("/")
+            if len(parts) >= 4 and directory.startswith("/nix/store/"):
+                tops.add("/".join(parts[:4]))
+    return tops
+
+
+class ToolRoots:
+    def __init__(self, nix_store):
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
+        self.nix_store = nix_store
+        self.dir = Path(runtime) / "nix-shell-roots" / str(os.getpid())
+        self.rooted = set()
+
+    def refresh(self, pid):
+        for process in process_tree(pid):
+            for top in path_store_tops(process) - self.rooted:
+                self.rooted.add(top)
+                self.dir.mkdir(parents=True, exist_ok=True)
+                link = self.dir / str(len(self.rooted))
+                subprocess.run(
+                    [self.nix_store, "--add-root", str(link), "--indirect", "--realise", top],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+
+    def watch(self, child):
+        while child.poll() is None:
+            try:
+                self.refresh(child.pid)
+            except OSError:
+                pass
+            time.sleep(2)
+
+    def release(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
 def spawns_interactive_shell(command, argv):
     if command == "nix-shell":
         return not {"--run", "--command", "-i"} & set(argv)
@@ -472,9 +559,22 @@ def main():
         add_log_options(forwarded) if observer.has_build_intent() and not interactive else forwarded
     )
     command = [options.real, *command_args]
+    roots = None
+    if runs_tool_shell(options.command, forwarded):
+        roots = ToolRoots(str(Path(options.real).parent / "nix-store"))
     # Must precede the sg wrap: skgid 700 would bypass the killswitch session-wide.
-    if interactive:
+    if interactive and roots is None:
         os.execv(command[0], command)
+    if interactive:
+        child = subprocess.Popen(command)
+        threading.Thread(target=roots.watch, args=(child,), daemon=True).start()
+        try:
+            exit_code = child.wait()
+        except KeyboardInterrupt:
+            exit_code = child.wait()
+        finally:
+            roots.release()
+        return exit_code
     if os.environ.get("NIX_OBSERVER_NOVPN") == "1" and Path("/run/wrappers/bin/sg").exists():
         command = ["/run/wrappers/bin/sg", "novpn", "-c", "exec " + shlex.join(command)]
     nom = None
@@ -489,6 +589,8 @@ def main():
             env=nom_environment,
         )
     child = subprocess.Popen(command, stderr=subprocess.PIPE, text=True, bufsize=1)
+    if roots:
+        threading.Thread(target=roots.watch, args=(child,), daemon=True).start()
     try:
         for line in child.stderr:
             event = observer.parse(line.rstrip("\n"))
@@ -511,6 +613,8 @@ def main():
             except (BrokenPipeError, AttributeError):
                 pass
             nom.wait()
+        if roots:
+            roots.release()
     observer.finish(exit_code)
     return exit_code
 
