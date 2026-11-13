@@ -296,6 +296,8 @@
       packages.x86_64-linux = {
         deploy-rs = inputs.deploy-rs.packages.x86_64-linux.default;
 
+        zoom-us = (pkgsFor "x86_64-linux").zoom-us;
+
         bookshelf = (pkgsFor "x86_64-linux").callPackage "${inputs.bookshelf}/package.nix" { };
 
         installer-iso =
