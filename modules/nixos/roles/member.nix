@@ -32,7 +32,7 @@
   local.server.ssh = {
     enable = true;
     port = lib.mkDefault 2222;
-    allowUsers = lib.mkDefault [ "max" ];
+    allowUsers = [ "max" ];
   };
   local.server.tailscale = {
     enable = true;
