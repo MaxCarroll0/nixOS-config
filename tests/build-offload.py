@@ -49,8 +49,8 @@ def preamble(builders="@/dev/null"):
     return u64(1) + text("builders") + text(builders) + u64(0)
 
 
-def request(system="x86_64-linux", features=()):
-    return text("try") + u64(1) + text(system) + text("/nix/store/a.drv") + texts(list(features))
+def request(system="x86_64-linux", features=(), drv="/nix/store/a.drv"):
+    return text("try") + u64(1) + text(system) + text(drv) + texts(list(features))
 
 
 def run(tmp, replies, probe, requests, grace=0, machines=None, setting="@/dev/null"):
@@ -131,11 +131,22 @@ def main():
             target.mkdir()
             return target
 
+        heavy = root / ("0" * 32 + "-linux-6.18.drv")
+        heavy.write_text("{}")
+        light = root / ("0" * 32 + "-hello-2.12.drv")
+        light.write_text("{}")
+
         verdicts, _, woken = run(
-            case("asleep"), ["# decline\n"], False, [request()], grace=0
+            case("asleep"), ["# decline\n"], False, [request(drv=str(heavy))], grace=0
         )
         failures += check("unreachable builder declines locally", verdicts, ["decline"])
-        failures += check("unreachable builder is woken", woken, True)
+        failures += check("unreachable builder is woken for a heavy build", woken, True)
+
+        verdicts, _, woken = run(
+            case("light"), ["# decline\n"], False, [request(drv=str(light))], grace=0
+        )
+        failures += check("a light build does not wake the builder", woken, False)
+        failures += check("a light build still declines locally", verdicts, ["decline"])
 
         verdicts, _, _ = run(
             case("grace"), ["# decline\n"], True, [request()], grace=600
