@@ -224,6 +224,20 @@ def remove_with_angrr(roots: list[Path], protect_days: int) -> None:
         )
 
 
+def eviction_rows(evictions: list[tuple[Project, dict[int, int]]]) -> list[dict]:
+    return [
+        {
+            "path": str(project.path),
+            "kind": "project",
+            "size": sum(totals.values()),
+            "tiers": {str(tier): totals[tier] for tier in TIERS},
+            "last_used": int(project.last_used),
+            "last_built": int(project.last_built),
+        }
+        for project, totals in evictions
+    ]
+
+
 def format_size(size: int) -> str:
     return f"{size / GIB:.1f} GiB"
 
@@ -297,6 +311,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--budget-gib", type=int, help="evict until retained project closures fit")
     parser.add_argument("--need-gib", type=int, help="evict until this much is freed")
     parser.add_argument("--max-freed-gib", type=int, default=40, help="bound on --need-gib")
+    parser.add_argument("--json", action="store_true", help="print the plan as JSON")
     return parser.parse_args()
 
 
@@ -322,9 +337,30 @@ def main() -> None:
     if args.need_gib is not None:
         need_bytes = min(args.need_gib, args.max_freed_gib) * GIB
 
+    started = time.time()
     evictions, retained, freed = plan(
         projects, sizes, time.time(), args.protect_days, budget_bytes, need_bytes
     )
+
+    if args.json:
+        if args.apply and evictions:
+            selected_roots = [root for project, _ in evictions for root in project.roots]
+            remove_with_angrr(selected_roots, args.protect_days)
+        print(
+            json.dumps(
+                {
+                    "stage": "projects",
+                    "applied": args.apply,
+                    "projects": len(projects),
+                    "need": need_bytes or 0,
+                    "freed": freed,
+                    "retained": retained,
+                    "seconds": round(time.time() - started, 1),
+                    "selected": eviction_rows(evictions),
+                }
+            )
+        )
+        return
 
     print(
         f"Projects: {len(projects)}; project closure union: "

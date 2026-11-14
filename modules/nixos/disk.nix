@@ -50,21 +50,29 @@ let
     '';
   };
 
+  stateDir = "/var/lib/disk-ledger";
+
   ledger = pkgs.writeShellApplication {
     name = "disk-ledger";
     runtimeInputs = [
       config.nix.package
       pkgs.coreutils
       pkgs.python3
+      pkgs.util-linux
     ];
     text = ''
       export RETENTION_MODULE=${./project-closure-retention.py}
+      export COLLECT_MODULE=${./store-collect.py}
       export LEDGER_HOME=${home}
+      export LEDGER_USER=${cfg.user}
       export LEDGER_TARGET_BYTES=${toString (pressure.minFreeGiB * gib)}
+      export LEDGER_MAX_FREED_BYTES=${toString (pressure.maxFreedGiB * gib)}
       export LEDGER_RUNTIME_DIR=/run/user/${uid}
+      export LEDGER_STATE_DIR=${stateDir}
       export LEDGER_UID=${uid}
       export LEDGER_TEXTFILE=/var/lib/node-exporter-textfile/disk-ledger.prom
       export LEDGER_OFFLOAD_DIR=${if cfg.offload.enable then "${home}/offload" else ""}
+      export LEDGER_SCRATCH_PLAN="${lib.getExe scratchClean} --home ${home} --state ${home}/.local/state/dev-build"
       exec python3 ${./disk-ledger.py}
     '';
   };
@@ -132,6 +140,8 @@ in
       scratchClean
     ];
 
+    systemd.tmpfiles.rules = [ "d ${stateDir} 0755 root root -" ];
+
     systemd.services.generation-expire = {
       description = "Keep the last 10 generations of every profile";
       path = [ config.nix.package ];
@@ -167,17 +177,24 @@ in
       };
       script = ''
         reclaim() {
-          local free need
+          local free need started status result
           free=$(${freeGiB})
-          [ "$free" -lt ${toString pressure.minFreeGiB} ] || exit 0
+          [ "$free" -lt ${toString pressure.minFreeGiB} ] || return 0
           need=$(( ${toString pressure.minFreeGiB} - free + 5 ))
           [ "$need" -le ${toString pressure.maxFreedGiB} ] || need=${toString pressure.maxFreedGiB}
-          "$@" "$need"
+          started=$(date +%s)
+          status=0
+          result=$("$@" "$need") || status=$?
+          ${pkgs.jq}/bin/jq -c --argjson at "$started" --argjson status "$status" --argjson free "$free" --argjson need "$need" \
+            '{at: $at, stage: (.stage // "unknown"), status: $status, free_gib: $free, need_gib: $need,
+              freed: (.freed // 0), items: ((.selected // []) | length), seconds: (.seconds // 0)}' \
+            <<<"''${result:-{\}}" >> ${stateDir}/events.jsonl
+          echo "$result" | ${pkgs.jq}/bin/jq -r '"\(.stage): freed \(.freed / 1073741824 * 10 | round / 10) GiB in \(.selected | length) items, \(.seconds)s"' 2>/dev/null || true
         }
         reclaim ${pkgs.util-linux}/bin/runuser -u ${cfg.user} -- ${lib.getExe scratchClean} \
-          --apply --home ${home} --state ${home}/.local/state/dev-build --need-gib
-        reclaim ${cfg.retention}/bin/project-closure-retention --apply --max-freed-gib ${toString pressure.maxFreedGiB} --need-gib
-        reclaim ${lib.getExe collect} --apply --need-gib
+          --apply --json --home ${home} --state ${home}/.local/state/dev-build --need-gib
+        reclaim ${cfg.retention}/bin/project-closure-retention --apply --json --max-freed-gib ${toString pressure.maxFreedGiB} --need-gib
+        reclaim ${lib.getExe collect} --apply --json --need-gib
       '';
     };
 
