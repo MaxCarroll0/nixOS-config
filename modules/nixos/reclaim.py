@@ -28,7 +28,14 @@ WEIGHTS = {
 }
 KNOWN_PROFILES = {"system", "home-manager", "profile", "default"}
 GENERATION = re.compile(r"^(.+)-(\d+)-link$")
-DERIVABLE_TEMP = re.compile(r"^(nix-shell[.-].*|nix-\d+-\d+|nix-build-.*|nix-develop-\d+-\d+|\.?org\.chromium\.Chromium\..*|scoped_dir.*|nixwatch-.*\.log|pytest-of-.*|babel-.*|epdfinfo.*|tmp\..*|tmp[a-z0-9_]{8}|\.?[a-z]+-[0-9a-f]{6,}\.(log|json|txt))$")
+DERIVABLE_TEMP = re.compile(r"^(nix-shell\.[A-Za-z0-9]{6}|nix-shell-\d+-\d+|nix-\d+-\d+|nix-build-.+|nix-develop-\d+-\d+|\.?org\.chromium\.Chromium\..+|scoped_dir.+|nixwatch-.+\.log|pytest-of-.+|babel-[A-Za-z0-9]{6}|babel-stable-\d+|epdfinfo[A-Za-z0-9]{6}|tmp\.[A-Za-z0-9]{10}|tmp[a-z0-9_]{8})$")
+PID_TEMP = re.compile(r"^nix(?:-develop|-shell)?-(\d+)-\d+$")
+CHROMIUM_TEMP = re.compile(r"^(\.?org\.chromium\.Chromium\..+|scoped_dir.+)$")
+UNKNOWN_TEMP_FACTOR = 1 / 16
+RECENT_TEMP = 3600
+KNOWN_CACHES = re.compile(r"^(appstream|arxiv-to-prompt|biome|bookmarksrunner|chromium|google-chrome|deno|distrobox|dune|dvisvgm|emacs|fontconfig|gh|go-build|gstreamer-1\.0|hie-bios|ksvg-elements|ksycoca6_.+|matplotlib|mesa_shader_cache|mesa_shader_cache_db|mpv|nix|node|org-persist|pip|pre-commit|qtshadercache-.+|typescript|uv|workspacesclient|yarn|at-spi|doc)$")
+ACTIVE_REASONS = ("in use by a process", "live agent session", "owner process alive", "chromium running", "pytest running", "written in the last hour")
+QT_CACHE = re.compile(r"^(qmlcache|qtpipelinecache-.+|qtshadercache-.+|_qt_QGfxShaderBuilder_.+)$")
 RUNTIME_TEMP = re.compile(r"^(\.[A-Za-z0-9]+-unix|hsperfdata_.*|cc-daemon-\d+|claude-\d+|claude-mcp-.*|systemd-private-.*|\.X\d+-lock|tmux-\d+|zellij-\d+|emacs\d+|ssh-.*|gpg-.*|pulse-.*|dbus-.*|kitty-.*|nvim.*|xdg-.*|lost\+found)$")
 SESSION = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 DERIVABLE_OUTPUT = re.compile(r"^(target|dist|dist-newstyle|build|_build|out|\.lake|node_modules|__pycache__|\.mypy_cache|\.pytest_cache|\.ruff_cache|\.direnv|\.venv|venv|\.tox|\.stack-work|\.gradle|\.zig-cache|zig-out|elm-stuff|\.next|\.parcel-cache|_opam|result(-.*)?)$")
@@ -65,7 +72,7 @@ def protected_class(link, reason):
         return "previous"
     if reason.startswith("live shell"):
         return "shells"
-    if link.startswith(("/proc/", "{")) or reason in ("in use by a process", "live agent session"):
+    if link.startswith(("/proc/", "{")) or reason in ACTIVE_REASONS:
         return "processes"
     return "roots"
 
@@ -179,9 +186,9 @@ def glob_worktrees(home):
 
 
 class Item:
-    __slots__ = ("kind", "path", "last_used", "links", "files", "targets", "store", "store_bytes", "file_bytes", "detail", "rank", "build")
+    __slots__ = ("kind", "path", "last_used", "links", "files", "targets", "store", "store_bytes", "file_bytes", "detail", "rank", "build", "factor")
 
-    def __init__(self, kind, path, last_used, links=(), files=(), detail=None):
+    def __init__(self, kind, path, last_used, links=(), files=(), detail=None, factor=1):
         self.kind = kind
         self.path = path
         self.last_used = int(last_used)
@@ -194,10 +201,11 @@ class Item:
         self.detail = detail or {}
         self.rank = 0
         self.build = 0
+        self.factor = factor
 
     @property
     def weight(self):
-        return WEIGHTS[self.kind]
+        return WEIGHTS[self.kind] * self.factor
 
     @property
     def freed(self):
@@ -284,6 +292,78 @@ def busy_paths():
     return ancestors
 
 
+def process_starts():
+    booted = boot_time()
+    starts = {}
+    for proc in glob.glob("/proc/[0-9]*"):
+        try:
+            with open(f"{proc}/stat") as handle:
+                head, tail = handle.read().rsplit(")", 1)
+        except (OSError, ValueError):
+            continue
+        name = head.split("(", 1)[1]
+        started = booted + int(tail.split()[19]) / CLOCK_TICKS
+        starts.setdefault(name, []).append(started)
+        if name.startswith(("python", ".python", "pytest", ".pytest")):
+            try:
+                with open(f"{proc}/cmdline", "rb") as handle:
+                    if b"pytest" in handle.read():
+                        starts.setdefault("pytest", []).append(started)
+            except OSError:
+                pass
+    return starts
+
+
+def cache_known(path):
+    name = os.path.basename(path)
+    if KNOWN_CACHES.match(name):
+        return True
+    try:
+        children = os.listdir(path)
+    except OSError:
+        return False
+    return bool(children) and all(QT_CACHE.match(child) for child in children)
+
+
+def git_dirs(path):
+    if os.path.lexists(os.path.join(path, ".git")):
+        return [path]
+    try:
+        children = os.listdir(path)
+    except OSError:
+        return []
+    return [os.path.join(path, child) for child in children if os.path.lexists(os.path.join(path, child, ".git"))]
+
+
+def unsaved_git(repo, user):
+    status = run_as(user, ["git", "-C", repo, "status", "--porcelain"])
+    if status.returncode != 0 or status.stdout.strip():
+        return True
+    unpushed = run_as(user, ["git", "-C", repo, "rev-list", "-n1", "--branches", "--not", "--remotes"])
+    return unpushed.returncode != 0 or bool(unpushed.stdout.strip())
+
+
+def temp_activity(path, used, now, sessions, starts, unsaved):
+    name = os.path.basename(path)
+    if now - used < RECENT_TEMP:
+        return "written in the last hour"
+    unknown = [session["started"] for session in sessions if not session["ids"]]
+    if unknown and used >= min(unknown):
+        return "live agent session"
+    match = PID_TEMP.match(name)
+    if match and alive(int(match.group(1))):
+        return "owner process alive"
+    if CHROMIUM_TEMP.match(name):
+        running = starts.get("chromium", []) + starts.get("chrome", []) + starts.get(".chromium-wrapp", [])
+        if running and used >= min(running):
+            return "chromium running"
+    if name.startswith("pytest-of-") and starts.get("pytest"):
+        return "pytest running"
+    if any(unsaved(repo) for repo in git_dirs(path)):
+        return "unsaved git work"
+    return None
+
+
 def profile_generations(directory):
     profiles = {}
     try:
@@ -308,7 +388,7 @@ def run_as(user, command, cwd=None, input=None):
     if os.geteuid() == 0 and user != "root":
         entry = pwd.getpwnam(user)
         command = ["setpriv", f"--reuid={entry.pw_uid}", f"--regid={entry.pw_gid}", "--init-groups", "--", *command]
-    return subprocess.run(command, capture_output=True, text=True, cwd=cwd, input=input)
+    return subprocess.run(command, capture_output=True, text=True, cwd=cwd, input=input, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
 
 
 def default_branch(repo, user):
@@ -349,6 +429,7 @@ class Model:
         self.offload = offload
         self.find_worktrees = worktrees or (lambda: glob_worktrees(self.home))
         self.worktrees = {}
+        self.git_state = {}
         self.ignored = {}
         self.items = []
         self.file_items = []
@@ -427,12 +508,15 @@ class Model:
             except OSError:
                 continue
             for child in children:
+                if not cache_known(str(child)):
+                    self.protected[str(child)] = "unknown cache, not derivable"
+                    continue
                 add(Item("cache", str(child), self.file_used(str(child)), files=[str(child)], detail={"owner": owner}))
         for relative in CACHES:
             path = self.home / relative
             if path.exists():
                 add(Item("cache", str(path), self.file_used(str(path)), files=[str(path)], detail={"owner": self.user}))
-        for item in self.tmp_items(sessions):
+        for item in self.tmp_items(sessions, busy):
             add(item)
         for item in self.agent_worktrees():
             add(item)
@@ -440,9 +524,11 @@ class Model:
             add(item)
         return containers
 
-    def tmp_items(self, sessions):
+    def tmp_items(self, sessions, busy=()):
         session_ids = {sid for session in sessions for sid in session["ids"]}
         oldest = min((session["started"] for session in sessions if not session["ids"]), default=None)
+        now = time.time()
+        starts = process_starts()
         try:
             entries = os.listdir(self.tmp)
         except OSError:
@@ -456,10 +542,15 @@ class Model:
             if RUNTIME_TEMP.match(name) or not (os.path.stat.S_ISDIR(info.st_mode) or os.path.stat.S_ISREG(info.st_mode)):
                 continue
             owner = pwd.getpwuid(info.st_uid).pw_name if info.st_uid in (0, self.uid) else None
-            if owner is None:
+            if owner is None or path in busy:
                 continue
-            kind = "temp" if DERIVABLE_TEMP.match(name) else "agent"
-            yield Item(kind, path, self.file_used(path), files=[path], detail={"owner": owner})
+            used = max(self.file_used(path), info.st_mtime)
+            reason = temp_activity(path, used, now, sessions, starts, lambda repo: self.unsaved(repo, owner))
+            if reason:
+                self.protected[path] = reason
+                continue
+            known = bool(DERIVABLE_TEMP.match(name))
+            yield Item("temp", path, used, files=[path], detail={"owner": owner, "pattern": known}, factor=1 if known else UNKNOWN_TEMP_FACTOR)
         for session_dir in glob.glob(f"{self.tmp}/claude-{self.uid}/*/*"):
             name = os.path.basename(session_dir)
             if not SESSION.match(name):
@@ -469,6 +560,59 @@ class Model:
                 self.protected[session_dir] = "live agent session"
                 continue
             yield Item("agent", session_dir, used, files=[session_dir], detail={"owner": self.user, "session": name})
+
+    def unsaved(self, repo, user):
+        key = self.file_used(repo)
+        if self.git_state.get(repo, (None,))[0] != key:
+            self.git_state[repo] = (key, unsaved_git(repo, user))
+        return self.git_state[repo][1]
+
+    def refusal(self, entry, busy, sessions):
+        for link in entry["links"]:
+            if os.path.lexists(link) and not os.path.islink(link):
+                return f"not a link: {link}"
+        kind = entry["kind"]
+        detail = entry["detail"]
+        for path in entry["files"]:
+            if not os.path.lexists(path):
+                continue
+            if path in busy:
+                return "in use by a process"
+            parent = os.path.dirname(path)
+            name = os.path.basename(path)
+            if kind == "cache":
+                caches = {str(self.home / relative) for relative in CACHES}
+                if not ((parent in (str(self.home / ".cache"), "/root/.cache") and cache_known(path)) or path in caches):
+                    return "not a known cache"
+            elif kind == "temp":
+                if parent != self.tmp or RUNTIME_TEMP.match(name):
+                    return "not a temp entry"
+                owner = detail.get("owner", self.user)
+                reason = temp_activity(path, max(walk_used(path), lstat_time(path)), time.time(), sessions, process_starts(), lambda repo: unsaved_git(repo, owner))
+                if reason:
+                    return reason
+            elif kind == "agent" and detail.get("session"):
+                ids = {sid for session in sessions for sid in session["ids"]}
+                unknown = [session["started"] for session in sessions if not session["ids"]]
+                if not (SESSION.match(name) and path.startswith(f"{self.tmp}/claude-{self.uid}/")) or name in ids or (unknown and walk_used(path) >= min(unknown)):
+                    return "live agent session"
+            elif kind == "agent" and detail.get("worktree"):
+                if "/.claude/worktrees/" not in path:
+                    return "not a worktree"
+                state = worktree_state(detail["repo"], path, self.user)
+                if state is None or state["dirty"]:
+                    return "uncommitted changes"
+            elif kind == "stale shell":
+                pid = name
+                if not (re.fullmatch(r"/run/user/\d+/nix-shell-roots", parent) and pid.isdigit()) or alive(int(pid)):
+                    return "live shell"
+            elif kind == "build":
+                offload = detail.get("offload") and self.offload and parent == self.offload and os.path.exists(os.path.join(path, ".dev-build-last-used"))
+                if not (offload or DERIVABLE_OUTPUT.match(name)) or os.path.islink(path):
+                    return "not a build output"
+            else:
+                return f"{kind} owns no files"
+        return None
 
     def agent_worktrees(self):
         for worktree in self.find_worktrees():

@@ -1199,13 +1199,18 @@ class Ledger:
         before = self.statfs()[2]
         status = 0
         refused = set()
+        refusals = []
         removed = []
         try:
-            busy = self.reclaim.busy_paths() if any(entry["files"] for entry in work) else set()
+            files = any(entry["files"] for entry in work)
+            busy = self.reclaim.busy_paths() if files else set()
+            sessions = self.reclaim.live_sessions(self.model.home) if files else []
             boot = False
             for entry in work:
-                if any(path in busy for path in entry["files"]):
+                reason = self.model.refusal(entry, busy, sessions)
+                if reason:
                     refused.add(entry["path"])
+                    refusals.append({"at": int(time.time()), "path": entry["path"], "kind": entry["kind"], "reason": reason})
                     continue
                 for link in entry["links"]:
                     try:
@@ -1244,6 +1249,7 @@ class Ledger:
             "claimed": sum(entry["freed"] for entry in work),
             "items": len(work),
             "refused": len(refused),
+            "refusals": refusals[:50],
             "seconds": round(time.time() - started, 2),
             "taken": {entry["path"]: entry["freed"] for entry in work[:200]},
             "oldest": min(entry["last_used"] for entry in work),
