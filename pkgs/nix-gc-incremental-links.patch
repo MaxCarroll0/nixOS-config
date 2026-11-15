@@ -1,0 +1,109 @@
+--- a/src/libstore/gc.cc	2026-11-15 23:06:27.297886302 +0000
++++ b/src/libstore/gc.cc	2026-11-15 23:06:38.199358668 +0000
+@@ -10,6 +10,7 @@
+ #include "nix/util/serialise.hh"
+ #include "nix/util/util.hh"
+ #include "nix/util/file-system.hh"
++#include "nix/util/posix-source-accessor.hh"
+ #include "nix/store/posix-fs-canonicalise.hh"
+ 
+ #include "store-config-private.hh"
+@@ -536,6 +537,42 @@
+     if (auto p = getEnv("_NIX_TEST_GC_SYNC_2"))
+         readFile(*p);
+ 
++    bool incrementalLinks = shouldDelete && getEnv("NIX_GC_INCREMENTAL_LINKS") == "1";
++    bool fullLinkScan = false;
++    uint64_t hashBudget = 64ULL << 20;
++    if (auto budget = getEnv("NIX_GC_LINK_HASH_BUDGET"))
++        hashBudget = std::stoull(*budget);
++    boost::unordered_flat_map<ino_t, std::string> namedLinks;
++    boost::unordered_flat_set<ino_t> unnamedLinks;
++
++    std::function<void(const std::filesystem::path &)> collectLinks = [&](const std::filesystem::path & path) {
++        auto st = lstat(path);
++        if (S_ISDIR(st.st_mode)) {
++            for (auto & entry : std::filesystem::directory_iterator{path})
++                collectLinks(entry.path());
++            return;
++        }
++        if (!(S_ISREG(st.st_mode) || S_ISLNK(st.st_mode)) || st.st_nlink < 2)
++            return;
++        if (namedLinks.count(st.st_ino) || unnamedLinks.count(st.st_ino))
++            return;
++        if ((uint64_t) st.st_size <= hashBudget) {
++            hashBudget -= st.st_size;
++            auto hash = hashPath(
++                            {make_ref<PosixSourceAccessor>(), CanonPath(path.string())},
++                            FileSerialisationMethod::NixArchive,
++                            HashAlgorithm::SHA256)
++                            .hash;
++            auto name = hash.to_string(HashFormat::Nix32, false);
++            auto stLink = maybeLstat(linksDir / name);
++            if (stLink && stLink->st_ino == st.st_ino && stLink->st_dev == st.st_dev) {
++                namedLinks.emplace(st.st_ino, name);
++                return;
++            }
++        }
++        unnamedLinks.insert(st.st_ino);
++    };
++
+     /* Helper function that deletes a path from the store and throws
+        GCLimitReached if we've deleted enough garbage. */
+     auto deleteFromStore = [&](std::string_view baseName, bool isKnownPath) {
+@@ -557,6 +594,16 @@
+ 
+         printInfo("deleting '%1%'", path);
+ 
++        if (incrementalLinks && !fullLinkScan) {
++            try {
++                if (maybeLstat(realPath))
++                    collectLinks(realPath);
++            } catch (std::exception & e) {
++                warn("incremental link collection failed (%s); falling back to a full scan", e.what());
++                fullLinkScan = true;
++            }
++        }
++
+         results.paths.insert(path);
+ 
+         uint64_t bytesFreed;
+@@ -756,7 +803,37 @@
+        safely deleted.  FIXME: race condition with optimisePath(): we
+        might see a link count of 1 just before optimisePath() increases
+        the link count. */
+-    if (options.action == GCOptions::gcDeleteDead || options.action == GCOptions::gcDeleteSpecific) {
++    if (incrementalLinks && !fullLinkScan) {
++        printInfo("deleting unused links (%d named, %d by inode)...", namedLinks.size(), unnamedLinks.size());
++
++        auto removeIfUnused = [&](const std::filesystem::path & path, ino_t ino) {
++            auto st = maybeLstat(path);
++            if (!st || st->st_ino != ino || st->st_nlink != 1)
++                return;
++            printMsg(lvlTalkative, "deleting unused link %1%", PathFmt(path));
++            unlink(path);
++        };
++
++        for (auto & [ino, name] : namedLinks) {
++            checkInterrupt();
++            removeIfUnused(linksDir / name, ino);
++        }
++
++        if (!unnamedLinks.empty()) {
++            AutoCloseDir dir(opendir(linksDir.string().c_str()));
++            if (!dir)
++                throw SysError("opening directory %1%", PathFmt(linksDir));
++            struct dirent * dirent;
++            while (errno = 0, dirent = readdir(dir.get())) {
++                checkInterrupt();
++                std::string name = dirent->d_name;
++                if (name == "." || name == "..")
++                    continue;
++                if (unnamedLinks.count(dirent->d_ino))
++                    removeIfUnused(linksDir / name, dirent->d_ino);
++            }
++        }
++    } else if (options.action == GCOptions::gcDeleteDead || options.action == GCOptions::gcDeleteSpecific) {
+         printInfo("deleting unused links...");
+ 
+         AutoCloseDir dir(opendir(linksDir.string().c_str()));
