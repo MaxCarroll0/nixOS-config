@@ -17,7 +17,6 @@ HISTORY_DAYS = 30
 HISTORY_POINTS = 288
 PREVIEW_BYTES = 10 * GIB
 SLACK_BYTES = GIB // 2
-RECONCILE_FREED = 2 * GIB
 KEEP_GENERATIONS = 10
 SEGMENTS = ("system", "home", "system_generations", "home_generations", "project_tier1", "project_tier2", "fetched", "deployed", "shells", "other", "garbage", "metadata", "rescan")
 
@@ -46,7 +45,7 @@ def inside_store_metadata():
 
 
 def var_bytes():
-    total = 0
+    total = os.lstat("/nix/var").st_blocks * 512
     for root, dirs, files in os.walk("/nix/var"):
         for name in dirs + files:
             try:
@@ -180,37 +179,21 @@ def load_events(path):
     return events
 
 
-def freed_since(path, since):
-    total = 0
-    try:
-        with open(path) as handle:
-            for line in handle:
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                if event.get("at", 0) >= since:
-                    total += max(0, event.get("freed", 0))
-    except OSError:
-        pass
-    return total
-
-
 def disk_bytes(path):
     out = subprocess.run(["du", "-sx", "--block-size=1", path], capture_output=True, text=True).stdout
     return int(out.split()[0]) if out else 0
 
 
-def measured_bytes(path, cache, now, max_age):
+def measured_bytes(path, cache, now, max_age, fingerprint):
     try:
         entry = json.loads(cache.read_text())
-        if now - entry["at"] < max_age:
+        if now - entry["at"] < max_age and entry.get("fingerprint") == fingerprint:
             return entry["bytes"], False
     except (OSError, ValueError, KeyError):
         pass
     size = disk_bytes(path)
     cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps({"at": now, "bytes": size}))
+    cache.write_text(json.dumps({"at": now, "bytes": size, "fingerprint": fingerprint}))
     return size, True
 
 
@@ -237,13 +220,34 @@ def held_open(device):
     return sorted(({**row, "holders": sorted(row["holders"])} for row in owners.values() if row["size"]), key=lambda row: -row["size"])
 
 
+def debugfs_stat(source, inode):
+    out = subprocess.run(["debugfs", "-R", f"stat <{inode}>", source], capture_output=True, text=True).stdout
+    found = re.search(r"Blockcount: (\d+)", out)
+    return int(found.group(1)) * 512 if found else 0, out
+
+
+def backup_groups(groups):
+    found = {0, 1}
+    for base in (3, 5, 7):
+        power = base
+        while power < groups:
+            found.add(power)
+            power *= base
+    return len({group for group in found if group < groups})
+
+
 def hidden_inodes(root):
     source = subprocess.run(["findmnt", "-no", "SOURCE", root], capture_output=True, text=True).stdout.strip().split("[")[0]
-    total = 0
-    for inode in (3, 4, 12):
-        out = subprocess.run(["debugfs", "-R", f"stat <{inode}>", source], capture_output=True, text=True).stdout
-        found = re.search(r"Blockcount: (\d+)", out)
-        total += int(found.group(1)) * 512 if found else 0
+    header = subprocess.run(["dumpe2fs", "-h", source], capture_output=True, text=True).stdout
+    field = lambda name: int(re.search(rf"^{name}:\s+(\d+)", header, re.M).group(1))
+    block = field("Block size")
+    groups = -(-field("Block count") // field("Blocks per group"))
+    total = sum(debugfs_stat(source, inode)[0] for inode in (3, 4, 12))
+    resize, _ = debugfs_stat(source, 7)
+    total += max(0, resize - field("Reserved GDT blocks") * backup_groups(groups) * block)
+    journal, out = debugfs_stat(source, 8)
+    size = re.search(r"Size: (\d+)", out)
+    total += max(0, journal - int(size.group(1))) if size else 0
     return total
 
 
@@ -396,7 +400,8 @@ def main():
     retention.populate_closures(projects)
     project_union = set().union(*(p.closure for p in projects.values())) if projects else set()
     metadata = store_metadata()
-    measured, fresh = measured_bytes("/nix/store", state / "store-du.json", now, 6 * 3600 if index.reconciled() and freed_since(state / "events.jsonl", index.reconciled()) < RECONCILE_FREED else 0)
+    fingerprint = [len(index.nar), sum(index.nar.values())]
+    measured, fresh = measured_bytes("/nix/store", state / "store-du.json", now, 6 * 3600 if index.reconciled() else 0, fingerprint)
     if index.coverage() < 0.99:
         index.calibrate(measured - inside_store_metadata())
     sizes = index.sizes("share")
@@ -451,11 +456,12 @@ def main():
     system_dirs = top_level_sizes(Path("/"), system_members, usage_all)
     covered = covered_mountpoints("/")
     system_dirs += [
-        {"path": "filesystem internals", "size": hidden_inodes("/"), "last_used": 0, "kind": "ext4 orphan file and quota inodes", "leaf": True},
+        {"path": "filesystem internals", "size": hidden_inodes("/"), "last_used": 0, "kind": "ext4 orphan file, quota inodes, journal and resize index blocks", "leaf": True},
         {"path": "mountpoints", "size": 4096 * len(covered), "last_used": 0, "kind": f"directories under {len(covered)} mounts", "leaf": True},
     ]
     held = held_open(os.stat("/").st_dev)
     held_bytes = sum(row["size"] for row in held)
+    churn = shutil.disk_usage("/nix/store").used - usage.used
     system_files = sum(row["size"] for row in system_dirs)
     accounted = store_disk + sum(files.values()) + swap + system_files + held_bytes - max(0, drift)
     unaccounted = usage.used - accounted
@@ -510,6 +516,7 @@ def main():
         "system_files": system_files,
         "held": held_bytes,
         "unaccounted": unaccounted,
+        "churn": churn,
         "reserved": reserved,
         "disk": {"total": usage.total, "used": usage.used, "free": free, "reserved": reserved},
         "free": free,
