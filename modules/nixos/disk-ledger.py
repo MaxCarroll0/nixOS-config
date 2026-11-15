@@ -1,4 +1,5 @@
 import collections
+import ctypes
 import fcntl
 import glob
 import re
@@ -6,6 +7,7 @@ import importlib.util
 import json
 import os
 import shutil
+import struct
 import subprocess
 import time
 from pathlib import Path
@@ -17,6 +19,7 @@ HISTORY_DAYS = 30
 HISTORY_POINTS = 288
 PREVIEW_BYTES = 10 * GIB
 SLACK_BYTES = GIB // 2
+SETTLE_ROUNDS = 3
 KEEP_GENERATIONS = 10
 SEGMENTS = ("system", "home", "system_generations", "home_generations", "project_tier1", "project_tier2", "fetched", "deployed", "shells", "other", "garbage", "metadata", "rescan")
 
@@ -197,8 +200,42 @@ def measured_bytes(path, cache, now, max_age, fingerprint):
     return size, True
 
 
+LIBC = ctypes.CDLL(None, use_errno=True)
+AT_SYMLINK_FOLLOW = 0x400
+AT_HANDLE_CONNECTABLE = 0x002
+FILEID_INO32_GEN = 1
+
+
+def parent_dir(link, root_fd):
+    buffer = ctypes.create_string_buffer(struct.pack("Ii", 128, 0), 136)
+    mount = ctypes.c_int()
+    if LIBC.name_to_handle_at(-100, link.encode(), buffer, ctypes.byref(mount), AT_SYMLINK_FOLLOW | AT_HANDLE_CONNECTABLE) < 0:
+        return None
+    size, _ = struct.unpack_from("Ii", buffer)
+    words = struct.unpack_from(f"{size // 4}I", buffer, 8)
+    if len(words) < 4:
+        return None
+    handle = ctypes.create_string_buffer(struct.pack("IiII", 8, FILEID_INO32_GEN, words[2], words[3]))
+    fd = LIBC.open_by_handle_at(root_fd, handle, os.O_RDONLY | os.O_DIRECTORY)
+    return fd if fd >= 0 else None
+
+
+def dead_ancestors(link, root_fd):
+    fd = parent_dir(link, root_fd)
+    while fd is not None:
+        stat = os.fstat(fd)
+        if stat.st_nlink:
+            os.close(fd)
+            return
+        yield os.readlink(f"/proc/self/fd/{fd}").removesuffix(" (deleted)"), stat
+        parent = os.open("..", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+        os.close(fd)
+        fd = parent if parent != fd else None
+
+
 def held_open(device):
     owners = {}
+    root_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     for kind, pattern in (("open", "/proc/[0-9]*/fd/*"), ("mapped", "/proc/[0-9]*/map_files/*")):
         for link in glob.glob(pattern):
             try:
@@ -215,13 +252,19 @@ def held_open(device):
                 command = open(f"/proc/{pid}/comm").read().strip()
             except OSError:
                 command = pid
-            row = owners.setdefault(stat.st_ino, {"path": target[: -len(" (deleted)")], "size": stat.st_blocks * 512, "last_used": int(stat.st_mtime), "how": kind, "holders": set()})
+            row = owners.setdefault(stat.st_ino, {"path": target[: -len(" (deleted)")], "size": stat.st_blocks * 512, "last_used": int(stat.st_mtime), "how": kind, "inode": stat.st_ino, "holders": set()})
             row["holders"].add(command)
+            try:
+                for path, directory in dead_ancestors(link, root_fd):
+                    owners.setdefault(directory.st_ino, {"path": path, "size": directory.st_blocks * 512, "last_used": int(directory.st_mtime), "how": "as a parent", "inode": directory.st_ino, "holders": set()})["holders"].add(command)
+            except OSError:
+                pass
+    os.close(root_fd)
     return sorted(({**row, "holders": sorted(row["holders"])} for row in owners.values() if row["size"]), key=lambda row: -row["size"])
 
 
 def debugfs_stat(source, inode):
-    out = subprocess.run(["debugfs", "-R", f"stat <{inode}>", source], capture_output=True, text=True).stdout
+    out = subprocess.run(["debugfs", "-c", "-R", f"stat <{inode}>", source], capture_output=True, text=True).stdout
     found = re.search(r"Blockcount: (\d+)", out)
     return int(found.group(1)) * 512 if found else 0, out
 
@@ -236,16 +279,12 @@ def backup_groups(groups):
     return len({group for group in found if group < groups})
 
 
-def written_bytes(root):
-    device = os.path.basename(os.path.realpath(subprocess.run(["findmnt", "-no", "SOURCE", root], capture_output=True, text=True).stdout.strip().split("[")[0]))
-    try:
-        return int(Path(f"/sys/fs/ext4/{device}/session_write_kbytes").read_text()) * 1024
-    except (OSError, ValueError):
-        return 0
+def root_source(root):
+    return subprocess.run(["findmnt", "-no", "SOURCE", root], capture_output=True, text=True).stdout.strip().split("[")[0]
 
 
 def hidden_inodes(root):
-    source = subprocess.run(["findmnt", "-no", "SOURCE", root], capture_output=True, text=True).stdout.strip().split("[")[0]
+    source = root_source(root)
     header = subprocess.run(["dumpe2fs", "-h", source], capture_output=True, text=True).stdout
     field = lambda name: int(re.search(rf"^{name}:\s+(\d+)", header, re.M).group(1))
     block = field("Block size")
@@ -257,6 +296,38 @@ def hidden_inodes(root):
     size = re.search(r"Size: (\d+)", out)
     total += max(0, journal - int(size.group(1))) if size else 0
     return total
+
+
+def shared_xattr_blocks(root, members):
+    device = os.lstat(root).st_dev
+    candidates = {}
+    for directory, subdirs, files in os.walk(root):
+        if directory in ("/nix/store", "/proc") or os.lstat(directory).st_dev != device:
+            subdirs[:] = []
+            continue
+        try:
+            if "system.posix_acl_default" not in os.listxattr(directory):
+                continue
+            for name in (".", *files):
+                candidates[os.lstat(os.path.join(directory, name)).st_ino] = directory
+        except OSError:
+            continue
+    if not candidates:
+        return {}
+    commands = "".join(f"stat <{inode}>\n" for inode in candidates)
+    out = subprocess.run(["debugfs", "-c", "-f", "/dev/stdin", root_source(root)], input=commands, capture_output=True, text=True).stdout
+    sharers = {}
+    for inode, block in re.findall(r"^Inode: (\d+).*?File ACL: (\d+)", out, re.M | re.S):
+        if block != "0":
+            sharers.setdefault(block, []).append(int(inode))
+    size = os.statvfs(root).f_bsize
+    extra = {}
+    for inodes in sharers.values():
+        for inode in inodes[1:]:
+            owner = next((str(member) for member in members if (candidates[inode] + "/").startswith(str(member) + "/")), None)
+            if owner:
+                extra[owner] = extra.get(owner, 0) + size
+    return extra
 
 
 def covered_mountpoints(root):
@@ -370,7 +441,6 @@ def main():
     lock = open(state / "measure.lock", "a")
     fcntl.flock(lock, fcntl.LOCK_EX)
     now = int(time.time())
-    written_at_start = written_bytes("/")
     retention = load_module("retention", "RETENTION_MODULE")
     collector = load_module("collector", "COLLECT_MODULE")
     home = Path(os.environ["LEDGER_HOME"])
@@ -409,7 +479,7 @@ def main():
     retention.populate_closures(projects)
     project_union = set().union(*(p.closure for p in projects.values())) if projects else set()
     metadata = store_metadata()
-    fingerprint = [len(index.nar), sum(index.nar.values())]
+    fingerprint = [len(index.nar), sum(index.nar.values()), len(index.disk), sum(share for share, _, _ in index.disk.values())]
     measured, fresh = measured_bytes("/nix/store", state / "store-du.json", now, 6 * 3600 if index.reconciled() else 0, fingerprint)
     if index.coverage() < 0.99:
         index.calibrate(measured - inside_store_metadata())
@@ -450,32 +520,53 @@ def main():
     store["metadata"] = metadata
     store["rescan"] = max(0, -drift)
 
-    usage = shutil.disk_usage("/nix/store")
     store_disk = sum(store.values())
     store_disk_segments = dict(store)
     home_members = entries(home, {".cache"})
     system_members = entries(Path("/"), {"nix", "home", "swapfile"})
     swapfile = [Path("/swapfile")] if os.path.exists("/swapfile") else []
     caches_dir = [home / ".cache"] if (home / ".cache").is_dir() else []
-    usage_all = usage_once(home_members + caches_dir + system_members + swapfile)
-    home_dirs = top_level_sizes(home, home_members, usage_all)
-    caches = sum(usage_all.get(str(path), (0, 0))[0] for path in caches_dir)
-    files = {"home": sum(row["size"] for row in home_dirs) + os.lstat(home.parent).st_blocks * 512, "caches": caches}
-    swap = usage_all.get("/swapfile", (0, 0))[0]
-    system_dirs = top_level_sizes(Path("/"), system_members, usage_all)
+    measured_paths = home_members + caches_dir + system_members + swapfile
     covered = covered_mountpoints("/")
-    system_dirs += [
-        {"path": "filesystem internals", "size": hidden_inodes("/"), "last_used": 0, "kind": "ext4 orphan file, quota inodes, journal and resize index blocks", "leaf": True},
-        {"path": "mountpoints", "size": 4096 * len(covered), "last_used": 0, "kind": f"directories under {len(covered)} mounts", "leaf": True},
-    ]
-    held = held_open(os.stat("/").st_dev)
-    held_bytes = sum(row["size"] for row in held)
-    churn = shutil.disk_usage("/nix/store").used - usage.used
+    internals = hidden_inodes("/")
+    shared_xattr = shared_xattr_blocks("/", measured_paths)
+    device = os.stat("/").st_dev
+    before = shutil.disk_usage("/nix/store")
+    usage_all = usage_once(measured_paths)
+    held = held_open(device)
+    usage = shutil.disk_usage("/nix/store")
+
+    def tally():
+        measured = {path: (size - shared_xattr.get(path, 0), newest) for path, (size, newest) in usage_all.items()}
+        home_dirs = top_level_sizes(home, home_members, measured)
+        files = {"home": sum(row["size"] for row in home_dirs) + os.lstat(home.parent).st_blocks * 512, "caches": sum(measured.get(str(path), (0, 0))[0] for path in caches_dir)}
+        system_dirs = top_level_sizes(Path("/"), system_members, measured) + [
+            {"path": "filesystem internals", "size": internals, "last_used": 0, "kind": "ext4 orphan file, quota inodes, journal and resize index blocks", "leaf": True},
+            {"path": "mountpoints", "size": 4096 * len(covered), "last_used": 0, "kind": f"directories under {len(covered)} mounts", "leaf": True},
+        ]
+        swap = measured.get("/swapfile", (0, 0))[0]
+        held_bytes = sum(row["size"] for row in held)
+        accounted = store_disk + sum(files.values()) + swap + sum(row["size"] for row in system_dirs) + held_bytes - max(0, drift)
+        return home_dirs, files, system_dirs, swap, held_bytes, accounted
+
+    home_dirs, files, system_dirs, swap, held_bytes, accounted = tally()
+    moved = False
+    for _ in range(SETTLE_ROUNDS):
+        if min(before.used, usage.used) <= accounted <= max(before.used, usage.used):
+            break
+        before = shutil.disk_usage("/nix/store")
+        fresh = usage_once([path for path in measured_paths if os.path.lexists(path)])
+        fresh = {str(path): fresh.get(str(path), (0, 0)) for path in measured_paths}
+        moved = any(fresh[path][0] != usage_all.get(path, (0, 0))[0] for path in fresh)
+        usage_all.update(fresh)
+        held = held_open(device)
+        usage = shutil.disk_usage("/nix/store")
+        home_dirs, files, system_dirs, swap, held_bytes, accounted = tally()
+    churn = usage.used - before.used
     system_files = sum(row["size"] for row in system_dirs)
-    accounted = store_disk + sum(files.values()) + swap + system_files + held_bytes - max(0, drift)
-    written = max(0, written_bytes("/") - written_at_start)
-    measuring = max(-written, min(written, usage.used - accounted))
-    unaccounted = usage.used - accounted - measuring
+    settled = accounted if moved else min(max(accounted, min(before.used, usage.used)), max(before.used, usage.used))
+    measuring = usage.used - settled
+    unaccounted = settled - accounted
 
     free = usage.free
     reserved = usage.total - usage.used - free
@@ -528,7 +619,6 @@ def main():
         "held": held_bytes,
         "unaccounted": unaccounted,
         "measuring": measuring,
-        "written": written,
         "churn": churn,
         "reserved": reserved,
         "disk": {"total": usage.total, "used": usage.used, "free": free, "reserved": reserved},

@@ -195,7 +195,7 @@ class Index:
                 break
             share, own = walk(path)
             if path in self.disk:
-                self.shift(self.disk[path][0] - share)
+                self.shift(share - self.disk[path][0])
             elif self.registered.get(path, 0) > oldest:
                 self.shift(share - own)
             self.disk[path] = (share, own, now)

@@ -233,7 +233,7 @@ Item {
             case "system_files":
                 return (prov.system ?? []).map(row => dirNode(row, color, false));
             case "held":
-                return (prov.held ?? []).map(row => ({ id: `held:${row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: `deleted, held ${row.how ?? "open"} by ${row.holders.join(", ")}`, delvable: false, openable: false, reclaimable: false, scheduled: false }));
+                return (prov.held ?? []).map(row => ({ id: `held:${row.inode ?? row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: `deleted, held ${row.how ?? "open"} by ${row.holders.join(", ")}`, delvable: false, openable: false, reclaimable: false, scheduled: false }));
             case "system_generations":
             case "home_generations":
                 return (prov.generations ?? []).filter(row => row.profile.startsWith("system") === (node.segment === "system_generations")).map(row => Object.assign(closureNode(row, color, `${row.profile.replace(/.*\//, "")} ${row.number || ""}`.trim(), `generation, ${ledger.clock(row.last_used)}${row.expiring ? ", expiring" : ""}`, row.number > 0)));
