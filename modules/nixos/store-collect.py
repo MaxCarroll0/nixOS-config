@@ -26,12 +26,12 @@ def setting(name):
 
 def gc_roots():
     out = subprocess.run(["nix-store", "--gc", "--print-roots"], capture_output=True, text=True).stdout
-    roots = set()
+    roots = {}
     for line in out.splitlines():
-        target = line.rsplit(" -> ", 1)[-1]
+        link, _, target = line.rpartition(" -> ")
         match = STORE_PATH.match(target)
         if match:
-            roots.add(match.group(0))
+            roots.setdefault(match.group(0), []).append(link)
     return roots
 
 
@@ -40,31 +40,37 @@ class Index:
         self.cache_path = cache
         self.cache = None
         self.disk = {}
+        self.cache_seen = 0
         self.calibrated = None
+        self.db = None
+        self.version = None
+        self.root_links = None
+        self.path_of = {}
+        self.registered = {}
+        self.nar = {}
+        self.deriver = {}
+        self.references = {}
+        self.referrers = {}
 
     def refresh(self):
-        db = sqlite3.connect(NIX_DB, uri=True)
-        rows = db.execute("select id, path, registrationTime, narSize, deriver from ValidPaths").fetchall()
-        self.path_of = {row[0]: row[1] for row in rows}
-        self.registered = {row[1]: row[2] or 0 for row in rows}
-        self.nar = {row[1]: row[3] or 0 for row in rows}
-        self.deriver = {row[1]: row[4] for row in rows if row[4]}
-        self.references = {path: [] for path in self.nar}
-        self.referrers = {path: [] for path in self.nar}
-        for referrer, reference in db.execute("select referrer, reference from Refs"):
-            if referrer == reference:
-                continue
-            source, target = self.path_of.get(referrer), self.path_of.get(reference)
-            if source and target:
-                self.references[source].append(target)
-                self.referrers[target].append(source)
+        if self.db is None:
+            self.db = sqlite3.connect(NIX_DB, uri=True, check_same_thread=False)
+        version = self.db.execute("pragma data_version").fetchone()[0]
+        changed = version != self.version
+        if changed:
+            self.load_paths()
+            self.version = version
+        roots = gc_roots()
+        if not changed and roots == self.root_links:
+            self.load_cache()
+            return False
+        self.root_links = roots
         outputs = {}
         if setting("keep-outputs"):
-            for drv, path in db.execute("select v.path, o.path from DerivationOutputs o join ValidPaths v on v.id = o.drv"):
+            for drv, path in self.db.execute("select v.path, o.path from DerivationOutputs o join ValidPaths v on v.id = o.drv"):
                 outputs.setdefault(drv, []).append(path)
-        db.close()
         keep_derivations = setting("keep-derivations")
-        self.roots = {path for path in gc_roots() if path in self.nar}
+        self.roots = {path for path in roots if path in self.nar}
         live = set()
         stack = list(self.roots)
         while stack:
@@ -87,7 +93,40 @@ class Index:
             self.used[path] = int(max(self.registered[path], accessed))
         self.effective = self.effective_use(self.dead)
         self.load_cache()
-        return self
+        return True
+
+    def load_paths(self):
+        ids = {row[0] for row in self.db.execute("select id from ValidPaths")}
+        for gone in [key for key in self.path_of if key not in ids]:
+            path = self.path_of.pop(gone)
+            for ref in self.references.pop(path, ()):
+                self.referrers.get(ref, set()).discard(path)
+            for up in self.referrers.pop(path, ()):
+                self.references.get(up, set()).discard(path)
+            for table in (self.registered, self.nar, self.deriver):
+                table.pop(path, None)
+        new = sorted(ids - self.path_of.keys())
+        for start in range(0, len(new), 900):
+            chunk = new[start : start + 900]
+            marks = ",".join("?" * len(chunk))
+            for key, path, registered, nar, deriver in self.db.execute(f"select id, path, registrationTime, narSize, deriver from ValidPaths where id in ({marks})", chunk):
+                self.path_of[key] = path
+                self.registered[path] = registered or 0
+                self.nar[path] = nar or 0
+                if deriver:
+                    self.deriver[path] = deriver
+                self.references.setdefault(path, set())
+                self.referrers.setdefault(path, set())
+        for start in range(0, len(new), 900):
+            chunk = new[start : start + 900]
+            marks = ",".join("?" * len(chunk))
+            for referrer, reference in self.db.execute(f"select referrer, reference from Refs where referrer in ({marks})", chunk):
+                if referrer == reference:
+                    continue
+                source, target = self.path_of.get(referrer), self.path_of.get(reference)
+                if source and target:
+                    self.references[source].add(target)
+                    self.referrers[target].add(source)
 
     def closure(self, paths):
         found = set()
@@ -133,20 +172,20 @@ class Index:
     def load_cache(self):
         if self.cache is None:
             os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
-            self.cache = sqlite3.connect(self.cache_path, timeout=60)
+            self.cache = sqlite3.connect(self.cache_path, timeout=60, check_same_thread=False)
             self.cache.execute("pragma journal_mode=wal")
             self.cache.execute("create table if not exists disk (path text primary key, share integer, own integer, scanned integer)")
             self.cache.execute("create table if not exists drift (id integer primary key check (id = 0), bytes integer, reconciled integer)")
             self.cache.execute("insert or ignore into drift values (0, 0, 0)")
             self.cache.commit()
         self.cache.execute("begin immediate")
-        self.disk = {path: (share, own, scanned) for path, share, own, scanned in self.cache.execute("select path, share, own, scanned from disk")}
-        gone = [path for path in self.disk if path not in self.nar]
-        if gone:
-            self.shift(-sum(self.disk[path][0] - self.disk[path][1] for path in gone))
-            self.cache.executemany("delete from disk where path = ?", [(path,) for path in gone])
-            for path in gone:
-                del self.disk[path]
+        for path, share, own, scanned in self.cache.execute("select path, share, own, scanned from disk where scanned >= ?", (self.cache_seen,)).fetchall():
+            self.disk[path] = (share, own, scanned)
+            self.cache_seen = max(self.cache_seen, scanned)
+        for path in [path for path in self.disk if path not in self.nar]:
+            share, own, _ = self.disk.pop(path)
+            if self.cache.execute("delete from disk where path = ?", (path,)).rowcount:
+                self.shift(own - share)
         self.cache.commit()
 
     def shift(self, delta):
@@ -186,13 +225,17 @@ class Index:
     def scan(self, budget_seconds, stale_after=7 * 86400, wanted=None):
         deadline = time.monotonic() + budget_seconds
         now = int(time.time())
-        pending = [path for path in (wanted or self.nar) if path in self.nar and (path not in self.disk or now - self.disk[path][2] > stale_after)]
+        pending = [path for path in (self.nar if wanted is None else wanted) if path in self.nar and (path not in self.disk or now - self.disk[path][2] > stale_after)]
         pending.sort(key=lambda path: (path in self.disk, self.disk.get(path, (0, 0, 0))[2]))
         done = 0
         oldest = min((entry[2] for entry in self.disk.values()), default=now)
         for path in pending:
             if time.monotonic() > deadline:
                 break
+            row = self.cache.execute("select share, own, scanned from disk where path = ?", (path,)).fetchone()
+            if row and now - row[2] <= stale_after and row[2] > self.disk.get(path, (0, 0, 0))[2]:
+                self.disk[path] = tuple(row)
+                continue
             share, own = walk(path)
             if path in self.disk:
                 self.shift(share - self.disk[path][0])

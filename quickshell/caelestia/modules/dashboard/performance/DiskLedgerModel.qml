@@ -74,6 +74,7 @@ Item {
         { key: "fetched", group: "store", label: "projects: fetched sources", color: tone(0.42, 0.56), reclaim: true, detail: "projects" },
         { key: "shells", group: "store", label: "live shells and builds", color: tone(0.5, 0.5), reclaim: false, detail: "none" },
         { key: "other", group: "store", label: "other live store paths", color: tone(0.56, 0.44), reclaim: false, detail: "other" },
+        { key: "building", group: "store", label: "store writes not yet registered", color: tone(0.6, 0.5), reclaim: false, detail: "building" },
         { key: "garbage", group: "store", label: "dead store paths", color: tone(0.66, 0.46), reclaim: true, detail: "dead" },
         { key: "metadata", group: "store", label: "store database and link table", color: tone(0.7, 0.36), reclaim: false, detail: "none" },
         { key: "rescan", group: "store", label: "shared files awaiting rescan", color: tone(0.74, 0.4), reclaim: false, detail: "none" },

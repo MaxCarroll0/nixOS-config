@@ -19,14 +19,28 @@ HISTORY_DAYS = 30
 HISTORY_POINTS = 288
 PREVIEW_BYTES = 10 * GIB
 SLACK_BYTES = GIB // 2
-SETTLE_ROUNDS = 3
 STORE_DU_SECONDS = 6 * 3600
 FORCED_DU_SECONDS = 3600
 XATTR_SECONDS = 3600
+INTERNALS_SECONDS = 3600
 HISTORY_SECONDS = 900
-SIGNATURE_BYTES = 64 * 1024**2
+PUBLISH_SECONDS = 5
+QUIET_SECONDS = 60
+STORE_POLL_SECONDS = 2
+ROOTS_SECONDS = 300
+PLAN_SECONDS = 300
+OFFLOAD_SECONDS = 600
+VERIFY_SECONDS = 0.01
+SETTLE_SECONDS = 0.5
+SCAN_SECONDS = 0.5
+MISMATCH_SECONDS = 600
+MISMATCH_BYTES = 64 * 1024**2
+HELD_SECONDS = 30
+TICK_SECONDS = 0.25
+DU_POLL_SECONDS = 10
+NEED_STEP = 256 * 1024**2
 KEEP_GENERATIONS = 10
-SEGMENTS = ("system", "home", "system_generations", "home_generations", "project_tier1", "project_tier2", "fetched", "deployed", "shells", "other", "garbage", "metadata", "rescan")
+SEGMENTS = ("system", "home", "system_generations", "home_generations", "project_tier1", "project_tier2", "fetched", "deployed", "shells", "other", "garbage", "building", "metadata", "rescan")
 
 
 def load_module(name, variable):
@@ -41,26 +55,6 @@ INDEX = []
 
 def closure(paths):
     return INDEX[0].closure(path for path in paths if path.startswith("/nix/store/"))
-
-
-def store_metadata():
-    return var_bytes() + inside_store_metadata() + os.lstat("/nix").st_blocks * 512
-
-
-def inside_store_metadata():
-    links = os.lstat("/nix/store/.links").st_blocks * 512 if os.path.isdir("/nix/store/.links") else 0
-    return links + os.lstat("/nix/store").st_blocks * 512
-
-
-def var_bytes():
-    total = os.lstat("/nix/var").st_blocks * 512
-    for root, dirs, files in os.walk("/nix/var"):
-        for name in dirs + files:
-            try:
-                total += os.lstat(os.path.join(root, name)).st_blocks * 512
-            except OSError:
-                continue
-    return total
 
 
 def resolve(path):
@@ -187,37 +181,6 @@ def load_events(path):
     return events
 
 
-def disk_bytes(path):
-    out = subprocess.run(["du", "-sx", "--block-size=1", path], capture_output=True, text=True).stdout
-    return int(out.split()[0]) if out else 0
-
-
-def measured_bytes(path, cache, now, max_age):
-    try:
-        entry = json.loads(cache.read_text())
-        if now - entry["at"] < max_age:
-            return entry["bytes"], False, entry["at"]
-    except (OSError, ValueError, KeyError):
-        pass
-    size = disk_bytes(path)
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps({"at": now, "bytes": size}))
-    return size, True, now
-
-
-def cached_xattr(cache, now, members):
-    key = sorted(map(str, members))
-    try:
-        entry = json.loads(cache.read_text())
-        if now - entry["at"] < XATTR_SECONDS and entry["members"] == key:
-            return entry["extra"]
-    except (OSError, ValueError, KeyError):
-        pass
-    extra = shared_xattr_blocks("/", members)
-    cache.write_text(json.dumps({"at": now, "members": key, "extra": extra}))
-    return extra
-
-
 LIBC = ctypes.CDLL(None, use_errno=True)
 AT_SYMLINK_FOLLOW = 0x400
 AT_HANDLE_CONNECTABLE = 0x002
@@ -316,38 +279,6 @@ def hidden_inodes(root):
     return total
 
 
-def shared_xattr_blocks(root, members):
-    device = os.lstat(root).st_dev
-    candidates = {}
-    for directory, subdirs, files in os.walk(root):
-        if directory in ("/nix/store", "/proc") or os.lstat(directory).st_dev != device:
-            subdirs[:] = []
-            continue
-        try:
-            if "system.posix_acl_default" not in os.listxattr(directory):
-                continue
-            for name in (".", *files):
-                candidates[os.lstat(os.path.join(directory, name)).st_ino] = directory
-        except OSError:
-            continue
-    if not candidates:
-        return {}
-    commands = "".join(f"stat <{inode}>\n" for inode in candidates)
-    out = subprocess.run(["debugfs", "-c", "-f", "/dev/stdin", root_source(root)], input=commands, capture_output=True, text=True).stdout
-    sharers = {}
-    for inode, block in re.findall(r"^Inode: (\d+).*?File ACL: (\d+)", out, re.M | re.S):
-        if block != "0":
-            sharers.setdefault(block, []).append(int(inode))
-    size = os.statvfs(root).f_bsize
-    extra = {}
-    for inodes in sharers.values():
-        for inode in inodes[1:]:
-            owner = next((str(member) for member in members if (candidates[inode] + "/").startswith(str(member) + "/")), None)
-            if owner:
-                extra[owner] = extra.get(owner, 0) + size
-    return extra
-
-
 def covered_mountpoints(root):
     device = os.lstat(root).st_dev
     targets = set()
@@ -362,53 +293,6 @@ def covered_mountpoints(root):
             except OSError:
                 continue
     return sorted(targets)
-
-
-def entries(root, skip):
-    device = os.lstat(root).st_dev
-    return [entry for entry in sorted(root.iterdir()) if entry.name not in skip and os.lstat(entry).st_dev == device]
-
-
-def usage_once(paths):
-    out = subprocess.run(["du", "-sx", "--time", "--time-style=+%s", "--block-size=1", "--", *map(str, paths)], capture_output=True, text=True).stdout
-    usage = {}
-    for line in out.splitlines():
-        size, newest, path = line.split("\t", 2)
-        usage[path] = (int(size), int(newest))
-    return usage
-
-
-def top_level_sizes(root, members, usage):
-    rows = []
-    loose = os.lstat(root).st_blocks * 512
-    newest = int(root.lstat().st_mtime)
-    for entry in members:
-        size, last = usage.get(str(entry), (0, 0))
-        if entry.is_symlink() or not entry.is_dir():
-            loose += size
-            newest = max(newest, last)
-            continue
-        rows.append({"path": str(entry), "size": size, "last_used": last or int(entry.lstat().st_mtime)})
-    rows.append({"path": f"{root}/*", "size": loose, "last_used": newest})
-    return sorted(rows, key=lambda row: -row["size"])
-
-
-def other_rows(paths, sizes):
-    largest = sorted(paths, key=lambda path: -sizes.get(path, 0))[:12]
-    rows = []
-    for path in largest:
-        rows.append({"path": path, "size": sizes.get(path, 0), "last_used": 0, "roots": root_links(path)[:6]})
-    return rows
-
-
-def root_links(path):
-    out = subprocess.run(["nix-store", "--query", "--roots", path], capture_output=True, text=True).stdout
-    links = []
-    for line in out.splitlines():
-        link = line.split(" -> ")[0].strip()
-        if link and not link.startswith("{") and link not in links:
-            links.append(link)
-    return links
 
 
 def generation_rows(links, size_of):
@@ -453,306 +337,6 @@ def project_rows(projects, sizes, retention, path_row, listing, project_paths):
     return sorted(rows, key=lambda row: -row["size"])
 
 
-def mtime(path):
-    try:
-        return os.stat(path).st_mtime_ns
-    except OSError:
-        return 0
-
-
-def signature(state, home):
-    watched = [
-        "/nix/var/nix/db/db.sqlite",
-        "/nix/var/nix/db/db.sqlite-wal",
-        "/nix/var/nix/gcroots/auto",
-        "/nix/var/nix/profiles",
-        str(home / ".local/state/nix/profiles"),
-        str(home / ".local/state/rebuild/roots"),
-        os.environ["LEDGER_TARGET_FILE"],
-        str(state / "events.jsonl"),
-    ]
-    return [shutil.disk_usage("/").used // SIGNATURE_BYTES] + [mtime(path) for path in watched]
-
-
-def unchanged(state, home, now):
-    current = signature(state, home)
-    path = state / "signature.json"
-    try:
-        previous = json.loads(path.read_text())
-        if previous["signature"] == current and now - previous["at"] < HISTORY_SECONDS:
-            return True
-    except (OSError, ValueError, KeyError):
-        pass
-    path.write_text(json.dumps({"at": now, "signature": current}))
-    return False
-
-
-def main():
-    state = Path(os.environ["LEDGER_STATE_DIR"])
-    state.mkdir(parents=True, exist_ok=True)
-    lock = open(state / "measure.lock", "a")
-    fcntl.flock(lock, fcntl.LOCK_EX)
-    now = int(time.time())
-    if os.environ.get("LEDGER_FORCE") != "1" and unchanged(state, Path(os.environ["LEDGER_HOME"]), now):
-        return
-    retention = load_module("retention", "RETENTION_MODULE")
-    collector = load_module("collector", "COLLECT_MODULE")
-    home = Path(os.environ["LEDGER_HOME"])
-    target = int(os.environ["LEDGER_TARGET_BYTES"])
-    try:
-        target = int(float(Path(os.environ["LEDGER_TARGET_FILE"]).read_text().strip()) * GIB)
-    except (OSError, ValueError, KeyError):
-        pass
-    runtime = Path(os.environ["LEDGER_RUNTIME_DIR"])
-    textfile = Path(os.environ["LEDGER_TEXTFILE"])
-
-    opened = shutil.disk_usage("/nix/store")
-    index = collector.Index().refresh()
-    INDEX.append(index)
-    gcroot_targets = [
-        resolve(os.path.join("/nix/var/nix/gcroots/auto", name))
-        for name in os.listdir("/nix/var/nix/gcroots/auto")
-    ]
-    system_links = glob.glob("/nix/var/nix/profiles/system-*-link")
-    home_links = glob.glob(str(home / ".local/state/nix/profiles/home-manager-*-link"))
-    good_boot = "/nix/var/nix/gcroots/previous-successful-boot"
-    if os.path.islink(good_boot):
-        system_links.append(good_boot)
-    generation_links = system_links + home_links
-    system_generations = closure(resolve(link) for link in system_links)
-    home_generations = closure(resolve(link) for link in home_links)
-    generations = system_generations | home_generations
-    system = closure([resolve("/run/current-system")])
-    home_generation = closure([resolve(home / ".local/state/nix/profiles/home-manager")])
-    roots = closure(gcroot_targets + [resolve("/run/booted-system")]) | generations | system
-    deploy_links = glob.glob(str(home / ".local/state/rebuild/roots/*"))
-    deployed = closure(resolve(link) for link in deploy_links)
-    shell_links = glob.glob("/run/user/*/nix-shell-roots/*/*")
-    shells = closure(resolve(link) for link in shell_links)
-
-    projects = retention.discover_projects(Path("/nix/var/nix/gcroots/auto"))
-    retention.populate_closures(projects)
-    project_union = set().union(*(p.closure for p in projects.values())) if projects else set()
-    metadata = store_metadata()
-    measured, store_fresh, measured_at = measured_bytes("/nix/store", state / "store-du.json", now, STORE_DU_SECONDS if index.reconciled() else 0)
-    if index.coverage() < 0.99:
-        index.calibrate(measured - inside_store_metadata())
-    sizes = index.sizes("share")
-    if store_fresh:
-        index.reconcile(sum(sizes.values()) - (measured - inside_store_metadata()))
-    drift = index.drift()
-    for path in roots | project_union:
-        sizes.setdefault(path, 0)
-    dead = list(index.dead)
-    dead_set = set(dead)
-
-    store = {segment: 0 for segment in SEGMENTS}
-    assigned = set()
-
-    members = {segment: set() for segment in SEGMENTS}
-
-    def add(segment, paths):
-        new = paths - assigned
-        assigned.update(new)
-        members[segment].update(new)
-        store[segment] += sum(sizes.get(path, 0) for path in new)
-
-    add("system", system)
-    add("home", home_generation - system)
-    add("system_generations", system_generations - system - home_generation)
-    add("home_generations", home_generations - system - home_generation)
-    for path in project_union:
-        if path in assigned:
-            continue
-        segment = {1: "project_tier1", 2: "project_tier2", 3: "fetched"}[retention.tier_of(path)]
-        add(segment, {path})
-    add("deployed", deployed)
-    add("shells", shells)
-    add("garbage", dead_set)
-    assigned_before_other = set(assigned)
-    add("other", set(sizes) - assigned)
-    store["metadata"] = metadata
-    store["rescan"] = max(0, -drift)
-
-    store_disk = sum(store.values())
-    store_disk_segments = dict(store)
-    home_members = entries(home, {".cache"})
-    system_members = entries(Path("/"), {"nix", "home", "swapfile"})
-    swapfile = [Path("/swapfile")] if os.path.exists("/swapfile") else []
-    caches_dir = [home / ".cache"] if (home / ".cache").is_dir() else []
-    measured_paths = home_members + caches_dir + system_members + swapfile
-    covered = covered_mountpoints("/")
-    internals = hidden_inodes("/")
-    shared_xattr = cached_xattr(state / "xattr.json", now, measured_paths)
-    device = os.stat("/").st_dev
-    before = shutil.disk_usage("/nix/store")
-    usage_all = usage_once(measured_paths)
-    held = held_open(device)
-    usage = shutil.disk_usage("/nix/store")
-
-    def tally():
-        measured = {path: (size - shared_xattr.get(path, 0), newest) for path, (size, newest) in usage_all.items()}
-        home_dirs = top_level_sizes(home, home_members, measured)
-        files = {"home": sum(row["size"] for row in home_dirs) + os.lstat(home.parent).st_blocks * 512, "caches": sum(measured.get(str(path), (0, 0))[0] for path in caches_dir)}
-        system_dirs = top_level_sizes(Path("/"), system_members, measured) + [
-            {"path": "filesystem internals", "size": internals, "last_used": 0, "kind": "ext4 orphan file, quota inodes, journal and resize index blocks", "leaf": True},
-            {"path": "mountpoints", "size": 4096 * len(covered), "last_used": 0, "kind": f"directories under {len(covered)} mounts", "leaf": True},
-        ]
-        swap = measured.get("/swapfile", (0, 0))[0]
-        held_bytes = sum(row["size"] for row in held)
-        accounted = store_disk + sum(files.values()) + swap + sum(row["size"] for row in system_dirs) + held_bytes - max(0, drift)
-        return home_dirs, files, system_dirs, swap, held_bytes, accounted
-
-    home_dirs, files, system_dirs, swap, held_bytes, accounted = tally()
-    moved = False
-    for _ in range(SETTLE_ROUNDS):
-        if min(opened.used, before.used, usage.used) <= accounted <= max(opened.used, before.used, usage.used):
-            break
-        before = shutil.disk_usage("/nix/store")
-        fresh = usage_once([path for path in measured_paths if os.path.lexists(path)])
-        fresh = {str(path): fresh.get(str(path), (0, 0)) for path in measured_paths}
-        moved = any(fresh[path][0] != usage_all.get(path, (0, 0))[0] for path in fresh)
-        usage_all.update(fresh)
-        held = held_open(device)
-        usage = shutil.disk_usage("/nix/store")
-        home_dirs, files, system_dirs, swap, held_bytes, accounted = tally()
-    if not store_fresh and now - measured_at >= FORCED_DU_SECONDS and not min(opened.used, before.used, usage.used) <= accounted <= max(opened.used, before.used, usage.used):
-        measured, store_fresh, measured_at = measured_bytes("/nix/store", state / "store-du.json", now, 0)
-        sizes = index.sizes("share")
-        index.reconcile(sum(sizes.values()) - (measured - inside_store_metadata()))
-        drift = index.drift()
-        store["rescan"] = max(0, -drift)
-        store_disk = sum(store.values())
-        store_disk_segments = dict(store)
-        usage = shutil.disk_usage("/nix/store")
-        home_dirs, files, system_dirs, swap, held_bytes, accounted = tally()
-    churn = usage.used - opened.used
-    system_files = sum(row["size"] for row in system_dirs)
-    low, high = min(opened.used, before.used, usage.used), max(opened.used, before.used, usage.used)
-    settled = accounted if moved else min(max(accounted, low), high)
-    measuring = usage.used - settled
-    unaccounted = settled - accounted
-
-    free = usage.free
-    reserved = usage.total - usage.used - free
-    deficit = max(0, target - free)
-    need = deficit + SLACK_BYTES if deficit else PREVIEW_BYTES
-
-    scratch = scratch_plan(need)
-    evictions, _, project_freed = retention.plan(projects, sizes, now, 0, None, need)
-    project_plan = {"selected": retention.eviction_rows(evictions), "freed": project_freed}
-    dead_plan = store_plan(collector, index, need)
-    rows, cut = queue([("scratch", scratch), ("projects", project_plan), ("store", dead_plan)], deficit)
-
-    generation_closure = {}
-
-    def closure_of(target):
-        if target not in generation_closure:
-            generation_closure[target] = closure([target])
-        return generation_closure[target]
-
-    def path_row(path):
-        return {"path": path, "size": sizes.get(path, 0), "last_used": index.used.get(path, 0)}
-
-    def member_size(link, segment):
-        return sum(sizes.get(item, 0) for item in closure_of(resolve(link)) if item in members[segment])
-
-    runtime.mkdir(parents=True, exist_ok=True)
-    owner = int(os.environ["LEDGER_UID"])
-
-    def listing(name, rows):
-        write_lines(runtime / name, rows, owner)
-        return str(runtime / name)
-
-    for segment in ("system", "home", "system_generations", "home_generations", "deployed", "shells", "other"):
-        listing(f"disk-segment-{segment}.jsonl", [path_row(path) for path in sorted(members[segment])])
-    generations = generation_rows(generation_links, lambda link: member_size(link, "system_generations" if link in system_links else "home_generations"))
-    kept = closure(resolve(row["path"]) for row in generations if not row["expiring"])
-    expiring = {
-        segment: sum(sizes.get(path, 0) for path in members[segment] if path not in kept)
-        for segment in ("system_generations", "home_generations")
-    }
-    listing("disk-dead.jsonl", [{**path_row(path), "last_used": index.effective.get(path, 0)} for path in dead])
-
-    ledger = {
-        "at": now,
-        "store": store,
-        "store_disk": store_disk_segments,
-        "files": files,
-        "swap": swap,
-        "system_files": system_files,
-        "held": held_bytes,
-        "unaccounted": unaccounted,
-        "measuring": measuring,
-        "churn": churn,
-        "reserved": reserved,
-        "disk": {"total": usage.total, "used": usage.used, "free": free, "reserved": reserved},
-        "free": free,
-        "target": target,
-        "provenance": {
-            "generations": generations,
-            "expiring": expiring,
-            "deployed": [{"path": link, "size": member_size(link, "deployed"), "last_used": int(os.lstat(link).st_mtime)} for link in sorted(deploy_links)],
-            "projects": project_rows(projects, sizes, retention, path_row, listing, members["project_tier1"] | members["project_tier2"] | members["fetched"]),
-            "home": home_dirs,
-            "caches": [{"path": str(home / ".cache" / entry.name), "size": disk_bytes(home / ".cache" / entry.name), "last_used": int(entry.lstat().st_mtime)} for entry in sorted((home / ".cache").iterdir(), key=lambda e: e.name) if entry.is_dir() and not entry.is_symlink()] if (home / ".cache").is_dir() else [],
-            "other": other_rows(set(sizes) - assigned_before_other, sizes),
-            "shells": [{"path": link, "size": member_size(link, "shells"), "last_used": int(os.lstat(link).st_mtime)} for link in sorted(shell_links) if os.path.islink(link)],
-            "system": system_dirs,
-            "held": held,
-        },
-        "deficit": deficit,
-        "need": need,
-        "queue": rows[: max(cut + 1, 1)],
-        "queue_file": listing("disk-queue.jsonl", rows),
-        "cut": cut,
-        "largest_dead": dead_plan["largest"],
-        "history": [],
-        "events": load_events(state / "events.jsonl"),
-    }
-    history_path = state / "history.jsonl"
-    points = load_history(history_path, now)
-    items = {}
-    for name, group in ledger["provenance"].items():
-        if not isinstance(group, list):
-            continue
-        for row in group:
-            if row.get("path") and row.get("size"):
-                items.setdefault(name, {})[row["path"]] = row["size"]
-    owners = {}
-    for name, rows in items.items():
-        for path in rows:
-            owners.setdefault(path, set()).add(name)
-    for old in points:
-        flat = old.get("items", {})
-        if flat and not all(isinstance(value, dict) for value in flat.values()):
-            grouped = {}
-            for path, size in flat.items():
-                if len(owners.get(path, ())) == 1:
-                    grouped.setdefault(next(iter(owners[path])), {})[path] = size
-            old["items"] = grouped
-    point = {"at": now, "store": store_disk_segments, "files": files, "swap": swap, "system": system_files, "held": held_bytes, "measuring": measuring, "unaccounted": unaccounted, "reserved": reserved, "free": free, "items": items}
-
-    if not points or now - points[-1].get("at", 0) >= HISTORY_SECONDS:
-        append_history(history_path, points, point)
-    else:
-        points.append(point)
-    sampled = downsample(points)
-    write_json(runtime / "disk-history-items.json", {str(old["at"]): old.get("items", {}) for old in sampled}, owner=owner)
-    ledger["history"] = [{key: value for key, value in old.items() if key != "items"} for old in sampled]
-    if scratch and scratch.get("error"):
-        ledger["scratch_error"] = scratch["error"]
-    offload_root = os.environ.get("LEDGER_OFFLOAD_DIR", "")
-    if offload_root:
-        segment = offload_segment(Path(offload_root), sizes)
-        if segment is not None:
-            ledger["offload"] = segment
-
-    write_json(runtime / "disk-ledger.json", ledger, owner=owner)
-    if textfile.parent.is_dir():
-        write_textfile(textfile, ledger)
-
-
 def write_lines(path, rows, owner):
     temporary = path.with_suffix(".tmp")
     temporary.write_text("".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows))
@@ -784,5 +368,490 @@ def write_textfile(path, ledger):
     temporary.replace(path)
 
 
+
+
+def mtime(path):
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return 0
+
+
+def blocks(path):
+    try:
+        return os.lstat(path).st_blocks * 512
+    except OSError:
+        return 0
+
+
+def shared_xattr_blocks(dirs, members, source, block_size):
+    candidates = {}
+    for directory in dirs:
+        try:
+            names = os.listdir(directory)
+            for name in (".", *names):
+                info = os.lstat(os.path.join(directory, name))
+                if not os.path.stat.S_ISDIR(info.st_mode) or name == ".":
+                    candidates[info.st_ino] = directory
+        except OSError:
+            continue
+    if not candidates:
+        return {}
+    commands = "".join(f"stat <{inode}>\n" for inode in candidates)
+    out = subprocess.run(["debugfs", "-c", "-f", "/dev/stdin", source], input=commands, capture_output=True, text=True).stdout
+    sharers = {}
+    for inode, block in re.findall(r"^Inode: (\d+).*?File ACL: (\d+)", out, re.M | re.S):
+        if block != "0":
+            sharers.setdefault(block, []).append(int(inode))
+    extra = {}
+    for inodes in sharers.values():
+        for inode in inodes[1:]:
+            owner = next((member for member in members if (candidates[inode] + "/").startswith(member + "/")), None)
+            if owner:
+                extra[owner] = extra.get(owner, 0) + block_size
+    return extra
+
+
+def roots_of(index, path):
+    targets = index.dependents([path]) & (index.root_links or {}).keys()
+    links = sorted({link for target in targets for link in index.root_links[target] if not link.startswith("{")})
+    return links[:6]
+
+
+class Ledger:
+    def __init__(self):
+        self.state = Path(os.environ["LEDGER_STATE_DIR"])
+        self.state.mkdir(parents=True, exist_ok=True)
+        self.lock = open(self.state / "measure.lock", "a")
+        self.retention = load_module("retention", "RETENTION_MODULE")
+        self.collector = load_module("collector", "COLLECT_MODULE")
+        self.home = Path(os.environ["LEDGER_HOME"])
+        self.runtime = Path(os.environ["LEDGER_RUNTIME_DIR"])
+        self.textfile = Path(os.environ["LEDGER_TEXTFILE"])
+        self.owner = int(os.environ["LEDGER_UID"])
+        self.offload_root = os.environ.get("LEDGER_OFFLOAD_DIR", "")
+        self.index = self.collector.Index()
+        self.index.refresh()
+        INDEX.append(self.index)
+        self.tree = load_module("tree", "TREE_MODULE").Tree("/", self.skip)
+        self.store_node = self.tree.find("/nix/store")
+        self.source = root_source("/")
+        self.device = os.stat("/").st_dev
+        self.signature = self.store_signature()
+        self.roots_checked = time.monotonic()
+        self.fresh = []
+        self.view = None
+        self.du = None
+        self.du_path = self.state / "store-du.json"
+        try:
+            self.du_state = json.loads(self.du_path.read_text())
+        except (OSError, ValueError):
+            self.du_state = {"at": 0, "bytes": 0}
+        if self.du_state["bytes"] and self.index.coverage() < 0.99:
+            self.index.calibrate(self.du_state["bytes"] - self.inside_store() - self.building())
+        self.internals = (0, 0.0)
+        self.xattr = ({}, 0.0, None)
+        self.scratch = (None, 0.0, 0)
+        self.offload = (None, 0.0)
+        self.points = load_history(self.state / "history.jsonl", int(time.time()))
+        self.written = {}
+        self.mismatch_since = None
+        self.published = 0.0
+        self.published_used = None
+        self.published_total = None
+        self.verified_at = 0.0
+        self.polled = 0.0
+        self.du_polled = 0.0
+        self.held = ([], 0.0)
+
+    def skip(self, parent, name):
+        return parent == "/nix/store" and (name == ".links" or "/nix/store/" + name in self.index.nar)
+
+    def store_signature(self):
+        version = self.index.db.execute("pragma data_version").fetchone()[0]
+        watched = [
+            "/nix/var/nix/gcroots/auto",
+            "/nix/var/nix/profiles",
+            str(self.home / ".local/state/nix/profiles"),
+            str(self.home / ".local/state/rebuild/roots"),
+            *glob.glob("/run/user/*/nix-shell-roots/*"),
+        ]
+        return version, tuple(mtime(path) for path in watched)
+
+    def inside_store(self):
+        return blocks("/nix/store/.links") + blocks("/nix/store")
+
+    def building(self):
+        return self.store_node.total - self.store_node.dir_blocks
+
+    def check_store(self, force=False):
+        now = time.monotonic()
+        if not force and now - self.polled < STORE_POLL_SECONDS:
+            return
+        self.polled = now
+        signature = self.store_signature()
+        if signature == self.signature and now - self.roots_checked < ROOTS_SECONDS:
+            return
+        known = set(self.index.nar)
+        self.index.refresh()
+        self.signature = signature
+        self.roots_checked = now
+        self.fresh.extend(path for path in self.index.nar if path not in known)
+        if self.index.nar.keys() != known:
+            for child in self.tree.scan(self.store_node):
+                self.tree.walk(child)
+        self.view = None
+
+    def scan_fresh(self):
+        if not self.fresh:
+            return
+        wanted = [path for path in self.fresh if path in self.index.nar]
+        done, _ = self.index.scan(SCAN_SECONDS, wanted=wanted)
+        self.fresh = [path for path in wanted if path not in self.index.disk]
+        if done:
+            self.view = None
+
+    def store_view(self):
+        index, home, retention = self.index, self.home, self.retention
+        gcroot_targets = [resolve(os.path.join("/nix/var/nix/gcroots/auto", name)) for name in os.listdir("/nix/var/nix/gcroots/auto")]
+        system_links = glob.glob("/nix/var/nix/profiles/system-*-link")
+        home_links = glob.glob(str(home / ".local/state/nix/profiles/home-manager-*-link"))
+        good_boot = "/nix/var/nix/gcroots/previous-successful-boot"
+        if os.path.islink(good_boot):
+            system_links.append(good_boot)
+        system_generations = closure(resolve(link) for link in system_links)
+        home_generations = closure(resolve(link) for link in home_links)
+        generations = system_generations | home_generations
+        system = closure([resolve("/run/current-system")])
+        home_generation = closure([resolve(home / ".local/state/nix/profiles/home-manager")])
+        roots = closure(gcroot_targets + [resolve("/run/booted-system")]) | generations | system
+        deploy_links = glob.glob(str(home / ".local/state/rebuild/roots/*"))
+        deployed = closure(resolve(link) for link in deploy_links)
+        shell_links = [link for link in glob.glob("/run/user/*/nix-shell-roots/*/*") if os.path.islink(link)]
+        shells = closure(resolve(link) for link in shell_links)
+        projects = retention.discover_projects(Path("/nix/var/nix/gcroots/auto"))
+        for project in projects.values():
+            project.closure = index.closure(project.store_paths)
+        project_union = set().union(*(project.closure for project in projects.values())) if projects else set()
+        sizes = index.sizes("share")
+        for path in roots | project_union:
+            sizes.setdefault(path, 0)
+        store = {segment: 0 for segment in SEGMENTS}
+        members = {segment: set() for segment in SEGMENTS}
+        assigned = set()
+
+        def add(segment, paths):
+            new = paths - assigned
+            assigned.update(new)
+            members[segment].update(new)
+            store[segment] += sum(sizes.get(path, 0) for path in new)
+
+        add("system", system)
+        add("home", home_generation - system)
+        add("system_generations", system_generations - system - home_generation)
+        add("home_generations", home_generations - system - home_generation)
+        for path in project_union:
+            if path not in assigned:
+                add({1: "project_tier1", 2: "project_tier2", 3: "fetched"}[retention.tier_of(path)], {path})
+        add("deployed", deployed)
+        add("shells", shells)
+        add("garbage", set(index.dead))
+        before_other = set(assigned)
+        add("other", set(sizes) - assigned)
+        largest_other = sorted(set(sizes) - before_other, key=lambda path: -sizes.get(path, 0))[:12]
+        generation_closure = {}
+
+        def closure_of(target):
+            if target not in generation_closure:
+                generation_closure[target] = closure([target])
+            return generation_closure[target]
+
+        def member_size(link, segment):
+            return sum(sizes.get(item, 0) for item in closure_of(resolve(link)) if item in members[segment])
+
+        generation_links = system_links + home_links
+        generation_list = generation_rows(generation_links, lambda link: member_size(link, "system_generations" if link in system_links else "home_generations"))
+        kept = closure(resolve(row["path"]) for row in generation_list if not row["expiring"])
+        return {
+            "store": store,
+            "members": members,
+            "sizes": sizes,
+            "projects": projects,
+            "generations": generation_list,
+            "expiring": {segment: sum(sizes.get(path, 0) for path in members[segment] if path not in kept) for segment in ("system_generations", "home_generations")},
+            "deployed": [{"path": link, "size": member_size(link, "deployed"), "last_used": int(os.lstat(link).st_mtime)} for link in sorted(deploy_links) if os.path.lexists(link)],
+            "shells": [{"path": link, "size": member_size(link, "shells"), "last_used": int(os.lstat(link).st_mtime)} for link in sorted(shell_links) if os.path.lexists(link)],
+            "other": [{"path": path, "size": sizes.get(path, 0), "last_used": 0, "roots": roots_of(index, path)} for path in largest_other],
+            "listed": False,
+        }
+
+    def poll_du(self, now):
+        if self.du is not None:
+            if self.du.poll() is None:
+                return
+            out = self.du.stdout.read()
+            self.du = None
+            self.tree.settle(time.monotonic() + 5, force=True)
+            if out:
+                measured = int(out.split()[0])
+                registered = measured - self.inside_store() - self.building()
+                if self.index.coverage() < 0.99:
+                    self.index.calibrate(registered)
+                self.index.reconcile(sum(self.index.sizes("share").values()) - registered)
+                self.du_state = {"at": now, "bytes": measured}
+                self.du_path.write_text(json.dumps(self.du_state))
+            fcntl.flock(self.lock, fcntl.LOCK_UN)
+            self.view = None
+            self.mismatch_since = None
+            return
+        age = now - self.du_state["at"]
+        mismatched = self.mismatch_since is not None and now - self.mismatch_since >= MISMATCH_SECONDS
+        if age >= STORE_DU_SECONDS or not self.index.reconciled() or (mismatched and age >= FORCED_DU_SECONDS):
+            try:
+                fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            self.du = subprocess.Popen(["du", "-sx", "--block-size=1", "/nix/store"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
+    def cached_internals(self, now):
+        value, at = self.internals
+        if now - at >= INTERNALS_SECONDS:
+            self.internals = (hidden_inodes("/"), now)
+        return self.internals[0]
+
+    def cached_xattr(self, now, members):
+        extra, at, dirs = self.xattr
+        if now - at < XATTR_SECONDS:
+            return extra
+        found = self.tree.acl_dirs()
+        if found != dirs or now - at >= XATTR_SECONDS:
+            extra = shared_xattr_blocks(found, members, self.source, os.statvfs("/").f_bsize)
+        self.xattr = (extra, now, found)
+        return extra
+
+    def cached_scratch(self, now, need):
+        plan, at, planned = self.scratch
+        if plan is None or now - at >= PLAN_SECONDS or abs(need - planned) >= GIB:
+            self.scratch = (scratch_plan(need), now, need)
+        return self.scratch[0]
+
+    def cached_offload(self, now, sizes):
+        if not self.offload_root:
+            return None
+        segment, at = self.offload
+        if now - at >= OFFLOAD_SECONDS:
+            self.offload = (offload_segment(Path(self.offload_root), sizes), now)
+        return self.offload[0]
+
+    def listing(self, name, rows):
+        path = self.runtime / name
+        text = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows)
+        if self.written.get(name) != text or not path.exists():
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(text)
+            os.chown(temporary, self.owner, -1)
+            temporary.replace(path)
+            self.written[name] = text
+        return str(path)
+
+    def children(self, root, skip, extra):
+        node = self.tree.find(str(root))
+        rows = []
+        for name, child in node.children.items():
+            if name in skip:
+                continue
+            path = os.path.join(str(root), name)
+            rows.append({"path": path, "size": child.total - extra.get(path, 0), "last_used": child.newest})
+        return node, rows
+
+    def due(self, now):
+        if now - self.published >= QUIET_SECONDS:
+            return True
+        if now - self.published < PUBLISH_SECONDS:
+            return False
+        used = shutil.disk_usage("/").used
+        return self.view is None or self.published_used is None or abs(used - self.published_used) >= 1024**2 or self.tree.root.total != self.published_total
+
+    def publish(self):
+        now = int(time.time())
+        self.check_store(force=True)
+        opened = shutil.disk_usage("/nix/store")
+        self.tree.settle(time.monotonic() + 5, force=True)
+        if self.view is None:
+            self.view = self.store_view()
+        view = self.view
+        index, home, retention = self.index, self.home, self.retention
+        sizes = view["sizes"]
+        target = int(os.environ["LEDGER_TARGET_BYTES"])
+        try:
+            target = int(float(Path(os.environ["LEDGER_TARGET_FILE"]).read_text().strip()) * GIB)
+        except (OSError, ValueError, KeyError):
+            pass
+
+        drift = index.drift()
+        store = dict(view["store"])
+        building = self.building()
+        nix = self.tree.find("/nix")
+        store["building"] = building
+        store["metadata"] = nix.total - building + blocks("/nix/store/.links")
+        store["rescan"] = max(0, -drift)
+        store_disk = sum(store.values())
+
+        home_node = self.tree.find(str(home))
+        system_skip = {"nix", "home"}
+        members = [os.path.join(str(home), name) for name in home_node.children] + [os.path.join("/", name) for name in self.tree.root.children if name not in system_skip]
+        extra = self.cached_xattr(now, members)
+        _, home_dirs = self.children(home, {".cache"}, extra)
+        home_dirs.append({"path": f"{home}/*", "size": home_node.own, "last_used": home_node.own_newest})
+        home_dirs.sort(key=lambda row: -row["size"])
+        cache_node = home_node.children.get(".cache")
+        cache_path = str(home / ".cache")
+        caches = cache_node.total - extra.get(cache_path, 0) if cache_node else 0
+        home_parent = self.tree.find(str(home.parent))
+        files = {"home": sum(row["size"] for row in home_dirs) + home_parent.total - home_node.total, "caches": caches}
+        swap = blocks("/swapfile")
+        covered = covered_mountpoints("/")
+        _, system_dirs = self.children(Path("/"), system_skip, extra)
+        system_dirs.append({"path": "/*", "size": self.tree.root.own - swap, "last_used": self.tree.root.own_newest})
+        system_dirs.sort(key=lambda row: -row["size"])
+        system_dirs += [
+            {"path": "filesystem internals", "size": self.cached_internals(now), "last_used": 0, "kind": "ext4 orphan file, quota inodes, journal and resize index blocks", "leaf": True},
+            {"path": "mountpoints", "size": 4096 * len(covered), "last_used": 0, "kind": f"directories under {len(covered)} mounts", "leaf": True},
+        ]
+        system_files = sum(row["size"] for row in system_dirs)
+        base = store_disk + sum(files.values()) + swap + system_files - max(0, drift)
+        usage = shutil.disk_usage("/nix/store")
+        held, held_at = self.held
+        if time.monotonic() - held_at >= HELD_SECONDS or abs(usage.used - base - sum(row["size"] for row in held)) >= 1024**2:
+            held = held_open(self.device)
+            self.held = (held, time.monotonic())
+        held_bytes = sum(row["size"] for row in held)
+        accounted = base + held_bytes
+        low, high = min(opened.used, usage.used), max(opened.used, usage.used)
+        settled = min(max(accounted, low), high)
+        measuring = usage.used - settled
+        unaccounted = settled - accounted
+        if abs(unaccounted) < MISMATCH_BYTES:
+            self.mismatch_since = None
+        elif self.mismatch_since is None:
+            self.mismatch_since = time.monotonic()
+
+        free = usage.free
+        reserved = usage.total - usage.used - free
+        deficit = max(0, target - free)
+        need = deficit + SLACK_BYTES if deficit else PREVIEW_BYTES
+        scratch = self.cached_scratch(time.monotonic(), need)
+        key = (need // NEED_STEP, deficit // NEED_STEP, id(scratch))
+        if view.get("plan_key") != key:
+            evictions, _, project_freed = retention.plan(view["projects"], sizes, now, 0, None, need)
+            project_plan = {"selected": retention.eviction_rows(evictions), "freed": project_freed}
+            dead_plan = store_plan(self.collector, index, need)
+            rows, cut = queue([("scratch", scratch), ("projects", project_plan), ("store", dead_plan)], deficit)
+            view.update(plan_key=key, plan=(rows, cut, dead_plan["largest"], self.listing("disk-queue.jsonl", rows)))
+        rows, cut, largest_dead, queue_file = view["plan"]
+
+        def path_row(path):
+            return {"path": path, "size": sizes.get(path, 0), "last_used": index.used.get(path, 0)}
+
+        self.runtime.mkdir(parents=True, exist_ok=True)
+        if not view["listed"]:
+            for segment in ("system", "home", "system_generations", "home_generations", "deployed", "shells", "other"):
+                self.listing(f"disk-segment-{segment}.jsonl", [path_row(path) for path in sorted(view["members"][segment])])
+            self.listing("disk-dead.jsonl", [{**path_row(path), "last_used": index.effective.get(path, 0)} for path in index.dead])
+            view["project_rows"] = project_rows(view["projects"], sizes, retention, path_row, self.listing, view["members"]["project_tier1"] | view["members"]["project_tier2"] | view["members"]["fetched"])
+            view["listed"] = True
+
+        store_node = self.store_node
+        building_rows = [{"path": f"/nix/store/{name}", "size": child.total, "last_used": child.newest} for name, child in store_node.children.items()]
+        if store_node.own - store_node.dir_blocks:
+            building_rows.append({"path": "/nix/store/*", "size": store_node.own - store_node.dir_blocks, "last_used": store_node.own_newest})
+        ledger = {
+            "at": now,
+            "store": store,
+            "store_disk": dict(store),
+            "files": files,
+            "swap": swap,
+            "system_files": system_files,
+            "held": held_bytes,
+            "unaccounted": unaccounted,
+            "measuring": measuring,
+            "churn": usage.used - opened.used,
+            "reserved": reserved,
+            "disk": {"total": usage.total, "used": usage.used, "free": free, "reserved": reserved},
+            "free": free,
+            "target": target,
+            "tracker": {"directories": len(self.tree.keys), "events": self.tree.events, "walk_seconds": round(self.tree.walk_seconds, 2), "verify_pass_seconds": round(self.tree.pass_seconds, 1), "store_du_at": self.du_state["at"], "store_du_running": self.du is not None},
+            "provenance": {
+                "generations": view["generations"],
+                "expiring": view["expiring"],
+                "deployed": view["deployed"],
+                "projects": view["project_rows"],
+                "home": home_dirs,
+                "caches": [{"path": os.path.join(cache_path, name), "size": child.total, "last_used": child.newest} for name, child in sorted(cache_node.children.items())] if cache_node else [],
+                "other": view["other"],
+                "shells": view["shells"],
+                "system": system_dirs,
+                "building": sorted(building_rows, key=lambda row: -row["size"])[:200],
+                "held": held,
+            },
+            "deficit": deficit,
+            "need": need,
+            "queue": rows[: max(cut + 1, 1)],
+            "queue_file": queue_file,
+            "cut": cut,
+            "largest_dead": largest_dead,
+            "history": [],
+            "events": load_events(self.state / "events.jsonl"),
+        }
+        items = {}
+        for name, group in ledger["provenance"].items():
+            if not isinstance(group, list):
+                continue
+            for row in group:
+                if row.get("path") and row.get("size"):
+                    items.setdefault(name, {})[row["path"]] = row["size"]
+        point = {"at": now, "store": dict(store), "files": files, "swap": swap, "system": system_files, "held": held_bytes, "measuring": measuring, "unaccounted": unaccounted, "reserved": reserved, "free": free, "items": items}
+        persisted = [old for old in self.points if old.get("persisted", True)]
+        if not persisted or now - persisted[-1].get("at", 0) >= HISTORY_SECONDS:
+            append_history(self.state / "history.jsonl", persisted, point)
+            self.points = persisted
+        else:
+            self.points = persisted + [{**point, "persisted": False}]
+        self.points = [old for old in self.points if old.get("at", 0) >= now - HISTORY_DAYS * DAY]
+        sampled = downsample(self.points)
+        write_json(self.runtime / "disk-history-items.json", {str(old["at"]): old.get("items", {}) for old in sampled}, owner=self.owner)
+        ledger["history"] = [{key: value for key, value in old.items() if key not in ("items", "persisted")} for old in sampled]
+        if scratch and scratch.get("error"):
+            ledger["scratch_error"] = scratch["error"]
+        offload = self.cached_offload(now, sizes)
+        if offload is not None:
+            ledger["offload"] = offload
+        write_json(self.runtime / "disk-ledger.json", ledger, owner=self.owner)
+        if self.textfile.parent.is_dir():
+            write_textfile(self.textfile, ledger)
+        self.published = time.monotonic()
+        self.published_used = usage.used
+        self.published_total = self.tree.root.total
+
+    def run(self):
+        while True:
+            started = time.monotonic()
+            self.tree.wait(1.0)
+            time.sleep(max(0.0, started + TICK_SECONDS - time.monotonic()))
+            self.tree.drain()
+            now = time.monotonic()
+            self.tree.settle(now + SETTLE_SECONDS)
+            self.check_store()
+            self.scan_fresh()
+            if self.du is not None or now - self.du_polled >= DU_POLL_SECONDS:
+                self.du_polled = now
+                self.poll_du(int(time.time()))
+            if now - self.verified_at >= 1.0:
+                self.tree.verify(time.monotonic() + VERIFY_SECONDS)
+                self.verified_at = now
+            if self.due(time.monotonic()):
+                self.publish()
+
+
 if __name__ == "__main__":
-    main()
+    Ledger().run()

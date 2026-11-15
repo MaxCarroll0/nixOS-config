@@ -154,7 +154,7 @@ Item {
     function nodeValue(point: var, node: var): real {
         if (node.kind === "segment")
             return ledger.valueOf(point, node.segment);
-        const group = ({ home_files: "home", caches: "caches", system_files: "system", held: "held", deployed: "deployed", shells: "shells", other: "other", project_tier1: "projects", project_tier2: "projects", fetched: "projects", system_generations: "generations", home_generations: "generations" })[root.trail.length ? root.trail[0].segment : ""];
+        const group = ({ home_files: "home", caches: "caches", system_files: "system", held: "held", deployed: "deployed", shells: "shells", building: "building", other: "other", project_tier1: "projects", project_tier2: "projects", fetched: "projects", system_generations: "generations", home_generations: "generations" })[root.trail.length ? root.trail[0].segment : ""];
         const items = (root.historyItems[point.at] ?? ({}))[group];
         if (!node.path || typeof items !== "object")
             return NaN;
@@ -253,6 +253,8 @@ Item {
                 return (prov.caches ?? []).map(row => dirNode(row, color, true));
             case "system_files":
                 return (prov.system ?? []).map(row => dirNode(row, color, false));
+            case "building":
+                return (prov.building ?? []).map(row => dirNode(row, color, false));
             case "held":
                 return (prov.held ?? []).map(row => ({ id: `held:${row.inode ?? row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: `deleted, held ${row.how ?? "open"} by ${row.holders.join(", ")}`, delvable: false, openable: false, reclaimable: false, scheduled: false }));
             case "system_generations":

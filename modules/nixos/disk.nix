@@ -65,6 +65,8 @@ let
     text = ''
       export RETENTION_MODULE=${./project-closure-retention.py}
       export COLLECT_MODULE=${./store-collect.py}
+      export TREE_MODULE=${./disk-tree.py}
+      export PYTHONUNBUFFERED=1
       export LEDGER_HOME=${home}
       export LEDGER_USER=${cfg.user}
       export LEDGER_TARGET_BYTES=${toString (pressure.minFreeGiB * gib)}
@@ -196,20 +198,16 @@ in
     };
 
     systemd.services.disk-ledger = {
-      restartIfChanged = false;
-      description = "Write the disk ledger for the performance tab and metrics";
+      description = "Keep the disk ledger for the performance tab and metrics current";
+      wantedBy = [ "multi-user.target" ];
       serviceConfig = resourceLimits // {
-        Type = "oneshot";
+        Type = "simple";
         ExecStart = lib.getExe ledger;
-      };
-    };
-
-    systemd.timers.disk-ledger = {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnBootSec = "2min";
-        OnUnitActiveSec = "1min";
-        AccuracySec = "10s";
+        Restart = "always";
+        RestartSec = 30;
+        Nice = 19;
+        CPUSchedulingPolicy = "idle";
+        IOSchedulingClass = "idle";
       };
     };
 

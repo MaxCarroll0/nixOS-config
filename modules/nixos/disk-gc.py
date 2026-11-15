@@ -20,7 +20,6 @@ REFRESH_SECONDS = 60
 PLAN_SECONDS = 60
 IDLE_SECONDS = 30
 SCAN_SECONDS = 10
-LEDGER_SECONDS = 300
 TAKEN_ROWS = 200
 PAUSE = 1.5
 
@@ -155,7 +154,6 @@ class Queue:
         gone = set(paths)
         self.index.dead = [path for path in self.index.dead if path not in gone]
         for path in gone:
-            self.index.nar.pop(path, None)
             self.index.effective.pop(path, None)
 
 
@@ -207,15 +205,9 @@ def step(queue, rows, limit):
     return event
 
 
-def ledger():
-    subprocess.run(["systemctl", "start", "--no-block", "disk-ledger.service"], capture_output=True)
-
-
 def main():
     os.makedirs(STATE, exist_ok=True)
     queue = Queue()
-    last_ledger = time.monotonic()
-    collected = False
     last = None
     while True:
         goal = target()
@@ -227,10 +219,6 @@ def main():
             time.sleep(2)
             continue
         if deficit <= 0:
-            if collected:
-                ledger()
-                last_ledger = time.monotonic()
-                collected = False
             stalled, cpu, io = busy(0.0)
             if not stalled:
                 queue.refresh()
@@ -256,10 +244,6 @@ def main():
             continue
         write_status({**base, "running": True, "stage": rows[0]["stage"], "state": "collecting", "urgency": level, "cpu": cpu, "io": io, "queue": head, "need_gib": round(deficit / GIB, 2)})
         last = step(queue, rows, burst(available))
-        collected = True
-        if time.monotonic() - last_ledger > LEDGER_SECONDS:
-            ledger()
-            last_ledger = time.monotonic()
         time.sleep(PAUSE * (1 - level))
 
 
