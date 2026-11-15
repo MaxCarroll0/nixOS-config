@@ -20,6 +20,11 @@ HISTORY_POINTS = 288
 PREVIEW_BYTES = 10 * GIB
 SLACK_BYTES = GIB // 2
 SETTLE_ROUNDS = 3
+STORE_DU_SECONDS = 6 * 3600
+FORCED_DU_SECONDS = 3600
+XATTR_SECONDS = 3600
+HISTORY_SECONDS = 900
+SIGNATURE_BYTES = 64 * 1024**2
 KEEP_GENERATIONS = 10
 SEGMENTS = ("system", "home", "system_generations", "home_generations", "project_tier1", "project_tier2", "fetched", "deployed", "shells", "other", "garbage", "metadata", "rescan")
 
@@ -187,17 +192,30 @@ def disk_bytes(path):
     return int(out.split()[0]) if out else 0
 
 
-def measured_bytes(path, cache, now, max_age, fingerprint):
+def measured_bytes(path, cache, now, max_age):
     try:
         entry = json.loads(cache.read_text())
-        if now - entry["at"] < max_age and entry.get("fingerprint") == fingerprint:
-            return entry["bytes"], False
+        if now - entry["at"] < max_age:
+            return entry["bytes"], False, entry["at"]
     except (OSError, ValueError, KeyError):
         pass
     size = disk_bytes(path)
     cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps({"at": now, "bytes": size, "fingerprint": fingerprint}))
-    return size, True
+    cache.write_text(json.dumps({"at": now, "bytes": size}))
+    return size, True, now
+
+
+def cached_xattr(cache, now, members):
+    key = sorted(map(str, members))
+    try:
+        entry = json.loads(cache.read_text())
+        if now - entry["at"] < XATTR_SECONDS and entry["members"] == key:
+            return entry["extra"]
+    except (OSError, ValueError, KeyError):
+        pass
+    extra = shared_xattr_blocks("/", members)
+    cache.write_text(json.dumps({"at": now, "members": key, "extra": extra}))
+    return extra
 
 
 LIBC = ctypes.CDLL(None, use_errno=True)
@@ -435,12 +453,48 @@ def project_rows(projects, sizes, retention, path_row, listing, project_paths):
     return sorted(rows, key=lambda row: -row["size"])
 
 
+def mtime(path):
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return 0
+
+
+def signature(state, home):
+    watched = [
+        "/nix/var/nix/db/db.sqlite",
+        "/nix/var/nix/db/db.sqlite-wal",
+        "/nix/var/nix/gcroots/auto",
+        "/nix/var/nix/profiles",
+        str(home / ".local/state/nix/profiles"),
+        str(home / ".local/state/rebuild/roots"),
+        os.environ["LEDGER_TARGET_FILE"],
+        str(state / "events.jsonl"),
+    ]
+    return [shutil.disk_usage("/").used // SIGNATURE_BYTES] + [mtime(path) for path in watched]
+
+
+def unchanged(state, home, now):
+    current = signature(state, home)
+    path = state / "signature.json"
+    try:
+        previous = json.loads(path.read_text())
+        if previous["signature"] == current and now - previous["at"] < HISTORY_SECONDS:
+            return True
+    except (OSError, ValueError, KeyError):
+        pass
+    path.write_text(json.dumps({"at": now, "signature": current}))
+    return False
+
+
 def main():
     state = Path(os.environ["LEDGER_STATE_DIR"])
     state.mkdir(parents=True, exist_ok=True)
     lock = open(state / "measure.lock", "a")
     fcntl.flock(lock, fcntl.LOCK_EX)
     now = int(time.time())
+    if os.environ.get("LEDGER_FORCE") != "1" and unchanged(state, Path(os.environ["LEDGER_HOME"]), now):
+        return
     retention = load_module("retention", "RETENTION_MODULE")
     collector = load_module("collector", "COLLECT_MODULE")
     home = Path(os.environ["LEDGER_HOME"])
@@ -480,12 +534,11 @@ def main():
     retention.populate_closures(projects)
     project_union = set().union(*(p.closure for p in projects.values())) if projects else set()
     metadata = store_metadata()
-    fingerprint = [len(index.nar), sum(index.nar.values()), len(index.disk), sum(share for share, _, _ in index.disk.values())]
-    measured, fresh = measured_bytes("/nix/store", state / "store-du.json", now, 6 * 3600 if index.reconciled() else 0, fingerprint)
+    measured, store_fresh, measured_at = measured_bytes("/nix/store", state / "store-du.json", now, STORE_DU_SECONDS if index.reconciled() else 0)
     if index.coverage() < 0.99:
         index.calibrate(measured - inside_store_metadata())
     sizes = index.sizes("share")
-    if fresh:
+    if store_fresh:
         index.reconcile(sum(sizes.values()) - (measured - inside_store_metadata()))
     drift = index.drift()
     for path in roots | project_union:
@@ -530,7 +583,7 @@ def main():
     measured_paths = home_members + caches_dir + system_members + swapfile
     covered = covered_mountpoints("/")
     internals = hidden_inodes("/")
-    shared_xattr = shared_xattr_blocks("/", measured_paths)
+    shared_xattr = cached_xattr(state / "xattr.json", now, measured_paths)
     device = os.stat("/").st_dev
     before = shutil.disk_usage("/nix/store")
     usage_all = usage_once(measured_paths)
@@ -561,6 +614,16 @@ def main():
         moved = any(fresh[path][0] != usage_all.get(path, (0, 0))[0] for path in fresh)
         usage_all.update(fresh)
         held = held_open(device)
+        usage = shutil.disk_usage("/nix/store")
+        home_dirs, files, system_dirs, swap, held_bytes, accounted = tally()
+    if not store_fresh and now - measured_at >= FORCED_DU_SECONDS and not min(opened.used, before.used, usage.used) <= accounted <= max(opened.used, before.used, usage.used):
+        measured, store_fresh, measured_at = measured_bytes("/nix/store", state / "store-du.json", now, 0)
+        sizes = index.sizes("share")
+        index.reconcile(sum(sizes.values()) - (measured - inside_store_metadata()))
+        drift = index.drift()
+        store["rescan"] = max(0, -drift)
+        store_disk = sum(store.values())
+        store_disk_segments = dict(store)
         usage = shutil.disk_usage("/nix/store")
         home_dirs, files, system_dirs, swap, held_bytes, accounted = tally()
     churn = usage.used - opened.used
@@ -670,7 +733,10 @@ def main():
             old["items"] = grouped
     point = {"at": now, "store": store_disk_segments, "files": files, "swap": swap, "system": system_files, "held": held_bytes, "measuring": measuring, "unaccounted": unaccounted, "reserved": reserved, "free": free, "items": items}
 
-    append_history(history_path, points, point)
+    if not points or now - points[-1].get("at", 0) >= HISTORY_SECONDS:
+        append_history(history_path, points, point)
+    else:
+        points.append(point)
     sampled = downsample(points)
     write_json(runtime / "disk-history-items.json", {str(old["at"]): old.get("items", {}) for old in sampled}, owner=owner)
     ledger["history"] = [{key: value for key, value in old.items() if key != "items"} for old in sampled]
