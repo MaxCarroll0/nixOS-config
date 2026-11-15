@@ -110,12 +110,15 @@ Item {
                 id: hatch
 
                 anchors.fill: parent
+                readonly property color ink: root.model.hatchColor
+
+                onInkChanged: requestPaint()
                 onWidthChanged: requestPaint()
                 onHeightChanged: requestPaint()
                 onPaint: {
                     const ctx = getContext("2d");
                     ctx.reset();
-                    ctx.strokeStyle = "white";
+                    ctx.strokeStyle = ink;
                     ctx.lineWidth = 1;
                     ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
                     ctx.globalAlpha = 0.7;

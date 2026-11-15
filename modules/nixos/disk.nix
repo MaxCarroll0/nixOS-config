@@ -1,4 +1,4 @@
-# Disk pressure, tiered store retention, scratch sweeping and the disk ledger.
+# Disk ledger and continuous collector, store retention and generation expiry.
 
 {
   config,
@@ -37,19 +37,6 @@ let
     '';
   };
 
-  scratchClean = pkgs.writeShellApplication {
-    name = "project-scratch-clean";
-    runtimeInputs = [
-      pkgs.git
-      pkgs.python3
-    ];
-    text = ''
-      export SCRATCH_OFFLOAD_DIR=${if cfg.offload.enable then "${home}/offload" else ""}
-      export SCRATCH_MIN_FREE_BYTES=${toString (pressure.minFreeGiB * gib)}
-      exec python3 ${./project-scratch-clean.py} "$@"
-    '';
-  };
-
   stateDir = "/var/lib/disk-ledger";
   targetFile = "${home}/.config/caelestia/disk-target";
 
@@ -59,6 +46,7 @@ let
       config.nix.package
       pkgs.coreutils
       pkgs.e2fsprogs
+      pkgs.git
       pkgs.python3
       pkgs.util-linux
     ];
@@ -66,17 +54,20 @@ let
       export RETENTION_MODULE=${./project-closure-retention.py}
       export COLLECT_MODULE=${./store-collect.py}
       export TREE_MODULE=${./disk-tree.py}
+      export RECLAIM_MODULE=${./reclaim.py}
       export PYTHONUNBUFFERED=1
+      export PYTHONDONTWRITEBYTECODE=1
       export LEDGER_HOME=${home}
       export LEDGER_USER=${cfg.user}
       export LEDGER_TARGET_BYTES=${toString (pressure.minFreeGiB * gib)}
       export LEDGER_TARGET_FILE=${targetFile}
+      export LEDGER_EMERGENCY_BYTES=${toString (config.nix.settings.min-free or (5 * gib))}
+      export LEDGER_COLLECT=${if pressure.enable then "1" else "0"}
       export LEDGER_RUNTIME_DIR=/run/user/${uid}
       export LEDGER_STATE_DIR=${stateDir}
       export LEDGER_UID=${uid}
       export LEDGER_TEXTFILE=/var/lib/node-exporter-textfile/disk-ledger.prom
       export LEDGER_OFFLOAD_DIR=${if cfg.offload.enable then "${home}/offload" else ""}
-      export LEDGER_SCRATCH_PLAN="${lib.getExe scratchClean} --home ${home} --state ${home}/.local/state/dev-build"
       exec python3 ${./disk-ledger.py}
     '';
   };
@@ -133,14 +124,11 @@ in
   config = {
     nix.settings.keep-derivations = lib.mkIf pressure.enable false;
 
-    environment.systemPackages = [
-      collect
-      scratchClean
-    ];
+    environment.systemPackages = [ collect ];
 
     systemd.tmpfiles.rules = [ "d ${stateDir} 0755 root root -" ];
 
-    systemd.services.generation-expire = {
+    systemd.services.generation-expire = lib.mkIf (!pressure.enable) {
       restartIfChanged = false;
       description = "Keep the last 10 generations of every profile";
       path = [ config.nix.package ];
@@ -157,7 +145,7 @@ in
       '';
     };
 
-    systemd.timers.generation-expire = {
+    systemd.timers.generation-expire = lib.mkIf (!pressure.enable) {
       wantedBy = [ "timers.target" ];
       timerConfig = {
         OnCalendar = "daily";
@@ -165,65 +153,17 @@ in
       };
     };
 
-    systemd.services.disk-gc = lib.mkIf pressure.enable {
-      description = "Continuous least-recently-used reclaim toward the free-space target";
+    systemd.services.disk-ledger = {
+      description = "Disk ledger for the storage tab and metrics, and the continuous collector";
       wantedBy = [ "multi-user.target" ];
       after = [ "nix-daemon.socket" ];
-      path = [
-        config.nix.package
-        pkgs.util-linux
-        pkgs.systemd
-      ];
-      environment = {
-        COLLECT_MODULE = "${./store-collect.py}";
-        GC_STATE_DIR = stateDir;
-        GC_STATUS = "/run/user/${uid}/disk-pressure.json";
-        GC_UID = uid;
-        GC_USER = cfg.user;
-        GC_TARGET_BYTES = toString (pressure.minFreeGiB * gib);
-        GC_TARGET_FILE = targetFile;
-        GC_EMERGENCY_BYTES = toString (config.nix.settings.min-free or (5 * gib));
-        GC_SCRATCH = "${lib.getExe scratchClean} --home ${home} --state ${home}/.local/state/dev-build";
-        GC_RETENTION = "${cfg.retention}/bin/project-closure-retention";
-        PYTHONUNBUFFERED = "1";
-      };
-      serviceConfig = resourceLimits // {
-        ExecStart = "${pkgs.python3}/bin/python3 ${./disk-gc.py}";
-        Restart = "always";
-        RestartSec = 30;
-        Nice = 19;
-        CPUSchedulingPolicy = "idle";
-        IOSchedulingClass = "idle";
-      };
-    };
-
-    systemd.services.disk-ledger = {
-      description = "Keep the disk ledger for the performance tab and metrics current";
-      wantedBy = [ "multi-user.target" ];
       serviceConfig = resourceLimits // {
         Type = "simple";
         ExecStart = lib.getExe ledger;
         Restart = "always";
         RestartSec = 30;
-        Nice = 19;
-        CPUSchedulingPolicy = "idle";
+        Nice = 10;
         IOSchedulingClass = "idle";
-      };
-    };
-
-    systemd.user.services.project-scratch-clean = {
-      description = "Report reclaimable build outputs, shell temp dirs and caches";
-      serviceConfig = resourceLimits // {
-        Type = "oneshot";
-        ExecStart = lib.getExe scratchClean;
-      };
-    };
-
-    systemd.user.timers.project-scratch-clean = {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnCalendar = "weekly";
-        Persistent = true;
       };
     };
   };

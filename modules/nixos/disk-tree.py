@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Per-directory size tree of one filesystem, kept current from fanotify events plus a rolling re-verify.
+# Per-directory size tree of one filesystem kept current from fanotify events, and last-open times of store paths.
 
 import collections
 import ctypes
@@ -16,6 +16,13 @@ FAN_UNLIMITED_QUEUE = 0x10
 FAN_REPORT_DFID_NAME = 0xC00
 FAN_MARK_ADD = 0x1
 FAN_MARK_FILESYSTEM = 0x100
+FAN_MARK_MOUNT = 0x10
+FAN_MARK_FLUSH = 0x80
+FAN_MARK_IGNORED_SURV_MODIFY = 0x40
+FAN_MARK_IGNORE = 0x400
+FAN_OPEN = 0x20
+FAN_OPEN_EXEC = 0x1000
+FAN_EVENT_ON_CHILD = 0x08000000
 FAN_MODIFY = 0x2
 FAN_MOVED_FROM = 0x40
 FAN_MOVED_TO = 0x80
@@ -27,8 +34,10 @@ WATCHED = FAN_MODIFY | FAN_MOVED_FROM | FAN_MOVED_TO | FAN_CREATE | FAN_DELETE |
 EVENT = struct.Struct("IBBHQii")
 INFO = struct.Struct("BBH")
 HANDLE = struct.Struct("Ii")
-SETTLE = 1.0
+SETTLE = 0.05
 COST_FACTOR = 20
+NAMED = frozenset({".claude"})
+STORE = "/nix/store/"
 
 
 class Node:
@@ -67,6 +76,7 @@ class Tree:
         self.dirty = {}
         self.ring = collections.deque()
         self.overflowed = False
+        self.named = {}
         self.last_event = 0.0
         self.events = 0
         self.scans = 0
@@ -154,6 +164,8 @@ class Tree:
                 del self.keys[current.key]
             if current.multi:
                 self.set_multi(current, {})
+            if current.name in NAMED:
+                self.named.get(current.name, set()).discard(current)
             self.dirty.pop(current, None)
 
     def scan(self, node):
@@ -201,6 +213,8 @@ class Tree:
                     if child is None:
                         child = Node(node, name, entry_info.st_ino)
                         node.children[name] = child
+                        if name in NAMED:
+                            self.named.setdefault(name, set()).add(child)
                         new.append(child)
                     continue
                 blocks = entry_info.st_blocks * 512
@@ -232,10 +246,10 @@ class Tree:
         while pending:
             pending.extend(self.scan(pending.pop()))
 
-    def wait(self, timeout):
-        select.select([self.fd], [], [], timeout)
+    def wait(self, timeout, *others):
+        select.select([self.fd, *others], [], [], timeout)
 
-    def drain(self):
+    def drain(self, unknown=None):
         now = time.monotonic()
         while True:
             try:
@@ -252,9 +266,13 @@ class Tree:
                 while cursor < offset + length:
                     _, _, size = INFO.unpack_from(data, cursor)
                     handle_bytes, kind = HANDLE.unpack_from(data, cursor + 12)
-                    node = self.keys.get(struct.pack("i", kind) + data[cursor + 20 : cursor + 20 + handle_bytes])
-                    if node is not None and node not in self.dirty:
-                        self.dirty[node] = now
+                    key = struct.pack("i", kind) + data[cursor + 20 : cursor + 20 + handle_bytes]
+                    node = self.keys.get(key)
+                    if node is not None:
+                        if node not in self.dirty:
+                            self.dirty[node] = now
+                    elif unknown is not None:
+                        unknown(key)
                     cursor += size
                 offset += length
             self.last_event = now
@@ -295,6 +313,30 @@ class Tree:
     def pending(self):
         return bool(self.dirty) or time.monotonic() - self.last_event < SETTLE
 
+    def next_due(self):
+        if not self.dirty:
+            return None
+        return min(max(since + max(SETTLE, node.cost * COST_FACTOR), node.scanned + node.cost * COST_FACTOR) for node, since in self.dirty.items())
+
+    def size(self, path):
+        node = self.find(path)
+        if node is not None and node.attached:
+            return node.total
+        try:
+            info = os.lstat(path)
+        except OSError:
+            return 0
+        return info.st_blocks * 512 if info.st_dev == self.device and not stat.S_ISDIR(info.st_mode) else 0
+
+    def newest(self, path):
+        node = self.find(path)
+        if node is not None and node.attached:
+            return node.newest
+        try:
+            return int(os.lstat(path).st_mtime)
+        except OSError:
+            return 0
+
     def acl_dirs(self):
         found = []
         stack = [self.root]
@@ -304,3 +346,107 @@ class Tree:
                 found.append(self.path(node))
             stack.extend(node.children.values())
         return found
+
+
+def handle_buffer(key):
+    kind = struct.unpack_from("i", key)[0]
+    raw = key[4:]
+    return ctypes.create_string_buffer(HANDLE.pack(len(raw), kind) + raw, 8 + len(raw))
+
+
+class Resolver:
+    def __init__(self, mount):
+        self.mount = os.open(mount, os.O_RDONLY | os.O_DIRECTORY)
+        self.cache = {}
+
+    def open(self, key, flags=os.O_PATH):
+        fd = LIBC.open_by_handle_at(self.mount, handle_buffer(key), flags)
+        return fd if fd >= 0 else None
+
+    def path(self, key):
+        if key in self.cache:
+            return self.cache[key]
+        if len(self.cache) > 200000:
+            self.cache.clear()
+        fd = self.open(key)
+        found = None
+        if fd is not None:
+            try:
+                found = os.readlink(f"/proc/self/fd/{fd}")
+            except OSError:
+                found = None
+            finally:
+                os.close(fd)
+        self.cache[key] = found
+        return found
+
+
+def store_path(path):
+    if not path or not path.startswith(STORE):
+        return None
+    name = path[len(STORE):].split("/", 1)[0]
+    return STORE + name if name and not name.startswith(".") else None
+
+
+class Opens:
+    def __init__(self, mount="/nix/store", flush_seconds=600):
+        self.fd = LIBC.fanotify_init(FAN_REPORT_DFID_NAME | FAN_NONBLOCK, os.O_RDONLY)
+        if self.fd < 0:
+            raise OSError(ctypes.get_errno(), "fanotify_init")
+        if LIBC.fanotify_mark(self.fd, FAN_MARK_ADD | FAN_MARK_MOUNT, FAN_OPEN | FAN_OPEN_EXEC, -100, mount.encode()) < 0:
+            raise OSError(ctypes.get_errno(), "fanotify_mark")
+        self.mount = mount
+        self.resolver = Resolver(mount)
+        self.root_key = handle_key(mount)
+        self.flush_seconds = flush_seconds
+        self.flushed = time.monotonic()
+        self.ignoring = True
+        self.events = 0
+        self.ignored = 0
+        self.pid = os.getpid()
+
+    def ignore(self, key):
+        if not self.ignoring:
+            return
+        fd = self.resolver.open(key, os.O_RDONLY | os.O_DIRECTORY)
+        if fd is None:
+            return
+        try:
+            if LIBC.fanotify_mark(self.fd, FAN_MARK_ADD | FAN_MARK_IGNORE | FAN_MARK_IGNORED_SURV_MODIFY, FAN_OPEN | FAN_OPEN_EXEC | FAN_EVENT_ON_CHILD, fd, None) < 0:
+                self.ignoring = False
+            else:
+                self.ignored += 1
+        finally:
+            os.close(fd)
+
+    def drain(self, touch):
+        now = time.time()
+        if time.monotonic() - self.flushed >= self.flush_seconds:
+            LIBC.fanotify_mark(self.fd, FAN_MARK_FLUSH, 0, -100, self.mount.encode())
+            self.resolver.cache.clear()
+            self.flushed = time.monotonic()
+            self.ignored = 0
+        while True:
+            try:
+                data = os.read(self.fd, 1 << 20)
+            except BlockingIOError:
+                return
+            offset = 0
+            while offset < len(data):
+                length, _, _, header, _, _, pid = EVENT.unpack_from(data, offset)
+                self.events += 1
+                cursor = offset + header
+                if pid != self.pid and cursor < offset + length:
+                    handle_bytes, kind = HANDLE.unpack_from(data, cursor + 12)
+                    key = struct.pack("i", kind) + data[cursor + 20 : cursor + 20 + handle_bytes]
+                    if key == self.root_key:
+                        name = data[cursor + 20 + handle_bytes : offset + length].split(b"\0", 1)[0].decode(errors="replace")
+                        touch(STORE + name, now)
+                    else:
+                        known = key in self.resolver.cache
+                        found = store_path(self.resolver.path(key))
+                        if found:
+                            touch(found, now)
+                            if not known:
+                                self.ignore(key)
+                offset += length

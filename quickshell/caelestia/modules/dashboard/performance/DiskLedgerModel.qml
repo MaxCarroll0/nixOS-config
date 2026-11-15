@@ -8,54 +8,42 @@ import qs.services
 Item {
     id: root
 
-    property var ledger: ({})
-    property var pressure: ({})
+    property var overview: ({})
+    property var historyData: ({})
+    property var events: []
+    property var tracker: ({})
+    property var nodes: ({})
+    property var drill: []
+    property bool diagnostics: false
     property string targetOverride: ""
+    property real receivedAt: 0
+    property bool paused: false
+    property bool streamed: false
+    property var held: ({})
 
     readonly property string home: Quickshell.env("HOME") || "/home/max"
-    readonly property string targetPath: `${home}/.config/caelestia/disk-target`
-    readonly property var store: ledger.store_disk ?? ledger.store ?? ({})
-    readonly property var queue: ledger.queue ?? []
-    readonly property var events: ledger.events ?? []
-    readonly property var history: ledger.history ?? []
-    readonly property var provenance: ledger.provenance ?? ({})
     readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000"
-    readonly property string deadFile: `${runtimeDir}/disk-dead.jsonl`
+    readonly property string targetPath: `${home}/.config/caelestia/disk-target`
+    readonly property bool live: socket.connected
+    readonly property var watches: ["overview", "history", "events"].concat(diagnostics ? ["tracker"] : []).concat(drill)
 
-    function segmentFile(key: string): string {
-        return ["system", "home", "system_generations", "home_generations", "deployed", "shells", "other"].includes(key) ? `${runtimeDir}/disk-segment-${key}.jsonl` : "";
-    }
-
-    function scheduledBytes(key: string): real {
-        const stages = Object.keys(stageSegment).filter(stage => stageSegment[stage] === key || ((key.startsWith("project") || key === "fetched") && stage === "projects"));
-        return queue.filter((row, index) => index <= cut && stages.includes(row.stage)).reduce((acc, row) => acc + (row.size ?? 0), 0);
-    }
-
-    function scheduledFraction(key: string): real {
-        const value = current(key);
-        return value > 0 ? Math.min(1, scheduledBytes(key) / value) : 0;
-    }
-    readonly property real free: ledger.free ?? 0
-    readonly property real targetGib: targetOverride !== "" && !isNaN(parseInt(targetOverride)) ? parseInt(targetOverride) : Math.round((ledger.target ?? 0) / 1073741824)
+    readonly property var history: historyData.points ?? []
+    readonly property var historyItems: historyData.items ?? ({})
+    readonly property var disk: overview.disk ?? ({})
+    readonly property var collector: overview.gc ?? ({})
+    readonly property var head: overview.next ?? null
+    readonly property real free: overview.free ?? 0
+    readonly property real diskTotal: disk.total ?? 0
+    readonly property real total: Math.max(1, diskTotal)
+    readonly property real targetGib: targetOverride !== "" && !isNaN(parseInt(targetOverride)) ? parseInt(targetOverride) : Math.round((overview.target ?? 0) / 1073741824)
     readonly property real target: targetGib * 1073741824
-    readonly property real deficit: Math.max(0, target - free)
-    readonly property int cut: {
-        if (deficit <= 0)
-            return -1;
-        let sum = 0;
-        for (let index = 0; index < queue.length; index++) {
-            sum += queue[index].size;
-            if (sum >= deficit)
-                return index;
-        }
-        return queue.length - 1;
-    }
-    readonly property real diskTotal: (ledger.disk ?? ({})).total ?? accounted
-    readonly property bool loaded: (ledger.at ?? 0) > 0
-    readonly property date updated: new Date((ledger.at ?? 0) * 1000)
-    readonly property bool collecting: pressure.running ?? false
-    readonly property string collectingStage: ({ "project-scratch-clean": "tmp and caches", "project-closure-retention": "project closures", "store-collect": "dead store paths" })[pressure.stage ?? ""] ?? (pressure.stage ?? "")
-    readonly property real collectingSince: pressure.at ?? 0
+    readonly property real deficit: targetOverride !== "" ? Math.max(0, target - free) : (overview.deficit ?? 0)
+    readonly property bool loaded: overview.segments !== undefined
+    readonly property date updated: new Date(receivedAt * 1000)
+    readonly property bool collecting: collector.state === "collecting"
+    readonly property string collectingStage: collecting ? (segment(kindKey[collector.kind] ?? "")?.label ?? collector.kind ?? "") : ""
+
+    readonly property var kindKey: ({ "dead": "dead", "cache": "cache", "temp": "temp", "stale shell": "stale_shell", "stray profile": "stray", "build": "build", "project": "project", "deploy": "deploy", "generation": "generation", "agent": "agent" })
 
     readonly property real hue: Colours.palette.m3primary.hslHue < 0 ? 0.6 : Colours.palette.m3primary.hslHue
 
@@ -63,107 +51,165 @@ Item {
         return Qt.hsla((hue + step) % 1, Colours.light ? 0.35 : 0.28, Colours.light ? light + 0.12 : light, 1);
     }
 
-    readonly property var segments: [
-        { key: "system", group: "store", label: "running system", color: tone(0, 0.5), reclaim: false, detail: "none" },
-        { key: "home", group: "store", label: "home profile", color: tone(0.06, 0.56), reclaim: false, detail: "none" },
-        { key: "system_generations", group: "store", label: "older system generations", color: tone(0.12, 0.48), reclaim: true, detail: "generations" },
-        { key: "home_generations", group: "store", label: "older home generations", color: tone(0.15, 0.42), reclaim: true, detail: "generations" },
-        { key: "deployed", group: "store", label: "deployed to other hosts", color: tone(0.18, 0.54), reclaim: true, detail: "deployed" },
-        { key: "project_tier1", group: "store", label: "projects: builds", color: tone(0.3, 0.52), reclaim: true, detail: "projects" },
-        { key: "project_tier2", group: "store", label: "projects: toolchains", color: tone(0.36, 0.46), reclaim: true, detail: "projects" },
-        { key: "fetched", group: "store", label: "projects: fetched sources", color: tone(0.42, 0.56), reclaim: true, detail: "projects" },
-        { key: "shells", group: "store", label: "live shells and builds", color: tone(0.5, 0.5), reclaim: false, detail: "none" },
-        { key: "other", group: "store", label: "other live store paths", color: tone(0.56, 0.44), reclaim: false, detail: "other" },
-        { key: "building", group: "store", label: "store writes not yet registered", color: tone(0.6, 0.5), reclaim: false, detail: "building" },
-        { key: "garbage", group: "store", label: "dead store paths", color: tone(0.66, 0.46), reclaim: true, detail: "dead" },
-        { key: "metadata", group: "store", label: "store database and link table", color: tone(0.7, 0.36), reclaim: false, detail: "none" },
-        { key: "rescan", group: "store", label: "shared files awaiting rescan", color: tone(0.74, 0.4), reclaim: false, detail: "none" },
-        { key: "home_files", group: "files", label: "home files", color: tone(0.78, 0.5), reclaim: false, detail: "home" },
-        { key: "caches", group: "files", label: "caches", color: tone(0.88, 0.54), reclaim: true, detail: "caches" },
-        { key: "reserved", group: "system", label: "ext4 root reserve", color: Qt.hsla(0, 0, Colours.light ? 0.8 : 0.45, 1), reclaim: false, detail: "none" },
-        { key: "swap", group: "system", label: "swapfile", color: Qt.hsla(0, 0, Colours.light ? 0.72 : 0.38, 1), reclaim: false, detail: "none" },
-        { key: "system_files", group: "system", label: "system files", color: Qt.hsla(0, 0, Colours.light ? 0.62 : 0.3, 1), reclaim: false, detail: "system" },
-        { key: "held", group: "system", label: "deleted, still open", color: Qt.hsla(0, 0, Colours.light ? 0.56 : 0.26, 1), reclaim: false, detail: "held" },
-        { key: "measuring", group: "system", label: "changed during measurement", color: Qt.hsla(0, 0, Colours.light ? 0.53 : 0.24, 1), reclaim: false, detail: "none" },
-        { key: "unaccounted", group: "system", label: "unaccounted", color: Qt.hsla(0, 0, Colours.light ? 0.5 : 0.22, 1), reclaim: false, detail: "none" }
-    ]
-
-    readonly property var stageSegment: ({ scratch: "caches", projects: "project_tier1", store: "garbage" })
-
-    function segmentScheduled(key: string): bool {
-        const stages = Object.keys(stageSegment).filter(stage => stageSegment[stage] === key || ((key.startsWith("project") || key === "fetched") && stage === "projects"));
-        return queue.some((row, index) => index <= cut && stages.includes(row.stage));
+    function grey(light: real): color {
+        return Qt.hsla(0, 0, Colours.light ? 1.05 - light : light, 1);
     }
+
+    readonly property var swatches: ({
+            running_system: tone(0, 0.5),
+            home_profile: tone(0.04, 0.56),
+            profiles: tone(0.07, 0.46),
+            previous: tone(0.1, 0.52),
+            shells: tone(0.13, 0.44),
+            processes: tone(0.16, 0.54),
+            roots: tone(0.19, 0.42),
+            recent: tone(0.22, 0.5),
+            building: tone(0.25, 0.46),
+            metadata: tone(0.28, 0.36),
+            dead: tone(0.34, 0.46),
+            cache: tone(0.38, 0.54),
+            temp: tone(0.42, 0.44),
+            stale_shell: tone(0.46, 0.52),
+            stray: tone(0.5, 0.42),
+            build: tone(0.54, 0.5),
+            project: tone(0.58, 0.44),
+            deploy: tone(0.62, 0.54),
+            generation: tone(0.66, 0.46),
+            agent: tone(0.7, 0.4),
+            home_files: tone(0.78, 0.5),
+            tmp_files: tone(0.84, 0.44),
+            system_files: grey(0.5),
+            swap: grey(0.44),
+            held: grey(0.38),
+            filesystem: grey(0.33),
+            changing: grey(0.28),
+            reserved: grey(0.58)
+        })
+
+    readonly property var segments: (overview.segments ?? []).map(row => ({
+                key: row.key,
+                label: row.label,
+                group: row.group,
+                reclaim: row.reclaimable,
+                color: swatches[row.key] ?? grey(0.5),
+                bytes: row.bytes,
+                scheduled: row.scheduled,
+                items: row.items
+            }))
+
+    readonly property color hatchColor: Colours.light ? Colours.palette.m3onSurface : "white"
+    readonly property color reclaimColor: Qt.hsla(0.36, 0.6, Colours.light ? 0.26 : 0.4, 1)
+    readonly property color scheduledColor: Qt.hsla(0.08, 0.9, Colours.light ? 0.42 : 0.62, 1)
 
     function segment(key: string): var {
         return segments.find(item => item.key === key) ?? null;
     }
 
-    function stageName(stage: string): string {
-        return ({ scratch: "tmp and caches", projects: "project closures", store: "dead store paths" })[stage] ?? stage;
-    }
-
-    function stageColor(stage: string): color {
-        return segment(stageSegment[stage] ?? "garbage").color;
-    }
-
-    readonly property color freeColor: Colours.palette.m3primary
-    readonly property color reclaimColor: Qt.hsla(0.36, 0.6, Colours.light ? 0.26 : 0.4, 1)
-    readonly property color scheduledColor: Qt.hsla(0.08, 0.9, Colours.light ? 0.42 : 0.62, 1)
-
-    function sum(values: var): real {
-        let total = 0;
-        for (const key in values)
-            total += values[key] ?? 0;
-        return total;
+    function current(key: string): real {
+        if (key === "free")
+            return free;
+        return segment(key)?.bytes ?? 0;
     }
 
     function valueOf(point: var, key: string): real {
         if (key === "free")
             return point.free ?? 0;
-        if (key === "swap")
-            return point.swap ?? 0;
-        if (key === "system_files")
-            return point.system ?? point.system_files ?? 0;
-        if (key === "held")
-            return point.held ?? 0;
-        if (key === "measuring")
-            return Math.max(0, point.measuring ?? 0);
-        if (key === "unaccounted")
-            return Math.max(0, point.unaccounted ?? 0);
-        if (key === "reserved")
-            return point.reserved ?? (ledger.disk ?? ({})).reserved ?? 0;
-        const files = point.files;
-        if (key === "home_files")
-            return typeof files === "number" ? files : (files ?? ({})).home ?? 0;
-        if (key === "caches")
-            return typeof files === "object" && files ? files.caches ?? 0 : 0;
-        const store = point.store_disk ?? point.store ?? ({});
-        if (key === "system_generations" && !("system_generations" in store))
-            return store.generations ?? 0;
-        return store[key] ?? 0;
+        return (point.segments ?? ({}))[key] ?? 0;
     }
 
-    function current(key: string): real {
-        return valueOf(ledger, key);
+    function scheduledBytes(key: string): real {
+        return segment(key)?.scheduled ?? 0;
     }
 
-    readonly property real accounted: segments.reduce((acc, item) => acc + current(item.key), 0) + free
-    readonly property real total: Math.max(1, accounted)
+    function scheduledFraction(key: string): real {
+        const value = current(key);
+        return value > 0 ? Math.min(1, scheduledBytes(key) / value) : 0;
+    }
+
+    function rows(id: string): var {
+        return nodes[id] ?? null;
+    }
+
+    function watch(ids: var): void {
+        drill = ids.filter((id, index) => id && ids.indexOf(id) === index);
+    }
+
+    function subscribe(): void {
+        if (!socket.connected)
+            return;
+        socket.write(JSON.stringify({ watch: watches }) + "\n");
+        socket.flush();
+    }
+
+    function receive(text: string): void {
+        let message;
+        try {
+            message = JSON.parse(text);
+        } catch (e) {
+            return;
+        }
+        if (paused && (!drill.includes(message.id) || message.id in nodes)) {
+            held[message.id] = message;
+            return;
+        }
+        apply(message);
+    }
+
+    function apply(message: var): void {
+        receivedAt = Date.now() / 1000;
+        if (message.id === "overview") {
+            overview = message.data;
+            streamed = true;
+        }
+        else if (message.id === "history")
+            historyData = message.data;
+        else if (message.id === "events")
+            events = message.data;
+        else if (message.id === "tracker")
+            tracker = message.data;
+        else {
+            const copy = {};
+            for (const id in nodes)
+                if (paused || drill.includes(id))
+                    copy[id] = nodes[id];
+            copy[message.id] = message.data;
+            nodes = copy;
+        }
+    }
+
+    function setPaused(value: bool): void {
+        paused = value;
+        if (value)
+            return;
+        const buffered = held;
+        held = {};
+        const kept = {};
+        for (const id of drill)
+            if (id in nodes)
+                kept[id] = nodes[id];
+        nodes = kept;
+        for (const id in buffered)
+            if (["overview", "history", "events", "tracker"].includes(id) || drill.includes(id))
+                apply(buffered[id]);
+    }
 
     function gib(bytes: real): string {
         const value = bytes / 1073741824;
-        if (value >= 10)
+        if (Math.abs(value) >= 10)
             return `${value.toFixed(0)} GiB`;
-        if (value >= 0.1)
+        if (Math.abs(value) >= 0.1)
             return `${value.toFixed(1)} GiB`;
-        return `${Math.round(bytes / 1048576)} MiB`;
+        if (Math.abs(bytes) >= 1048576)
+            return `${Math.round(bytes / 1048576)} MiB`;
+        return `${Math.round(bytes / 1024)} KiB`;
     }
 
     function ago(seconds: real): string {
         if (!seconds)
             return "";
         const delta = Math.max(0, Date.now() / 1000 - seconds);
+        if (delta < 60)
+            return "just now";
         if (delta < 3600)
             return `${Math.round(delta / 60)} min ago`;
         if (delta < 86400)
@@ -196,6 +242,10 @@ Item {
             Quickshell.execDetached(["xdg-open", path]);
     }
 
+    function focusWindow(pid: int): void {
+        Quickshell.execDetached(["hyprctl", "dispatch", "focuswindow", `pid:${pid}`]);
+    }
+
     function setTarget(gib: int): void {
         const value = Math.max(5, Math.min(200, gib));
         targetOverride = String(value);
@@ -210,35 +260,55 @@ Item {
         return Qt.hsla(base.hslHue, Math.max(0.08, base.hslSaturation - fade), base.hslLightness + (Colours.light ? fade : -fade), 1);
     }
 
+    onWatchesChanged: subscribe()
+
+    Socket {
+        id: socket
+
+        path: `${root.runtimeDir}/disk-tree.sock`
+        connected: true
+        parser: SplitParser {
+            onRead: data => root.receive(data)
+        }
+        onConnectionStateChanged: {
+            if (connected) {
+                root.subscribe();
+            } else {
+                root.streamed = false;
+                retry.start();
+            }
+        }
+        onError: retry.start()
+    }
+
+    Timer {
+        id: retry
+
+        interval: 2000
+        onTriggered: socket.connected = true
+    }
+
+    FileView {
+        path: root.streamed || root.paused ? "" : `${root.runtimeDir}/disk-ledger.json`
+        watchChanges: true
+        printErrors: false
+        onFileChanged: reload()
+        onLoaded: {
+            try {
+                const data = JSON.parse(text());
+                root.overview = data;
+                root.historyData = { points: data.history ?? [], items: ({}) };
+                root.events = data.events ?? [];
+                root.receivedAt = data.at ?? 0;
+            } catch (e) {}
+        }
+    }
+
     FileView {
         path: root.targetPath
         watchChanges: true
         printErrors: false
         onFileChanged: reload()
         onLoaded: root.targetOverride = text().trim()
-    }
-
-    FileView {
-        path: `${Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000"}/disk-pressure.json`
-        watchChanges: true
-        printErrors: false
-        onFileChanged: reload()
-        onLoaded: {
-            try {
-                root.pressure = JSON.parse(text());
-            } catch (e) {}
-        }
-    }
-
-    FileView {
-        path: `${Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000"}/disk-ledger.json`
-        watchChanges: true
-        printErrors: false
-        onFileChanged: reload()
-        onLoaded: {
-            try {
-                root.ledger = JSON.parse(text());
-            } catch (e) {}
-        }
     }
 }

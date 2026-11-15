@@ -127,7 +127,7 @@ case "$action" in
       done
     fi
     if [ -s "$record/artefacts" ]; then
-      echo "recorded here: $(wc -l < "$record/artefacts") artefact paths (project-scratch-clean reclaims them)"
+      echo "recorded here: $(wc -l < "$record/artefacts") artefact paths (the disk ledger reclaims them)"
     fi
     builderState
     exit 0 ;;

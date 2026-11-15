@@ -12,18 +12,20 @@ Item {
     required property var rows
     property var hovered: null
     property real capacity: 0
+    property bool ordered: false
     readonly property real minSlice: 3
     signal clicked(var row)
     signal rightClicked(var row)
 
-    readonly property bool timed: (root.rows ?? []).length > 0 && root.rows.every(row => row.last_used > 0)
+    readonly property bool timed: !root.ordered && (root.rows ?? []).length > 0 && root.rows.every(row => row.last_used > 0)
     readonly property real barHeight: 28
     readonly property real axisHeight: timed ? 14 : 0
 
     readonly property var slices: {
         const list = root.rows.filter(row => row.size > 0);
         const timed = root.timed;
-        list.sort((a, b) => timed ? a.last_used - b.last_used : b.size - a.size);
+        if (!root.ordered)
+            list.sort((a, b) => timed ? a.last_used - b.last_used : b.size - a.size);
         const used = list.reduce((acc, item) => acc + item.size, 0);
         const total = Math.max(1, used, root.capacity);
         const minShare = root.minSlice / Math.max(1, root.width);
@@ -192,14 +194,29 @@ Item {
                     lineWidth: 2
                 }
 
-                StyledText {
+                Row {
                     anchors.centerIn: parent
-                    visible: slice.width > implicitWidth + 10
-                    text: `${slice.modelData.label} ${root.model.gib(slice.modelData.size)}`
-                    font: Tokens.font.body.small
-                    color: Colours.palette.m3onSurface
-                    elide: Text.ElideRight
-                    width: Math.min(implicitWidth, slice.width - 8)
+                    visible: slice.width > amount.implicitWidth + 8
+                    spacing: 4
+
+                    StyledText {
+                        readonly property real room: slice.width - 12 - amount.implicitWidth
+
+                        visible: room > 24
+                        text: slice.modelData.label
+                        font: Tokens.font.body.small
+                        color: Colours.palette.m3onSurface
+                        elide: /^[~/]/.test(slice.modelData.label) ? Text.ElideLeft : Text.ElideRight
+                        width: Math.min(implicitWidth, room)
+                    }
+
+                    StyledText {
+                        id: amount
+
+                        text: root.model.gib(slice.modelData.size)
+                        font: Tokens.font.body.small
+                        color: Colours.palette.m3onSurface
+                    }
                 }
 
                 MouseArea {

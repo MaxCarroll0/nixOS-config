@@ -13,15 +13,25 @@ Item {
     id: root
 
     property var trail: []
-    property var entries: []
-    property bool loading: false
     readonly property var node: trail.length ? trail[trail.length - 1] : null
     readonly property real paneWidth: 1160
     readonly property real chartHeight: 150
-    readonly property var rootRows: ledger.segments.map(segment => segmentNode(segment)).filter(item => item.size > 0)
+    readonly property var rootRows: ledger.segments.filter(segment => segment.bytes > 0).map(segment => segmentNode(segment))
     property var range: null
+    property var bounds: null
     property var focusEvent: null
-    readonly property var focusNode: !root.node ? null : (root.node.kind === "segment" || root.node.path) ? root.node : root.trail[0]
+    readonly property var focusNode: !root.node ? null : root.node
+    readonly property string focusSegment: root.trail.length ? root.trail[0].segment : ""
+    readonly property var nodeRows: root.node ? ledger.rows(root.node.id) : null
+    readonly property bool loading: root.node !== null && root.nodeRows === null && !root.focusEvent
+    readonly property var entries: {
+        if (root.focusEvent)
+            return root.takenRows(root.focusEvent);
+        if (!root.node)
+            return root.rootRows;
+        const color = root.trail[0].color;
+        return (root.nodeRows ?? []).filter(row => !row.missing).map(row => Object.assign({}, row, { color: color, segment: root.focusSegment }));
+    }
     readonly property var span: {
         if (root.range !== null)
             return root.range;
@@ -47,18 +57,12 @@ Item {
         const out = [];
         for (const event of ledger.events) {
             const last = out.length ? out[out.length - 1] : null;
-            const freed = Math.max(0, event.freed ?? 0);
-            if (last && event.at - last.at < 900) {
+            if (last && event.at - last.at < 900)
                 last.events.push(event);
-                last.freed += freed;
-                last.seconds += event.seconds ?? 0;
-                last.items += event.items ?? 0;
-                last.failed = last.failed || event.status !== 0;
-                last.taken = Object.assign(last.taken, event.taken ?? ({}));
-            } else
-                out.push({ run: true, at: event.at, events: [event], freed: freed, seconds: event.seconds ?? 0, items: event.items ?? 0, failed: event.status !== 0, taken: Object.assign({}, event.taken ?? ({})), free_gib: event.free_gib ?? 0 });
+            else
+                out.push({ events: [event] });
         }
-        return out;
+        return out.map(group => root.runFrom(group.events));
     }
 
     function runFrom(events: var): var {
@@ -73,32 +77,22 @@ Item {
         return run;
     }
 
-    function runOf(event: var): var {
-        return root.runs.find(run => run.events.includes(event)) ?? null;
+    function segmentLabel(key: string): string {
+        return ledger.segment(key)?.label ?? key;
     }
 
-    function focused(event: var): bool {
-        return root.focusEvent !== null && root.focusEvent.events.includes(event);
+    function segmentColor(key: string): color {
+        return ledger.swatches[key] ?? Colours.palette.m3outline;
     }
 
     function runLabel(run: var): string {
         const names = [];
         for (const event of run.events) {
-            const name = ledger.stageName(event.stage);
+            const name = root.segmentLabel(event.segment);
             if (!names.includes(name))
                 names.push(name);
         }
         return names.join(", ");
-    }
-
-    function runAmount(run: var): var {
-        let total = null;
-        for (const event of run.events) {
-            const amount = root.eventAmount(event);
-            if (amount !== null)
-                total = (total ?? 0) + amount;
-        }
-        return total;
     }
 
     function timeText(seconds: real): string {
@@ -151,17 +145,39 @@ Item {
         root.range = [Math.min(from, to - 60), Math.max(to, from + 60)];
     }
 
+    function parseGib(text: string): real {
+        const value = parseFloat(text.trim());
+        return isNaN(value) ? NaN : value * 1073741824;
+    }
+
+    function setBounds(low: real, high: real): void {
+        if (isNaN(low) || isNaN(high) || high <= low)
+            return;
+        root.bounds = [Math.max(0, low), high];
+    }
+
+    function gibText(bytes: real): string {
+        return String(Math.round(bytes / 1073741824 * 10) / 10);
+    }
+
     function nodeValue(point: var, node: var): real {
-        if (node.kind === "segment")
+        if (node.id.startsWith("segment:"))
             return ledger.valueOf(point, node.segment);
-        const group = ({ home_files: "home", caches: "caches", system_files: "system", held: "held", deployed: "deployed", shells: "shells", building: "building", other: "other", project_tier1: "projects", project_tier2: "projects", fetched: "projects", system_generations: "generations", home_generations: "generations" })[root.trail.length ? root.trail[0].segment : ""];
-        const items = (root.historyItems[point.at] ?? ({}))[group];
-        if (!node.path || typeof items !== "object")
+        const items = (ledger.historyItems[point.at] ?? ({}))[root.focusSegment];
+        if (typeof items !== "object")
             return NaN;
-        if (node.path in items)
-            return items[node.path];
         let total = 0;
         let found = false;
+        if (!node.path) {
+            for (const row of node === root.node ? (root.nodeRows ?? []) : [])
+                if (row.path && row.path in items) {
+                    total += items[row.path];
+                    found = true;
+                }
+            return found ? total : NaN;
+        }
+        if (node.path in items)
+            return items[node.path];
         for (const path in items)
             if (path.startsWith(node.path + "/")) {
                 total += items[path];
@@ -174,11 +190,9 @@ Item {
         const focus = root.focusNode;
         if (!focus)
             return Math.max(0, event.freed ?? 0);
+        if (focus.id.startsWith("segment:"))
+            return event.segment === focus.segment ? Math.max(0, event.freed ?? 0) : null;
         const taken = event.taken ?? ({});
-        if (focus.kind === "segment") {
-            const stages = Object.keys(ledger.stageSegment).filter(stage => ledger.stageSegment[stage] === focus.segment || ((focus.segment.startsWith("project") || focus.segment === "fetched") && stage === "projects"));
-            return stages.includes(event.stage) ? Math.max(0, event.freed ?? 0) : null;
-        }
         let total = 0;
         let any = false;
         for (const key in taken) {
@@ -190,184 +204,48 @@ Item {
         return any ? total : null;
     }
 
-    property var historyItems: ({})
-
-    FileView {
-        path: root.trail.length > 0 ? `${ledger.runtimeDir}/disk-history-items.json` : ""
-        watchChanges: true
-        printErrors: false
-        blockLoading: false
-        onFileChanged: reload()
-        onLoaded: {
-            try {
-                root.historyItems = JSON.parse(text());
-            } catch (e) {}
-            history.requestPaint();
+    function takenRows(run: var): var {
+        const out = [];
+        for (const event of run.events) {
+            const taken = event.taken ?? ({});
+            for (const key of Object.keys(taken))
+                out.push({ id: `taken:${event.at}:${key}`, label: ledger.shortName(key), path: key, size: taken[key], last_used: 0, color: root.segmentColor(event.segment), segment: event.segment, kind: `collected ${root.segmentLabel(event.segment)}`, delvable: false, openable: false, reclaimable: true, scheduled: false });
         }
-    }
-
-    DiskLedgerModel {
-        id: ledger
-
-        onLedgerChanged: {
-            history.requestPaint();
-            reclaims.requestPaint();
-            Qt.callLater(root.refresh);
-        }
-        onTargetChanged: history.requestPaint()
-    }
-
-    DiskProbe {
-        id: probe
-
-        onResultsChanged: Qt.callLater(root.refresh)
-        onCurrentChanged: Qt.callLater(root.refresh)
-    }
-
-    function scheduledFor(path: string): bool {
-        return ledger.queue.some((row, index) => index <= ledger.cut && (row.path === path || path.startsWith(row.path + "/")));
+        return out;
     }
 
     function segmentNode(segment: var): var {
-        const scheduled = ledger.segmentScheduled(segment.key);
-        return { id: `segment:${segment.key}`, label: segment.label, path: "", size: ledger.current(segment.key), last_used: 0, color: segment.color, kind: "segment", segment: segment.key, delvable: segment.detail !== "none" || ["system", "home"].includes(segment.key), openable: false, reclaimable: segment.reclaim, scheduled: scheduled };
+        return { id: `segment:${segment.key}`, label: segment.label, path: "", size: segment.bytes, last_used: 0, color: segment.color, kind: segment.reclaim ? `${segment.items} reclaimable items` : "segment", segment: segment.key, delvable: true, openable: false, reclaimable: segment.reclaim, scheduled: segment.scheduled > 0 };
     }
 
-    function dirNode(row: var, color: color, reclaimable: bool): var {
-        const loose = row.path.endsWith("/*");
-        return { id: `dir:${row.path}`, label: loose ? "files" : (ledger.shortName(row.path).replace(/^.*\//, "") || row.path), path: row.path, size: row.size, last_used: row.last_used ?? 0, color: color, kind: row.kind ?? "directory", delvable: !loose && !row.leaf, openable: !loose && !row.leaf, reclaimable: reclaimable, scheduled: reclaimable && scheduledFor(row.path) };
-    }
-
-    function closureNode(row: var, color: color, label: string, kind: string, reclaimable: bool): var {
-        return { id: `closure:${row.path}`, label: label, path: row.path, size: row.size, last_used: row.last_used ?? 0, color: color, kind: kind, delvable: true, openable: false, reclaimable: reclaimable, scheduled: reclaimable && scheduledFor(row.path), roots: row.roots ?? [] };
-    }
-
-    function childrenOf(node: var): var {
-        const prov = ledger.provenance;
-        const color = node.color;
-        if (node.kind === "segment") {
-            switch (node.segment) {
-            case "home_files":
-                return (prov.home ?? []).map(row => dirNode(row, color, false));
-            case "caches":
-                return (prov.caches ?? []).map(row => dirNode(row, color, true));
-            case "system_files":
-                return (prov.system ?? []).map(row => dirNode(row, color, false));
-            case "building":
-                return (prov.building ?? []).map(row => dirNode(row, color, false));
-            case "held":
-                return (prov.held ?? []).map(row => ({ id: `held:${row.inode ?? row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: `deleted, held ${row.how ?? "open"} by ${row.holders.join(", ")}`, delvable: false, openable: false, reclaimable: false, scheduled: false }));
-            case "system_generations":
-            case "home_generations":
-                return (prov.generations ?? []).filter(row => row.profile.startsWith("system") === (node.segment === "system_generations")).map(row => Object.assign(closureNode(row, color, `${row.profile.replace(/.*\//, "")} ${row.number || ""}`.trim(), `generation, ${ledger.clock(row.last_used)}${row.expiring ? ", expiring" : ""}`, row.number > 0)));
-            case "deployed":
-                return (prov.deployed ?? []).map(row => closureNode(row, color, row.path.replace(/.*\//, ""), `deployed ${ledger.ago(row.last_used)}`, true));
-            case "shells":
-                return (prov.shells ?? []).map(row => closureNode(row, color, row.path.replace(/.*nix-shell-roots\//, "shell "), "live shell root", false));
-            case "other":
-                return probed(node, "file", ledger.segmentFile("other"), rows => groupByName(rows, color, prov.other ?? []));
-            case "system":
-                return [closureNode({ path: "/run/current-system", size: node.size, last_used: 0 }, color, "current system", "closure", false)];
-            case "home":
-                return [closureNode({ path: `${ledger.home}/.local/state/nix/profiles/home-manager`, size: node.size, last_used: 0 }, color, "home-manager profile", "closure", false)];
-            case "project_tier1":
-            case "project_tier2":
-            case "fetched": {
-                const tier = { project_tier1: "1", project_tier2: "2", fetched: "3" }[node.segment];
-                return (prov.projects ?? []).filter(row => (row.tiers ?? ({}))[tier] > 0).map(row => ({ id: `project:${row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.tiers[tier], last_used: row.last_used, color: color, kind: `project, built ${ledger.ago(row.last_built)}`, delvable: true, openable: true, reclaimable: true, scheduled: scheduledFor(row.path), roots: row.roots, file: row.file ?? "", tier: parseInt(tier) }));
-            }
-            case "garbage":
-                return probed(node, "dead", ledger.deadFile, rows => groupByDay(rows, color));
-            default:
-                return [];
-            }
-        }
-        if (node.id.startsWith("project:"))
-            return probed(node, "file", node.file, rows => rows.filter(row => row.tier === node.tier).map(row => ({ id: `path:${row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: row.kind, delvable: false, openable: false, reclaimable: true, scheduled: node.scheduled })));
-        if (node.id.startsWith("group:"))
-            return node.members;
-        if (node.id.startsWith("day:"))
-            return node.rows.map(row => ({ id: `dead:${row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: "dead path", delvable: false, openable: false, reclaimable: true, scheduled: node.scheduled }));
-        if (node.id.startsWith("closure:"))
-            return probed(node, "closure", node.path, rows => rows.map(row => ({ id: `path:${row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: "store path", delvable: false, openable: false, reclaimable: node.reclaimable, scheduled: node.scheduled })), root.trail.length ? ledger.segmentFile(root.trail[0].segment ?? "") : "");
-        if (node.id.startsWith("dir:"))
-            return probed(node, "dir", node.path, rows => rows.map(row => dirNode(row, color, node.reclaimable)));
-        return [];
-    }
-
-    function probed(node: var, kind: string, path: string, build: var, extra: string): var {
-        if (!probe.has(node.id)) {
-            probe.request(node.id, kind, path, extra ?? "");
-            return null;
-        }
-        return build(probe.results[node.id]);
-    }
-
-    function groupByName(rows: var, color: color, rooted: var): var {
-        const roots = {};
-        for (const row of rooted)
-            roots[row.path] = row.roots ?? [];
-        const pathNode = row => ({ id: `path:${row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: roots[row.path] ? (roots[row.path].length === 1 ? `held by ${ledger.shortName(roots[row.path][0])}` : `held by ${roots[row.path].length} roots`) : "live store path", delvable: false, openable: false, reclaimable: false, scheduled: false });
-        const groups = {};
-        for (const row of rows) {
-            const name = ledger.shortName(row.path).replace(/-[0-9].*$/, "").replace(/\.(drv|patch|tar\.\w+|zip)$/, "");
-            const group = groups[name] ?? (groups[name] = { id: `group:other:${name}`, label: name, path: "", size: 0, last_used: 0, color: color, delvable: true, openable: false, reclaimable: false, scheduled: false, members: [] });
-            group.size += row.size;
-            group.last_used = Math.max(group.last_used, row.last_used);
-            group.members.push(pathNode(row));
-        }
-        return Object.values(groups).map(group => {
-            if (group.members.length === 1)
-                return group.members[0];
-            group.members.sort((a, b) => b.size - a.size);
-            group.kind = `${group.members.length} paths`;
-            return group;
-        });
-    }
-
-    function groupByDay(rows: var, color: color): var {
-        const next = new Set(ledger.queue.filter((row, index) => index <= ledger.cut && row.stage === "store").map(row => row.path));
-        const days = {};
-        for (const row of rows) {
-            const day = Qt.formatDateTime(new Date(row.last_used * 1000), "yyyy-MM-dd");
-            const scheduled = next.has(row.path);
-            const key = scheduled ? `${day} next` : day;
-            const group = days[key] ?? (days[key] = { id: `day:${key}`, label: scheduled ? `${day}, next collection` : day, path: "", size: 0, last_used: row.last_used, color: color, kind: "day", delvable: true, openable: false, reclaimable: true, scheduled: scheduled, rows: [] });
-            group.size += row.size;
-            group.rows.push(row);
-        }
-        return Object.values(days).map(group => Object.assign(group, { kind: `${group.rows.length} dead paths`, extra: group.rows.slice().sort((a, b) => b.size - a.size).slice(0, 3).map(row => ["", `${ledger.shortName(row.path)} ${ledger.gib(row.size)}`]) }));
-    }
-
-    function refresh(): void {
-        const node = root.trail.length ? root.trail[root.trail.length - 1] : null;
-        if (root.focusEvent) {
-            const entries = [];
-            for (const event of root.focusEvent.events) {
-                const taken = event.taken ?? ({});
-                const color = ledger.stageColor(event.stage);
-                for (const key of Object.keys(taken))
-                    entries.push({ id: `taken:${event.stage}:${key}`, label: key.match(/^\d{4}-\d{2}-\d{2}$/) ? key : ledger.shortName(key).replace(/^.*\//, "") || key, path: key.startsWith("/") ? key : "", size: taken[key], last_used: 0, color: color, kind: ledger.stageName(event.stage), delvable: false, openable: key.startsWith("/") && !key.startsWith("/nix/store/"), reclaimable: true, scheduled: false });
-            }
-            root.entries = entries;
-            root.loading = false;
-            return;
-        }
-        if (!node) {
-            root.entries = root.rootRows;
-            root.loading = false;
-            return;
-        }
-        const rows = childrenOf(node);
-        root.loading = rows === null || probe.measuring(node.id);
-        root.entries = rows ?? [];
+    function pick(key: string): void {
+        const segment = ledger.segment(key);
+        if (segment)
+            root.trail = [root.segmentNode(segment)];
     }
 
     function delve(row: var): void {
         if (row.delvable)
             root.trail = root.trail.concat([row]);
+        else if (row.pid)
+            ledger.focusWindow(row.pid);
         else if (row.openable)
             ledger.open(row.path);
+    }
+
+    function repaint(): void {
+        history.requestPaint();
+        reclaims.requestPaint();
+    }
+
+    DiskLedgerModel {
+        id: ledger
+
+        drill: root.trail.map(node => node.id)
+        onHistoryChanged: root.repaint()
+        onEventsChanged: root.repaint()
+        onOverviewChanged: root.repaint()
+        onTargetChanged: history.requestPaint()
     }
 
     onTrailChanged: {
@@ -375,21 +253,16 @@ Item {
         slices.hovered = null;
         if (root.trail.length)
             root.focusEvent = null;
-        refresh();
-        history.requestPaint();
-        reclaims.requestPaint();
+        root.bounds = null;
+        root.repaint();
     }
-    onRangeChanged: {
-        history.requestPaint();
-        reclaims.requestPaint();
-    }
+    onRangeChanged: root.repaint()
+    onBoundsChanged: root.repaint()
     onFocusEventChanged: {
         if (root.focusEvent)
             root.trail = [];
-        refresh();
         reclaims.requestPaint();
     }
-    Component.onCompleted: refresh()
 
     implicitWidth: layout.implicitWidth + Tokens.padding.large * 2
     implicitHeight: layout.implicitHeight + Tokens.padding.large * 2
@@ -408,21 +281,28 @@ Item {
             StyledText {
                 text: ledger.loaded ? `${ledger.gib(ledger.free)} free of ${ledger.gib(ledger.diskTotal)}` : "No ledger yet"
                 font: Tokens.font.title.medium
-                color: ledger.deficit > 0 ? Colours.palette.m3error : ledger.freeColor
+                color: ledger.deficit > 0 ? Colours.palette.m3error : Colours.palette.m3onSurface
             }
 
             StyledText {
                 visible: ledger.collecting
-                text: `collecting: ${ledger.collectingStage} ${Qt.formatDateTime(new Date(ledger.collectingSince * 1000), "HH:mm")}`
+                text: `collecting ${ledger.collectingStage}`
                 font: Tokens.font.body.medium
                 color: Colours.palette.m3tertiary
             }
 
+            IconButton {
+                visible: ledger.loaded
+                icon: ledger.paused ? "play_arrow" : "pause"
+                type: IconButton.Text
+                onClicked: ledger.setPaused(!ledger.paused)
+            }
+
             StyledText {
                 visible: ledger.loaded
-                text: ledger.clock(ledger.updated.getTime() / 1000)
+                text: ledger.paused ? `snapshot of ${ledger.clock(ledger.updated.getTime() / 1000)}` : ledger.live ? "live" : `file from ${ledger.clock(ledger.updated.getTime() / 1000)}`
                 font: Tokens.font.body.small
-                color: Colours.palette.m3onSurfaceVariant
+                color: ledger.paused ? Colours.palette.m3tertiary : Colours.palette.m3onSurfaceVariant
             }
 
             Item {
@@ -441,9 +321,36 @@ Item {
                 onClicked: ledger.setTarget(ledger.targetGib - 5)
             }
 
-            StyledText {
-                text: `${ledger.targetGib} GiB`
+            StyledTextField {
+                id: targetField
+
+                Layout.preferredWidth: 44
+                verticalPadding: 2
+                horizontalPadding: 6
+                radius: 4
+                horizontalAlignment: TextInput.AlignRight
                 font: Tokens.font.body.builders.medium.weight(Font.DemiBold).build()
+                color: Colours.palette.m3error
+                validator: IntValidator {
+                    bottom: 5
+                    top: 200
+                }
+                text: String(ledger.targetGib)
+                onAccepted: ledger.setTarget(parseInt(text))
+                onActiveFocusChanged: if (!activeFocus) text = String(ledger.targetGib)
+
+                Connections {
+                    target: ledger
+                    function onTargetGibChanged(): void {
+                        if (!targetField.activeFocus)
+                            targetField.text = String(ledger.targetGib);
+                    }
+                }
+            }
+
+            StyledText {
+                text: "GiB"
+                font: Tokens.font.body.medium
                 color: Colours.palette.m3error
             }
 
@@ -462,7 +369,7 @@ Item {
             Layout.bottomMargin: 16
             model: ledger
             selected: root.trail.length ? root.trail[0].segment ?? "" : ""
-            onPicked: key => root.trail = [root.segmentNode(ledger.segment(key))]
+            onPicked: key => root.pick(key)
         }
 
         Flow {
@@ -470,7 +377,7 @@ Item {
             spacing: Tokens.spacing.medium
 
             Repeater {
-                model: ledger.segments
+                model: ledger.segments.filter(segment => segment.bytes > 0)
 
                 delegate: Item {
                     id: legend
@@ -507,7 +414,7 @@ Item {
                         }
 
                         Outline {
-                            readonly property bool scheduled: ledger.segmentScheduled(legend.modelData.key)
+                            readonly property bool scheduled: legend.modelData.scheduled > 0
 
                             visible: legend.modelData.reclaim
                             dashed: !scheduled
@@ -520,7 +427,7 @@ Item {
                     StyledText {
                         id: legendText
 
-                        text: `${legend.modelData.label} ${ledger.gib(ledger.current(legend.modelData.key))}`
+                        text: `${legend.modelData.label} ${ledger.gib(legend.modelData.bytes)}`
                         font: legend.lit ? Tokens.font.body.builders.small.weight(Font.DemiBold).build() : Tokens.font.body.small
                         color: legend.lit ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant
                     }
@@ -539,7 +446,7 @@ Item {
             }
 
             Repeater {
-                model: [{ label: "can be reclaimed", scheduled: false }, { label: "next collection", scheduled: true }]
+                model: [{ label: `free ${ledger.gib(ledger.free)}`, scheduled: false, free: true }, { label: "can be reclaimed", scheduled: false, free: false }, { label: "next collection", scheduled: true, free: false }]
 
                 delegate: Row {
                     id: key
@@ -560,10 +467,10 @@ Item {
                         }
 
                         Outline {
-                            dashed: !key.modelData.scheduled
-                            hatched: key.modelData.scheduled
-                            color: key.modelData.scheduled ? ledger.scheduledColor : ledger.reclaimColor
-                            lineWidth: key.modelData.scheduled ? 2 : 1.5
+                            dashed: !key.modelData.scheduled && !key.modelData.free
+                            hatched: key.modelData.scheduled || key.modelData.free
+                            color: key.modelData.free ? ledger.hatchColor : key.modelData.scheduled ? ledger.scheduledColor : ledger.reclaimColor
+                            lineWidth: key.modelData.scheduled ? 2 : key.modelData.free ? 1 : 1.5
                         }
                     }
 
@@ -628,7 +535,11 @@ Item {
                     }
 
                     StyledText {
-                        text: `${crumb.modelData.label} ${ledger.gib(crumb.modelData.size)}`
+                        readonly property bool middle: crumb.index > 0 && crumb.index < root.trail.length - 1
+                        readonly property int room: Math.max(6, Math.floor((root.paneWidth - 760) / Math.max(1, root.trail.length - 2) / 8))
+                        readonly property string name: crumb.modelData.label
+
+                        text: !middle ? `${name} ${ledger.gib(crumb.modelData.size)}` : name.length > room ? name.slice(0, room - 1) + "…" : name
                         font: crumb.index === root.trail.length - 1 ? Tokens.font.title.small : Tokens.font.body.medium
                         color: Colours.palette.m3primary
 
@@ -660,7 +571,7 @@ Item {
 
             StyledText {
                 visible: root.loading
-                text: "measuring…"
+                text: "loading…"
                 font: Tokens.font.body.medium
                 color: Colours.palette.m3tertiary
             }
@@ -670,6 +581,7 @@ Item {
             id: slices
 
             capacity: root.node && !root.focusEvent ? root.node.size : 0
+            ordered: root.node === null && !root.focusEvent
 
             Layout.preferredWidth: root.paneWidth
             model: ledger
@@ -709,6 +621,79 @@ Item {
 
                     Item {
                         Layout.fillWidth: true
+                    }
+
+                    StyledTextField {
+                        id: lowField
+
+                        Layout.preferredWidth: 48
+                        verticalPadding: 2
+                        horizontalPadding: 6
+                        radius: 4
+                        horizontalAlignment: TextInput.AlignRight
+                        font: Tokens.font.body.small
+                        text: root.gibText(history.axis[0])
+                        onAccepted: root.setBounds(root.parseGib(text), history.axis[1])
+                        onActiveFocusChanged: if (!activeFocus) text = root.gibText(history.axis[0])
+
+                        Connections {
+                            target: history
+                            function onAxisChanged(): void {
+                                if (!lowField.activeFocus)
+                                    lowField.text = root.gibText(history.axis[0]);
+                            }
+                        }
+                    }
+
+                    StyledText {
+                        text: "–"
+                        font: Tokens.font.body.small
+                        color: Colours.palette.m3onSurfaceVariant
+                    }
+
+                    StyledTextField {
+                        id: highField
+
+                        Layout.preferredWidth: 48
+                        verticalPadding: 2
+                        horizontalPadding: 6
+                        radius: 4
+                        horizontalAlignment: TextInput.AlignRight
+                        font: Tokens.font.body.small
+                        text: root.gibText(history.axis[1])
+                        onAccepted: root.setBounds(history.axis[0], root.parseGib(text))
+                        onActiveFocusChanged: if (!activeFocus) text = root.gibText(history.axis[1])
+
+                        Connections {
+                            target: history
+                            function onAxisChanged(): void {
+                                if (!highField.activeFocus)
+                                    highField.text = root.gibText(history.axis[1]);
+                            }
+                        }
+                    }
+
+                    StyledText {
+                        text: "GiB"
+                        font: Tokens.font.body.small
+                        color: Colours.palette.m3onSurfaceVariant
+                    }
+
+                    StyledText {
+                        visible: root.bounds !== null
+                        text: "auto"
+                        font: Tokens.font.body.small
+                        color: Colours.palette.m3primary
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.bounds = null
+                        }
+                    }
+
+                    Item {
+                        Layout.preferredWidth: 12
                     }
 
                     StyledTextField {
@@ -854,6 +839,7 @@ Item {
                         }
                     }
 
+                    property var axis: [0, 1]
                     readonly property real plotLeft: 40
                     readonly property real plotBottom: height - 16
                     readonly property real plotWidth: width - plotLeft - 4
@@ -867,7 +853,7 @@ Item {
                         const ctx = getContext("2d");
                         ctx.reset();
                         const focus = root.focusNode;
-                        const points = focus && focus.kind !== "segment" ? root.visiblePoints.filter(point => isFinite(root.nodeValue(point, focus))) : root.visiblePoints;
+                        const points = focus && !focus.id.startsWith("segment:") ? root.visiblePoints.filter(point => isFinite(root.nodeValue(point, focus))) : root.visiblePoints;
                         history.layout = null;
                         if (points.length < 2) {
                             if (focus) {
@@ -884,8 +870,15 @@ Item {
                         const x = at => plotLeft + plotWidth * (at - first) / spanSeconds;
                         const series = focus ? [focus] : ledger.segments;
                         const valueFor = (point, item) => focus ? root.nodeValue(point, focus) : ledger.valueOf(point, item.key);
-                        const top = focus ? Math.max(1, ...points.map(point => valueFor(point, focus))) * 1.1 : ledger.diskTotal;
-                        const y = bytes => plotBottom - plotHeight * bytes / top;
+                        const auto = focus ? Math.max(1, ...points.map(point => valueFor(point, focus))) * 1.1 : ledger.diskTotal;
+                        const [low, top] = root.bounds ?? [0, auto];
+                        if (history.axis[0] !== low || history.axis[1] !== top)
+                            history.axis = [low, top];
+                        const y = bytes => plotBottom - plotHeight * (bytes - low) / (top - low);
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.rect(plotLeft, 4, plotWidth, plotHeight);
+                        ctx.clip();
                         const base = points.map(() => 0);
                         const bands = [];
                         for (const item of series) {
@@ -930,7 +923,7 @@ Item {
                                 ctx.lineTo(x(points[i].at), y(base[i] + (points[i].free ?? 0)));
                             ctx.closePath();
                             ctx.clip();
-                            ctx.strokeStyle = "white";
+                            ctx.strokeStyle = ledger.hatchColor;
                             ctx.globalAlpha = 0.7;
                             for (let cx = plotLeft - plotHeight; cx < plotLeft + plotWidth; cx += 7) {
                                 ctx.beginPath();
@@ -939,14 +932,16 @@ Item {
                                 ctx.stroke();
                             }
                             ctx.restore();
-                            const targetLine = y(top - ledger.target);
+                            const targetLine = y(ledger.diskTotal - ledger.target);
                             ctx.strokeStyle = Colours.palette.m3error;
-                            ctx.setLineDash([4, 4]);
+                            ctx.lineWidth = 2;
+                            ctx.setLineDash([5, 4]);
                             ctx.beginPath();
                             ctx.moveTo(plotLeft, targetLine);
                             ctx.lineTo(plotLeft + plotWidth, targetLine);
                             ctx.stroke();
                             ctx.setLineDash([]);
+                            ctx.lineWidth = 1;
                         }
                         history.runXs = [];
                         for (const run of root.runs) {
@@ -986,11 +981,12 @@ Item {
                             ctx.fillRect(Math.min(history.dragFrom, history.dragTo), 4, Math.abs(history.dragTo - history.dragFrom), plotBottom - 4);
                             ctx.globalAlpha = 1;
                         }
+                        ctx.restore();
                         ctx.fillStyle = Colours.palette.m3onSurfaceVariant;
                         ctx.font = "10px sans-serif";
                         ctx.textAlign = "right";
                         for (let step = 0; step <= 4; step++) {
-                            const bytes = top * step / 4;
+                            const bytes = low + (top - low) * step / 4;
                             ctx.fillText(ledger.gib(bytes).replace(" GiB", "G").replace(" MiB", "M"), plotLeft - 4, y(bytes) + 3);
                         }
                         const labels = Math.min(6, points.length);
@@ -1047,7 +1043,7 @@ Item {
                                 if (run)
                                     root.focusEvent = root.focusEvent === run ? null : run;
                                 else if (band && band.key)
-                                    root.trail = [root.segmentNode(ledger.segment(band.key))];
+                                    root.pick(band.key);
                             }
                             history.dragFrom = -1;
                             history.dragTo = -1;
@@ -1188,10 +1184,10 @@ Item {
                             if (!point)
                                 return [];
                             const focus = root.focusNode;
-                            if (focus && focus.kind !== "segment")
+                            if (focus && !focus.id.startsWith("segment:"))
                                 return [{ key: "", label: focus.label, color: Colours.palette.m3primary, size: root.nodeValue(point, focus), bold: true }];
                             const rows = ledger.segments.filter(item => !focus || item.key === focus.segment).map(item => ({ key: item.key, label: item.label, color: item.color, size: ledger.valueOf(point, item.key), bold: item.key === history.hoverKey || (focus && focus.segment === item.key) })).filter(row => row.size > 0);
-                            return focus ? rows : rows.concat([{ key: "free", label: "free", color: ledger.freeColor, size: point.free ?? 0, bold: false }]);
+                            return focus ? rows : rows.concat([{ key: "free", label: "free", color: "transparent", size: point.free ?? 0, bold: false, free: true }]);
                         }
 
                         RowLayout {
@@ -1202,10 +1198,17 @@ Item {
                             spacing: 3
 
                             Rectangle {
-                                implicitWidth: 7
-                                implicitHeight: 7
+                                implicitWidth: sliceRow.modelData.free ? 9 : 7
+                                implicitHeight: implicitWidth
                                 radius: 2
                                 color: sliceRow.modelData.color
+
+                                Outline {
+                                    visible: sliceRow.modelData.free === true
+                                    hatched: true
+                                    lineWidth: 1
+                                    color: ledger.hatchColor
+                                }
                             }
 
                             StyledText {
@@ -1250,13 +1253,8 @@ Item {
                         history.requestPaint();
                     }
 
-                    function stageKey(stage: string): string {
-                        return ledger.stageSegment[stage] ?? "garbage";
-                    }
-
-                    function stageLit(stage: string): bool {
-                        const key = reclaims.stageKey(stage);
-                        return bar.hovered === key || (root.trail.length > 0 && root.trail[0].segment === key) || (stage === "projects" && (bar.hovered.startsWith("project") || bar.hovered === "fetched"));
+                    function stageLit(key: string): bool {
+                        return bar.hovered === key || root.focusSegment === key;
                     }
 
                     function xOf(at: real): real {
@@ -1279,14 +1277,14 @@ Item {
                         const events = ledger.events.filter(event => event.at >= first && event.at <= last).map(event => ({ event: event, amount: root.eventAmount(event) })).filter(entry => entry.amount !== null && entry.amount > 0);
                         const stages = [];
                         for (const entry of events)
-                            if (!stages.includes(entry.event.stage))
-                                stages.push(entry.event.stage);
+                            if (!stages.includes(entry.event.segment))
+                                stages.push(entry.event.segment);
                         const bins = Math.max(12, Math.min(96, Math.round(reclaims.plotWidth / 6)));
                         const binSeconds = Math.max(60, (last - first) / bins);
                         const rates = Array.from({ length: bins }, () => ({}));
                         for (const entry of events) {
                             const index = Math.min(bins - 1, Math.max(0, Math.floor((entry.event.at - first) / binSeconds)));
-                            rates[index][entry.event.stage] = (rates[index][entry.event.stage] ?? 0) + entry.amount * 3600 / binSeconds;
+                            rates[index][entry.event.segment] = (rates[index][entry.event.segment] ?? 0) + entry.amount * 3600 / binSeconds;
                         }
                         const steps = events.map(entry => ({ at: entry.event.at, event: entry.event }));
                         reclaims.points = steps.map(step => ({ x: reclaims.xOf(step.at), event: step.event }));
@@ -1315,7 +1313,7 @@ Item {
                                 const value = bin[stage] ?? 0;
                                 if (value <= 0)
                                     continue;
-                                ctx.fillStyle = ledger.stageColor(stage);
+                                ctx.fillStyle = root.segmentColor(stage);
                                 ctx.globalAlpha = !anyLit || reclaims.stageLit(stage) ? 0.85 : 0.3;
                                 ctx.fillRect(x + 0.5, y(below + value), Math.max(1, barWidth - 1), y(below) - y(below + value));
                                 below += value;
@@ -1383,7 +1381,7 @@ Item {
                             const event = nearest(mouse.x);
                             if (reclaims.hoveredEvent !== event)
                                 reclaims.hoveredEvent = event;
-                            const key = event ? reclaims.stageKey(event.stage) : "";
+                            const key = event ? event.segment : "";
                             if (bar.hovered !== key)
                                 bar.hovered = key;
                         }
@@ -1421,7 +1419,7 @@ Item {
                             path: "",
                             size: root.eventAmount(event) ?? 0,
                             last_used: event.newest ?? 0,
-                            kind: ledger.stageName(event.stage),
+                            kind: root.segmentLabel(event.segment),
                             extra: [["paths", String(event.items ?? 0)], ["duration", `${event.seconds} s`], ["free before", `${event.free_gib} GiB`]].concat(event.refused ? [["held", String(event.refused)]] : []).concat(event.status !== 0 ? [["status", "failed"]] : []).concat(taken.map(([path, size]) => ["", `${ledger.shortName(path).replace(/^.*\//, "")} ${ledger.gib(size)}`]))
                         };
                     }

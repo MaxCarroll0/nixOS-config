@@ -10,7 +10,7 @@ StyledRect {
     id: root
 
     readonly property color accent: Colours.palette.m3secondary
-    readonly property var next: ledger.queue.length > 0 ? ledger.queue[0] : null
+    readonly property var head: ledger.head
 
     color: Colours.tPalette.m3surfaceContainer
     radius: Tokens.rounding.medium
@@ -82,7 +82,7 @@ StyledRect {
             StyledText {
                 text: ledger.loaded ? `${ledger.gib(ledger.free)} free` : "no ledger yet"
                 font: Tokens.font.title.medium
-                color: ledger.deficit > 0 ? Colours.palette.m3error : ledger.freeColor
+                color: ledger.deficit > 0 ? Colours.palette.m3error : Colours.palette.m3onSurface
             }
 
             StyledText {
@@ -107,7 +107,7 @@ StyledRect {
             spacing: Tokens.spacing.medium
 
             Repeater {
-                model: ledger.segments.filter(segment => ledger.current(segment.key) > 0)
+                model: ledger.segments.filter(segment => segment.bytes > 0).concat([{ key: "free", label: "free", color: "transparent", bytes: ledger.free, free: true }])
 
                 delegate: Item {
                     id: legend
@@ -132,12 +132,19 @@ StyledRect {
                         implicitHeight: implicitWidth
                         radius: 2
                         color: legend.modelData.color
-                        border.width: legend.lit ? 1 : 0
+                        border.width: legend.lit && !legend.modelData.free ? 1 : 0
                         border.color: Colours.palette.m3onSurface
+
+                        Outline {
+                            visible: legend.modelData.free === true
+                            hatched: true
+                            lineWidth: 1
+                            color: ledger.hatchColor
+                        }
                     }
 
                     StyledText {
-                        text: `${legend.modelData.label} ${ledger.gib(ledger.current(legend.modelData.key))}`
+                        text: `${legend.modelData.label} ${ledger.gib(legend.modelData.bytes)}`
                         font: legend.lit ? Tokens.font.body.builders.small.weight(Font.DemiBold).build() : Tokens.font.body.small
                         color: legend.lit ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant
                     }
@@ -163,13 +170,13 @@ StyledRect {
 
             Repeater {
                 model: {
-                    const out = [[Qt.formatDateTime(ledger.updated, "HH:mm"), ""]];
+                    const out = [[ledger.live ? "live" : Qt.formatDateTime(ledger.updated, "HH:mm"), ""]];
                     if (ledger.collecting)
                         out.push(["collecting", ledger.collectingStage]);
                     if (ledger.deficit > 0)
                         out.push(["to target", ledger.gib(ledger.deficit)]);
-                    else if (root.next)
-                        out.push(["next", `${ledger.shortName(root.next.path)} ${ledger.ago(root.next.last_used)}`]);
+                    else if (root.head)
+                        out.push(["next", `${root.head.label} ${ledger.gib(root.head.size)}, used ${ledger.ago(root.head.last_used)}`]);
                     return out;
                 }
 

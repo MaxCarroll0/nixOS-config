@@ -1,27 +1,36 @@
 #!/usr/bin/env python3
-# Store index over the nix database plus a persistent per-path disk cache, and LRU dead-path collection.
+# Store index over the nix database, exact per-path disk use from shared-inode accounting, and dead-path deletion.
 
 import argparse
+import array
 import json
 import os
 import re
 import sqlite3
+import stat
 import subprocess
 import time
 
 GIB = 1024 ** 3
 NIX_DB = "file:/nix/var/nix/db/db.sqlite?mode=ro"
 CACHE = os.environ.get("STORE_INDEX_CACHE", "/var/lib/disk-ledger/store-index.sqlite")
+LINKS = "/nix/store/.links"
 DELETE_BATCH = 1000
 FREED = re.compile(r"(\d+) store paths deleted, ([\d.]+) (KiB|MiB|GiB) freed")
 UNITS = {"KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3}
 ALIVE = re.compile(r"[Cc]annot delete path '([^']+)'")
 STORE_PATH = re.compile(r"/nix/store/[^/\s]+")
+O_NOATIME = 0o1000000
+WALK_FLAGS = [os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | O_NOATIME]
+
+
+SETTINGS = {}
 
 
 def setting(name):
-    out = subprocess.run(["nix", "config", "show", name], capture_output=True, text=True).stdout.strip()
-    return out == "true"
+    if name not in SETTINGS:
+        SETTINGS[name] = subprocess.run(["nix", "config", "show", name], capture_output=True, text=True).stdout.strip() == "true"
+    return SETTINGS[name]
 
 
 def gc_roots():
@@ -29,48 +38,144 @@ def gc_roots():
     roots = {}
     for line in out.splitlines():
         link, _, target = line.rpartition(" -> ")
-        match = STORE_PATH.match(target)
+        link = link.strip().strip('"')
+        match = STORE_PATH.match(target.strip().strip('"'))
         if match:
             roots.setdefault(match.group(0), []).append(link)
     return roots
+
+
+def open_dir(relative, dir_fd=None):
+    try:
+        return os.open(relative, WALK_FLAGS[0], dir_fd=dir_fd)
+    except PermissionError:
+        if not WALK_FLAGS[0] & O_NOATIME:
+            raise
+        WALK_FLAGS[0] &= ~O_NOATIME
+        return os.open(relative, WALK_FLAGS[0], dir_fd=dir_fd)
+
+
+def walk(path):
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return None
+    own = 0
+    used = 0
+    shared = {}
+
+    def account(entry):
+        nonlocal own, used
+        blocks = entry.st_blocks * 512
+        if entry.st_nlink > 1 and not stat.S_ISDIR(entry.st_mode):
+            shared[entry.st_ino] = blocks
+        else:
+            own += blocks
+        if stat.S_ISREG(entry.st_mode) and entry.st_atime > used:
+            used = entry.st_atime
+
+    account(info)
+    if stat.S_ISDIR(info.st_mode):
+        try:
+            root = open_dir(path)
+        except OSError:
+            return None
+        try:
+            stack = [None]
+            while stack:
+                relative = stack.pop()
+                try:
+                    fd = os.dup(root) if relative is None else open_dir(relative, root)
+                except OSError:
+                    continue
+                try:
+                    with os.scandir(fd) as entries:
+                        for entry in entries:
+                            try:
+                                child = entry.stat(follow_symlinks=False)
+                            except OSError:
+                                continue
+                            account(child)
+                            if stat.S_ISDIR(child.st_mode):
+                                stack.append(entry.name if relative is None else relative + "/" + entry.name)
+                finally:
+                    os.close(fd)
+        finally:
+            os.close(root)
+    inodes = array.array("Q")
+    for ino, blocks in shared.items():
+        inodes.append(ino)
+        inodes.append(blocks)
+    return own, inodes, int(used)
 
 
 class Index:
     def __init__(self, cache=CACHE):
         self.cache_path = cache
         self.cache = None
-        self.disk = {}
-        self.cache_seen = 0
-        self.calibrated = None
         self.db = None
         self.version = None
         self.root_links = None
+        self.roots = set()
+        self.live = set()
+        self.dead = []
+        self.effective = {}
         self.path_of = {}
         self.registered = {}
         self.nar = {}
         self.deriver = {}
         self.references = {}
         self.referrers = {}
+        self.own = {}
+        self.inodes = {}
+        self.holders = {}
+        self.blocks = {}
+        self.claimant = {}
+        self.sizes = {}
+        self.used = {}
+        self.pending = set()
+        self.touched = set()
+        self.own_total = 0
+        self.shared_total = 0
+        self.orphan_bytes = 0
+        self.orphan_count = 0
+        self.links_blocks = 0
+        self.walked = 0
 
-    def refresh(self):
+    def load(self):
         if self.db is None:
             self.db = sqlite3.connect(NIX_DB, uri=True, check_same_thread=False)
         version = self.db.execute("pragma data_version").fetchone()[0]
-        changed = version != self.version
-        if changed:
-            self.load_paths()
-            self.version = version
-        roots = gc_roots()
-        if not changed and roots == self.root_links:
-            self.load_cache()
+        if version == self.version:
             return False
-        self.root_links = roots
+        before = set(self.nar)
+        self.load_paths()
+        self.version = version
+        if self.cache is None:
+            self.load_cache()
+        for path in before - self.nar.keys():
+            self.forget(path)
+        for path in self.nar.keys() - before:
+            if path not in self.own:
+                self.pending.add(path)
+        return True
+
+    def refresh(self):
+        self.load()
+        self.refresh_roots()
+        return self
+
+    def refresh_roots(self):
+        self.root_links = gc_roots()
+        self.liveness()
+
+    def liveness(self):
         outputs = {}
         if setting("keep-outputs"):
             for drv, path in self.db.execute("select v.path, o.path from DerivationOutputs o join ValidPaths v on v.id = o.drv"):
                 outputs.setdefault(drv, []).append(path)
         keep_derivations = setting("keep-derivations")
-        self.roots = {path for path in roots if path in self.nar}
+        self.roots = {path for path in self.root_links if path in self.nar}
         live = set()
         stack = list(self.roots)
         while stack:
@@ -84,16 +189,7 @@ class Index:
             stack.extend(out for out in outputs.get(path, []) if out in self.nar)
         self.live = live
         self.dead = [path for path in self.nar if path not in live]
-        self.used = {}
-        for path in self.nar:
-            try:
-                accessed = os.lstat(path).st_atime
-            except OSError:
-                accessed = 0
-            self.used[path] = int(max(self.registered[path], accessed))
         self.effective = self.effective_use(self.dead)
-        self.load_cache()
-        return True
 
     def load_paths(self):
         ids = {row[0] for row in self.db.execute("select id from ValidPaths")}
@@ -127,6 +223,145 @@ class Index:
                 if source and target:
                     self.references[source].add(target)
                     self.referrers[target].add(source)
+
+    def load_cache(self):
+        os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
+        self.cache = sqlite3.connect(self.cache_path, timeout=60, check_same_thread=False)
+        self.cache.execute("pragma journal_mode=wal")
+        self.cache.execute("drop table if exists disk")
+        self.cache.execute("drop table if exists drift")
+        self.cache.execute("create table if not exists store (path text primary key, own integer, used integer, inodes blob)")
+        self.cache.commit()
+        stale = []
+        for path, own, used, blob in self.cache.execute("select path, own, used, inodes from store"):
+            if path not in self.nar:
+                stale.append((path,))
+                continue
+            inodes = array.array("Q")
+            inodes.frombytes(blob)
+            self.attach(path, own, inodes)
+            self.used[path] = max(used, self.registered.get(path, 0))
+        self.cache.executemany("delete from store where path = ?", stale)
+        self.cache.commit()
+        self.pending = {path for path in self.nar if path not in self.own}
+
+    def attach(self, path, own, inodes):
+        self.sizes.clear()
+        self.own[path] = own
+        self.inodes[path] = inodes
+        self.own_total += own
+        holders, blocks = self.holders, self.blocks
+        for position in range(0, len(inodes), 2):
+            ino = inodes[position]
+            count = holders.get(ino, 0)
+            if count == 0:
+                blocks[ino] = inodes[position + 1]
+                self.shared_total += inodes[position + 1]
+            holders[ino] = count + 1
+
+    def detach(self, path):
+        self.sizes.clear()
+        inodes = self.inodes.pop(path, None)
+        self.own_total -= self.own.pop(path, 0)
+        if inodes is None:
+            return
+        holders, blocks, claimant = self.holders, self.blocks, self.claimant
+        for position in range(0, len(inodes), 2):
+            ino = inodes[position]
+            if claimant.get(ino) == path:
+                del claimant[ino]
+            count = holders[ino] - 1
+            if count:
+                holders[ino] = count
+            else:
+                del holders[ino]
+                self.shared_total -= blocks.pop(ino)
+
+    def forget(self, path):
+        self.detach(path)
+        self.used.pop(path, None)
+        self.pending.discard(path)
+        self.touched.discard(path)
+        if self.cache is not None:
+            self.cache.execute("delete from store where path = ?", (path,))
+
+    def measure(self, path):
+        result = walk(path)
+        if result is None:
+            return False
+        own, inodes, used = result
+        self.detach(path)
+        self.attach(path, own, inodes)
+        self.used[path] = max(self.used.get(path, 0), used, self.registered.get(path, 0))
+        self.cache.execute("insert or replace into store values (?, ?, ?, ?)", (path, own, self.used[path], inodes.tobytes()))
+        self.walked += 1
+        return True
+
+    def walk_pending(self, deadline):
+        done = 0
+        while self.pending and time.monotonic() < deadline:
+            path = self.pending.pop()
+            if path in self.nar and self.measure(path):
+                done += 1
+        if done:
+            self.cache.commit()
+        return done
+
+    def touch(self, path, when):
+        if path in self.nar and when > self.used.get(path, 0):
+            self.used[path] = when
+            self.touched.add(path)
+
+    def flush_used(self):
+        if self.touched:
+            self.cache.executemany("update store set used = ? where path = ?", [(self.used[path], path) for path in self.touched if path in self.used])
+            self.cache.commit()
+            self.touched.clear()
+
+    def scan_links(self):
+        holders = self.holders
+        orphan_bytes = orphan_count = 0
+        try:
+            self.links_blocks = os.lstat(LINKS).st_blocks * 512
+            with os.scandir(LINKS) as entries:
+                for entry in entries:
+                    if entry.inode() not in holders:
+                        try:
+                            orphan_bytes += entry.stat(follow_symlinks=False).st_blocks * 512
+                            orphan_count += 1
+                        except OSError:
+                            continue
+        except OSError:
+            pass
+        self.orphan_bytes, self.orphan_count = orphan_bytes, orphan_count
+
+    def registered_bytes(self):
+        return self.own_total + self.shared_total
+
+    def size(self, path):
+        known = self.sizes.get(path)
+        if known is not None:
+            return known
+        own = self.own.get(path)
+        if own is None:
+            return 0
+        inodes = self.inodes[path]
+        holders, blocks, claimant = self.holders, self.blocks, self.claimant
+        total = own
+        for position in range(0, len(inodes), 2):
+            ino = inodes[position]
+            share, remainder = divmod(blocks[ino], holders[ino])
+            total += share
+            if remainder and claimant.setdefault(ino, path) == path:
+                total += remainder
+        self.sizes[path] = total
+        return total
+
+    def sizes(self):
+        return {path: self.size(path) for path in self.nar}
+
+    def coverage(self):
+        return len(self.own) / max(1, len(self.nar))
 
     def closure(self, paths):
         found = set()
@@ -163,91 +398,11 @@ class Index:
                     continue
                 above = [up for up in self.referrers[path] if up in dead_set]
                 if expanded:
-                    effective[path] = max([self.used[path]] + [effective.get(up, 0) for up in above])
+                    effective[path] = max([self.used.get(path, self.registered[path])] + [effective.get(up, 0) for up in above])
                     continue
                 stack.append((path, True))
                 stack.extend((up, False) for up in above if up not in effective)
         return effective
-
-    def load_cache(self):
-        if self.cache is None:
-            os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
-            self.cache = sqlite3.connect(self.cache_path, timeout=60, check_same_thread=False)
-            self.cache.execute("pragma journal_mode=wal")
-            self.cache.execute("create table if not exists disk (path text primary key, share integer, own integer, scanned integer)")
-            self.cache.execute("create table if not exists drift (id integer primary key check (id = 0), bytes integer, reconciled integer)")
-            self.cache.execute("insert or ignore into drift values (0, 0, 0)")
-            self.cache.commit()
-        self.cache.execute("begin immediate")
-        for path, share, own, scanned in self.cache.execute("select path, share, own, scanned from disk where scanned >= ?", (self.cache_seen,)).fetchall():
-            self.disk[path] = (share, own, scanned)
-            self.cache_seen = max(self.cache_seen, scanned)
-        for path in [path for path in self.disk if path not in self.nar]:
-            share, own, _ = self.disk.pop(path)
-            if self.cache.execute("delete from disk where path = ?", (path,)).rowcount:
-                self.shift(own - share)
-        self.cache.commit()
-
-    def shift(self, delta):
-        if delta:
-            self.cache.execute("update drift set bytes = bytes + ? where id = 0", (delta,))
-
-    def reconcile(self, bytes):
-        self.cache.execute("update drift set bytes = ?, reconciled = ? where id = 0", (bytes, int(time.time())))
-        self.cache.commit()
-
-    def drift(self):
-        return self.cache.execute("select bytes from drift where id = 0").fetchone()[0]
-
-    def reconciled(self):
-        return self.cache.execute("select reconciled from drift where id = 0").fetchone()[0]
-
-    def ratio(self):
-        if self.calibrated is not None:
-            return self.calibrated
-        scanned = [path for path in self.disk if path in self.nar]
-        nar = sum(self.nar[path] for path in scanned)
-        return sum(self.disk[path][0] for path in scanned) / nar if nar else 1.0
-
-    def calibrate(self, store_bytes):
-        scanned = sum(share for path, (share, _, _) in self.disk.items() if path in self.nar)
-        unscanned = sum(nar for path, nar in self.nar.items() if path not in self.disk)
-        self.calibrated = max(0.0, store_bytes - scanned) / unscanned if unscanned else 1.0
-
-    def sizes(self, kind="share"):
-        column = 0 if kind == "share" else 1
-        ratio = self.ratio()
-        return {path: self.disk[path][column] if path in self.disk else int(self.nar[path] * ratio) for path in self.nar}
-
-    def coverage(self):
-        return len(self.disk) / max(1, len(self.nar))
-
-    def scan(self, budget_seconds, stale_after=7 * 86400, wanted=None):
-        deadline = time.monotonic() + budget_seconds
-        now = int(time.time())
-        pending = [path for path in (self.nar if wanted is None else wanted) if path in self.nar and (path not in self.disk or now - self.disk[path][2] > stale_after)]
-        pending.sort(key=lambda path: (path in self.disk, self.disk.get(path, (0, 0, 0))[2]))
-        done = 0
-        oldest = min((entry[2] for entry in self.disk.values()), default=now)
-        for path in pending:
-            if time.monotonic() > deadline:
-                break
-            row = self.cache.execute("select share, own, scanned from disk where path = ?", (path,)).fetchone()
-            if row and now - row[2] <= stale_after and row[2] > self.disk.get(path, (0, 0, 0))[2]:
-                self.disk[path] = tuple(row)
-                continue
-            share, own = walk(path)
-            if path in self.disk:
-                self.shift(share - self.disk[path][0])
-            elif self.registered.get(path, 0) > oldest:
-                self.shift(share - own)
-            self.disk[path] = (share, own, now)
-            self.cache.execute("insert or replace into disk values (?, ?, ?, ?)", (path, share, own, now))
-            done += 1
-            if done % 500 == 0:
-                self.cache.commit()
-        self.cache.commit()
-        return done, len(pending) - done
 
     def order(self, paths):
         chosen = set(paths)
@@ -265,53 +420,6 @@ class Index:
         return out
 
 
-def walk(path):
-    share = own = 0
-    seen = set()
-    stack = [path]
-    while stack:
-        current = stack.pop()
-        try:
-            stat = os.lstat(current)
-        except OSError:
-            continue
-        if stat.st_ino in seen:
-            continue
-        seen.add(stat.st_ino)
-        size = stat.st_blocks * 512
-        if os.path.stat.S_ISDIR(stat.st_mode):
-            share += size
-            own += size
-            try:
-                stack.extend(os.path.join(current, name) for name in os.listdir(current))
-            except OSError:
-                pass
-            continue
-        links = stat.st_nlink
-        share += size // (links - 1) if links > 2 else size
-        if links <= 2:
-            own += size
-    return share, own
-
-
-def select(index, need, before=None):
-    sizes = index.sizes("own")
-    old = sorted((p for p in index.dead if before is None or index.effective[p] < before), key=lambda p: (index.effective[p], p))
-    chosen = []
-    freed = 0
-    for path in old:
-        if freed >= need and index.effective[path] != index.effective[chosen[-1]]:
-            break
-        chosen.append(path)
-        freed += sizes[path]
-    return old, chosen, freed
-
-
-def rows(index, chosen):
-    sizes = index.sizes("own")
-    return [{"path": path, "size": sizes[path], "last_used": index.effective.get(path, index.used[path])} for path in chosen]
-
-
 def delete(paths):
     result = subprocess.run(["nix-store", "--delete", *paths], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     output = result.stdout + result.stderr
@@ -321,10 +429,9 @@ def delete(paths):
     return result.returncode == 0, deleted, freed, set(ALIVE.findall(output))
 
 
-def delete_all(index, paths):
+def delete_ordered(ordered, references):
     deleted = freed = 0
     refused = set()
-    ordered = index.order(index.dependents(paths))
     for start in range(0, len(ordered), DELETE_BATCH):
         batch = [path for path in ordered[start : start + DELETE_BATCH] if path not in refused]
         while batch:
@@ -333,56 +440,46 @@ def delete_all(index, paths):
             freed += size
             if ok:
                 break
-            live = index.closure(alive) & set(ordered) if alive else set(batch)
+            live = set()
+            stack = list(alive) if alive else list(batch)
+            while stack:
+                path = stack.pop()
+                if path in live:
+                    continue
+                live.add(path)
+                stack.extend(references.get(path, ()))
             refused |= live
             batch = [path for path in batch if path not in live and os.path.exists(path)]
     return deleted, freed, refused
 
 
+def deletion_plan(index, paths):
+    ordered = index.order(index.dependents(paths))
+    chosen = set(ordered)
+    return ordered, {path: [ref for ref in index.references[path] if ref in chosen] for path in ordered}
+
+
 def main():
     parser = argparse.ArgumentParser(prog="store-collect")
-    parser.add_argument("--need-gib", type=float, required=True, help="free this much, least recently used dead paths first")
-    parser.add_argument("--apply", action="store_true", help="delete; the default only reports")
-    parser.add_argument("--json", action="store_true", help="print the selection as JSON")
-    parser.add_argument("--before", type=float, help="only paths last used before this epoch second")
+    parser.add_argument("--walk", type=float, default=0, help="measure unwalked store paths for this many seconds first")
+    parser.add_argument("--path", action="append", default=[], help="print the exact size of this store path")
     options = parser.parse_args()
-
-    started = time.time()
     index = Index().refresh()
-    need = options.need_gib * GIB
-    old, chosen, claimed = select(index, need, options.before)
-    own = index.sizes("own")
-    dead_bytes = sum(own[p] for p in old)
-
-    deleted = freed = 0
-    refused = set()
-    if options.apply:
-        deleted, freed, refused = delete_all(index, chosen)
-
-    if options.json:
-        print(json.dumps({
-            "stage": "store",
-            "applied": options.apply,
-            "dead_paths": len(old),
-            "dead_bytes": dead_bytes,
-            "need": need,
-            "freed": freed if options.apply else claimed,
-            "claimed": claimed,
-            "deleted": deleted,
-            "refused": len(refused),
-            "seconds": round(time.time() - started, 1),
-            "selected": rows(index, chosen),
-        }))
-        return 0
-
-    print("dead %d paths (%.1f GiB); selected %d (%.2f GiB of %.2f GiB needed)" % (len(old), dead_bytes / GIB, len(chosen), claimed / GIB, need / GIB))
-    if chosen:
-        print("last used between %s and %s" % (time.strftime("%Y-%m-%d %H:%M", time.localtime(index.effective[chosen[0]])), time.strftime("%Y-%m-%d %H:%M", time.localtime(index.effective[chosen[-1]]))))
-    if options.apply:
-        print("deleted %d paths, %.2f GiB freed, %d refused" % (deleted, freed / GIB, len(refused)))
-    else:
-        for path in sorted(chosen, key=lambda p: -own[p])[:20]:
-            print("  %8.1f MiB  %s" % (own[path] / 2 ** 20, path))
+    index.walk_pending(time.monotonic() + options.walk)
+    index.scan_links()
+    for path in options.path:
+        print("%14.0f %s" % (index.size(path), path))
+    print(json.dumps({
+        "paths": len(index.nar),
+        "walked": len(index.own),
+        "pending": len(index.pending),
+        "registered_bytes": index.registered_bytes(),
+        "orphan_bytes": index.orphan_bytes,
+        "orphans": index.orphan_count,
+        "links_dir_bytes": index.links_blocks,
+        "dead_paths": len(index.dead),
+        "dead_bytes": round(sum(index.size(path) for path in index.dead)),
+    }, indent=1))
     return 0
 
 
