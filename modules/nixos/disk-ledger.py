@@ -452,6 +452,7 @@ def main():
     runtime = Path(os.environ["LEDGER_RUNTIME_DIR"])
     textfile = Path(os.environ["LEDGER_TEXTFILE"])
 
+    opened = shutil.disk_usage("/nix/store")
     index = collector.Index().refresh()
     INDEX.append(index)
     gcroot_targets = [
@@ -552,7 +553,7 @@ def main():
     home_dirs, files, system_dirs, swap, held_bytes, accounted = tally()
     moved = False
     for _ in range(SETTLE_ROUNDS):
-        if min(before.used, usage.used) <= accounted <= max(before.used, usage.used):
+        if min(opened.used, before.used, usage.used) <= accounted <= max(opened.used, before.used, usage.used):
             break
         before = shutil.disk_usage("/nix/store")
         fresh = usage_once([path for path in measured_paths if os.path.lexists(path)])
@@ -562,9 +563,10 @@ def main():
         held = held_open(device)
         usage = shutil.disk_usage("/nix/store")
         home_dirs, files, system_dirs, swap, held_bytes, accounted = tally()
-    churn = usage.used - before.used
+    churn = usage.used - opened.used
     system_files = sum(row["size"] for row in system_dirs)
-    settled = accounted if moved else min(max(accounted, min(before.used, usage.used)), max(before.used, usage.used))
+    low, high = min(opened.used, before.used, usage.used), max(opened.used, before.used, usage.used)
+    settled = accounted if moved else min(max(accounted, low), high)
     measuring = usage.used - settled
     unaccounted = settled - accounted
 
@@ -647,12 +649,24 @@ def main():
     history_path = state / "history.jsonl"
     points = load_history(history_path, now)
     items = {}
-    for group in ledger["provenance"].values():
+    for name, group in ledger["provenance"].items():
         if not isinstance(group, list):
             continue
         for row in group:
             if row.get("path") and row.get("size"):
-                items[row["path"]] = row["size"]
+                items.setdefault(name, {})[row["path"]] = row["size"]
+    owners = {}
+    for name, rows in items.items():
+        for path in rows:
+            owners.setdefault(path, set()).add(name)
+    for old in points:
+        flat = old.get("items", {})
+        if flat and not all(isinstance(value, dict) for value in flat.values()):
+            grouped = {}
+            for path, size in flat.items():
+                if len(owners.get(path, ())) == 1:
+                    grouped.setdefault(next(iter(owners[path])), {})[path] = size
+            old["items"] = grouped
     point = {"at": now, "store": store_disk_segments, "files": files, "swap": swap, "system": system_files, "held": held_bytes, "measuring": measuring, "unaccounted": unaccounted, "reserved": reserved, "free": free, "items": items}
 
     append_history(history_path, points, point)

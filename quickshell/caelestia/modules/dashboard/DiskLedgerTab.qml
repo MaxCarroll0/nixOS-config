@@ -153,16 +153,20 @@ Item {
     function nodeValue(point: var, node: var): real {
         if (node.kind === "segment")
             return ledger.valueOf(point, node.segment);
-        const items = point.items ?? ({});
-        if (!node.path)
-            return 0;
+        const group = ({ home_files: "home", caches: "caches", system_files: "system", held: "held", deployed: "deployed", shells: "shells", other: "other", project_tier1: "projects", project_tier2: "projects", fetched: "projects", system_generations: "generations", home_generations: "generations" })[root.trail.length ? root.trail[0].segment : ""];
+        const items = (point.items ?? ({}))[group];
+        if (!node.path || typeof items !== "object")
+            return NaN;
         if (node.path in items)
             return items[node.path];
         let total = 0;
+        let found = false;
         for (const path in items)
-            if (path.startsWith(node.path + "/"))
+            if (path.startsWith(node.path + "/")) {
                 total += items[path];
-        return total;
+                found = true;
+            }
+        return found ? total : NaN;
     }
 
     function eventAmount(event: var): var {
@@ -828,15 +832,22 @@ Item {
                     onPaint: {
                         const ctx = getContext("2d");
                         ctx.reset();
-                        const points = root.visiblePoints;
+                        const focus = root.focusNode;
+                        const points = focus && focus.kind !== "segment" ? root.visiblePoints.filter(point => isFinite(root.nodeValue(point, focus))) : root.visiblePoints;
                         history.layout = null;
-                        if (points.length < 2)
+                        if (points.length < 2) {
+                            if (focus) {
+                                ctx.fillStyle = Colours.palette.m3onSurfaceVariant;
+                                ctx.font = "10px sans-serif";
+                                ctx.textAlign = "center";
+                                ctx.fillText("no history recorded at this depth", plotLeft + plotWidth / 2, plotBottom / 2);
+                            }
                             return;
+                        }
                         const plotHeight = plotBottom - 4;
                         const [first, last] = root.span;
                         const spanSeconds = Math.max(1, last - first);
                         const x = at => plotLeft + plotWidth * (at - first) / spanSeconds;
-                        const focus = root.focusNode;
                         const series = focus ? [focus] : ledger.segments;
                         const valueFor = (point, item) => focus ? root.nodeValue(point, focus) : ledger.valueOf(point, item.key);
                         const top = focus ? Math.max(1, ...points.map(point => valueFor(point, focus))) * 1.1 : ledger.diskTotal;
