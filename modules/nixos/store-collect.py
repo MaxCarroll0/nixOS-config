@@ -133,15 +133,35 @@ class Index:
     def load_cache(self):
         if self.cache is None:
             os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
-            self.cache = sqlite3.connect(self.cache_path)
+            self.cache = sqlite3.connect(self.cache_path, timeout=60)
+            self.cache.execute("pragma journal_mode=wal")
             self.cache.execute("create table if not exists disk (path text primary key, share integer, own integer, scanned integer)")
+            self.cache.execute("create table if not exists drift (id integer primary key check (id = 0), bytes integer, reconciled integer)")
+            self.cache.execute("insert or ignore into drift values (0, 0, 0)")
+            self.cache.commit()
+        self.cache.execute("begin immediate")
         self.disk = {path: (share, own, scanned) for path, share, own, scanned in self.cache.execute("select path, share, own, scanned from disk")}
         gone = [path for path in self.disk if path not in self.nar]
         if gone:
+            self.shift(-sum(self.disk[path][0] - self.disk[path][1] for path in gone))
             self.cache.executemany("delete from disk where path = ?", [(path,) for path in gone])
-            self.cache.commit()
             for path in gone:
                 del self.disk[path]
+        self.cache.commit()
+
+    def shift(self, delta):
+        if delta:
+            self.cache.execute("update drift set bytes = bytes + ? where id = 0", (delta,))
+
+    def reconcile(self, bytes):
+        self.cache.execute("update drift set bytes = ?, reconciled = ? where id = 0", (bytes, int(time.time())))
+        self.cache.commit()
+
+    def drift(self):
+        return self.cache.execute("select bytes from drift where id = 0").fetchone()[0]
+
+    def reconciled(self):
+        return self.cache.execute("select reconciled from drift where id = 0").fetchone()[0]
 
     def ratio(self):
         if self.calibrated is not None:
@@ -169,10 +189,15 @@ class Index:
         pending = [path for path in (wanted or self.nar) if path in self.nar and (path not in self.disk or now - self.disk[path][2] > stale_after)]
         pending.sort(key=lambda path: (path in self.disk, self.disk.get(path, (0, 0, 0))[2]))
         done = 0
+        oldest = min((entry[2] for entry in self.disk.values()), default=now)
         for path in pending:
             if time.monotonic() > deadline:
                 break
             share, own = walk(path)
+            if path in self.disk:
+                self.shift(self.disk[path][0] - share)
+            elif self.registered.get(path, 0) > oldest:
+                self.shift(share - own)
             self.disk[path] = (share, own, now)
             self.cache.execute("insert or replace into disk values (?, ?, ?, ?)", (path, share, own, now))
             done += 1

@@ -27,10 +27,45 @@ Item {
         const used = list.reduce((acc, item) => acc + item.size, 0);
         const total = Math.max(1, used, root.capacity);
         const minShare = root.minSlice / Math.max(1, root.width);
-        const shares = list.map(item => Math.max(minShare, item.size / total));
+        const merged = [];
+        let pending = [];
+        const flush = () => {
+            if (pending.length === 1)
+                merged.push(pending[0]);
+            else if (pending.length > 1)
+                merged.push(root.group(pending));
+            pending = [];
+        };
+        for (const item of list) {
+            if (item.size / total >= minShare) {
+                flush();
+                merged.push(item);
+            } else
+                pending.push(item);
+        }
+        flush();
+        const shares = merged.map(item => Math.max(minShare, item.size / total));
         const sum = shares.reduce((acc, share) => acc + share, 0);
         const scale = Math.min(1, used / total) / Math.max(sum, 1e-9);
-        return list.map((item, index) => Object.assign({}, item, { share: shares[index] * scale }));
+        return merged.map((item, index) => Object.assign({}, item, { share: shares[index] * scale }));
+    }
+
+    function group(members: var): var {
+        const first = members[0];
+        return {
+            id: `group:${first.id}:${members.length}`,
+            label: `${members.length} small items`,
+            path: "",
+            size: members.reduce((acc, item) => acc + item.size, 0),
+            last_used: first.last_used,
+            color: first.color,
+            kind: `${members.length} items, each too small to draw`,
+            delvable: true,
+            openable: false,
+            reclaimable: members.every(item => item.reclaimable),
+            scheduled: members.every(item => item.scheduled),
+            members: members
+        };
     }
 
     readonly property var boxes: {

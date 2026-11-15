@@ -76,11 +76,13 @@ Item {
         { key: "other", group: "store", label: "other live store paths", color: tone(0.56, 0.44), reclaim: false, detail: "other" },
         { key: "garbage", group: "store", label: "dead store paths", color: tone(0.66, 0.46), reclaim: true, detail: "dead" },
         { key: "metadata", group: "store", label: "store database and link table", color: tone(0.7, 0.36), reclaim: false, detail: "none" },
+        { key: "rescan", group: "store", label: "shared files awaiting rescan", color: tone(0.74, 0.4), reclaim: false, detail: "none" },
         { key: "home_files", group: "files", label: "home files", color: tone(0.78, 0.5), reclaim: false, detail: "home" },
         { key: "caches", group: "files", label: "caches", color: tone(0.88, 0.54), reclaim: true, detail: "caches" },
         { key: "reserved", group: "system", label: "ext4 root reserve", color: Qt.hsla(0, 0, Colours.light ? 0.8 : 0.45, 1), reclaim: false, detail: "none" },
         { key: "swap", group: "system", label: "swapfile", color: Qt.hsla(0, 0, Colours.light ? 0.72 : 0.38, 1), reclaim: false, detail: "none" },
-        { key: "system_files", group: "system", label: "system files", color: Qt.hsla(0, 0, Colours.light ? 0.62 : 0.3, 1), reclaim: false, detail: "none" },
+        { key: "system_files", group: "system", label: "system files", color: Qt.hsla(0, 0, Colours.light ? 0.62 : 0.3, 1), reclaim: false, detail: "system" },
+        { key: "held", group: "system", label: "deleted, still open", color: Qt.hsla(0, 0, Colours.light ? 0.56 : 0.26, 1), reclaim: false, detail: "held" },
         { key: "unaccounted", group: "system", label: "unaccounted", color: Qt.hsla(0, 0, Colours.light ? 0.5 : 0.22, 1), reclaim: false, detail: "none" }
     ]
 
@@ -121,6 +123,8 @@ Item {
             return point.swap ?? 0;
         if (key === "system_files")
             return point.system ?? point.system_files ?? 0;
+        if (key === "held")
+            return point.held ?? 0;
         if (key === "unaccounted")
             return Math.max(0, point.unaccounted ?? 0);
         if (key === "reserved")

@@ -17,7 +17,7 @@ HISTORY_POINTS = 288
 PREVIEW_BYTES = 10 * GIB
 SLACK_BYTES = GIB // 2
 KEEP_GENERATIONS = 10
-SEGMENTS = ("system", "home", "system_generations", "home_generations", "project_tier1", "project_tier2", "fetched", "deployed", "shells", "other", "garbage", "metadata")
+SEGMENTS = ("system", "home", "system_generations", "home_generations", "project_tier1", "project_tier2", "fetched", "deployed", "shells", "other", "garbage", "metadata", "rescan")
 
 
 def load_module(name, variable):
@@ -35,6 +35,15 @@ def closure(paths):
 
 
 def store_metadata():
+    return var_bytes() + inside_store_metadata()
+
+
+def inside_store_metadata():
+    links = os.lstat("/nix/store/.links").st_blocks * 512 if os.path.isdir("/nix/store/.links") else 0
+    return links + os.lstat("/nix/store").st_blocks * 512
+
+
+def var_bytes():
     total = 0
     for root, dirs, files in os.walk("/nix/var"):
         for name in dirs + files:
@@ -42,8 +51,7 @@ def store_metadata():
                 total += os.lstat(os.path.join(root, name)).st_blocks * 512
             except OSError:
                 continue
-    links = os.lstat("/nix/store/.links").st_blocks * 512 if os.path.isdir("/nix/store/.links") else 0
-    return total + links + os.lstat("/nix/store").st_blocks * 512
+    return total
 
 
 def resolve(path):
@@ -175,17 +183,17 @@ def disk_bytes(path):
     return int(out.split()[0]) if out else 0
 
 
-def cached_disk_bytes(path, cache, now, max_age, invalidated_after):
+def measured_bytes(path, cache, now, max_age):
     try:
         entry = json.loads(cache.read_text())
-        if now - entry["at"] < max_age and entry["at"] > invalidated_after:
-            return entry["bytes"]
+        if now - entry["at"] < max_age:
+            return entry["bytes"], False
     except (OSError, ValueError, KeyError):
         pass
     size = disk_bytes(path)
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps({"at": now, "bytes": size}))
-    return size
+    return size, True
 
 
 def disk_usage_and_newest(path):
@@ -194,6 +202,28 @@ def disk_usage_and_newest(path):
         return int(out[0]), int(out[1])
     except (IndexError, ValueError):
         return 0, 0
+
+
+def held_open(device):
+    owners = {}
+    for fd in glob.glob("/proc/[0-9]*/fd/*"):
+        try:
+            target = os.readlink(fd)
+            if not target.endswith(" (deleted)"):
+                continue
+            stat = os.stat(fd)
+        except OSError:
+            continue
+        if stat.st_dev != device or not os.path.stat.S_ISREG(stat.st_mode):
+            continue
+        pid = fd.split("/")[2]
+        try:
+            command = open(f"/proc/{pid}/comm").read().strip()
+        except OSError:
+            command = pid
+        row = owners.setdefault(stat.st_ino, {"path": target[: -len(" (deleted)")], "size": stat.st_blocks * 512, "last_used": int(stat.st_mtime), "holders": set()})
+        row["holders"].add(command)
+    return sorted(({**row, "holders": sorted(row["holders"])} for row in owners.values() if row["size"]), key=lambda row: -row["size"])
 
 
 def top_level_sizes(root, skip):
@@ -314,12 +344,14 @@ def main():
     retention.populate_closures(projects)
     project_union = set().union(*(p.closure for p in projects.values())) if projects else set()
     state = Path(os.environ["LEDGER_STATE_DIR"])
-    events_path = state / "events.jsonl"
-    last_collection = events_path.stat().st_mtime if events_path.exists() else 0
     metadata = store_metadata()
+    measured, fresh = measured_bytes("/nix/store", state / "store-du.json", now, 6 * 3600 if index.reconciled() else 0)
     if index.coverage() < 0.99:
-        index.calibrate(cached_disk_bytes("/nix/store", state / "store-du.json", now, 6 * 3600, last_collection) - metadata)
+        index.calibrate(measured - inside_store_metadata())
     sizes = index.sizes("share")
+    if fresh:
+        index.reconcile(sum(sizes.values()) - (measured - inside_store_metadata()))
+    drift = index.drift()
     for path in roots | project_union:
         sizes.setdefault(path, 0)
     dead = list(index.dead)
@@ -351,6 +383,7 @@ def main():
     assigned_before_other = set(assigned)
     add("other", set(sizes) - assigned)
     store["metadata"] = metadata
+    store["rescan"] = max(0, -drift)
 
     usage = shutil.disk_usage("/nix/store")
     store_disk = sum(store.values())
@@ -359,9 +392,11 @@ def main():
     caches = disk_bytes(home / ".cache")
     files = {"home": sum(row["size"] for row in home_dirs), "caches": caches}
     swap = os.stat("/swapfile").st_size if os.path.exists("/swapfile") else 0
-    system_dirs = top_level_sizes(Path("/"), {"nix", "home", "swapfile", "proc", "sys", "dev", "run", "tmp", "boot"})
+    system_dirs = top_level_sizes(Path("/"), {"nix", "home", "swapfile", "proc", "sys", "dev", "run", "boot"})
+    held = held_open(os.stat("/").st_dev)
+    held_bytes = sum(row["size"] for row in held)
     system_files = sum(row["size"] for row in system_dirs)
-    accounted = store_disk + sum(files.values()) + swap + system_files
+    accounted = store_disk + sum(files.values()) + swap + system_files + held_bytes - max(0, drift)
     unaccounted = usage.used - accounted
 
     free = usage.free
@@ -412,6 +447,7 @@ def main():
         "files": files,
         "swap": swap,
         "system_files": system_files,
+        "held": held_bytes,
         "unaccounted": unaccounted,
         "reserved": reserved,
         "disk": {"total": usage.total, "used": usage.used, "free": free, "reserved": reserved},
@@ -427,6 +463,7 @@ def main():
             "other": other_rows(set(sizes) - assigned_before_other, sizes),
             "shells": [{"path": link, "size": member_size(link, "shells"), "last_used": int(os.lstat(link).st_mtime)} for link in sorted(shell_links) if os.path.islink(link)],
             "system": system_dirs,
+            "held": held,
         },
         "deficit": deficit,
         "need": need,
@@ -445,7 +482,7 @@ def main():
         for row in group:
             if row.get("path") and row.get("size"):
                 items[row["path"]] = row["size"]
-    point = {"at": now, "store": store_disk_segments, "files": files, "swap": swap, "system": system_files, "unaccounted": unaccounted, "reserved": reserved, "free": free, "items": items}
+    point = {"at": now, "store": store_disk_segments, "files": files, "swap": swap, "system": system_files, "held": held_bytes, "unaccounted": unaccounted, "reserved": reserved, "free": free, "items": items}
 
     append_history(history_path, points, point)
     ledger["history"] = downsample(points)

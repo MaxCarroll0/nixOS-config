@@ -69,7 +69,9 @@ further free space is from the target, and pauses while CPU or IO pressure is hi
 deleted for age alone; generations are expired daily to the last ten. Every deploy roots the
 deployed closure of its target here, so an unchanged host never rebuilds. The disk tab of the
 desktop shell drills from the whole disk into segments, folders and store paths, and plots what
-was reclaimed over time; selecting a stretch lists the paths taken.
+was reclaimed over time; selecting a stretch lists the paths taken. Its segments sum to the
+filesystem's used bytes: hard-linked store files whose sharing changed since their last scan,
+and deleted files still held open, are shown as their own rows.
 
 | Command | Does |
 |---|---|

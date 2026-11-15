@@ -20,7 +20,7 @@ Item {
     readonly property var rootRows: ledger.segments.map(segment => segmentNode(segment)).filter(item => item.size > 0)
     property var range: null
     property var focusEvent: null
-    readonly property var focusNode: root.node && (root.node.kind === "segment" || root.node.path) ? root.node : null
+    readonly property var focusNode: !root.node ? null : (root.node.kind === "segment" || root.node.path) ? root.node : root.trail[0]
     readonly property var span: {
         if (root.range !== null)
             return root.range;
@@ -154,12 +154,6 @@ Item {
         if (node.kind === "segment")
             return ledger.valueOf(point, node.segment);
         const items = point.items ?? ({});
-        if (node.kind === "day") {
-            let total = 0;
-            for (const row of node.rows ?? [])
-                total += items[row.path] ?? 0;
-            return total;
-        }
         if (!node.path)
             return 0;
         if (node.path in items)
@@ -183,7 +177,7 @@ Item {
         let total = 0;
         let any = false;
         for (const key in taken) {
-            if (key === focus.path || key.startsWith(focus.path + "/") || (focus.kind === "day" && focus.label.startsWith(key))) {
+            if (key === focus.path || key.startsWith(focus.path + "/")) {
                 total += taken[key];
                 any = true;
             }
@@ -238,6 +232,8 @@ Item {
                 return (prov.caches ?? []).map(row => dirNode(row, color, true));
             case "system_files":
                 return (prov.system ?? []).map(row => dirNode(row, color, false));
+            case "held":
+                return (prov.held ?? []).map(row => ({ id: `held:${row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: `deleted, held open by ${row.holders.join(", ")}`, delvable: false, openable: false, reclaimable: false, scheduled: false }));
             case "system_generations":
             case "home_generations":
                 return (prov.generations ?? []).filter(row => row.profile.startsWith("system") === (node.segment === "system_generations")).map(row => Object.assign(closureNode(row, color, `${row.profile.replace(/.*\//, "")} ${row.number || ""}`.trim(), `generation, ${ledger.clock(row.last_used)}${row.expiring ? ", expiring" : ""}`, row.number > 0)));
@@ -265,7 +261,9 @@ Item {
         }
         if (node.id.startsWith("project:"))
             return probed(node, "file", node.file, rows => rows.filter(row => row.tier === node.tier).map(row => ({ id: `path:${row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: row.kind, delvable: false, openable: false, reclaimable: true, scheduled: node.scheduled })));
-        if (node.kind === "day")
+        if (node.id.startsWith("group:"))
+            return node.members;
+        if (node.id.startsWith("day:"))
             return node.rows.map(row => ({ id: `dead:${row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: "dead path", delvable: false, openable: false, reclaimable: true, scheduled: node.scheduled }));
         if (node.id.startsWith("closure:"))
             return probed(node, "closure", node.path, rows => rows.map(row => ({ id: `path:${row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: "store path", delvable: false, openable: false, reclaimable: node.reclaimable, scheduled: node.scheduled })), root.trail.length ? ledger.segmentFile(root.trail[0].segment ?? "") : "");
@@ -341,10 +339,8 @@ Item {
         reclaims.requestPaint();
     }
     onFocusEventChanged: {
-        if (root.focusEvent) {
+        if (root.focusEvent)
             root.trail = [];
-            root.range = [root.focusEvent.at - 3 * 3600, root.focusEvent.at + 3600];
-        }
         refresh();
         reclaims.requestPaint();
     }
@@ -564,7 +560,7 @@ Item {
 
             StyledText {
                 visible: root.focusEvent !== null
-                text: root.focusEvent ? `› collection ${ledger.clock(root.focusEvent.at)} ${root.runLabel(root.focusEvent)} ${ledger.gib(root.focusEvent.freed)}` : ""
+                text: root.focusEvent ? `› ${root.focusEvent.events.length === 1 ? "collection" : root.focusEvent.events.length + " collections"} ${ledger.clock(root.focusEvent.at)}${root.focusEvent.events.length === 1 ? "" : "–" + ledger.clock(root.focusEvent.events[root.focusEvent.events.length - 1].at)} ${root.runLabel(root.focusEvent)} ${ledger.gib(root.focusEvent.freed)}` : ""
                 font: Tokens.font.title.small
                 color: Colours.palette.m3primary
             }
