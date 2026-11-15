@@ -242,7 +242,7 @@ Item {
             case "shells":
                 return (prov.shells ?? []).map(row => closureNode(row, color, row.path.replace(/.*nix-shell-roots\//, "shell "), "live shell root", false));
             case "other":
-                return (prov.other ?? []).map(row => closureNode(row, color, ledger.shortName(row.path), row.roots && row.roots.length === 1 ? `held by ${ledger.shortName(row.roots[0])}` : row.roots && row.roots.length ? `held by ${row.roots.length} roots` : "live, root unknown", false));
+                return probed(node, "file", ledger.segmentFile("other"), rows => groupByName(rows, color, prov.other ?? []));
             case "system":
                 return [closureNode({ path: "/run/current-system", size: node.size, last_used: 0 }, color, "current system", "closure", false)];
             case "home":
@@ -278,6 +278,28 @@ Item {
             return null;
         }
         return build(probe.results[node.id]);
+    }
+
+    function groupByName(rows: var, color: color, rooted: var): var {
+        const roots = {};
+        for (const row of rooted)
+            roots[row.path] = row.roots ?? [];
+        const pathNode = row => ({ id: `path:${row.path}`, label: ledger.shortName(row.path), path: row.path, size: row.size, last_used: row.last_used, color: color, kind: roots[row.path] ? (roots[row.path].length === 1 ? `held by ${ledger.shortName(roots[row.path][0])}` : `held by ${roots[row.path].length} roots`) : "live store path", delvable: false, openable: false, reclaimable: false, scheduled: false });
+        const groups = {};
+        for (const row of rows) {
+            const name = ledger.shortName(row.path).replace(/-[0-9].*$/, "").replace(/\.(drv|patch|tar\.\w+|zip)$/, "");
+            const group = groups[name] ?? (groups[name] = { id: `group:other:${name}`, label: name, path: "", size: 0, last_used: 0, color: color, delvable: true, openable: false, reclaimable: false, scheduled: false, members: [] });
+            group.size += row.size;
+            group.last_used = Math.max(group.last_used, row.last_used);
+            group.members.push(pathNode(row));
+        }
+        return Object.values(groups).map(group => {
+            if (group.members.length === 1)
+                return group.members[0];
+            group.members.sort((a, b) => b.size - a.size);
+            group.kind = `${group.members.length} paths`;
+            return group;
+        });
     }
 
     function groupByDay(rows: var, color: color): var {

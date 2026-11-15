@@ -83,6 +83,7 @@ Item {
         { key: "swap", group: "system", label: "swapfile", color: Qt.hsla(0, 0, Colours.light ? 0.72 : 0.38, 1), reclaim: false, detail: "none" },
         { key: "system_files", group: "system", label: "system files", color: Qt.hsla(0, 0, Colours.light ? 0.62 : 0.3, 1), reclaim: false, detail: "system" },
         { key: "held", group: "system", label: "deleted, still open", color: Qt.hsla(0, 0, Colours.light ? 0.56 : 0.26, 1), reclaim: false, detail: "held" },
+        { key: "measuring", group: "system", label: "changed during measurement", color: Qt.hsla(0, 0, Colours.light ? 0.53 : 0.24, 1), reclaim: false, detail: "none" },
         { key: "unaccounted", group: "system", label: "unaccounted", color: Qt.hsla(0, 0, Colours.light ? 0.5 : 0.22, 1), reclaim: false, detail: "none" }
     ]
 
@@ -125,6 +126,8 @@ Item {
             return point.system ?? point.system_files ?? 0;
         if (key === "held")
             return point.held ?? 0;
+        if (key === "measuring")
+            return Math.max(0, point.measuring ?? 0);
         if (key === "unaccounted")
             return Math.max(0, point.unaccounted ?? 0);
         if (key === "reserved")

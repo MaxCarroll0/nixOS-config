@@ -236,6 +236,14 @@ def backup_groups(groups):
     return len({group for group in found if group < groups})
 
 
+def written_bytes(root):
+    device = os.path.basename(os.path.realpath(subprocess.run(["findmnt", "-no", "SOURCE", root], capture_output=True, text=True).stdout.strip().split("[")[0]))
+    try:
+        return int(Path(f"/sys/fs/ext4/{device}/session_write_kbytes").read_text()) * 1024
+    except (OSError, ValueError):
+        return 0
+
+
 def hidden_inodes(root):
     source = subprocess.run(["findmnt", "-no", "SOURCE", root], capture_output=True, text=True).stdout.strip().split("[")[0]
     header = subprocess.run(["dumpe2fs", "-h", source], capture_output=True, text=True).stdout
@@ -362,6 +370,7 @@ def main():
     lock = open(state / "measure.lock", "a")
     fcntl.flock(lock, fcntl.LOCK_EX)
     now = int(time.time())
+    written_at_start = written_bytes("/")
     retention = load_module("retention", "RETENTION_MODULE")
     collector = load_module("collector", "COLLECT_MODULE")
     home = Path(os.environ["LEDGER_HOME"])
@@ -464,7 +473,9 @@ def main():
     churn = shutil.disk_usage("/nix/store").used - usage.used
     system_files = sum(row["size"] for row in system_dirs)
     accounted = store_disk + sum(files.values()) + swap + system_files + held_bytes - max(0, drift)
-    unaccounted = usage.used - accounted
+    written = max(0, written_bytes("/") - written_at_start)
+    measuring = max(-written, min(written, usage.used - accounted))
+    unaccounted = usage.used - accounted - measuring
 
     free = usage.free
     reserved = usage.total - usage.used - free
@@ -516,6 +527,8 @@ def main():
         "system_files": system_files,
         "held": held_bytes,
         "unaccounted": unaccounted,
+        "measuring": measuring,
+        "written": written,
         "churn": churn,
         "reserved": reserved,
         "disk": {"total": usage.total, "used": usage.used, "free": free, "reserved": reserved},
@@ -550,7 +563,7 @@ def main():
         for row in group:
             if row.get("path") and row.get("size"):
                 items[row["path"]] = row["size"]
-    point = {"at": now, "store": store_disk_segments, "files": files, "swap": swap, "system": system_files, "held": held_bytes, "unaccounted": unaccounted, "reserved": reserved, "free": free, "items": items}
+    point = {"at": now, "store": store_disk_segments, "files": files, "swap": swap, "system": system_files, "held": held_bytes, "measuring": measuring, "unaccounted": unaccounted, "reserved": reserved, "free": free, "items": items}
 
     append_history(history_path, points, point)
     ledger["history"] = downsample(points)
