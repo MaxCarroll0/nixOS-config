@@ -155,6 +155,8 @@ StyledRect {
         }
 
         Flow {
+            id: facts
+
             Layout.fillWidth: true
             visible: ledger.loaded
             spacing: Tokens.spacing.medium
@@ -179,6 +181,8 @@ StyledRect {
                     spacing: Tokens.spacing.extraSmall
 
                     StyledText {
+                        id: key
+
                         text: fact.modelData[0]
                         font: Tokens.font.body.small
                         color: Colours.palette.m3onSurfaceVariant
@@ -186,6 +190,8 @@ StyledRect {
 
                     StyledText {
                         visible: fact.modelData[1] !== ""
+                        width: Math.min(implicitWidth, facts.width - key.implicitWidth - fact.spacing)
+                        elide: Text.ElideMiddle
                         text: fact.modelData[1]
                         font: Tokens.font.body.builders.small.weight(Font.DemiBold).build()
                         color: Colours.palette.m3onSurface
