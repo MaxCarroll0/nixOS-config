@@ -196,14 +196,6 @@ def measured_bytes(path, cache, now, max_age):
     return size, True
 
 
-def disk_usage_and_newest(path):
-    out = subprocess.run(["du", "-sx", "--time", "--time-style=+%s", "--block-size=1", path], capture_output=True, text=True).stdout.split("\t")
-    try:
-        return int(out[0]), int(out[1])
-    except (IndexError, ValueError):
-        return 0, 0
-
-
 def held_open(device):
     owners = {}
     for fd in glob.glob("/proc/[0-9]*/fd/*"):
@@ -226,21 +218,32 @@ def held_open(device):
     return sorted(({**row, "holders": sorted(row["holders"])} for row in owners.values() if row["size"]), key=lambda row: -row["size"])
 
 
-def top_level_sizes(root, skip):
+def entries(root, skip):
+    device = os.lstat(root).st_dev
+    return [entry for entry in sorted(root.iterdir()) if entry.name not in skip and os.lstat(entry).st_dev == device]
+
+
+def usage_once(paths):
+    out = subprocess.run(["du", "-sx", "--time", "--time-style=+%s", "--block-size=1", "--", *map(str, paths)], capture_output=True, text=True).stdout
+    usage = {}
+    for line in out.splitlines():
+        size, newest, path = line.split("\t", 2)
+        usage[path] = (int(size), int(newest))
+    return usage
+
+
+def top_level_sizes(root, members, usage):
     rows = []
-    loose = 0
-    for entry in sorted(root.iterdir()):
-        if entry.name in skip:
-            continue
+    loose = os.lstat(root).st_blocks * 512
+    newest = int(root.lstat().st_mtime)
+    for entry in members:
+        size, last = usage.get(str(entry), (0, 0))
         if entry.is_symlink() or not entry.is_dir():
-            loose += entry.lstat().st_size
+            loose += size
+            newest = max(newest, last)
             continue
-        if os.lstat(entry).st_dev != os.lstat(root).st_dev:
-            continue
-        size, newest = disk_usage_and_newest(entry)
-        rows.append({"path": str(entry), "size": size, "last_used": newest or int(entry.lstat().st_mtime)})
-    if loose:
-        rows.append({"path": f"{root}/*", "size": loose, "last_used": int(root.lstat().st_mtime)})
+        rows.append({"path": str(entry), "size": size, "last_used": last or int(entry.lstat().st_mtime)})
+    rows.append({"path": f"{root}/*", "size": loose, "last_used": newest})
     return sorted(rows, key=lambda row: -row["size"])
 
 
@@ -388,11 +391,16 @@ def main():
     usage = shutil.disk_usage("/nix/store")
     store_disk = sum(store.values())
     store_disk_segments = dict(store)
-    home_dirs = top_level_sizes(home, {".cache"})
-    caches = disk_bytes(home / ".cache")
-    files = {"home": sum(row["size"] for row in home_dirs), "caches": caches}
-    swap = os.stat("/swapfile").st_size if os.path.exists("/swapfile") else 0
-    system_dirs = top_level_sizes(Path("/"), {"nix", "home", "swapfile", "proc", "sys", "dev", "run", "boot"})
+    home_members = entries(home, {".cache"})
+    system_members = entries(Path("/"), {"nix", "home", "swapfile"})
+    swapfile = [Path("/swapfile")] if os.path.exists("/swapfile") else []
+    caches_dir = [home / ".cache"] if (home / ".cache").is_dir() else []
+    usage_all = usage_once(home_members + caches_dir + system_members + swapfile)
+    home_dirs = top_level_sizes(home, home_members, usage_all)
+    caches = sum(usage_all.get(str(path), (0, 0))[0] for path in caches_dir)
+    files = {"home": sum(row["size"] for row in home_dirs) + os.lstat(home.parent).st_blocks * 512, "caches": caches}
+    swap = usage_all.get("/swapfile", (0, 0))[0]
+    system_dirs = top_level_sizes(Path("/"), system_members, usage_all)
     held = held_open(os.stat("/").st_dev)
     held_bytes = sum(row["size"] for row in held)
     system_files = sum(row["size"] for row in system_dirs)
