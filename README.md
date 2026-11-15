@@ -61,18 +61,21 @@ Source: `modules/nixos/build-client.nix`, `build-offload.py`, `dev-build.sh`, `v
 
 ## Disk
 
-Space is reclaimed only under pressure and least recently used first: whenever free space drops
-under the target, including when files are added, the laptop reclaims just the deficit, taking
-recorded build artefacts, scratch dirs and caches first, then whole project closures, then dead
-store paths, each oldest-use first. Nothing is deleted for age alone; generations are expired
-daily to the last ten. Every deploy roots the deployed closure of its target here, so an
-unchanged host never rebuilds. The performance tab of the desktop shell shows the store by tier
-and the space taken by real files.
+`disk-gc` runs continuously at idle priority and keeps free space at the target (`minFreeGiB`
+plus 512 MiB). Recorded build artefacts, scratch dirs, project closures and dead store paths form
+one queue ordered by last use, refreshed every minute from the nix database. It deletes in bursts
+of 1000 store paths (4000 below nix `min-free`), each with its dead referrers, waits less the
+further free space is from the target, and pauses while CPU or IO pressure is high. Nothing is
+deleted for age alone; generations are expired daily to the last ten. Every deploy roots the
+deployed closure of its target here, so an unchanged host never rebuilds. The disk tab of the
+desktop shell drills from the whole disk into segments, folders and store paths, and plots what
+was reclaimed over time; selecting a stretch lists the paths taken.
 
 | Command | Does |
 |---|---|
 | `project-closure-retention` | report or evict project closures by tier against the budget |
 | `store-collect --need-gib N` | report or delete dead store paths, oldest first, until N GiB is freed |
+| `systemctl status disk-gc` | the continuous collector; its state is in `/run/user/1000/disk-pressure.json` |
 | `project-scratch-clean` | report or remove recorded build artefacts, scratch dirs and caches |
 
 Source: `modules/nixos/disk.nix` and the scripts beside it.

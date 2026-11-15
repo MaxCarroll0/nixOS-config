@@ -114,6 +114,26 @@ def launch(log, command):
     print("launched pid=%d log=%s: %s" % (child.pid, log, " ".join(command)), flush=True)
 
 
+def note_stage(log, stage):
+    marks = Path(log + ".stages")
+    last = marks.read_text().splitlines()[-1].split()[1] if marks.exists() and marks.read_text().strip() else None
+    if last != stage:
+        with marks.open("a") as out:
+            out.write("%d %s\n" % (time.time(), stage))
+
+
+def stage_summary(log):
+    marks = Path(log + ".stages")
+    if not marks.exists():
+        return ""
+    rows = [line.split() for line in marks.read_text().splitlines() if line.strip()]
+    parts = []
+    for index, (at, stage) in enumerate(rows):
+        end = int(rows[index + 1][0]) if index + 1 < len(rows) else int(time.time())
+        parts.append("%s %dm%02ds" % (stage, (end - int(at)) // 60, (end - int(at)) % 60))
+    return " ".join(parts)
+
+
 def main():
     argv = sys.argv[1:]
     command = []
@@ -131,6 +151,7 @@ def main():
     options = parser.parse_args(argv)
     if command:
         launch(options.log, command)
+        Path(options.log + ".stages").write_text("")
     flat = {"bytes": 0, "progress": 0, "drv": 0, "stage": 0}
     previous = None
     started = time.time()
@@ -141,6 +162,7 @@ def main():
             print("RUNNING log=%s" % options.log, flush=True)
             return 3
         data, signals, tail = sample(options.log)
+        note_stage(options.log, signals["stage"])
         delta = signals["bytes"] - (previous["bytes"] if previous else 0)
         if previous is not None:
             for key in flat:
@@ -153,6 +175,7 @@ def main():
             print(describe(signals, delta, 0, tail, started, stage_since), flush=True)
             if verdicts:
                 print("verdict: " + VERDICT.search(data).group(0).decode(errors="replace"), flush=True)
+            print("stages: %s" % stage_summary(options.log), flush=True)
             print("EXIT=%s log=%s" % (exits[-1].decode(), options.log), flush=True)
             return 0 if exits[-1] == b"0" else 1
         if min(flat.values()) >= FLAT_MINUTES:

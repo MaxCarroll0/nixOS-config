@@ -584,3 +584,17 @@ index 60cb877..0a96014 100644
      Lock {
          id: lock
      }
+diff --git a/modules/dashboard/Performance.qml b/modules/dashboard/Performance.qml
+--- a/modules/dashboard/Performance.qml
++++ b/modules/dashboard/Performance.qml
+@@ -130,6 +130,10 @@
+                     sourceComponent: MemoryCard {}
+                 }
+             }
++
++            DiskCard {
++                Layout.fillWidth: true
++            }
+         }
+ 
+         WrappedLoader {

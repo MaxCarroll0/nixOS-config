@@ -294,7 +294,7 @@
 
   nix.settings = {
     min-free = 2 * 1024 * 1024 * 1024;
-    max-free = 5 * 1024 * 1024 * 1024;
+    max-free = 2 * 1024 * 1024 * 1024 + 512 * 1024 * 1024;
     auto-optimise-store = true;
   };
   services.udev.extraRules = ''

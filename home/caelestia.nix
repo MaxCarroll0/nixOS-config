@@ -38,6 +38,7 @@ let
           ++ cfg.caelestia.patches;
         postPatch = (old.postPatch or "") + ''
           cp -r --no-preserve=mode ${../quickshell/caelestia}/. .
+          sed -i 's/flickableDirection: Flickable.HorizontalFlick/&\n            interactive: false/' modules/dashboard/Content.qml
         '';
       });
 

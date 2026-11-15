@@ -1,7 +1,10 @@
 import argparse
+import json
 import os
 import shutil
+import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -99,7 +102,7 @@ def artefact_candidates(state):
 
 def shell_temp_candidates():
     return [
-        (entry.lstat().st_mtime, entry, "nix-shell temp", remove)
+        (entry.lstat().st_mtime, entry, "tmp", remove)
         for entry in Path("/tmp").glob("nix-shell.*")
         if entry.lstat().st_uid == os.getuid()
     ]
@@ -107,7 +110,7 @@ def shell_temp_candidates():
 
 def scratchpad_candidates():
     return [
-        (last_used(entry), entry, "scratchpad", remove)
+        (last_used(entry), entry, "tmp", remove)
         for scratchpad in Path("/tmp/claude-%d" % os.getuid()).glob("*/*/scratchpad")
         for entry in scratchpad.iterdir()
     ]
@@ -122,11 +125,19 @@ def cache_candidates(home):
     return rows
 
 
+def writable_retry(function, failed, error):
+    if not isinstance(error, PermissionError):
+        raise error
+    parent = os.path.dirname(failed)
+    os.chmod(parent, os.lstat(parent).st_mode | stat.S_IWUSR | stat.S_IXUSR)
+    function(failed)
+
+
 def remove(path):
     if path.is_symlink() or path.is_file():
         path.unlink()
     else:
-        shutil.rmtree(path)
+        shutil.rmtree(path, onexc=writable_retry)
 
 
 def offload_candidates(root):
@@ -151,6 +162,8 @@ def main():
     parser = argparse.ArgumentParser(description="Reclaim rederivable build and cache leftovers, least recently used first")
     parser.add_argument("--apply", action="store_true", help="remove; needs --need-gib")
     parser.add_argument("--need-gib", type=float, help="stop once this much has been reclaimed")
+    parser.add_argument("--json", action="store_true", help="print the selection as JSON")
+    parser.add_argument("--before", type=float, help="only entries last used before this epoch second")
     parser.add_argument("--home", type=Path, default=Path.home())
     parser.add_argument(
         "--state",
@@ -169,18 +182,43 @@ def main():
         + offload_candidates(Path(os.environ.get("SCRATCH_OFFLOAD_DIR", "") or "/nonexistent")),
         key=lambda row: row[0],
     )
+    if options.before is not None:
+        rows = [row for row in rows if row[0] < options.before]
+    started = time.time()
     need = (options.need_gib or 0) * GIB
     reclaimed = 0
-    print(f"{len(rows)} reclaimable entries, least recently used first" + (f"; need {need / GIB:.1f} GiB" if need else ""))
+    selected = []
+    say = (lambda *_: None) if options.json else print
+    say(f"{len(rows)} reclaimable entries, least recently used first" + (f"; need {need / GIB:.1f} GiB" if need else ""))
     for used, path, kind, removal in rows:
         if need and reclaimed >= need:
             break
         size = size_of(path)
         when = time.strftime("%Y-%m-%d", time.localtime(used))
-        print(f"  {when} {size / GIB:6.2f} GiB {kind:14} {path}")
+        say(f"  {when} {size / GIB:6.2f} GiB {kind:14} {path}")
         if options.apply:
-            removal(path)
+            try:
+                removal(path)
+            except OSError as error:
+                print(f"  skipped {path}: {error}", file=sys.stderr)
+                continue
         reclaimed += size
+        selected.append({"path": str(path), "kind": kind, "size": size, "last_used": int(used)})
+    if options.json:
+        print(
+            json.dumps(
+                {
+                    "stage": "scratch",
+                    "applied": options.apply,
+                    "candidates": len(rows),
+                    "need": need,
+                    "freed": reclaimed,
+                    "seconds": round(time.time() - started, 1),
+                    "selected": selected,
+                }
+            )
+        )
+        return
     verb = "reclaimed" if options.apply else "would reclaim"
     print(f"{verb} {reclaimed / GIB:.2f} GiB")
 

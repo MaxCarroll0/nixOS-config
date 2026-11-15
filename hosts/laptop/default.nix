@@ -97,6 +97,28 @@
     }
   ];
   systemd.sleep.settings.Sleep.AllowHibernation = lib.mkForce true;
+  systemd.services.hibernate-fit = {
+    description = "Size the hibernation image to the swap that is actually free";
+    wantedBy = [
+      "hibernate.target"
+      "hybrid-sleep.target"
+    ];
+    before = [
+      "systemd-hibernate.service"
+      "systemd-hybrid-sleep.service"
+    ];
+    unitConfig.DefaultDependencies = false;
+    serviceConfig.Type = "oneshot";
+    script = ''
+      read -r _ total _ < <(grep MemTotal /proc/meminfo)
+      read -r _ free _ < <(grep SwapFree /proc/meminfo)
+      default=$(( total * 1024 * 2 / 5 ))
+      fit=$(( free * 1024 / 2 ))
+      target=$(( fit < default ? fit : default ))
+      echo "$target" > /sys/power/image_size
+      echo "image target $(( target >> 20 )) MiB from $(( free >> 10 )) MiB free swap"
+    '';
+  };
   services.upower = {
     criticalPowerAction = "Hibernate";
     percentageCritical = 12;

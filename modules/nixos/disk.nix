@@ -50,26 +50,33 @@ let
     '';
   };
 
+  stateDir = "/var/lib/disk-ledger";
+  targetFile = "${home}/.config/caelestia/disk-target";
+
   ledger = pkgs.writeShellApplication {
     name = "disk-ledger";
     runtimeInputs = [
       config.nix.package
       pkgs.coreutils
       pkgs.python3
+      pkgs.util-linux
     ];
     text = ''
       export RETENTION_MODULE=${./project-closure-retention.py}
+      export COLLECT_MODULE=${./store-collect.py}
       export LEDGER_HOME=${home}
+      export LEDGER_USER=${cfg.user}
       export LEDGER_TARGET_BYTES=${toString (pressure.minFreeGiB * gib)}
+      export LEDGER_TARGET_FILE=${targetFile}
       export LEDGER_RUNTIME_DIR=/run/user/${uid}
+      export LEDGER_STATE_DIR=${stateDir}
       export LEDGER_UID=${uid}
       export LEDGER_TEXTFILE=/var/lib/node-exporter-textfile/disk-ledger.prom
       export LEDGER_OFFLOAD_DIR=${if cfg.offload.enable then "${home}/offload" else ""}
+      export LEDGER_SCRATCH_PLAN="${lib.getExe scratchClean} --home ${home} --state ${home}/.local/state/dev-build"
       exec python3 ${./disk-ledger.py}
     '';
   };
-
-  freeGiB = "df --output=avail -B1G /nix/store | tail -n1";
 
   resourceLimits = {
     CPUWeight = "idle";
@@ -109,30 +116,29 @@ in
       enable = lib.mkOption {
         type = lib.types.bool;
         default = config.networking.hostName == "laptop";
-        description = "Whether free space below the target triggers retention and bounded collection.";
+        description = "Whether the continuous collector keeps free space at the target.";
       };
 
       minFreeGiB = lib.mkOption {
         type = lib.types.int;
         default = if config.networking.hostName == "desktopnew" then 40 else 20;
-        description = "Free space in GiB on /nix/store below which pressure reclaim runs.";
-      };
-
-      maxFreedGiB = lib.mkOption {
-        type = lib.types.int;
-        default = 40;
-        description = "Upper bound in GiB on what one pressure run may free.";
+        description = "Free space in GiB on /nix/store that continuous reclaim keeps, plus a 512 MiB margin.";
       };
     };
   };
 
   config = {
+    nix.settings.keep-derivations = lib.mkIf pressure.enable false;
+
     environment.systemPackages = [
       collect
       scratchClean
     ];
 
+    systemd.tmpfiles.rules = [ "d ${stateDir} 0755 root root -" ];
+
     systemd.services.generation-expire = {
+      restartIfChanged = false;
       description = "Keep the last 10 generations of every profile";
       path = [ config.nix.package ];
       serviceConfig = resourceLimits // {
@@ -156,51 +162,40 @@ in
       };
     };
 
-    systemd.services.disk-pressure = lib.mkIf pressure.enable {
-      description = "Reclaim store space when free space is below target";
+    systemd.services.disk-gc = lib.mkIf pressure.enable {
+      description = "Continuous least-recently-used reclaim toward the free-space target";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "nix-daemon.socket" ];
       path = [
         config.nix.package
-        pkgs.coreutils
+        pkgs.util-linux
+        pkgs.systemd
       ];
+      environment = {
+        COLLECT_MODULE = "${./store-collect.py}";
+        GC_STATE_DIR = stateDir;
+        GC_STATUS = "/run/user/${uid}/disk-pressure.json";
+        GC_UID = uid;
+        GC_USER = cfg.user;
+        GC_TARGET_BYTES = toString (pressure.minFreeGiB * gib);
+        GC_TARGET_FILE = targetFile;
+        GC_EMERGENCY_BYTES = toString (config.nix.settings.min-free or (5 * gib));
+        GC_SCRATCH = "${lib.getExe scratchClean} --home ${home} --state ${home}/.local/state/dev-build";
+        GC_RETENTION = "${cfg.retention}/bin/project-closure-retention";
+        PYTHONUNBUFFERED = "1";
+      };
       serviceConfig = resourceLimits // {
-        Type = "oneshot";
-      };
-      script = ''
-        reclaim() {
-          local free need
-          free=$(${freeGiB})
-          [ "$free" -lt ${toString pressure.minFreeGiB} ] || exit 0
-          need=$(( ${toString pressure.minFreeGiB} - free + 5 ))
-          [ "$need" -le ${toString pressure.maxFreedGiB} ] || need=${toString pressure.maxFreedGiB}
-          "$@" "$need"
-        }
-        reclaim ${pkgs.util-linux}/bin/runuser -u ${cfg.user} -- ${lib.getExe scratchClean} \
-          --apply --home ${home} --state ${home}/.local/state/dev-build --need-gib
-        reclaim ${cfg.retention}/bin/project-closure-retention --apply --max-freed-gib ${toString pressure.maxFreedGiB} --need-gib
-        reclaim ${lib.getExe collect} --apply --need-gib
-      '';
-    };
-
-    systemd.timers.disk-pressure = lib.mkIf pressure.enable {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnBootSec = "5min";
-        OnUnitActiveSec = "15min";
-      };
-    };
-
-    systemd.paths.disk-pressure = lib.mkIf pressure.enable {
-      wantedBy = [ "multi-user.target" ];
-      pathConfig = {
-        PathChanged = [
-          "${home}/Videos"
-          "${home}/Downloads"
-        ];
-        Unit = "disk-pressure.service";
+        ExecStart = "${pkgs.python3}/bin/python3 ${./disk-gc.py}";
+        Restart = "always";
+        RestartSec = 30;
+        Nice = 19;
+        CPUSchedulingPolicy = "idle";
+        IOSchedulingClass = "idle";
       };
     };
 
     systemd.services.disk-ledger = {
+      restartIfChanged = false;
       description = "Write the disk ledger for the performance tab and metrics";
       serviceConfig = resourceLimits // {
         Type = "oneshot";

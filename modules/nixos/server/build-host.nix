@@ -14,21 +14,12 @@ let
 
   gib = 1024 * 1024 * 1024;
 
-  freeGiB =
+  minFreeGiB =
     {
-      laptop = {
-        min = 5;
-        max = 10;
-      };
-      desktopnew = {
-        min = 40;
-        max = 80;
-      };
+      laptop = 5;
+      desktopnew = 40;
     }
-    .${config.networking.hostName} or {
-      min = 10;
-      max = 200;
-    };
+    .${config.networking.hostName} or 10;
 
   slice = "nixbuild";
 
@@ -102,8 +93,8 @@ in
         cores = 0;
         sandbox = true;
         sandbox-fallback = false;
-        min-free = freeGiB.min * gib;
-        max-free = freeGiB.max * gib;
+        min-free = minFreeGiB * gib;
+        max-free = minFreeGiB * gib + 512 * 1024 * 1024;
         auto-allocate-uids = true;
         experimental-features = [
           "auto-allocate-uids"
