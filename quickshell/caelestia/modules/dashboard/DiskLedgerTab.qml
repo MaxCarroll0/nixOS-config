@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Layouts
+import Quickshell.Io
 import Caelestia.Config
 import qs.components
 import qs.components.controls
@@ -154,7 +155,7 @@ Item {
         if (node.kind === "segment")
             return ledger.valueOf(point, node.segment);
         const group = ({ home_files: "home", caches: "caches", system_files: "system", held: "held", deployed: "deployed", shells: "shells", other: "other", project_tier1: "projects", project_tier2: "projects", fetched: "projects", system_generations: "generations", home_generations: "generations" })[root.trail.length ? root.trail[0].segment : ""];
-        const items = (point.items ?? ({}))[group];
+        const items = (root.historyItems[point.at] ?? ({}))[group];
         if (!node.path || typeof items !== "object")
             return NaN;
         if (node.path in items)
@@ -187,6 +188,22 @@ Item {
             }
         }
         return any ? total : null;
+    }
+
+    property var historyItems: ({})
+
+    FileView {
+        path: root.trail.length > 0 ? `${ledger.runtimeDir}/disk-history-items.json` : ""
+        watchChanges: true
+        printErrors: false
+        blockLoading: false
+        onFileChanged: reload()
+        onLoaded: {
+            try {
+                root.historyItems = JSON.parse(text());
+            } catch (e) {}
+            history.requestPaint();
+        }
     }
 
     DiskLedgerModel {
@@ -782,7 +799,11 @@ Item {
                     implicitHeight: root.chartHeight
 
                     property var layout: null
+                    property var hoverPoint: null
+                    property string hoverKey: ""
                     property var runXs: []
+
+                    onHoverPointChanged: requestPaint()
                     property real dragFrom: -1
                     property real dragTo: -1
 
@@ -799,6 +820,17 @@ Item {
                             return null;
                         const at = history.timeAt(px);
                         return run.events.reduce((best, event) => !best || Math.abs(event.at - at) < Math.abs(best.at - at) ? event : best, null);
+                    }
+
+                    function pointAt(px: real): var {
+                        if (!history.layout)
+                            return null;
+                        const xs = history.layout.xs;
+                        let index = 0;
+                        for (let i = 1; i < xs.length; i++)
+                            if (Math.abs(xs[i] - px) < Math.abs(xs[index] - px))
+                                index = i;
+                        return history.layout.points[index] ?? null;
                     }
 
                     function bandAt(px: real, py: real): var {
@@ -877,7 +909,15 @@ Item {
                                 base[i] += valueFor(points[i], item);
                             bands.push({ key: item.key ?? "", lows: lows, highs: base.slice() });
                         }
-                        history.layout = { xs: points.map(point => x(point.at)), bands: bands, y: y, top: top };
+                        history.layout = { xs: points.map(point => x(point.at)), points: points, bands: bands, y: y, top: top };
+                        if (history.hoverPoint) {
+                            ctx.strokeStyle = Colours.palette.m3onSurface;
+                            ctx.lineWidth = 1;
+                            ctx.beginPath();
+                            ctx.moveTo(Math.round(x(history.hoverPoint.at)) + 0.5, 4);
+                            ctx.lineTo(Math.round(x(history.hoverPoint.at)) + 0.5, plotBottom);
+                            ctx.stroke();
+                        }
                         if (!focus) {
                             ctx.save();
                             ctx.beginPath();
@@ -978,12 +1018,18 @@ Item {
                             const band = run ? null : history.bandAt(mouse.x, mouse.y);
                             const key = band && band.key && !root.focusNode ? band.key : "";
                             const event = history.eventNear(run, mouse.x);
+                            const point = history.pointAt(mouse.x);
+                            if (history.hoverPoint !== point)
+                                history.hoverPoint = point;
+                            history.hoverKey = band && band.key ? band.key : "";
                             if (reclaims.hoveredEvent !== event)
                                 reclaims.hoveredEvent = event;
                             if (bar.hovered !== key)
                                 bar.hovered = key;
                         }
                         onExited: {
+                            history.hoverPoint = null;
+                            history.hoverKey = "";
                             reclaims.hoveredEvent = null;
                             bar.hovered = "";
                         }
@@ -1122,6 +1168,54 @@ Item {
                         onDoubleClicked: root.range = null
                     }
                 }
+
+                Flow {
+                    Layout.preferredWidth: history.implicitWidth
+                    visible: history.hoverPoint !== null
+                    spacing: Tokens.spacing.small
+
+                    StyledText {
+                        text: history.hoverPoint ? ledger.clock(history.hoverPoint.at) : ""
+                        font: Tokens.font.body.small
+                        color: Colours.palette.m3primary
+                    }
+
+                    Repeater {
+                        model: {
+                            const point = history.hoverPoint;
+                            if (!point)
+                                return [];
+                            const focus = root.focusNode;
+                            if (focus && focus.kind !== "segment")
+                                return [{ key: "", label: focus.label, color: Colours.palette.m3primary, size: root.nodeValue(point, focus), bold: true }];
+                            const rows = ledger.segments.filter(item => !focus || item.key === focus.segment).map(item => ({ key: item.key, label: item.label, color: item.color, size: ledger.valueOf(point, item.key), bold: item.key === history.hoverKey || (focus && focus.segment === item.key) })).filter(row => row.size > 0);
+                            return focus ? rows : rows.concat([{ key: "free", label: "free", color: ledger.freeColor, size: point.free ?? 0, bold: false }]);
+                        }
+
+                        RowLayout {
+                            id: sliceRow
+
+                            required property var modelData
+
+                            spacing: 3
+
+                            Rectangle {
+                                implicitWidth: 7
+                                implicitHeight: 7
+                                radius: 2
+                                color: sliceRow.modelData.color
+                            }
+
+                            StyledText {
+                                text: `${sliceRow.modelData.label} ${isFinite(sliceRow.modelData.size) ? ledger.gib(sliceRow.modelData.size) : "?"}`
+                                font.pointSize: Tokens.font.body.small.pointSize
+                                font.family: Tokens.font.body.small.family
+                                font.bold: sliceRow.modelData.bold
+                                color: sliceRow.modelData.bold ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant
+                            }
+                        }
+                    }
+                }
             }
 
             ColumnLayout {
@@ -1130,7 +1224,7 @@ Item {
 
                 StyledText {
                     Layout.maximumWidth: root.paneWidth / 2 - Tokens.spacing.large / 2
-                    text: root.focusNode ? `collected from ${root.focusNode.label}` : "collected"
+                    text: root.focusNode ? `collection rate from ${root.focusNode.label}` : "collection rate"
                     font: Tokens.font.title.small
                     color: Colours.palette.m3primary
                     elide: Text.ElideMiddle
@@ -1185,15 +1279,16 @@ Item {
                         for (const entry of events)
                             if (!stages.includes(entry.event.stage))
                                 stages.push(entry.event.stage);
-                        const totals = ({});
-                        for (const stage of stages)
-                            totals[stage] = 0;
-                        const steps = events.map(entry => {
-                            totals[entry.event.stage] += entry.amount;
-                            return { at: entry.event.at, event: entry.event, totals: Object.assign({}, totals) };
-                        });
+                        const bins = Math.max(12, Math.min(96, Math.round(reclaims.plotWidth / 6)));
+                        const binSeconds = Math.max(60, (last - first) / bins);
+                        const rates = Array.from({ length: bins }, () => ({}));
+                        for (const entry of events) {
+                            const index = Math.min(bins - 1, Math.max(0, Math.floor((entry.event.at - first) / binSeconds)));
+                            rates[index][entry.event.stage] = (rates[index][entry.event.stage] ?? 0) + entry.amount * 3600 / binSeconds;
+                        }
+                        const steps = events.map(entry => ({ at: entry.event.at, event: entry.event }));
                         reclaims.points = steps.map(step => ({ x: reclaims.xOf(step.at), event: step.event }));
-                        const peak = Math.max(268435456, steps.length ? Object.values(steps[steps.length - 1].totals).reduce((a, b) => a + b, 0) : 0);
+                        const peak = Math.max(268435456, ...rates.map(bin => Object.values(bin).reduce((a, b) => a + b, 0)));
                         const y = bytes => bottom - plotHeight * bytes / peak;
                         const right = reclaims.plotLeft + reclaims.plotWidth;
                         ctx.strokeStyle = Colours.palette.m3outlineVariant;
@@ -1210,32 +1305,21 @@ Item {
                             ctx.fillRect(Math.min(from, to) - 2, 6, Math.abs(to - from) + 4, plotHeight);
                         }
                         const anyLit = bar.hovered !== "" || root.trail.length > 0;
-                        let below = steps.map(() => 0);
-                        for (const stage of stages) {
-                            const above = steps.map((step, index) => below[index] + step.totals[stage]);
-                            ctx.beginPath();
-                            ctx.moveTo(reclaims.plotLeft, bottom);
-                            let previous = 0;
-                            steps.forEach((step, index) => {
-                                const x = reclaims.xOf(step.at);
-                                ctx.lineTo(x, y(previous));
-                                ctx.lineTo(x, y(above[index]));
-                                previous = above[index];
-                            });
-                            ctx.lineTo(right, y(previous));
-                            ctx.lineTo(right, y(below[below.length - 1] ?? 0));
-                            for (let index = steps.length - 1; index >= 0; index--) {
-                                const x = reclaims.xOf(steps[index].at);
-                                ctx.lineTo(x, y(below[index]));
-                                ctx.lineTo(x, y(index > 0 ? below[index - 1] : 0));
+                        const barWidth = reclaims.plotWidth / bins;
+                        rates.forEach((bin, index) => {
+                            let below = 0;
+                            const x = reclaims.plotLeft + barWidth * index;
+                            for (const stage of stages) {
+                                const value = bin[stage] ?? 0;
+                                if (value <= 0)
+                                    continue;
+                                ctx.fillStyle = ledger.stageColor(stage);
+                                ctx.globalAlpha = !anyLit || reclaims.stageLit(stage) ? 0.85 : 0.3;
+                                ctx.fillRect(x + 0.5, y(below + value), Math.max(1, barWidth - 1), y(below) - y(below + value));
+                                below += value;
                             }
-                            ctx.closePath();
-                            ctx.fillStyle = ledger.stageColor(stage);
-                            ctx.globalAlpha = !anyLit || reclaims.stageLit(stage) ? 0.85 : 0.3;
-                            ctx.fill();
-                            ctx.globalAlpha = 1;
-                            below = above;
-                        }
+                        });
+                        ctx.globalAlpha = 1;
                         for (const step of steps)
                             if (step.event.status !== 0) {
                                 ctx.fillStyle = Colours.palette.m3error;
@@ -1257,7 +1341,7 @@ Item {
                         ctx.textAlign = "right";
                         for (let step = 0; step <= 2; step++) {
                             const bytes = peak * step / 2;
-                            ctx.fillText(ledger.gib(bytes).replace(" GiB", "G").replace(" MiB", "M"), reclaims.plotLeft - 4, y(bytes) + 3);
+                            ctx.fillText(ledger.gib(bytes).replace(" GiB", "G").replace(" MiB", "M") + "/h", reclaims.plotLeft - 4, y(bytes) + 3);
                         }
                         ctx.textAlign = "center";
                         for (let tick = 0; tick <= 3; tick++) {

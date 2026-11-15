@@ -640,7 +640,8 @@ def main():
         },
         "deficit": deficit,
         "need": need,
-        "queue": rows,
+        "queue": rows[: max(cut + 1, 1)],
+        "queue_file": listing("disk-queue.jsonl", rows),
         "cut": cut,
         "largest_dead": dead_plan["largest"],
         "history": [],
@@ -670,7 +671,9 @@ def main():
     point = {"at": now, "store": store_disk_segments, "files": files, "swap": swap, "system": system_files, "held": held_bytes, "measuring": measuring, "unaccounted": unaccounted, "reserved": reserved, "free": free, "items": items}
 
     append_history(history_path, points, point)
-    ledger["history"] = downsample(points)
+    sampled = downsample(points)
+    write_json(runtime / "disk-history-items.json", {str(old["at"]): old.get("items", {}) for old in sampled}, owner=owner)
+    ledger["history"] = [{key: value for key, value in old.items() if key != "items"} for old in sampled]
     if scratch and scratch.get("error"):
         ledger["scratch_error"] = scratch["error"]
     offload_root = os.environ.get("LEDGER_OFFLOAD_DIR", "")
