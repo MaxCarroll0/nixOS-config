@@ -58,6 +58,7 @@ let
     runtimeInputs = [
       config.nix.package
       pkgs.coreutils
+      pkgs.e2fsprogs
       pkgs.python3
       pkgs.util-linux
     ];

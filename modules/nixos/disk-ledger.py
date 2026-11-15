@@ -1,4 +1,5 @@
 import collections
+import fcntl
 import glob
 import re
 import importlib.util
@@ -16,6 +17,7 @@ HISTORY_DAYS = 30
 HISTORY_POINTS = 288
 PREVIEW_BYTES = 10 * GIB
 SLACK_BYTES = GIB // 2
+RECONCILE_FREED = 2 * GIB
 KEEP_GENERATIONS = 10
 SEGMENTS = ("system", "home", "system_generations", "home_generations", "project_tier1", "project_tier2", "fetched", "deployed", "shells", "other", "garbage", "metadata", "rescan")
 
@@ -35,7 +37,7 @@ def closure(paths):
 
 
 def store_metadata():
-    return var_bytes() + inside_store_metadata()
+    return var_bytes() + inside_store_metadata() + os.lstat("/nix").st_blocks * 512
 
 
 def inside_store_metadata():
@@ -178,6 +180,22 @@ def load_events(path):
     return events
 
 
+def freed_since(path, since):
+    total = 0
+    try:
+        with open(path) as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if event.get("at", 0) >= since:
+                    total += max(0, event.get("freed", 0))
+    except OSError:
+        pass
+    return total
+
+
 def disk_bytes(path):
     out = subprocess.run(["du", "-sx", "--block-size=1", path], capture_output=True, text=True).stdout
     return int(out.split()[0]) if out else 0
@@ -198,24 +216,51 @@ def measured_bytes(path, cache, now, max_age):
 
 def held_open(device):
     owners = {}
-    for fd in glob.glob("/proc/[0-9]*/fd/*"):
-        try:
-            target = os.readlink(fd)
-            if not target.endswith(" (deleted)"):
+    for kind, pattern in (("open", "/proc/[0-9]*/fd/*"), ("mapped", "/proc/[0-9]*/map_files/*")):
+        for link in glob.glob(pattern):
+            try:
+                target = os.readlink(link)
+                if not target.endswith(" (deleted)"):
+                    continue
+                stat = os.stat(link)
+            except OSError:
                 continue
-            stat = os.stat(fd)
-        except OSError:
-            continue
-        if stat.st_dev != device or not os.path.stat.S_ISREG(stat.st_mode):
-            continue
-        pid = fd.split("/")[2]
-        try:
-            command = open(f"/proc/{pid}/comm").read().strip()
-        except OSError:
-            command = pid
-        row = owners.setdefault(stat.st_ino, {"path": target[: -len(" (deleted)")], "size": stat.st_blocks * 512, "last_used": int(stat.st_mtime), "holders": set()})
-        row["holders"].add(command)
+            if stat.st_dev != device or not os.path.stat.S_ISREG(stat.st_mode):
+                continue
+            pid = link.split("/")[2]
+            try:
+                command = open(f"/proc/{pid}/comm").read().strip()
+            except OSError:
+                command = pid
+            row = owners.setdefault(stat.st_ino, {"path": target[: -len(" (deleted)")], "size": stat.st_blocks * 512, "last_used": int(stat.st_mtime), "how": kind, "holders": set()})
+            row["holders"].add(command)
     return sorted(({**row, "holders": sorted(row["holders"])} for row in owners.values() if row["size"]), key=lambda row: -row["size"])
+
+
+def hidden_inodes(root):
+    source = subprocess.run(["findmnt", "-no", "SOURCE", root], capture_output=True, text=True).stdout.strip().split("[")[0]
+    total = 0
+    for inode in (3, 4, 12):
+        out = subprocess.run(["debugfs", "-R", f"stat <{inode}>", source], capture_output=True, text=True).stdout
+        found = re.search(r"Blockcount: (\d+)", out)
+        total += int(found.group(1)) * 512 if found else 0
+    return total
+
+
+def covered_mountpoints(root):
+    device = os.lstat(root).st_dev
+    targets = set()
+    with open("/proc/self/mountinfo") as handle:
+        for line in handle:
+            target = line.split()[4].encode().decode("unicode_escape")
+            if target == root:
+                continue
+            try:
+                if os.lstat(target).st_dev != device and os.lstat(os.path.dirname(target)).st_dev == device:
+                    targets.add(target)
+            except OSError:
+                continue
+    return sorted(targets)
 
 
 def entries(root, skip):
@@ -308,6 +353,10 @@ def project_rows(projects, sizes, retention, path_row, listing, project_paths):
 
 
 def main():
+    state = Path(os.environ["LEDGER_STATE_DIR"])
+    state.mkdir(parents=True, exist_ok=True)
+    lock = open(state / "measure.lock", "a")
+    fcntl.flock(lock, fcntl.LOCK_EX)
     now = int(time.time())
     retention = load_module("retention", "RETENTION_MODULE")
     collector = load_module("collector", "COLLECT_MODULE")
@@ -346,9 +395,8 @@ def main():
     projects = retention.discover_projects(Path("/nix/var/nix/gcroots/auto"))
     retention.populate_closures(projects)
     project_union = set().union(*(p.closure for p in projects.values())) if projects else set()
-    state = Path(os.environ["LEDGER_STATE_DIR"])
     metadata = store_metadata()
-    measured, fresh = measured_bytes("/nix/store", state / "store-du.json", now, 6 * 3600 if index.reconciled() else 0)
+    measured, fresh = measured_bytes("/nix/store", state / "store-du.json", now, 6 * 3600 if index.reconciled() and freed_since(state / "events.jsonl", index.reconciled()) < RECONCILE_FREED else 0)
     if index.coverage() < 0.99:
         index.calibrate(measured - inside_store_metadata())
     sizes = index.sizes("share")
@@ -401,6 +449,11 @@ def main():
     files = {"home": sum(row["size"] for row in home_dirs) + os.lstat(home.parent).st_blocks * 512, "caches": caches}
     swap = usage_all.get("/swapfile", (0, 0))[0]
     system_dirs = top_level_sizes(Path("/"), system_members, usage_all)
+    covered = covered_mountpoints("/")
+    system_dirs += [
+        {"path": "filesystem internals", "size": hidden_inodes("/"), "last_used": 0, "kind": "ext4 orphan file and quota inodes", "leaf": True},
+        {"path": "mountpoints", "size": 4096 * len(covered), "last_used": 0, "kind": f"directories under {len(covered)} mounts", "leaf": True},
+    ]
     held = held_open(os.stat("/").st_dev)
     held_bytes = sum(row["size"] for row in held)
     system_files = sum(row["size"] for row in system_dirs)

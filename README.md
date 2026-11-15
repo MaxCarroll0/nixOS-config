@@ -71,7 +71,7 @@ deployed closure of its target here, so an unchanged host never rebuilds. The di
 desktop shell drills from the whole disk into segments, folders and store paths, and plots what
 was reclaimed over time; selecting a stretch lists the paths taken. Its segments sum to the
 filesystem's used bytes: hard-linked store files whose sharing changed since their last scan,
-and deleted files still held open, are shown as their own rows.
+deleted files still held open or mapped, the ext4 orphan file and the directories under mountpoints are shown as their own rows. Store bursts stop at 1000 paths or 2 GiB, and the ledger pauses the collector while it measures.
 
 | Command | Does |
 |---|---|

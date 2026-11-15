@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Continuous least-recently-used reclaim: one queue over scratch, project roots and dead store paths, paced by deficit and pressure.
 
+import fcntl
 import importlib.util
 import json
 import os
@@ -14,6 +15,7 @@ MARGIN = 512 * MIB
 RAMP = 4 * GIB
 BURST = 1000
 EMERGENCY_BURST = 4000
+BURST_BYTES = 2 * GIB
 REFRESH_SECONDS = 60
 PLAN_SECONDS = 60
 IDLE_SECONDS = 30
@@ -53,6 +55,15 @@ def target():
 def free():
     stat = os.statvfs("/nix/store")
     return stat.f_bavail * stat.f_frsize
+
+
+def measuring():
+    try:
+        with open(os.path.join(STATE, "measure.lock"), "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return False
+    except BlockingIOError:
+        return True
 
 
 def pressure(kind):
@@ -151,9 +162,13 @@ class Queue:
 def step(queue, rows, limit):
     stage = rows[0]["stage"]
     run = []
+    batch_bytes = 0
     for row in rows:
         if row["stage"] != stage or (stage == "store" and len(run) >= limit) or (stage != "store" and run):
             break
+        if stage == "store" and run and limit == BURST and batch_bytes + row.get("size", 0) > BURST_BYTES:
+            break
+        batch_bytes += row.get("size", 0)
         run.append(row)
     started = time.time()
     before = free()
@@ -207,6 +222,10 @@ def main():
         available = free()
         deficit = goal - available
         base = {"at": int(time.time()), "target": goal, "free": available, "deficit": max(0, deficit), "last": last}
+        if available >= EMERGENCY and measuring():
+            write_status({**base, "running": False, "stage": "", "state": "measuring"})
+            time.sleep(2)
+            continue
         if deficit <= 0:
             if collected:
                 ledger()
