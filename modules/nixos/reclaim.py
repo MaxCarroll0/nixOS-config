@@ -481,6 +481,9 @@ class Model:
             state = self.worktrees[worktree][1]
             if state is None:
                 continue
+            if state.get("dirty"):
+                self.protected[worktree] = "uncommitted changes"
+                continue
             kind = "agent"
             detail = {"owner": self.user, "repo": repo, **state, "worktree": True}
             yield Item(kind, worktree, self.file_used(worktree), files=[worktree], detail=detail)
