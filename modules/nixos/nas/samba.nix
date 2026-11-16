@@ -10,14 +10,14 @@ let
   cfg = config.local.nas;
 
   shareOf =
-    name:
+    name: account:
     {
       path = "${cfg.dataRoot}/${name}";
       browseable = "yes";
       writable = "yes";
       "valid users" = name;
       "force user" = name;
-      "force group" = name;
+      "force group" = if account.systemUser then config.users.users.${name}.group else name;
       "create mask" = "0600";
       "directory mask" = "0700";
     }
@@ -63,8 +63,8 @@ in
           "smb encrypt" = "required";
           # All three machines have hardware acceleration for AES-GCM.
           "server smb3 encryption algorithms" = "AES-128-GCM";
-          "bind interfaces only" = "yes";
-          "interfaces" = "lo ${lib.concatStringsSep " " cfg.smb.interfaces}";
+          # Samba skips non-broadcast interfaces such as tailscale0, so the firewall scopes 445.
+          "bind interfaces only" = "no";
           "load printers" = "no";
           "printing" = "bsd";
           "printcap name" = "/dev/null";
@@ -74,16 +74,11 @@ in
           "wide links" = "no";
         };
       }
-      // lib.mapAttrs (name: _: shareOf name) cfg.accounts;
+      // lib.mapAttrs shareOf cfg.accounts;
     };
 
     networking.firewall.interfaces = lib.genAttrs cfg.smb.interfaces (_: {
       allowedTCPPorts = [ 445 ];
     });
-
-    systemd.services.samba-nmbd.serviceConfig = {
-      After = "network-online.target";
-      Wants = "network-online.target";
-    };
   };
 }
