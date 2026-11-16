@@ -6,6 +6,7 @@ mod probe;
 mod reclaim;
 mod remove;
 mod store;
+mod sweep;
 mod sys;
 mod tree;
 
@@ -256,16 +257,18 @@ fn main() {
                     continue;
                 }
                 match gc::plan(&layout, &paths).and_then(|(ordered, references)| {
-                    gc::collect(&layout, &ordered, &references, &orphans, &mut |_| {})
+                    let mut session = gc::Session::open(&layout, &orphans)?;
+                    let outcome = session.delete(&ordered, &references);
+                    Ok((outcome, session.report.milliseconds()))
                 }) {
-                    Ok(report) => {
-                        let mut refused: Vec<&String> = report.refused.iter().collect();
+                    Ok((outcome, ms)) => {
+                        let mut refused: Vec<&String> = outcome.refused.iter().collect();
                         refused.sort();
                         println!(
                             "{}",
-                            serde_json::json!({"deleted": report.deleted, "entries": report.entries, "slowest": [(report.slowest.0 * 1e3).round(), report.slowest.1, report.slowest.2], "links": report.links, "refused": refused, "strays": report.strays, "error": report.error, "ms": report.milliseconds()})
+                            serde_json::json!({"deleted": outcome.deleted, "entries": outcome.entries, "links": outcome.links, "refused": refused, "causes": outcome.causes, "strays": outcome.strays, "error": outcome.error, "ms": ms})
                         );
-                        code |= i32::from(report.error.is_some() || !report.strays.is_empty());
+                        code |= i32::from(outcome.error.is_some() || !outcome.strays.is_empty());
                     }
                     Err(reason) => {
                         eprintln!("native collection unavailable: {reason}");

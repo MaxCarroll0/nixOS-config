@@ -15,19 +15,6 @@ pub fn blocks(path: &str) -> u64 {
     sys::lstat(path).map(|info| info.blocks).unwrap_or(0)
 }
 
-pub fn pressure(kind: &str) -> f64 {
-    std::fs::read_to_string(format!("/proc/pressure/{kind}"))
-        .ok()
-        .and_then(|text| {
-            text.lines()
-                .next()
-                .and_then(|line| line.split("avg10=").nth(1))
-                .and_then(|rest| rest.split_whitespace().next())
-                .and_then(|value| value.parse().ok())
-        })
-        .unwrap_or(0.0)
-}
-
 pub fn short(path: &str, home: &str) -> String {
     static STORE: OnceLock<Regex> = OnceLock::new();
     if path.starts_with("/nix/store/") {

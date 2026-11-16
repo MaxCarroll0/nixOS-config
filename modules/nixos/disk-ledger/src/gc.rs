@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 
 const LOGICAL: &str = "/nix/store/";
 const SCHEMA: &str = "10";
-const CHUNK: usize = 256;
 const READERS: usize = 16;
 const HASH_PART: usize = 32;
 const NAME_LENGTH: usize = 52;
@@ -101,12 +100,7 @@ pub fn idle() {
 pub struct Report {
     pub deleted: u64,
     pub entries: u64,
-    pub slowest: (f64, u64, String),
     pub links: u64,
-    pub refused: HashSet<String>,
-    pub causes: Vec<(String, &'static str)>,
-    pub strays: Vec<(String, i32)>,
-    pub error: Option<String>,
     pub waited: f64,
     pub roots: f64,
     pub rescanned: bool,
@@ -735,172 +729,83 @@ impl Collector {
         Ok(gone)
     }
 
-    fn sweep(
-        &mut self,
-        ordered: &[String],
-        references: &HashMap<String, Vec<String>>,
-        orphans: &[String],
-        shared: &Mutex<Shared>,
-        wake: i32,
-        report: &mut Report,
-        progress: &mut dyn FnMut(usize),
-    ) -> Result<(), String> {
-        let clock = Instant::now();
-        let mut live: HashSet<Key> = store::directory_roots(&self.state)
-            .keys()
-            .filter_map(|path| key(path))
-            .collect();
-        live.extend(temp_roots(&self.state)?);
-        report.rescanned = self.processes.refresh(&self.store);
-        if !report.rescanned
-            && ordered
-                .iter()
-                .filter_map(|path| key(path))
-                .any(|hash| self.processes.roots.contains(&hash))
-        {
-            self.processes.valid = false;
-            report.rescanned = self.processes.refresh(&self.store);
-        }
-        report.roots = clock.elapsed().as_secs_f64();
-        writable(&self.store)?;
-        let mut linked: Vec<u64> = Vec::new();
-        for (place, chunk) in ordered.chunks(CHUNK).enumerate() {
-            progress(place * CHUNK + chunk.len());
-            self.processes.watch();
-            let flight: Vec<&String> = {
-                let mut state = locked(shared);
-                let mut flight = Vec::new();
-                for path in chunk {
-                    if report.refused.contains(path) {
-                        continue;
-                    }
-                    match key(path) {
-                        Some(hash)
-                            if !live.contains(&hash)
-                                && !self.processes.roots.contains(&hash)
-                                && !hash_part(path)
-                                    .is_some_and(|text| state.temp.contains(text)) =>
-                        {
-                            flight.push(path)
-                        }
-                        Some(hash) => {
-                            let cause = if live.contains(&hash) {
-                                "gc root"
-                            } else if self.processes.roots.contains(&hash) {
-                                "held by a process"
-                            } else {
-                                "temp root of a nix client"
-                            };
-                            report.causes.push((path.clone(), cause));
-                            refuse(path, references, &mut report.refused)
-                        }
-                        None => {
-                            report.causes.push((path.clone(), "not a store path"));
-                            refuse(path, references, &mut report.refused)
-                        }
-                    }
-                }
-                state.flight = flight
-                    .iter()
-                    .filter_map(|path| hash_part(path))
-                    .map(str::to_string)
-                    .collect();
-                flight
-            };
-            let clock = Instant::now();
-            let gone =
-                self.invalidate(&flight, references, &mut report.refused, &mut report.causes);
-            report.database += clock.elapsed().as_secs_f64();
-            let clock = Instant::now();
-            remove::prefetch(
-                gone.iter()
-                    .flatten()
-                    .map(|path| format!("{}/{}", self.store, &path[LOGICAL.len()..]))
-                    .collect(),
-                READERS,
-            );
-            report.warming += clock.elapsed().as_secs_f64();
-            let clock = Instant::now();
-            for path in gone.iter().flatten() {
-                let mut outcome = remove::Outcome::default();
-                let single = Instant::now();
-                remove::remove_tree_linked(
-                    &format!("{}/{}", self.store, &path[LOGICAL.len()..]),
-                    &mut outcome,
-                    &mut Some(&mut linked),
-                );
-                let spent = single.elapsed().as_secs_f64();
-                report.entries += outcome.removed as u64;
-                if spent > report.slowest.0 {
-                    report.slowest = (spent, outcome.removed as u64, path.to_string());
-                }
-                if let Some((_, code)) = outcome.failed.first() {
-                    report.strays.push((path.to_string(), *code));
-                }
-                report.deleted += 1;
-            }
-            report.unlinking += clock.elapsed().as_secs_f64();
-            locked(shared).flight.clear();
-            unsafe { libc::write(wake, b"x".as_ptr() as *const libc::c_void, 1) };
-            if let Err(error) = gone {
-                report.error = Some(format!("nix database: {error}"));
-                report
-                    .refused
-                    .extend(ordered[place * CHUNK..].iter().cloned());
-                break;
+    fn drop_linked(&mut self, dir: i32, mut linked: Vec<u64>) -> u64 {
+        if self.index.origin.is_none() {
+            let path = format!("{}/.links", self.store);
+            let published = self
+                .links_index
+                .clone()
+                .filter(|file| std::path::Path::new(file).exists());
+            self.index.load(&path, published.as_deref());
+            if self.index.origin.is_none() {
+                self.index.origin = Some((0, 0, 0));
             }
         }
-        self.unlink_orphans(linked, orphans, report);
-        Ok(())
-    }
-
-    fn unlink_orphans(&mut self, mut linked: Vec<u64>, orphans: &[String], report: &mut Report) {
-        if linked.is_empty() && orphans.is_empty() {
-            return;
-        }
-        let path = format!("{}/.links", self.store);
-        let Some(dir) = sys::open_dir(&path) else {
-            return;
-        };
-        let clock = Instant::now();
-        let published = self
-            .links_index
-            .as_deref()
-            .filter(|file| std::path::Path::new(file).exists());
-        if !linked.is_empty()
-            && (self.index.origin.is_none()
-                || self.index.origin != stamp(published.unwrap_or(&path)))
-        {
-            self.index.load(&path, published);
-        }
-        report.indexing = clock.elapsed().as_secs_f64();
-        let clock = Instant::now();
         linked.sort_unstable();
         linked.dedup();
-        for ino in linked {
-            if let Some(name) = self.index.name(ino) {
-                report.links += drop_orphan(dir, &name);
-            }
-        }
-        for name in orphans.iter().filter(|name| !name.contains('/')) {
-            if let Ok(name) = CString::new(name.as_bytes()) {
-                report.links += drop_orphan(dir, &name);
-            }
-        }
-        if self.index.origin.is_some() && published.is_none() {
-            self.index.origin = stamp(&path);
-        }
-        sys::close(dir);
-        report.linking = clock.elapsed().as_secs_f64();
+        linked
+            .into_iter()
+            .filter_map(|ino| self.index.name(ino))
+            .map(|name| drop_orphan(dir, &name))
+            .sum()
     }
+}
 
-    fn run(
-        &mut self,
-        ordered: &[String],
-        references: &HashMap<String, Vec<String>>,
-        orphans: &[String],
-        progress: &mut dyn FnMut(usize),
-    ) -> Result<Report, String> {
+#[derive(Default, Debug)]
+pub struct Outcome {
+    pub deleted: u64,
+    pub entries: u64,
+    pub links: u64,
+    pub refused: HashSet<String>,
+    pub causes: Vec<(String, &'static str)>,
+    pub strays: Vec<(String, i32)>,
+    pub error: Option<String>,
+    pub database: f64,
+    pub unlinking: f64,
+}
+
+pub struct Session {
+    guard: MutexGuard<'static, Option<Collector>>,
+    live: HashMap<Key, Vec<String>>,
+    shared: std::sync::Arc<Mutex<Shared>>,
+    stop: std::sync::Arc<AtomicBool>,
+    wake: [i32; 2],
+    links: i32,
+    server: Option<std::thread::JoinHandle<()>>,
+    _lock: std::fs::File,
+    pub report: Report,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        unsafe { libc::write(self.wake[1], b"x".as_ptr() as *const libc::c_void, 1) };
+        if let Some(server) = self.server.take() {
+            let _ = server.join();
+        }
+        sys::close(self.wake[0]);
+        sys::close(self.wake[1]);
+        if self.links >= 0 {
+            sys::close(self.links);
+        }
+        if let Some(collector) = self.guard.as_mut() {
+            collector.index = Index::default();
+        }
+    }
+}
+
+impl Session {
+    pub fn open(layout: &Layout, orphans: &[String]) -> Result<Session, String> {
+        let mut guard = locked(&COLLECTOR);
+        if !guard.as_ref().is_some_and(|collector| {
+            collector.store == layout.store && collector.state == layout.state
+        }) {
+            *guard = Some(open(layout)?);
+        }
+        let (store, state) = match guard.as_ref() {
+            Some(collector) => (collector.store.clone(), collector.state.clone()),
+            None => return Err("no collector".into()),
+        };
         let mut report = Report::default();
         let clock = Instant::now();
         let lock = std::fs::File::options()
@@ -908,13 +813,13 @@ impl Collector {
             .write(true)
             .create(true)
             .mode(0o600)
-            .open(format!("{}/gc.lock", self.state))
+            .open(format!("{state}/gc.lock"))
             .map_err(|error| format!("gc.lock: {error}"))?;
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
             return Err(failure("gc.lock"));
         }
         report.waited = clock.elapsed().as_secs_f64();
-        let directory = format!("{}/gc-socket", self.state);
+        let directory = format!("{state}/gc-socket");
         let wrap = |error: std::io::Error| format!("{directory}: {error}");
         std::fs::create_dir_all(&directory).map_err(wrap)?;
         let anchor = std::fs::File::open(&directory).map_err(wrap)?;
@@ -923,51 +828,167 @@ impl Collector {
         let listener = UnixListener::bind(&socket).map_err(wrap)?;
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666)).map_err(wrap)?;
         listener.set_nonblocking(true).map_err(wrap)?;
-        let mut pipe = [0i32; 2];
-        if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
+        let mut wake = [0i32; 2];
+        if unsafe { libc::pipe2(wake.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
             return Err(failure("pipe"));
         }
-        let shared = Mutex::new(Shared::default());
-        let stop = AtomicBool::new(false);
-        let result = std::thread::scope(|scope| {
-            scope.spawn(|| serve(&listener, pipe[0], &shared, &stop));
-            let result = self.sweep(
-                ordered,
-                references,
-                orphans,
-                &shared,
-                pipe[1],
-                &mut report,
-                progress,
-            );
-            stop.store(true, Ordering::SeqCst);
-            unsafe { libc::write(pipe[1], b"x".as_ptr() as *const libc::c_void, 1) };
-            result
-        });
-        sys::close(pipe[0]);
-        sys::close(pipe[1]);
-        result.map(|()| report)
+        let shared = std::sync::Arc::new(Mutex::new(Shared::default()));
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let server = {
+            let (shared, stop, read) = (shared.clone(), stop.clone(), wake[0]);
+            std::thread::spawn(move || serve(&listener, read, &shared, &stop))
+        };
+        let mut session = Session {
+            guard,
+            live: HashMap::new(),
+            shared,
+            stop,
+            wake,
+            links: -1,
+            server: Some(server),
+            _lock: lock,
+            report,
+        };
+        let clock = Instant::now();
+        session.live = store::directory_roots(&state)
+            .into_iter()
+            .filter_map(|(path, links)| Some((key(&path)?, links)))
+            .collect();
+        for root in temp_roots(&state)? {
+            session.live.entry(root).or_default().push(String::new());
+        }
+        let collector = session.collector();
+        collector.processes.valid = false;
+        session.report.rescanned = collector.processes.refresh(&store);
+        session.report.roots = clock.elapsed().as_secs_f64();
+        writable(&store)?;
+        session.links = sys::open_dir(&format!("{store}/.links")).unwrap_or(-1);
+        for name in orphans.iter().filter(|name| !name.contains('/')) {
+            if let (Ok(name), true) = (CString::new(name.as_bytes()), session.links >= 0) {
+                session.report.links += drop_orphan(session.links, &name);
+            }
+        }
+        Ok(session)
     }
-}
 
-pub fn collect(
-    layout: &Layout,
-    ordered: &[String],
-    references: &HashMap<String, Vec<String>>,
-    orphans: &[String],
-    progress: &mut dyn FnMut(usize),
-) -> Result<Report, String> {
-    let mut held = locked(&COLLECTOR);
-    if !held
-        .as_ref()
-        .is_some_and(|collector| collector.store == layout.store && collector.state == layout.state)
-    {
-        *held = Some(open(layout)?);
+    pub fn unroot(&mut self, links: &[String]) {
+        self.live.retain(|_, held| {
+            held.retain(|link| !links.contains(link));
+            !held.is_empty()
+        });
     }
-    let Some(collector) = held.as_mut() else {
-        return Err("no collector".into());
-    };
-    collector.run(ordered, references, orphans, progress)
+
+    fn collector(&mut self) -> &mut Collector {
+        self.guard.as_mut().expect("session holds a collector")
+    }
+
+    fn cause(&self, path: &str, temp: &HashSet<String>) -> Option<&'static str> {
+        let Some(hash) = key(path) else {
+            return Some("not a store path");
+        };
+        let processes = &self
+            .guard
+            .as_ref()
+            .expect("session holds a collector")
+            .processes;
+        if self.live.contains_key(&hash) {
+            Some("gc root")
+        } else if processes.roots.contains(&hash) {
+            Some("held by a process")
+        } else if hash_part(path).is_some_and(|text| temp.contains(text)) {
+            Some("temp root of a nix client")
+        } else {
+            None
+        }
+    }
+
+    pub fn delete(
+        &mut self,
+        ordered: &[String],
+        references: &HashMap<String, Vec<String>>,
+    ) -> Outcome {
+        let mut outcome = Outcome::default();
+        let collector = self.collector();
+        let store = collector.store.clone();
+        let executed = collector.processes.watch();
+        if collector.processes.valid {
+            for pid in executed {
+                scan_process(pid, &mut collector.processes.roots);
+            }
+        } else {
+            collector.processes.refresh(&store);
+        }
+        let shared = self.shared.clone();
+        let flight: Vec<&String> = {
+            let mut state = locked(&shared);
+            let mut flight = Vec::new();
+            for path in ordered {
+                if outcome.refused.contains(path) {
+                    continue;
+                }
+                match self.cause(path, &state.temp) {
+                    None => flight.push(path),
+                    Some(cause) => {
+                        outcome.causes.push((path.clone(), cause));
+                        refuse(path, references, &mut outcome.refused);
+                    }
+                }
+            }
+            state.flight = flight
+                .iter()
+                .filter_map(|path| hash_part(path))
+                .map(str::to_string)
+                .collect();
+            flight
+        };
+        let flight: Vec<&String> = flight
+            .into_iter()
+            .filter(|path| !outcome.refused.contains(*path))
+            .collect();
+        let clock = Instant::now();
+        let collector = self.collector();
+        let gone = collector.invalidate(
+            &flight,
+            references,
+            &mut outcome.refused,
+            &mut outcome.causes,
+        );
+        outcome.database = clock.elapsed().as_secs_f64();
+        let clock = Instant::now();
+        let physical = |path: &str| format!("{store}/{}", &path[LOGICAL.len()..]);
+        let mut linked: Vec<u64> = Vec::new();
+        if let Ok(gone) = &gone {
+            if gone.len() > 1 {
+                remove::prefetch(gone.iter().map(|path| physical(path)).collect(), READERS);
+            }
+            for path in gone {
+                let mut removed = remove::Outcome::default();
+                remove::remove_tree_linked(&physical(path), &mut removed, &mut Some(&mut linked));
+                outcome.entries += removed.removed as u64;
+                if let Some((_, code)) = removed.failed.first() {
+                    outcome.strays.push((path.to_string(), *code));
+                }
+                outcome.deleted += 1;
+            }
+        }
+        locked(&self.shared).flight.clear();
+        unsafe { libc::write(self.wake[1], b"x".as_ptr() as *const libc::c_void, 1) };
+        if let Err(error) = gone {
+            outcome.error = Some(format!("nix database: {error}"));
+            outcome.refused.extend(ordered.iter().cloned());
+        }
+        if self.links >= 0 && !linked.is_empty() {
+            let links = self.links;
+            outcome.links = self.collector().drop_linked(links, linked);
+        }
+        outcome.unlinking = clock.elapsed().as_secs_f64();
+        self.report.deleted += outcome.deleted;
+        self.report.entries += outcome.entries;
+        self.report.links += outcome.links;
+        self.report.database += outcome.database;
+        self.report.unlinking += outcome.unlinking;
+        outcome
+    }
 }
 
 pub fn plan(

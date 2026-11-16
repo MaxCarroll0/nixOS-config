@@ -440,13 +440,13 @@ impl Store {
         value
     }
 
-    pub fn load(&mut self) -> bool {
+    pub fn load(&mut self) -> (bool, bool) {
         if self.db.is_none()
             && self
                 .open_db("file:/nix/var/nix/db/db.sqlite?mode=ro")
                 .is_err()
         {
-            return false;
+            return (false, false);
         }
         let version: i64 = self
             .db
@@ -455,7 +455,7 @@ impl Store {
             .query_row("pragma data_version", [], |row| row.get(0))
             .unwrap_or(-1);
         if Some(version) == self.version {
-            return false;
+            return (false, false);
         }
         let (gone, new) = self.load_paths();
         self.version = Some(version);
@@ -468,6 +468,7 @@ impl Store {
             self.journal.push((path, false));
         }
         self.commit();
+        let added = !new.is_empty();
         for slot in new {
             self.journal
                 .push((self.paths[slot as usize].path.clone(), true));
@@ -475,7 +476,7 @@ impl Store {
                 self.pending.insert(slot);
             }
         }
-        true
+        (true, added)
     }
 
     pub fn refresh_roots(&mut self) {
@@ -1277,12 +1278,6 @@ pub fn delete(paths: &[String]) -> Deleted {
     }
 }
 
-pub struct Swept {
-    pub refused: HashSet<String>,
-    pub report: Option<gc::Report>,
-    pub fallback: Option<String>,
-}
-
 fn vanished(db: &Connection, known: &[i64], out: &mut Vec<i64>) {
     let (Some(first), Some(last)) = (known.first(), known.last()) else {
         return;
@@ -1303,34 +1298,12 @@ fn vanished(db: &Connection, known: &[i64], out: &mut Vec<i64>) {
     vanished(db, high, out);
 }
 
-pub fn delete_ordered(
+pub fn delete_fallback(
     ordered: &[String],
     references: &HashMap<String, Vec<String>>,
-    orphans: &[String],
-    progress: &mut dyn FnMut(usize),
-) -> Swept {
-    let mut fallback = None;
-    if std::env::var("LEDGER_NATIVE_GC").as_deref() != Ok("0") {
-        match gc::collect(
-            &gc::Layout::system(),
-            ordered,
-            references,
-            orphans,
-            progress,
-        ) {
-            Ok(report) => {
-                return Swept {
-                    refused: report.refused.clone(),
-                    report: Some(report),
-                    fallback: None,
-                }
-            }
-            Err(reason) => fallback = Some(reason),
-        }
-    }
+) -> HashSet<String> {
     let mut refused: HashSet<String> = HashSet::new();
-    for (place, chunk) in ordered.chunks(DELETE_BATCH).enumerate() {
-        progress(place * DELETE_BATCH + chunk.len());
+    for chunk in ordered.chunks(DELETE_BATCH) {
         let mut batch: Vec<String> = chunk
             .iter()
             .filter(|path| !refused.contains(*path))
@@ -1359,11 +1332,7 @@ pub fn delete_ordered(
             refused.extend(live);
         }
     }
-    Swept {
-        refused,
-        report: None,
-        fallback,
-    }
+    refused
 }
 
 #[cfg(test)]
