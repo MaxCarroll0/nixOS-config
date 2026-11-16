@@ -263,6 +263,8 @@ fn games_use_last_play_or_install() {
     fs::create_dir_all(format!("{apps}/compatdata/1/pfx")).unwrap();
     fs::write(format!("{apps}/compatdata/1/config_info"), format!("9.0-203\n{apps}/common/Proton 9.0/files/share/fonts/\n")).unwrap();
     fs::write(format!("{apps}/compatdata/1/pfx/user.reg"), "").unwrap();
+    fs::create_dir_all(format!("{home}/.local/share/Steam/userdata/7/config")).unwrap();
+    fs::write(format!("{home}/.local/share/Steam/userdata/7/config/localconfig.vdf"), "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"apps\"\n\t\t{\n\t\t\t\"1\"\n\t\t\t{\n\t\t\t\t\"cloud\"\n\t\t\t\t{\n\t\t\t\t}\n\t\t\t\t\"LastPlayed\"\t\t\"1500000000\"\n\t\t\t}\n\t\t}\n\t}\n}\n").unwrap();
     let heroic = format!("{home}/.config/heroic");
     fs::create_dir_all(format!("{heroic}/legendaryConfig/legendary")).unwrap();
     fs::create_dir_all(format!("{heroic}/store")).unwrap();
@@ -272,7 +274,8 @@ fn games_use_last_play_or_install() {
     let found = games(&home, "");
     let titles: Vec<&str> = found.iter().map(|game| game.title.as_str()).collect();
     assert_eq!(titles, ["Played Game", "Fresh Game", "Proton 9.0", "Crab Game"]);
-    assert!(found[2].tool && found[2].played > 0 && !found[0].tool);
+    assert!(found[2].tool && !found[0].tool);
+    assert_eq!(found[2].played, 1_500_000_000);
     let played = &found[0];
     assert_eq!(played.played, 4_000_000_000);
     assert!(played.files.contains(&format!("{apps}/shadercache/1")) && !played.files.iter().any(|file| file.contains("compatdata")));

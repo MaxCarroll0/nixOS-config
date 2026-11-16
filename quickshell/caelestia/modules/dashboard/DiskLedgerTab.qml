@@ -20,6 +20,7 @@ Item {
     readonly property var shownSegments: ledger.segments.filter(segment => segment.bytes > 0 || root.everShown[segment.key])
     readonly property var rootRows: ledger.segments.filter(segment => segment.bytes > 0).map(segment => segmentNode(segment))
     property var range: null
+    readonly property real defaultSpan: 86400
     property var focusEvent: null
     readonly property var focusNode: !root.node ? null : root.node
     readonly property string focusSegment: root.trail.length ? root.trail[0].segment : ""
@@ -41,9 +42,10 @@ Item {
         return out;
     }
     readonly property string takenId: root.focusEvent ? `taken:${root.focusEvent.events[0].seq}:${root.focusEvent.events[root.focusEvent.events.length - 1].seq}` : ""
+    readonly property bool takenGroup: root.focusEvent !== null && root.node !== null && root.node.id.startsWith("group:taken:")
     readonly property var entries: {
         if (root.focusEvent)
-            return root.takenRows(root.focusEvent);
+            return root.takenGroup ? root.node.members : root.takenRows(root.focusEvent);
         if (!root.node)
             return root.rootRows;
         const color = root.trail[0].color;
@@ -57,7 +59,7 @@ Item {
             return root.range;
         const points = ledger.history;
         const end = points.length ? points[points.length - 1].at : Date.now() / 1000;
-        return [end - 7 * 86400, end];
+        return [end - root.defaultSpan, end];
     }
     readonly property var visiblePoints: {
         const [first, last] = root.span;
@@ -171,6 +173,14 @@ Item {
             return new Date(new Date().getFullYear(), month, +match[1], +(match[3] ?? 0), +(match[4] ?? 0)).getTime() / 1000;
         }
         return NaN;
+    }
+
+    function panBy(fraction: real): void {
+        const [from, to] = root.span;
+        const length = to - from;
+        const [first, last] = root.fullSpan;
+        const start = Math.max(first, Math.min(last - length, from + fraction * length));
+        root.range = start + length >= last && length === root.defaultSpan ? null : [start, start + length];
     }
 
     function setRange(from: real, to: real): void {
@@ -298,7 +308,9 @@ Item {
 
     function pick(key: string): void {
         const segment = ledger.segment(key);
-        if (segment)
+        if (root.focusSegment === key && root.trail.length === 1)
+            root.trail = [];
+        else if (segment)
             root.trail = [root.segmentNode(segment)];
     }
 
@@ -489,12 +501,7 @@ Item {
             Layout.bottomMargin: 16
             model: ledger
             selected: root.trail.length ? root.trail[0].segment ?? "" : ""
-            onPicked: key => {
-                if (root.focusSegment === key)
-                    root.trail = [];
-                else
-                    root.pick(key);
-            }
+            onPicked: key => root.pick(key)
         }
 
         Flow {
@@ -551,14 +558,18 @@ Item {
                                 opacity: ledger.weightOpacity(legend.modelData.weight)
                             }
 
-                            Outline {
-                                readonly property bool scheduled: legend.modelData.scheduled > 0
+                            ReclaimHatch {
+                                anchors.fill: parent
+                                visible: legend.modelData.reclaim && !(legend.modelData.scheduled > 0)
+                                spans: [{ x: 0, w: width }]
+                                color: ledger.reclaimColor
+                            }
 
-                                visible: legend.modelData.reclaim
-                                dashed: !scheduled
-                                hatched: scheduled
-                                color: scheduled ? ledger.scheduledColor : ledger.reclaimColor
-                                lineWidth: scheduled ? 2 : 1.5
+                            Outline {
+                                visible: legend.modelData.reclaim && legend.modelData.scheduled > 0
+                                hatched: true
+                                color: ledger.scheduledColor
+                                lineWidth: 2
                             }
                         }
 
@@ -578,7 +589,7 @@ Item {
                         onEntered: bar.hovered = legend.modelData.key
                         onExited: if (bar.hovered === legend.modelData.key)
                             bar.hovered = ""
-                        onClicked: root.trail = [root.segmentNode(legend.modelData)]
+                        onClicked: root.pick(legend.modelData.key)
                     }
                 }
             }
@@ -620,11 +631,18 @@ Item {
                             color: Colours.tPalette.m3surfaceContainerHigh
                         }
 
+                        ReclaimHatch {
+                            anchors.fill: parent
+                            visible: !key.modelData.scheduled && !key.modelData.free
+                            spans: [{ x: 0, w: width }]
+                            color: ledger.reclaimColor
+                        }
+
                         Outline {
-                            dashed: !key.modelData.scheduled && !key.modelData.free
-                            hatched: key.modelData.scheduled || key.modelData.free
-                            color: key.modelData.free ? ledger.hatchColor : key.modelData.scheduled ? ledger.scheduledColor : ledger.reclaimColor
-                            lineWidth: key.modelData.scheduled ? 2 : key.modelData.free ? 1 : 1.5
+                            visible: key.modelData.scheduled || key.modelData.free
+                            hatched: true
+                            color: key.modelData.free ? ledger.hatchColor : ledger.scheduledColor
+                            lineWidth: key.modelData.scheduled ? 2 : 1
                         }
                     }
 
@@ -667,8 +685,14 @@ Item {
             StyledText {
                 visible: root.focusEvent !== null
                 text: root.focusEvent ? `› ${root.focusEvent.events.length === 1 ? "collection" : root.focusEvent.events.length + " collections"} ${ledger.clock(root.focusEvent.at)}${root.focusEvent.events.length === 1 ? "" : "–" + ledger.clock(root.focusEvent.events[root.focusEvent.events.length - 1].at)} ${root.runLabel(root.focusEvent)} ${ledger.gib(root.focusEvent.freed)}` : ""
-                font: Tokens.font.title.small
+                font: root.trail.length === 0 ? Tokens.font.title.small : Tokens.font.body.medium
                 color: Colours.palette.m3primary
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.trail = []
+                }
             }
 
             Repeater {
@@ -735,7 +759,7 @@ Item {
             id: slices
 
             capacity: root.node && !root.focusEvent ? root.node.size : 0
-            node: root.node && !root.focusEvent ? root.node.id : ""
+            node: root.node && (!root.focusEvent || root.takenGroup) ? root.node.id : ""
             weight: root.trail.length && root.trail[0].reclaimable && !root.focusEvent ? root.trail[0].weight ?? -1 : -1
             ordered: root.node === null && !root.focusEvent
 
@@ -869,6 +893,17 @@ Item {
 
                 Canvas {
                     id: history
+
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.NoButton
+                        onWheel: wheel => {
+                            const dx = wheel.pixelDelta.x !== 0 ? wheel.pixelDelta.x : wheel.angleDelta.x / 4;
+                            wheel.accepted = dx !== 0;
+                            if (dx !== 0)
+                                root.panBy(-dx / Math.max(1, width));
+                        }
+                    }
 
                     implicitWidth: root.historyWidth
                     implicitHeight: root.chartHeight
@@ -1140,9 +1175,10 @@ Item {
                             } else {
                                 const run = history.runNear(mouse.x);
                                 const band = run ? null : history.bandAt(mouse.x, mouse.y);
-                                if (run)
+                                if (run) {
                                     root.focusEvent = root.focusEvent === run ? null : run;
-                                else if (band && band.key)
+                                    root.trail = [];
+                                } else if (band && band.key)
                                     root.pick(band.key);
                             }
                             history.dragFrom = -1;
@@ -1373,6 +1409,17 @@ Item {
                 Canvas {
                     id: reclaims
 
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.NoButton
+                        onWheel: wheel => {
+                            const dx = wheel.pixelDelta.x !== 0 ? wheel.pixelDelta.x : wheel.angleDelta.x / 4;
+                            wheel.accepted = dx !== 0;
+                            if (dx !== 0)
+                                root.panBy(-dx / Math.max(1, width));
+                        }
+                    }
+
                     implicitWidth: root.paneWidth / 2 - Tokens.spacing.large / 2
                     implicitHeight: root.chartHeight
 
@@ -1398,7 +1445,18 @@ Item {
                     }
 
                     function barAt(px: real): var {
-                        return reclaims.bars.find(item => px >= item.x - 1 && px < item.x + item.w + 1) ?? null;
+                        const inside = reclaims.bars.find(item => px >= item.x && px < item.x + item.w);
+                        if (inside)
+                            return inside;
+                        const left = reclaims.bars.filter(item => item.x + item.w <= px).reduce((best, item) => !best || item.x > best.x ? item : best, null);
+                        const right = reclaims.bars.filter(item => item.x > px).reduce((best, item) => !best || item.x < best.x ? item : best, null);
+                        const toLeft = left ? px - (left.x + left.w) : Infinity;
+                        const toRight = right ? right.x - px : Infinity;
+                        if (toLeft * 1.25 <= toRight)
+                            return left;
+                        if (toRight * 1.25 <= toLeft)
+                            return right;
+                        return null;
                     }
 
                     Connections {

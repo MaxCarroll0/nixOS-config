@@ -80,6 +80,7 @@ Item {
             weight: members.some(item => item.weight !== undefined) ? members.reduce((acc, item) => Math.max(acc, item.weight ?? -1), -1) : undefined,
             scheduled: members.every(item => item.scheduled),
             scheduledBytes: members.reduce((acc, item) => acc + (item.scheduledBytes ?? (item.scheduled ? item.size : 0)), 0),
+            deletingBytes: members.reduce((acc, item) => acc + (item.deletingBytes ?? (item.deleting ? item.size : 0)), 0),
             reclaimBytes: members.reduce((acc, item) => acc + (item.reclaimBytes ?? (item.reclaimable ? item.size : 0)), 0),
             members: members
         };
@@ -88,32 +89,36 @@ Item {
     readonly property var boxes: {
         const out = [];
         let x = 0;
-        let open = null;
         let openScheduled = null;
         for (const slice of root.slices) {
             const w = root.width * slice.share;
+            const inner = Math.max(0, w - 1);
             if (slice.reclaimable && slice.reclaimSpans) {
-                open = null;
-                out.push(...root.model.mergeBoxes(slice.reclaimSpans.map(span => ({
-                                x: x + w * span[0] / Math.max(1, slice.size),
-                                w: w * span[1] / Math.max(1, slice.size),
-                                scheduled: false
-                            }))));
+                for (const span of slice.reclaimSpans) {
+                    const from = x + w * span[0] / Math.max(1, slice.size);
+                    const to = Math.min(x + inner, from + w * span[1] / Math.max(1, slice.size));
+                    if (to > from)
+                        out.push({
+                            x: from,
+                            w: to - from,
+                            scheduled: false
+                        });
+                }
                 openScheduled = null;
+                const part = Math.min(1, (slice.scheduledBytes ?? (slice.scheduled ? slice.size : 0)) / Math.max(1, slice.size));
+                if (part > 0)
+                    out.push({
+                        x: x,
+                        w: w * part,
+                        scheduled: true
+                    });
             } else if (slice.reclaimable) {
                 const reach = slice.reclaimBytes !== undefined ? Math.min(1, slice.reclaimBytes / Math.max(1, slice.size)) : 1;
-                if (open)
-                    open.w = x + w * reach - open.x;
-                else {
-                    open = {
-                        x: x,
-                        w: w * reach,
-                        scheduled: false
-                    };
-                    out.push(open);
-                }
-                if (reach < 1)
-                    open = null;
+                out.push({
+                    x: x,
+                    w: Math.min(inner, w * reach),
+                    scheduled: false
+                });
                 const part = slice.scheduledBytes !== undefined ? Math.min(1, slice.scheduledBytes / Math.max(1, slice.size)) : slice.scheduled ? 1 : 0;
                 if (part > 0) {
                     if (openScheduled)
@@ -131,12 +136,18 @@ Item {
                 } else
                     openScheduled = null;
             } else {
-                open = null;
                 openScheduled = null;
             }
+            const doomed = slice.deleting === true ? 1 : Math.min(1, (slice.deletingBytes ?? 0) / Math.max(1, slice.size));
+            if (doomed > 0)
+                out.push({
+                    x: x,
+                    w: w * doomed,
+                    deleting: true
+                });
             x += w;
         }
-        return root.ordered ? out : root.model.mergeBoxes(out);
+        return out;
     }
 
     readonly property var ticks: {
@@ -238,31 +249,6 @@ Item {
                     lineWidth: 2
                 }
 
-                Row {
-                    anchors.centerIn: parent
-                    visible: slice.width > amount.implicitWidth + 8
-                    spacing: 4
-
-                    StyledText {
-                        readonly property real room: slice.width - 12 - amount.implicitWidth
-
-                        visible: room > 24
-                        text: slice.modelData.label
-                        font: Tokens.font.body.small
-                        color: Colours.palette.m3onSurface
-                        elide: /^[~/]/.test(slice.modelData.label) ? Text.ElideLeft : Text.ElideRight
-                        width: Math.min(implicitWidth, room)
-                    }
-
-                    StyledText {
-                        id: amount
-
-                        text: root.model.gib(slice.modelData.size)
-                        font: Tokens.font.body.small
-                        color: Colours.palette.m3onSurface
-                    }
-                }
-
                 MouseArea {
                     anchors.fill: parent
                     hoverEnabled: true
@@ -282,6 +268,74 @@ Item {
         }
     }
 
+    ReclaimHatch {
+        width: parent.width
+        height: root.barHeight
+        spans: root.boxes.filter(box => !box.scheduled && !box.deleting)
+        color: root.model.reclaimColor
+    }
+
+    Row {
+        width: parent.width
+        height: root.barHeight
+        spacing: 0
+
+        Repeater {
+            model: root.slices.length
+
+            delegate: Item {
+                id: label
+
+                required property int index
+                readonly property var modelData: root.slices[index] ?? ({})
+
+                width: row.width * label.modelData.share
+                height: root.barHeight
+
+                Rectangle {
+                    anchors.centerIn: parent
+                    visible: tag.visible && label.modelData.reclaimable === true
+                    width: Math.min(label.width - 1, tag.implicitWidth + 16)
+                    height: Math.min(root.barHeight - 6, tag.implicitHeight + 6)
+                    color: Colours.tPalette.m3surfaceContainer
+
+                    Rectangle {
+                        anchors.fill: parent
+                        color: root.model.ageShade(label.modelData.color, label.modelData.last_used)
+                        opacity: root.model.weightOpacity(label.modelData.weight ?? (label.modelData.reclaimable ? root.weight : -1))
+                    }
+                }
+
+                Row {
+                    id: tag
+
+                    anchors.centerIn: parent
+                    visible: label.width > amount.implicitWidth + 8
+                    spacing: 4
+
+                    StyledText {
+                        readonly property real room: label.width - 12 - amount.implicitWidth
+
+                        visible: room > 24
+                        text: label.modelData.label
+                        font: Tokens.font.body.small
+                        color: Colours.palette.m3onSurface
+                        elide: /^[~/]/.test(label.modelData.label) ? Text.ElideLeft : Text.ElideRight
+                        width: Math.min(implicitWidth, room)
+                    }
+
+                    StyledText {
+                        id: amount
+
+                        text: root.model.gib(label.modelData.size)
+                        font: Tokens.font.body.small
+                        color: Colours.palette.m3onSurface
+                    }
+                }
+            }
+        }
+    }
+
     Repeater {
         model: root.boxes.length
 
@@ -295,12 +349,17 @@ Item {
             width: Math.max(0, box.modelData.w - 1)
             height: root.barHeight
 
+            Rectangle {
+                visible: box.modelData.deleting === true
+                anchors.fill: parent
+                color: root.model.deletingColor
+            }
+
             Outline {
-                outset: box.modelData.scheduled ? 0 : 3
-                dashed: !box.modelData.scheduled
-                hatched: box.modelData.scheduled
-                color: box.modelData.scheduled ? root.model.scheduledColor : root.model.reclaimColor
-                lineWidth: box.modelData.scheduled ? 2 : 1.5
+                visible: box.modelData.scheduled === true
+                hatched: true
+                color: root.model.scheduledColor
+                lineWidth: 2
             }
         }
     }

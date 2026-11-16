@@ -107,6 +107,7 @@ Item {
                 color: swatches[row.key] ?? grey(0.5),
                 bytes: row.bytes,
                 scheduled: row.scheduled,
+                deleting: row.deleting ?? 0,
                 reclaimBytes: row.reclaim_bytes ?? (row.reclaimable ? row.bytes : 0),
                 weight: row.reclaimable ? row.weight ?? -1 : -1,
                 spans: row.reclaim_spans ?? null,
@@ -115,21 +116,8 @@ Item {
 
     readonly property color hatchColor: Colours.light ? Colours.palette.m3onSurface : "white"
     readonly property color reclaimColor: Qt.hsla(0.36, 0.6, Colours.light ? 0.26 : 0.4, 1)
+    readonly property color deletingColor: Qt.hsla(0.0, 0.8, Colours.light ? 0.45 : 0.55, 1)
     readonly property color scheduledColor: Qt.hsla(0.08, 0.9, Colours.light ? 0.42 : 0.62, 1)
-
-    function mergeBoxes(boxes: var): var {
-        const out = [];
-        let last = null;
-        for (const box of boxes.filter(item => !item.scheduled).sort((a, b) => a.x - b.x)) {
-            if (last && box.x <= last.x + last.w + 4)
-                last.w = Math.max(last.w, box.x + box.w - last.x);
-            else {
-                last = Object.assign({}, box);
-                out.push(last);
-            }
-        }
-        return out.concat(boxes.filter(item => item.scheduled));
-    }
 
     function segment(key: string): var {
         return segments.find(item => item.key === key) ?? null;
@@ -154,6 +142,11 @@ Item {
     function scheduledFraction(key: string): real {
         const value = current(key);
         return value > 0 ? Math.min(1, scheduledBytes(key) / value) : 0;
+    }
+
+    function deletingFraction(key: string): real {
+        const value = current(key);
+        return value > 0 ? Math.min(1, (segment(key)?.deleting ?? 0) / value) : 0;
     }
 
     function rows(id: string): var {

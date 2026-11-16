@@ -1815,13 +1815,42 @@ pub struct Game {
 const STEAM_TOOLS: [&str; 5] = ["Proton", "Steam Linux Runtime", "Steamworks Common", "SteamVR", "Steam.dll"];
 const STEAM_REDOWNLOADED: [&str; 2] = ["Proton", "Steam Linux Runtime"];
 
-fn prefix_runs(apps: &str) -> Vec<(String, i64)> {
+fn prefix_runs(apps: &str, played: &HashMap<String, i64>) -> Vec<(String, i64)> {
     list_sorted(&join(apps, "compatdata")).into_iter().filter_map(|id| {
         let prefix = join(apps, &format!("compatdata/{id}"));
         let tool = std::fs::read_to_string(join(&prefix, "config_info")).ok()?.lines().nth(1)?.to_string();
-        let ran = sys::statx(&join(&prefix, "pfx/user.reg")).map(|info| info.mtime).unwrap_or(0);
+        let ran = match played.get(&id) {
+            Some(at) => *at,
+            None if played.is_empty() => sys::statx(&join(&prefix, "pfx/user.reg")).map(|info| info.mtime).unwrap_or(0),
+            None => 0,
+        };
         Some((tool, ran))
     }).collect()
+}
+
+fn steam_played(steam: &str) -> HashMap<String, i64> {
+    let mut out: HashMap<String, i64> = HashMap::new();
+    for user in list_sorted(&join(steam, "userdata")) {
+        let Ok(text) = std::fs::read_to_string(join(steam, &format!("userdata/{user}/config/localconfig.vdf"))) else { continue };
+        let mut app = String::new();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if let Some(key) = trimmed.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')).filter(|key| !key.contains('"')) {
+                if !key.is_empty() && key.bytes().all(|byte| byte.is_ascii_digit()) {
+                    app = key.to_string();
+                }
+                continue;
+            }
+            if let Some((_, value)) = vdf_pairs(line).into_iter().find(|(key, _)| key == "LastPlayed") {
+                let at: i64 = value.parse().unwrap_or(0);
+                if !app.is_empty() && at > 0 {
+                    let entry = out.entry(app.clone()).or_insert(0);
+                    *entry = (*entry).max(at);
+                }
+            }
+        }
+    }
+    out
 }
 
 fn vdf_pairs(text: &str) -> Vec<(String, String)> {
@@ -1863,9 +1892,10 @@ pub fn games(home: &str, only: &str) -> Vec<Game> {
     }
     libraries.sort();
     libraries.dedup();
+    let steam_played = steam_played(&steam);
     for library in libraries {
         let apps = join(&library, "steamapps");
-        let runs = prefix_runs(&apps);
+        let runs = prefix_runs(&apps, &steam_played);
         let mut tools: Vec<Game> = Vec::new();
         let mut latest = 0i64;
         for name in list_sorted(&apps) {
@@ -1887,7 +1917,7 @@ pub fn games(home: &str, only: &str) -> Vec<Game> {
             let mut files = vec![root.clone(), manifest.clone()];
             files.extend([join(&apps, &format!("shadercache/{id}")), join(&apps, &format!("downloading/{id}"))].into_iter().filter(|path| lexists(path)));
             let installed = [born(&root), born(&manifest)].into_iter().filter(|time| *time > 0).min().unwrap_or_else(|| field("LastUpdated").parse().unwrap_or(0));
-            let played: i64 = field("LastPlayed").parse().unwrap_or(0);
+            let played: i64 = field("LastPlayed").parse::<i64>().unwrap_or(0).max(steam_played.get(id).copied().unwrap_or(0));
             let game = Game { store: "steam", id: id.to_string(), title, files, played, installed, tool, root };
             if tool {
                 tools.push(game);

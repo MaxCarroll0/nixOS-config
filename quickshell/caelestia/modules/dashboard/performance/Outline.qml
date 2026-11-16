@@ -34,8 +34,8 @@ Canvas {
         ctx.clip();
         ctx.setLineDash([]);
         ctx.lineCap = "butt";
-        ctx.lineWidth = 1;
-        ctx.globalAlpha = 0.55;
+        ctx.lineWidth = 1.75;
+        ctx.globalAlpha = 0.95;
         for (let x = -height; x < width; x += 6) {
             ctx.beginPath();
             ctx.moveTo(x, height);

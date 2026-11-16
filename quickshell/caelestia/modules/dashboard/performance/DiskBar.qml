@@ -21,26 +21,26 @@ Item {
     readonly property var boxes: {
         const out = [];
         let x = 0;
-        let open = null;
         for (const segment of root.model.segments) {
             const w = root.width * root.model.current(segment.key) / root.model.total;
-            if (w > 0) {
-                if (segment.reclaim && segment.spans) {
-                    open = null;
+            const inner = Math.max(0, w - 1);
+            if (w > 0 && segment.reclaim) {
+                if (segment.spans) {
                     const bytes = Math.max(1, root.model.current(segment.key));
-                    out.push(...root.model.mergeBoxes(segment.spans.map(span => ({ x: x + w * span[0] / bytes, w: w * span[1] / bytes, scheduled: false }))));
-                } else if (segment.reclaim) {
-                    if (open)
-                        open.w = x + w - open.x;
-                    else {
-                        open = { x: x, w: w, scheduled: false };
-                        out.push(open);
+                    for (const span of segment.spans) {
+                        const from = x + w * span[0] / bytes;
+                        const to = Math.min(x + inner, from + w * span[1] / bytes);
+                        if (to > from)
+                            out.push({ x: from, w: to - from, scheduled: false });
                     }
-                    const scheduled = root.model.scheduledFraction(segment.key);
-                    if (scheduled > 0)
-                        out.push({ x: x, w: w * scheduled, scheduled: true, key: segment.key, label: segment.label, bytes: root.model.scheduledBytes(segment.key) });
                 } else
-                    open = null;
+                    out.push({ x: x, w: inner, scheduled: false });
+                const scheduled = root.model.scheduledFraction(segment.key);
+                if (scheduled > 0)
+                    out.push({ x: x, w: Math.min(w, w * scheduled + 1), scheduled: true, key: segment.key, label: segment.label, bytes: root.model.scheduledBytes(segment.key) });
+                const deleting = root.model.deletingFraction(segment.key);
+                if (deleting > 0)
+                    out.push({ x: x, w: Math.min(w, w * deleting + 1), deleting: true });
             }
             x += w;
         }
@@ -138,9 +138,9 @@ Item {
 
             Rectangle {
                 anchors.centerIn: parent
-                visible: free.width > label.implicitWidth + 16
-                width: label.implicitWidth + 10
-                height: label.implicitHeight + 2
+                visible: free.width > label.implicitWidth + 24
+                width: label.implicitWidth + 16
+                height: Math.min(free.height - 4, label.implicitHeight + 6)
                 color: Colours.tPalette.m3surfaceContainer
 
                 StyledText {
@@ -162,6 +162,13 @@ Item {
         }
     }
 
+    ReclaimHatch {
+        anchors.fill: parent
+        opacity: root.selected === "" ? 1 : 0.35
+        spans: root.boxes.filter(box => !box.scheduled && !box.deleting)
+        color: root.model.reclaimColor
+    }
+
     Repeater {
         model: root.boxes.length
 
@@ -176,12 +183,17 @@ Item {
             height: root.height
             opacity: root.selected === "" ? 1 : 0.35
 
+            Rectangle {
+                visible: box.modelData.deleting === true
+                anchors.fill: parent
+                color: root.model.deletingColor
+            }
+
             Outline {
-                outset: box.modelData.scheduled ? 0 : 3
-                dashed: !box.modelData.scheduled
-                hatched: box.modelData.scheduled
-                color: box.modelData.scheduled ? root.model.scheduledColor : root.model.reclaimColor
-                lineWidth: box.modelData.scheduled ? 2 : 1.5
+                visible: box.modelData.scheduled === true
+                hatched: true
+                color: root.model.scheduledColor
+                lineWidth: 2
             }
 
             MouseArea {
