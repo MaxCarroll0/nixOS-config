@@ -45,8 +45,8 @@ Canvas {
         ctx.setLineDash([]);
         ctx.lineCap = "butt";
         ctx.lineWidth = root.faint ? 1.25 : 1.75;
-        ctx.globalAlpha = root.faint ? 0.5 : 0.95;
-        for (let x = -height; x < width; x += 6) {
+        ctx.globalAlpha = root.faint ? 0.4 : 0.7;
+        for (let x = -height; x < width; x += 8) {
             ctx.beginPath();
             ctx.moveTo(x, height);
             ctx.lineTo(x + height, 0);

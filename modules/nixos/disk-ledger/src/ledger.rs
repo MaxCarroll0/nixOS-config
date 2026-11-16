@@ -373,7 +373,6 @@ pub struct Ledger {
     kind_items: HashMap<&'static str, Vec<usize>>,
     claim_of: HashMap<u32, Owner>,
     claim_sets: HashMap<Owner, Rc<HashSet<u32>>>,
-    days: HashMap<i64, String>,
     startup_seconds: f64,
     laps: Vec<(&'static str, f64)>,
     slow: VecDeque<(i64, &'static str, f64, f64)>,
@@ -560,7 +559,6 @@ impl Ledger {
             kind_items: HashMap::new(),
             claim_of: HashMap::new(),
             claim_sets: HashMap::new(),
-            days: HashMap::new(),
             startup_seconds: 0.0,
             laps: Vec::new(),
             slow: VecDeque::new(),
@@ -704,10 +702,6 @@ impl Ledger {
         self.claim_sets.clear();
         self.sums_dirty = true;
         self.model_version += 1;
-    }
-
-    fn day(&mut self, seconds: i64) -> String {
-        self.days.entry(seconds.div_euclid(900)).or_insert_with(|| probe::local("%Y-%m-%d", seconds)).clone()
     }
 
     fn target(&mut self) -> i64 {
@@ -1033,8 +1027,9 @@ impl Ledger {
                 *deleting.entry(item.kind.key()).or_insert(0) += item.freed() as i64;
             }
         }
+        let home = self.home_spans();
         let live_temp = segments.get("tmp_files").copied().unwrap_or(0) + segments.get("tmp_roots").copied().unwrap_or(0);
-        let rows: Vec<Value> = SEGMENTS.iter().map(|(key, label, group, can)| json!({"key": key, "label": label, "group": group, "reclaimable": can, "bytes": segments.get(key).copied().unwrap_or(0) + match *key { "temp" => live_temp, "generation" => segments.get("previous").copied().unwrap_or(0), "home_profile" => segments.get("profiles").copied().unwrap_or(0), "processes" => segments.get("shells").copied().unwrap_or(0), "agent" => segments.get("agent_files").copied().unwrap_or(0), "stray" => segments.get("deploy").copied().unwrap_or(0) + segments.get("roots").copied().unwrap_or(0), "home_files" => segments.get("repo").copied().unwrap_or(0) + segments.get("game").copied().unwrap_or(0), _ => 0 }, "weight": Kind::from_name(key).filter(|kind| kind.key() == *key).map(Kind::weight), "reclaim_bytes": if *can { folded(key).iter().map(|part| segments.get(part).copied().unwrap_or(0)).sum::<i64>() } else { 0 }, "scheduled": folded(key).iter().map(|part| scheduled.get(part).copied().unwrap_or(0)).sum::<i64>(), "deleting": folded(key).iter().map(|part| deleting.get(part).copied().unwrap_or(0)).sum::<i64>(), "items": if *can { folded(key).iter().map(|part| self.kind_items.get(*part).map(Vec::len).unwrap_or(0)).sum::<usize>() } else { 0 }, "reclaim_spans": if *key == "home_files" { self.home_spans() } else { Value::Null }})).collect();
+        let rows: Vec<Value> = SEGMENTS.iter().map(|(key, label, group, can)| json!({"key": key, "label": label, "group": group, "reclaimable": can, "bytes": segments.get(key).copied().unwrap_or(0) + match *key { "temp" => live_temp, "generation" => segments.get("previous").copied().unwrap_or(0), "home_profile" => segments.get("profiles").copied().unwrap_or(0), "processes" => segments.get("shells").copied().unwrap_or(0), "agent" => segments.get("agent_files").copied().unwrap_or(0), "stray" => segments.get("deploy").copied().unwrap_or(0) + segments.get("roots").copied().unwrap_or(0), "home_files" => segments.get("repo").copied().unwrap_or(0) + segments.get("game").copied().unwrap_or(0), _ => 0 }, "weight": Kind::from_name(key).filter(|kind| kind.key() == *key).map(Kind::weight), "reclaim_bytes": if *can { folded(key).iter().map(|part| segments.get(part).copied().unwrap_or(0)).sum::<i64>() } else { 0 }, "scheduled": folded(key).iter().map(|part| scheduled.get(part).copied().unwrap_or(0)).sum::<i64>(), "deleting": folded(key).iter().map(|part| deleting.get(part).copied().unwrap_or(0)).sum::<i64>(), "items": if *can { folded(key).iter().map(|part| self.kind_items.get(*part).map(Vec::len).unwrap_or(0)).sum::<usize>() } else { 0 }, "reclaim_spans": if *key == "home_files" { home["reclaim"].clone() } else { Value::Null }, "scheduled_spans": if *key == "home_files" { home["scheduled"].clone() } else { Value::Null }})).collect();
         self.cut_rank = cut;
         let head = self.model.items.iter().find(|item| item.freed() > 0).map(|item| json!({"path": item.path, "label": short(&item.path, &self.home), "kind": item.kind.key(), "size": item.freed(), "last_used": item.last_used}));
         json!({
@@ -1148,42 +1143,6 @@ impl Ledger {
         }))
     }
 
-    fn day_items(&mut self, key: &str, day: &str) -> Vec<usize> {
-        let members = self.kind_items.get(key).cloned().unwrap_or_default();
-        members.into_iter().filter(|index| {
-            let used = self.model.items[*index].last_used;
-            self.day(used) == day
-        }).collect()
-    }
-
-    fn item_family_rows(&self, owner_id: &str, items: &[usize]) -> Vec<Map<String, Value>> {
-        let mut order: Vec<String> = Vec::new();
-        let mut families: HashMap<String, Vec<usize>> = HashMap::new();
-        for index in items {
-            let name = family(&short(&self.model.items[*index].path, &self.home));
-            families.entry(name.clone()).or_insert_with(|| {
-                order.push(name);
-                Vec::new()
-            }).push(*index);
-        }
-        let mut rows = Vec::new();
-        for name in order {
-            let members = &families[&name];
-            if members.len() < 3 {
-                rows.extend(members.iter().map(|index| self.item_row(&self.model.items[*index])));
-                continue;
-            }
-            let items: Vec<&Item> = members.iter().map(|index| &self.model.items[*index]).collect();
-            let low = items.iter().map(|item| item.rank).min().unwrap_or(0);
-            let high = items.iter().map(|item| item.rank).max().unwrap_or(0);
-            let build: i64 = items.iter().map(|item| item.build).sum();
-            let mut entry = row(format!("items:{owner_id}:{name}"), format!("{name} ×{}", items.len()), String::new(), items.iter().map(|item| item.freed() as i64).sum(), items.iter().map(|item| item.last_used).max().unwrap_or(0), format!("{} {} items, ranks {low}–{high}", items.len(), items[0].kind.name()) + &rebuild_text(build), true, items.iter().any(|item| self.is_planned(item.rank)), true, false);
-            entry.insert("build".into(), json!(build));
-            entry.insert("deletingBytes".into(), json!(items.iter().filter(|item| self.deleting.contains(&item.path)).map(|item| item.freed() as i64).sum::<i64>()));
-            rows.push(entry);
-        }
-        rows
-    }
 
     fn store_row(&mut self, slot: u32, reclaimable: bool, scheduled: bool) -> Map<String, Value> {
         let size = self.store.size(slot) as i64;
@@ -1311,16 +1270,20 @@ impl Ledger {
                 own.insert("size".into(), json!(size));
                 own.insert("reclaimBytes".into(), json!(item.freed()));
                 own.insert("reclaimSpans".into(), json!([[0, (item.freed() as i64).min(size)]]));
+                own.insert("scheduledSpans".into(), json!(if self.is_planned(item.rank) { vec![[0, (item.freed() as i64).min(size)]] } else { Vec::new() }));
                 own.insert("delvable".into(), json!(true));
                 entry = own;
             } else {
                 let inside: Vec<&&Item> = kept.iter().filter(|item| item.path.starts_with(&format!("{child_path}/"))).collect();
                 if !inside.is_empty() {
                     entry.insert("reclaimable".into(), json!(true));
-                    let spans = self.reclaim_spans(&child_path);
+                    let [spans, planned] = self.reclaim_spans(&child_path);
                     entry.insert("reclaimBytes".into(), json!(spans.iter().map(|span| span[1]).sum::<i64>().min(size)));
                     entry.insert("reclaimSpans".into(), json!(spans));
+                    entry.insert("scheduledBytes".into(), json!(planned.iter().map(|span| span[1]).sum::<i64>().min(size)));
+                    entry.insert("scheduledSpans".into(), json!(planned));
                     entry.insert("scheduled".into(), json!(inside.iter().any(|item| self.is_planned(item.rank))));
+                    entry.insert("deletingBytes".into(), json!(inside.iter().filter(|item| self.deleting.contains(&item.path)).map(|item| item.freed() as i64).sum::<i64>().min(size)));
                 }
             }
             rows.push(entry);
@@ -1371,19 +1334,21 @@ impl Ledger {
         rows
     }
 
-    fn reclaim_spans(&self, path: &str) -> Vec<[i64; 2]> {
+    fn reclaim_spans(&self, path: &str) -> [Vec<[i64; 2]>; 2] {
         let rows = self.dir_rows(path, "files");
         let timed = !rows.is_empty() && rows.iter().all(|row| number(row.get("last_used")) > 0);
         let mut list: Vec<&Map<String, Value>> = rows.iter().filter(|row| number(row.get("size")) > 0).collect();
         list.sort_by_key(|row| if timed { number(row.get("last_used")) } else { -number(row.get("size")) });
-        let mut out: Vec<[i64; 2]> = Vec::new();
+        let mut out: [Vec<[i64; 2]>; 2] = [Vec::new(), Vec::new()];
         let mut offset = 0i64;
         for row in list {
-            for span in row.get("reclaimSpans").and_then(Value::as_array).into_iter().flatten() {
-                let (start, length) = (offset + number(span.get(0)), number(span.get(1)));
-                match out.last_mut() {
-                    Some(last) if last[0] + last[1] == start => last[1] += length,
-                    _ => out.push([start, length]),
+            for (key, spans) in ["reclaimSpans", "scheduledSpans"].iter().zip(out.iter_mut()) {
+                for span in row.get(*key).and_then(Value::as_array).into_iter().flatten() {
+                    let (start, length) = (offset + number(span.get(0)), number(span.get(1)));
+                    match spans.last_mut() {
+                        Some(last) if last[0] + last[1] == start => last[1] += length,
+                        _ => spans.push([start, length]),
+                    }
                 }
             }
             offset += number(row.get("size"));
@@ -1392,14 +1357,16 @@ impl Ledger {
     }
 
     fn home_spans(&self) -> Value {
+        let key = self.model_version ^ (self.planned.iter().filter(|planned| **planned).count() as u64) << 32 ^ (self.deleting.len() as u64) << 52;
         let mut cache = self.spans_cache.borrow_mut();
         if let Some((at, version, spans)) = cache.as_ref() {
-            if *version == self.model_version && clock() - at < 10.0 {
+            if *version == key && clock() - at < 10.0 {
                 return spans.clone();
             }
         }
-        let spans = json!(self.reclaim_spans("/home"));
-        *cache = Some((clock(), self.model_version, spans.clone()));
+        let [reclaim, planned] = self.reclaim_spans("/home");
+        let spans = json!({"reclaim": reclaim, "scheduled": planned});
+        *cache = Some((clock(), key, spans.clone()));
         spans
     }
 
@@ -1694,32 +1661,7 @@ impl Ledger {
                 if key == "dead" && self.store.orphan_bytes != 0 {
                     rows.push(row("meta:orphans".into(), "unused link table entries".into(), "/nix/store/.links".into(), self.store.orphan_bytes as i64, 0, format!("{} files freed with the next deletion", self.store.orphan_count), true, self.cut_rank >= 0, false, false));
                 }
-                if items.len() > ROWS {
-                    let mut order: Vec<String> = Vec::new();
-                    let mut days: HashMap<String, Vec<usize>> = HashMap::new();
-                    for index in &items {
-                        let day = self.day(self.model.items[*index].last_used);
-                        days.entry(day.clone()).or_insert_with(|| {
-                            order.push(day);
-                            Vec::new()
-                        }).push(*index);
-                    }
-                    for day in order {
-                        let members = &days[&day];
-                        let first = &self.model.items[members[0]];
-                        let last = &self.model.items[members[members.len() - 1]];
-                        let size: i64 = members.iter().map(|index| self.model.items[*index].freed() as i64).sum();
-                        let used = members.iter().map(|index| self.model.items[*index].last_used).max().unwrap_or(0);
-                        let weight = members.iter().map(|index| self.model.items[*index].weight()).fold(0.0, f64::max);
-                        let mut day_row = row(format!("day:{key}:{day}"), day.clone(), String::new(), size, used, format!("{} {key} items, ranks {}–{}", members.len(), first.rank, last.rank), true, members.iter().any(|index| self.is_planned(*index)), true, false);
-                        day_row.insert("weight".into(), json!(weight));
-                        day_row.insert("deletingBytes".into(), json!(members.iter().map(|index| &self.model.items[*index]).filter(|item| self.deleting.contains(&item.path)).map(|item| item.freed() as i64).sum::<i64>()));
-                        day_row.insert("ranks".into(), json!([first.rank, last.rank]));
-                        rows.push(day_row);
-                    }
-                } else {
-                    rows.extend(items.iter().map(|index| self.item_row(&self.model.items[*index])));
-                }
+                rows.extend(items.iter().map(|index| self.item_row(&self.model.items[*index])));
                 if key == "generation" {
                     let mut kept = self.segment_rows("previous");
                     for entry in kept.iter_mut() {
@@ -1810,18 +1752,6 @@ impl Ledger {
             }
             "tmpfamily" => self.temp_rows(Some(rest)),
             "store" => self.closure_rows(rest),
-            "day" => {
-                let (key, day) = rest.split_once(':').unwrap_or((rest, ""));
-                let items = self.day_items(key, day);
-                self.item_family_rows(node_id, &items)
-            }
-            "items" => {
-                let (owner_id, name) = rest.rsplit_once(':').unwrap_or(("", rest));
-                let mut parts = owner_id.splitn(3, ':');
-                let (_, key, day) = (parts.next(), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-                let items = self.day_items(key, day);
-                items.into_iter().filter(|index| family(&short(&self.model.items[*index].path, &self.home)) == name).map(|index| self.item_row(&self.model.items[index])).collect()
-            }
             "dir" => {
                 let (context, path) = rest.split_once(':').unwrap_or((rest, ""));
                 self.dir_rows(path, context)

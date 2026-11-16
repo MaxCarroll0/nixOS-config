@@ -36,8 +36,20 @@ Item {
                 } else
                     out.push({ x: x, w: inner, scheduled: false });
                 const scheduled = root.model.scheduledFraction(segment.key);
-                if (scheduled > 0)
-                    out.push({ x: x, w: Math.min(w, w * scheduled + 1), scheduled: true, key: segment.key, label: segment.label, bytes: root.model.scheduledBytes(segment.key) });
+                const mark = { scheduled: true, key: segment.key, label: segment.label, bytes: root.model.scheduledBytes(segment.key) };
+                if (segment.scheduledSpans && scheduled > 0) {
+                    const bytes = Math.max(1, root.model.current(segment.key));
+                    for (const span of segment.scheduledSpans) {
+                        const from = x + w * span[0] / bytes;
+                        const to = Math.min(x + w, from + w * span[1] / bytes + 1);
+                        const last = out[out.length - 1];
+                        if (last && last.scheduled && last.key === segment.key && from <= last.x + last.w + 2)
+                            last.w = Math.max(last.w, to - last.x);
+                        else if (to > from)
+                            out.push(Object.assign({ x: from, w: to - from }, mark));
+                    }
+                } else if (scheduled > 0)
+                    out.push(Object.assign({ x: x, w: Math.min(w, w * scheduled + 1) }, mark));
                 const deleting = root.model.deletingFraction(segment.key);
                 if (deleting > 0)
                     out.push({ x: x, w: Math.min(w, w * deleting + 1), deleting: true });
@@ -162,11 +174,21 @@ Item {
         }
     }
 
-    ReclaimHatch {
+    ReclaimBoxes {
         anchors.fill: parent
         opacity: root.selected === "" ? 1 : 0.35
         spans: root.boxes.filter(box => !box.scheduled && !box.deleting)
         color: root.model.reclaimColor
+    }
+
+    Pointers {
+        y: -size - 1
+        width: parent.width
+        height: root.height + 2 * (size + 1)
+        barHeight: root.height
+        opacity: (root.model.due ? 1 : 0.5) * (root.selected === "" ? 1 : 0.35)
+        marks: root.boxes.filter(box => box.scheduled)
+        color: root.model.scheduledColor
     }
 
     Repeater {

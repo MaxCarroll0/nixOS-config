@@ -16,8 +16,13 @@ Item {
     readonly property var node: trail.length ? trail[trail.length - 1] : null
     readonly property real paneWidth: 1160
     readonly property real chartHeight: 150
-    property var everShown: ({})
-    readonly property var shownSegments: ledger.segments.filter(segment => segment.bytes > 0 || root.everShown[segment.key])
+    readonly property var everShown: ({})
+    readonly property var shownSegments: {
+        const shown = ledger.segments.filter(segment => segment.bytes > 0 || root.everShown[segment.key]);
+        for (const segment of shown)
+            root.everShown[segment.key] = true;
+        return shown;
+    }
     readonly property var rootRows: ledger.segments.filter(segment => segment.bytes > 0).map(segment => segmentNode(segment))
     property var range: null
     readonly property real defaultSpan: 86400
@@ -532,11 +537,6 @@ Item {
                         text: `${legend.modelData.label} 8888 KiB`
                     }
 
-                    Component.onCompleted: if (!root.everShown[legend.modelData.key])
-                        root.everShown = Object.assign({}, root.everShown, {
-                            [legend.modelData.key]: true
-                        })
-
                     implicitWidth: Math.ceil((12 + Tokens.spacing.extraSmall + boldMetrics.width) / 24) * 24
                     implicitHeight: legendRow.implicitHeight
                     opacity: (bar.hovered === "" && root.trail.length === 0) || legend.lit ? 1 : 0.5
@@ -556,21 +556,6 @@ Item {
                                 anchors.margins: legend.lit ? 0 : 1
                                 color: legend.modelData.color
                                 opacity: ledger.weightOpacity(legend.modelData.weight)
-                            }
-
-                            ReclaimHatch {
-                                anchors.fill: parent
-                                visible: legend.modelData.reclaim && !(legend.modelData.scheduled > 0)
-                                spans: [{ x: 0, w: width }]
-                                color: ledger.reclaimColor
-                            }
-
-                            Outline {
-                                visible: legend.modelData.reclaim && legend.modelData.scheduled > 0
-                                hatched: true
-                                faint: !ledger.due
-                                color: ledger.scheduledColor
-                                lineWidth: 2
                             }
                         }
 
@@ -632,7 +617,7 @@ Item {
                             color: Colours.tPalette.m3surfaceContainerHigh
                         }
 
-                        ReclaimHatch {
+                        ReclaimBoxes {
                             anchors.fill: parent
                             visible: !key.modelData.scheduled && !key.modelData.free
                             spans: [{ x: 0, w: width }]

@@ -16,6 +16,8 @@ Item {
     property string node: ""
     property real weight: -1
     readonly property real minSlice: 3
+    readonly property real settleSeconds: 60
+    readonly property var lastOrder: ({})
     signal clicked(var row)
     signal rightClicked(var row)
 
@@ -27,8 +29,14 @@ Item {
         const list = root.rows.filter(row => row.size > 0);
         const timed = root.timed;
         const presorted = list.length > 0 && list.every(row => row.at !== undefined || row.from !== undefined);
-        if (!root.ordered && !presorted)
-            list.sort((a, b) => timed ? a.last_used - b.last_used : b.size - a.size);
+        if (!root.ordered && !presorted) {
+            const before = Object.assign({}, root.lastOrder);
+            const settled = (a, b) => Math.abs(a.last_used - b.last_used) <= root.settleSeconds && a.id in before && b.id in before;
+            list.sort((a, b) => timed ? (settled(a, b) ? before[a.id] - before[b.id] : a.last_used - b.last_used) : b.size - a.size);
+            for (const id in root.lastOrder)
+                delete root.lastOrder[id];
+            list.forEach((item, index) => root.lastOrder[item.id] = index);
+        }
         const used = list.reduce((acc, item) => acc + item.size, 0);
         const total = Math.max(1, used, root.capacity);
         const minShare = root.minSlice / Math.max(1, root.width);
@@ -105,13 +113,26 @@ Item {
                         });
                 }
                 openScheduled = null;
-                const part = Math.min(1, (slice.scheduledBytes ?? (slice.scheduled ? slice.size : 0)) / Math.max(1, slice.size));
-                if (part > 0)
-                    out.push({
-                        x: x,
-                        w: w * part,
-                        scheduled: true
-                    });
+                if (slice.scheduledSpans) {
+                    for (const span of slice.scheduledSpans) {
+                        const from = x + w * span[0] / Math.max(1, slice.size);
+                        const to = Math.min(x + w, from + w * span[1] / Math.max(1, slice.size));
+                        if (to > from)
+                            out.push({
+                                x: from,
+                                w: to - from,
+                                scheduled: true
+                            });
+                    }
+                } else {
+                    const part = Math.min(1, (slice.scheduledBytes ?? (slice.scheduled ? slice.size : 0)) / Math.max(1, slice.size));
+                    if (part > 0)
+                        out.push({
+                            x: x,
+                            w: w * part,
+                            scheduled: true
+                        });
+                }
             } else if (slice.reclaimable) {
                 const reach = slice.reclaimBytes !== undefined ? Math.min(1, slice.reclaimBytes / Math.max(1, slice.size)) : 1;
                 out.push({
@@ -268,7 +289,7 @@ Item {
         }
     }
 
-    ReclaimHatch {
+    ReclaimBoxes {
         width: parent.width
         height: root.barHeight
         spans: root.boxes.filter(box => !box.scheduled && !box.deleting)
@@ -363,5 +384,15 @@ Item {
                 lineWidth: 2
             }
         }
+    }
+
+    Pointers {
+        y: -size - 1
+        width: parent.width
+        height: root.barHeight + 2 * (size + 1)
+        barHeight: root.barHeight
+        opacity: root.model.due ? 1 : 0.5
+        marks: root.boxes.filter(box => box.scheduled)
+        color: root.model.scheduledColor
     }
 }

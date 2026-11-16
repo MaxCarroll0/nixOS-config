@@ -66,8 +66,13 @@ Item {
 
     readonly property real hue: Colours.palette.m3primary.hslHue < 0 ? 0.6 : Colours.palette.m3primary.hslHue
 
+    readonly property real arcStart: 0.47
+    readonly property real arcLength: 0.71
+
     function tone(step: real, light: real): color {
-        return Qt.hsla((hue + step) % 1, Colours.light ? 0.35 : 0.28, Colours.light ? light + 0.12 : light, 1);
+        const origin = Math.min(arcLength, ((hue - arcStart) % 1 + 1) % 1);
+        const along = (origin + step * arcLength) % arcLength;
+        return Qt.hsla((arcStart + along) % 1, Colours.light ? 0.35 : 0.28, Colours.light ? light + 0.12 : light, 1);
     }
 
     function grey(light: real): color {
@@ -112,6 +117,7 @@ Item {
                 reclaimBytes: row.reclaim_bytes ?? (row.reclaimable ? row.bytes : 0),
                 weight: row.reclaimable ? row.weight ?? -1 : -1,
                 spans: row.reclaim_spans ?? null,
+                scheduledSpans: row.scheduled_spans ?? null,
                 items: row.items
             }))
 
