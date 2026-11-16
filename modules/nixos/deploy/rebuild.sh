@@ -117,6 +117,11 @@ fi
 recordDeployed() {
   [ "$rev" != "$headRev" ] || return 0
   git -C "$flake" update-ref "$deployRef" "$rev"
+  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+    sessions="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/claude-deploy-sessions"
+    mkdir -p "$sessions"
+    echo "$rebuildTarget" >>"$sessions/$CLAUDE_CODE_SESSION_ID.hosts"
+  fi
   if ! git -C "$flake" push -q --force origin "$rev:$deployRef" 2>/dev/null; then
     echo "warning: could not push $deployRef to origin; other machines cannot inspect this deploy" >&2
   fi
