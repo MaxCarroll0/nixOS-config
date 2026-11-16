@@ -332,6 +332,18 @@ in
 
   local.vpn.moderateNat = true;
 
+  local.vpn.selection.deferWhile = [
+    (lib.getExe (
+      pkgs.writeShellApplication {
+        name = "${domainName}-locked";
+        runtimeInputs = [ pkgs.jq ];
+        text = ''
+          jq -e --argjson now "$(date +%s)" '.locks > 0 and $now - .updated < 180' ${idleStatus} >/dev/null 2>&1
+        '';
+      }
+    ))
+  ];
+
   local.server.ssh.hostOnlyInterfaces = [ bridge ];
 
   networking.firewall.interfaces.${bridge} = {

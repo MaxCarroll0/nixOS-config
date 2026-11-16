@@ -231,6 +231,25 @@ let
     '';
   };
 
+  autoselect = pkgs.writeShellApplication {
+    name = "vpn-autoselect";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      busy() {
+        local check
+        for check in ${lib.escapeShellArgs selection.deferWhile}; do
+          if "$check"; then
+            echo "deferred: $check"
+            return 0
+          fi
+        done
+        return 1
+      }
+      while busy; do sleep 60; done
+      exec ${vpnSwitchPkg}/bin/vpn-switch
+    '';
+  };
+
   allowedInterfaces = lib.concatStringsSep ", " (
     map (i: ''"${i}"'') ([ cfg.interface ] ++ cfg.allowInterfaces)
   );
@@ -349,6 +368,12 @@ in
       example = "6h";
       description = "Systemd time span between automatic server re-picks; default null, meaning never.";
     };
+
+    deferWhile = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Executables that exit 0 while an automatic re-pick must wait; checked every minute, default none.";
+    };
   };
 
   config = {
@@ -430,8 +455,9 @@ in
           partOf = [ "wg-quick-${cfg.interface}.service" ];
           serviceConfig = {
             Type = "oneshot";
-            ExecStart = "${vpnSwitchPkg}/bin/vpn-switch";
+            ExecStart = lib.getExe autoselect;
             ExecStartPost = lib.getExe vpnStatus;
+            TimeoutStartSec = "infinity";
           };
         };
 
