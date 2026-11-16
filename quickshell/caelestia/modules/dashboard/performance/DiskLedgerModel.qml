@@ -43,6 +43,7 @@ Item {
     readonly property real targetGib: targetOverride !== "" && !isNaN(parseInt(targetOverride)) ? parseInt(targetOverride) : Math.round((overview.target ?? 0) / 1073741824)
     readonly property real target: targetGib * 1073741824
     readonly property real deficit: targetOverride !== "" ? Math.max(0, target - free) : (overview.deficit ?? 0)
+    readonly property bool due: deficit > 0
     readonly property bool loaded: overview.segments !== undefined
     readonly property date updated: new Date(receivedAt * 1000)
     readonly property bool collecting: collector.state === "collecting"

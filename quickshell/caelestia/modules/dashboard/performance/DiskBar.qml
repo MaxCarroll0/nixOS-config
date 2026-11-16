@@ -192,6 +192,7 @@ Item {
             Outline {
                 visible: box.modelData.scheduled === true
                 hatched: true
+                faint: !root.model.due
                 color: root.model.scheduledColor
                 lineWidth: 2
             }

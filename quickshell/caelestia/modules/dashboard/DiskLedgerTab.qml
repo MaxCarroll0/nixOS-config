@@ -568,6 +568,7 @@ Item {
                             Outline {
                                 visible: legend.modelData.reclaim && legend.modelData.scheduled > 0
                                 hatched: true
+                                faint: !ledger.due
                                 color: ledger.scheduledColor
                                 lineWidth: 2
                             }
@@ -641,6 +642,7 @@ Item {
                         Outline {
                             visible: key.modelData.scheduled || key.modelData.free
                             hatched: true
+                            faint: key.modelData.scheduled && !ledger.due
                             color: key.modelData.free ? ledger.hatchColor : ledger.scheduledColor
                             lineWidth: key.modelData.scheduled ? 2 : 1
                         }
@@ -657,7 +659,7 @@ Item {
 
         StyledText {
             Layout.preferredHeight: smallLine.height
-            text: bar.hoveredScheduled ? `next collection takes ${ledger.gib(bar.hoveredScheduled.bytes)} of ${bar.hoveredScheduled.label}` : ""
+            text: bar.hoveredScheduled ? `next collection ${ledger.due ? "takes" : "would take"} ${ledger.gib(bar.hoveredScheduled.bytes)} of ${bar.hoveredScheduled.label}` : ""
             font: Tokens.font.body.small
             color: ledger.scheduledColor
         }
