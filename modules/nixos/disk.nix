@@ -35,6 +35,7 @@ let
     name = "disk-ledger";
     runtimeInputs = [
       config.nix.package
+      pkgs.bash
       pkgs.coreutils
       pkgs.e2fsprogs
       pkgs.git

@@ -22,20 +22,38 @@ impl Drop for Fd {
 }
 
 fn errno() -> i32 {
-    std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO)
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or(libc::EIO)
 }
 
 fn open2(dir: i32, name: &CStr, flags: i32, resolve: u64) -> Result<Fd, i32> {
     let mut how: libc::open_how = unsafe { std::mem::zeroed() };
     how.flags = (flags | libc::O_CLOEXEC) as u64;
     how.resolve = resolve;
-    let fd = unsafe { libc::syscall(libc::SYS_openat2, dir, name.as_ptr(), &how as *const libc::open_how, std::mem::size_of::<libc::open_how>()) };
-    if fd < 0 { Err(errno()) } else { Ok(Fd(fd as i32)) }
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            dir,
+            name.as_ptr(),
+            &how as *const libc::open_how,
+            std::mem::size_of::<libc::open_how>(),
+        )
+    };
+    if fd < 0 {
+        Err(errno())
+    } else {
+        Ok(Fd(fd as i32))
+    }
 }
 
 fn stat_at(dir: i32, name: &CStr) -> Result<libc::stat, i32> {
     let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstatat(dir, name.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) } < 0 { Err(errno()) } else { Ok(stat) }
+    if unsafe { libc::fstatat(dir, name.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) } < 0 {
+        Err(errno())
+    } else {
+        Ok(stat)
+    }
 }
 
 fn entries(dir: &Fd) -> Result<Vec<(CString, u8)>, i32> {
@@ -75,7 +93,11 @@ fn clear(dir: &Fd, path: &mut Vec<u8>, outcome: &mut Outcome, linked: &mut Optio
     writable(dir);
     let listed = match entries(dir) {
         Ok(listed) => listed,
-        Err(code) => return outcome.failed.push((String::from_utf8_lossy(path).into_owned(), code)),
+        Err(code) => {
+            return outcome
+                .failed
+                .push((String::from_utf8_lossy(path).into_owned(), code))
+        }
     };
     for (name, kind) in listed {
         let mark = path.len();
@@ -86,29 +108,50 @@ fn clear(dir: &Fd, path: &mut Vec<u8>, outcome: &mut Outcome, linked: &mut Optio
     }
 }
 
-fn remove_entry(parent: &Fd, name: &CStr, kind: u8, path: &mut Vec<u8>, outcome: &mut Outcome, linked: &mut Option<&mut Vec<u64>>) {
+fn remove_entry(
+    parent: &Fd,
+    name: &CStr,
+    kind: u8,
+    path: &mut Vec<u8>,
+    outcome: &mut Outcome,
+    linked: &mut Option<&mut Vec<u64>>,
+) {
     let directory = if kind == libc::DT_DIR {
         true
     } else if kind == libc::DT_UNKNOWN || linked.is_some() {
         match stat_at(parent.0, name) {
             Ok(stat) => {
                 let directory = stat.st_mode & libc::S_IFMT == libc::S_IFDIR;
-                if let (false, true, Some(found)) = (directory, stat.st_nlink > 1, linked.as_mut()) {
+                if let (false, true, Some(found)) = (directory, stat.st_nlink > 1, linked.as_mut())
+                {
                     found.push(stat.st_ino);
                 }
                 directory
             }
             Err(libc::ENOENT) => return,
-            Err(code) => return outcome.failed.push((String::from_utf8_lossy(path).into_owned(), code)),
+            Err(code) => {
+                return outcome
+                    .failed
+                    .push((String::from_utf8_lossy(path).into_owned(), code))
+            }
         }
     } else {
         false
     };
     if directory {
-        match open2(parent.0, name, libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW, RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV) {
+        match open2(
+            parent.0,
+            name,
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+        ) {
             Ok(child) => clear(&child, path, outcome, linked),
             Err(libc::ENOENT) => return,
-            Err(code) => return outcome.failed.push((String::from_utf8_lossy(path).into_owned(), code)),
+            Err(code) => {
+                return outcome
+                    .failed
+                    .push((String::from_utf8_lossy(path).into_owned(), code))
+            }
         }
     }
     let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
@@ -116,7 +159,9 @@ fn remove_entry(parent: &Fd, name: &CStr, kind: u8, path: &mut Vec<u8>, outcome:
         0 => outcome.removed += 1,
         _ => match errno() {
             libc::ENOENT => {}
-            code => outcome.failed.push((String::from_utf8_lossy(path).into_owned(), code)),
+            code => outcome
+                .failed
+                .push((String::from_utf8_lossy(path).into_owned(), code)),
         },
     }
 }
@@ -133,19 +178,37 @@ pub fn remove_tree_linked(path: &str, outcome: &mut Outcome, linked: &mut Option
     if !target.is_absolute() || name.as_bytes() == b".." {
         return outcome.failed.push((path.to_string(), libc::EINVAL));
     }
-    let (Ok(parent), Ok(name)) = (CString::new(parent.as_os_str().as_bytes()), CString::new(name.as_bytes())) else {
+    let (Ok(parent), Ok(name)) = (
+        CString::new(parent.as_os_str().as_bytes()),
+        CString::new(name.as_bytes()),
+    ) else {
         return outcome.failed.push((path.to_string(), libc::EINVAL));
     };
-    let parent = match open2(libc::AT_FDCWD, &parent, libc::O_RDONLY | libc::O_DIRECTORY, RESOLVE_NO_SYMLINKS) {
+    let parent = match open2(
+        libc::AT_FDCWD,
+        &parent,
+        libc::O_RDONLY | libc::O_DIRECTORY,
+        RESOLVE_NO_SYMLINKS,
+    ) {
         Ok(parent) => parent,
         Err(libc::ENOENT) => return,
         Err(code) => return outcome.failed.push((path.to_string(), code)),
     };
-    remove_entry(&parent, &name, libc::DT_UNKNOWN, &mut path.as_bytes().to_vec(), outcome, linked);
+    remove_entry(
+        &parent,
+        &name,
+        libc::DT_UNKNOWN,
+        &mut path.as_bytes().to_vec(),
+        outcome,
+        linked,
+    );
 }
 
 pub fn prefetch(roots: Vec<String>, threads: usize) -> usize {
-    let roots: Vec<String> = roots.into_iter().filter(|root| std::fs::symlink_metadata(root).is_ok_and(|found| found.is_dir())).collect();
+    let roots: Vec<String> = roots
+        .into_iter()
+        .filter(|root| std::fs::symlink_metadata(root).is_ok_and(|found| found.is_dir()))
+        .collect();
     let queue = std::sync::Mutex::new((roots, 0usize));
     let ready = std::sync::Condvar::new();
     let seen = std::sync::atomic::AtomicUsize::new(0);
@@ -153,7 +216,9 @@ pub fn prefetch(roots: Vec<String>, threads: usize) -> usize {
         for _ in 0..threads.max(1) {
             scope.spawn(|| loop {
                 let directory = {
-                    let mut state = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let mut state = queue
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     loop {
                         if let Some(directory) = state.0.pop() {
                             state.1 += 1;
@@ -163,7 +228,9 @@ pub fn prefetch(roots: Vec<String>, threads: usize) -> usize {
                             ready.notify_all();
                             return;
                         }
-                        state = ready.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
+                        state = ready
+                            .wait(state)
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                     }
                 };
                 let mut below = Vec::new();
@@ -177,7 +244,9 @@ pub fn prefetch(roots: Vec<String>, threads: usize) -> usize {
                     }
                 }
                 seen.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
-                let mut state = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut state = queue
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 state.0.extend(below);
                 state.1 -= 1;
                 ready.notify_all();
@@ -218,7 +287,10 @@ pub fn remove_as(uid: u32, gid: u32, paths: Vec<String>) -> Outcome {
         outcome
     })
     .join()
-    .unwrap_or_else(|_| Outcome { removed: 0, failed: vec![(String::new(), libc::EIO)] })
+    .unwrap_or_else(|_| Outcome {
+        removed: 0,
+        failed: vec![(String::new(), libc::EIO)],
+    })
 }
 
 #[cfg(test)]
@@ -240,7 +312,11 @@ mod tests {
         std::fs::create_dir_all(tree.join("a/b/c")).unwrap();
         std::fs::write(tree.join("a/b/c/file"), b"x").unwrap();
         std::fs::write(tree.join("top"), b"y").unwrap();
-        std::fs::set_permissions(tree.join("a/b"), std::os::unix::fs::PermissionsExt::from_mode(0o555)).unwrap();
+        std::fs::set_permissions(
+            tree.join("a/b"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o555),
+        )
+        .unwrap();
         let mut outcome = Outcome::default();
         remove_tree(tree.to_str().unwrap(), &mut outcome);
         assert!(outcome.failed.is_empty(), "{:?}", outcome.failed);

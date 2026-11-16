@@ -5,8 +5,8 @@ use regex::bytes::Regex;
 use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
-use std::io::{Read, Write};
 use std::hash::{Hash, Hasher};
+use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -24,7 +24,11 @@ const NAME_LENGTH: usize = 52;
 const NIX32: &[u8; 32] = b"0123456789abcdfghijklmnpqrsvwxyz";
 
 const RECORD: usize = 40;
-const KERNEL_ROOTS: [&str; 3] = ["/proc/sys/kernel/modprobe", "/proc/sys/kernel/fbsplash", "/proc/sys/kernel/poweroff_cmd"];
+const KERNEL_ROOTS: [&str; 3] = [
+    "/proc/sys/kernel/modprobe",
+    "/proc/sys/kernel/fbsplash",
+    "/proc/sys/kernel/poweroff_cmd",
+];
 
 type Key = [u8; HASH_PART];
 
@@ -36,8 +40,13 @@ pub struct Layout {
 
 impl Layout {
     pub fn system() -> Layout {
-        let state = std::env::var("LEDGER_STATE_DIR").unwrap_or_else(|_| "/var/lib/disk-ledger".into());
-        Layout { store: "/nix/store".into(), state: "/nix/var/nix".into(), links_index: Some(format!("{state}/links.idx")) }
+        let state =
+            std::env::var("LEDGER_STATE_DIR").unwrap_or_else(|_| "/var/lib/disk-ledger".into());
+        Layout {
+            store: "/nix/store".into(),
+            state: "/nix/var/nix".into(),
+            links_index: Some(format!("{state}/links.idx")),
+        }
     }
 }
 
@@ -50,10 +59,14 @@ pub struct LinkScan {
 
 pub fn scan_links(path: &str) -> LinkScan {
     let mut scan = LinkScan::default();
-    let Some(dir) = sys::open_dir(path) else { return scan };
+    let Some(dir) = sys::open_dir(path) else {
+        return scan;
+    };
     scan.complete = sys::read_names(dir, |name, ino| match decode(name) {
         Some(hash) => scan.entries.push((ino, hash)),
-        None => scan.strays.push((String::from_utf8_lossy(name).into_owned(), ino)),
+        None => scan
+            .strays
+            .push((String::from_utf8_lossy(name).into_owned(), ino)),
     });
     sys::close(dir);
     scan.entries.sort_unstable_by_key(|entry| entry.0);
@@ -91,6 +104,7 @@ pub struct Report {
     pub slowest: (f64, u64, String),
     pub links: u64,
     pub refused: HashSet<String>,
+    pub causes: Vec<(String, &'static str)>,
     pub strays: Vec<(String, i32)>,
     pub error: Option<String>,
     pub waited: f64,
@@ -158,7 +172,9 @@ struct Collector {
 static COLLECTOR: Mutex<Option<Collector>> = Mutex::new(None);
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn failure(what: &str) -> String {
@@ -180,14 +196,20 @@ fn mention(bytes: &[u8], roots: &mut HashSet<Key>) {
 }
 
 fn target(link: &str) -> Option<Vec<u8>> {
-    std::fs::read_link(link).ok().map(|found| found.as_os_str().as_bytes().to_vec())
+    std::fs::read_link(link)
+        .ok()
+        .map(|found| found.as_os_str().as_bytes().to_vec())
 }
 
 fn identity(pid: i32) -> Option<(u64, u64)> {
     let exe = target(&format!("/proc/{pid}/exe"))?;
     let stat = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
     let after = stat.iter().rposition(|byte| *byte == b')')?;
-    let started = String::from_utf8_lossy(&stat[after + 1..]).split_ascii_whitespace().nth(19)?.parse().ok()?;
+    let started = String::from_utf8_lossy(&stat[after + 1..])
+        .split_ascii_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()?;
     let mut hasher = std::hash::DefaultHasher::new();
     exe.hash(&mut hasher);
     target(&format!("/proc/{pid}/cwd")).hash(&mut hasher);
@@ -215,15 +237,27 @@ fn scan_process(pid: i32, roots: &mut HashSet<Key>) {
 }
 
 fn processes() -> Vec<i32> {
-    let Ok(entries) = std::fs::read_dir("/proc") else { return Vec::new() };
-    entries.flatten().filter_map(|entry| entry.file_name().to_str()?.parse().ok()).collect()
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+        .collect()
 }
 
 impl Opens {
     fn arm(store: &str) -> Option<Opens> {
         let fd = sys::fanotify(sys::FAN_NONBLOCK).ok()?;
         let opens = Opens { fd };
-        sys::fanotify_mark(fd, sys::FAN_MARK_ADD | sys::FAN_MARK_MOUNT, sys::FAN_OPEN | sys::FAN_OPEN_EXEC, libc::AT_FDCWD, Some(store)).ok()?;
+        sys::fanotify_mark(
+            fd,
+            sys::FAN_MARK_ADD | sys::FAN_MARK_MOUNT,
+            sys::FAN_OPEN | sys::FAN_OPEN_EXEC,
+            libc::AT_FDCWD,
+            Some(store),
+        )
+        .ok()?;
         Some(opens)
     }
 
@@ -239,7 +273,10 @@ impl Opens {
                     break;
                 }
                 let mask = sys::u64_at(&buffer, offset + 8);
-                let (fd, pid) = (sys::i32_at(&buffer, offset + 16), sys::i32_at(&buffer, offset + 20));
+                let (fd, pid) = (
+                    sys::i32_at(&buffer, offset + 16),
+                    sys::i32_at(&buffer, offset + 20),
+                );
                 if mask & sys::FAN_Q_OVERFLOW != 0 {
                     complete = false;
                 }
@@ -351,7 +388,11 @@ fn encode(hash: &[u8; 32]) -> CString {
     for place in 0..NAME_LENGTH {
         let (index, shift) = (place * 5 / 8, place * 5 % 8);
         let low = (hash[index] as u16) >> shift;
-        let high = if index + 1 < hash.len() { (hash[index + 1] as u16) << (8 - shift) } else { 0 };
+        let high = if index + 1 < hash.len() {
+            (hash[index + 1] as u16) << (8 - shift)
+        } else {
+            0
+        };
         name[NAME_LENGTH - place - 1] = NIX32[((low | high) & 0x1f) as usize];
     }
     CString::new(name).unwrap_or_default()
@@ -360,7 +401,11 @@ fn encode(hash: &[u8; 32]) -> CString {
 fn stamp(path: &str) -> Option<(i64, i64, u64)> {
     let name = sys::cstr(path);
     let mut info: libc::stat = unsafe { std::mem::zeroed() };
-    (unsafe { libc::stat(name.as_ptr(), &mut info) } == 0).then_some((info.st_mtime, info.st_mtime_nsec, info.st_size as u64))
+    (unsafe { libc::stat(name.as_ptr(), &mut info) } == 0).then_some((
+        info.st_mtime,
+        info.st_mtime_nsec,
+        info.st_size as u64,
+    ))
 }
 
 impl Index {
@@ -370,7 +415,15 @@ impl Index {
             let before = stamp(file);
             if let Ok(bytes) = std::fs::read(file) {
                 if bytes.len() % RECORD == 0 {
-                    self.entries = bytes.chunks_exact(RECORD).filter_map(|record| Some((u64::from_le_bytes(record[..8].try_into().ok()?), record[8..].try_into().ok()?))).collect();
+                    self.entries = bytes
+                        .chunks_exact(RECORD)
+                        .filter_map(|record| {
+                            Some((
+                                u64::from_le_bytes(record[..8].try_into().ok()?),
+                                record[8..].try_into().ok()?,
+                            ))
+                        })
+                        .collect();
                     self.origin = before;
                     return;
                 }
@@ -385,14 +438,19 @@ impl Index {
     }
 
     fn name(&self, ino: u64) -> Option<CString> {
-        let found = self.entries.binary_search_by_key(&ino, |entry| entry.0).ok()?;
+        let found = self
+            .entries
+            .binary_search_by_key(&ino, |entry| entry.0)
+            .ok()?;
         Some(encode(&self.entries[found].1))
     }
 }
 
 fn drop_orphan(dir: i32, name: &CString) -> u64 {
     let mut info: libc::stat = unsafe { std::mem::zeroed() };
-    let orphan = unsafe { libc::fstatat(dir, name.as_ptr(), &mut info, libc::AT_SYMLINK_NOFOLLOW) } == 0 && info.st_nlink == 1;
+    let orphan = unsafe { libc::fstatat(dir, name.as_ptr(), &mut info, libc::AT_SYMLINK_NOFOLLOW) }
+        == 0
+        && info.st_nlink == 1;
     u64::from(orphan && unsafe { libc::unlinkat(dir, name.as_ptr(), 0) } == 0)
 }
 
@@ -409,7 +467,11 @@ fn temp_roots(state: &str) -> Result<Vec<Key>, String> {
         if entry.file_name().as_encoded_bytes().first() == Some(&b'.') {
             continue;
         }
-        let mut file = match std::fs::File::options().read(true).write(true).open(entry.path()) {
+        let mut file = match std::fs::File::options()
+            .read(true)
+            .write(true)
+            .open(entry.path())
+        {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(format!("{}: {error}", entry.path().display())),
@@ -418,7 +480,8 @@ fn temp_roots(state: &str) -> Result<Vec<Key>, String> {
             continue;
         }
         let mut contents = Vec::new();
-        file.read_to_end(&mut contents).map_err(|error| format!("{}: {error}", entry.path().display()))?;
+        file.read_to_end(&mut contents)
+            .map_err(|error| format!("{}: {error}", entry.path().display()))?;
         for path in contents.split(|byte| *byte == 0) {
             found.extend(key(&String::from_utf8_lossy(path)));
         }
@@ -438,7 +501,16 @@ fn writable(store: &str) -> Result<(), String> {
     if unsafe { libc::unshare(libc::CLONE_NEWNS) } != 0 {
         return Err(failure("unshare"));
     }
-    if unsafe { libc::mount(std::ptr::null(), path.as_ptr(), c"none".as_ptr(), libc::MS_REMOUNT | libc::MS_BIND, std::ptr::null()) } != 0 {
+    if unsafe {
+        libc::mount(
+            std::ptr::null(),
+            path.as_ptr(),
+            c"none".as_ptr(),
+            libc::MS_REMOUNT | libc::MS_BIND,
+            std::ptr::null(),
+        )
+    } != 0
+    {
         return Err(failure("remount"));
     }
     Ok(())
@@ -448,7 +520,12 @@ fn refuse(path: &str, references: &HashMap<String, Vec<String>>, refused: &mut H
     let mut stack = vec![path.to_string()];
     while let Some(path) = stack.pop() {
         if let Some(below) = references.get(&path) {
-            stack.extend(below.iter().filter(|other| !refused.contains(*other)).cloned());
+            stack.extend(
+                below
+                    .iter()
+                    .filter(|other| !refused.contains(*other))
+                    .cloned(),
+            );
         }
         refused.insert(path);
     }
@@ -476,8 +553,27 @@ fn answer(client: &mut Client, shared: &Mutex<Shared>) -> bool {
 fn serve(listener: &UnixListener, wake: i32, shared: &Mutex<Shared>, stop: &AtomicBool) {
     let mut clients: Vec<Client> = Vec::new();
     loop {
-        let mut fds = vec![libc::pollfd { fd: wake, events: libc::POLLIN, revents: 0 }, libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 }];
-        fds.extend(clients.iter().map(|client| libc::pollfd { fd: client.stream.as_raw_fd(), events: if client.held.is_some() { 0 } else { libc::POLLIN }, revents: 0 }));
+        let mut fds = vec![
+            libc::pollfd {
+                fd: wake,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: listener.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        fds.extend(clients.iter().map(|client| libc::pollfd {
+            fd: client.stream.as_raw_fd(),
+            events: if client.held.is_some() {
+                0
+            } else {
+                libc::POLLIN
+            },
+            revents: 0,
+        }));
         if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) } < 0 {
             if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                 continue;
@@ -487,12 +583,20 @@ fn serve(listener: &UnixListener, wake: i32, shared: &Mutex<Shared>, stop: &Atom
         let mut closed: Vec<usize> = Vec::new();
         if fds[0].revents != 0 {
             let mut drained = [0u8; 64];
-            unsafe { libc::read(wake, drained.as_mut_ptr() as *mut libc::c_void, drained.len()) };
+            unsafe {
+                libc::read(
+                    wake,
+                    drained.as_mut_ptr() as *mut libc::c_void,
+                    drained.len(),
+                )
+            };
             if stop.load(Ordering::SeqCst) {
                 return;
             }
             for (place, client) in clients.iter_mut().enumerate() {
-                let Some(hash) = client.held.clone() else { continue };
+                let Some(hash) = client.held.clone() else {
+                    continue;
+                };
                 if locked(shared).flight.contains(&hash) {
                     continue;
                 }
@@ -531,7 +635,11 @@ fn serve(listener: &UnixListener, wake: i32, shared: &Mutex<Shared>, stop: &Atom
         if fds[1].revents != 0 {
             while let Ok((stream, _)) = listener.accept() {
                 if stream.set_nonblocking(false).is_ok() {
-                    clients.push(Client { stream, buffer: Vec::new(), held: None });
+                    clients.push(Client {
+                        stream,
+                        buffer: Vec::new(),
+                        held: None,
+                    });
                 }
             }
         }
@@ -539,36 +647,70 @@ fn serve(listener: &UnixListener, wake: i32, shared: &Mutex<Shared>, stop: &Atom
 }
 
 fn open(layout: &Layout) -> Result<Collector, String> {
-    let schema = std::fs::read_to_string(format!("{}/db/schema", layout.state)).map_err(|error| format!("schema: {error}"))?;
+    let schema = std::fs::read_to_string(format!("{}/db/schema", layout.state))
+        .map_err(|error| format!("schema: {error}"))?;
     if schema.trim() != SCHEMA {
         return Err(format!("nix schema {} is not {SCHEMA}", schema.trim()));
     }
     for name in ["keep-outputs", "keep-derivations"] {
-        if store::nix_setting("/etc/nix/nix.conf", name).map(|value| value == "true").unwrap_or(name == "keep-derivations") {
+        if store::nix_setting("/etc/nix/nix.conf", name)
+            .map(|value| value == "true")
+            .unwrap_or(name == "keep-derivations")
+        {
             return Err(format!("{name} is set"));
         }
     }
     let wrap = |error: rusqlite::Error| format!("nix database: {error}");
-    let db = Connection::open_with_flags(format!("{}/db/db.sqlite", layout.state), OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(wrap)?;
+    let db = Connection::open_with_flags(
+        format!("{}/db/db.sqlite", layout.state),
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(wrap)?;
     db.busy_timeout(Duration::from_secs(60)).map_err(wrap)?;
     db.pragma_update(None, "foreign_keys", 1).map_err(wrap)?;
-    if db.query_row("pragma foreign_keys", [], |row| row.get::<_, i64>(0)).map_err(wrap)? != 1 {
+    if db
+        .query_row("pragma foreign_keys", [], |row| row.get::<_, i64>(0))
+        .map_err(wrap)?
+        != 1
+    {
         return Err("foreign keys are not enforced".into());
     }
-    if db.query_row("pragma journal_mode", [], |row| row.get::<_, String>(0)).map_err(wrap)? != "wal" {
+    if db
+        .query_row("pragma journal_mode", [], |row| row.get::<_, String>(0))
+        .map_err(wrap)?
+        != "wal"
+    {
         return Err("nix database is not in wal mode".into());
     }
-    db.pragma_update(None, "synchronous", "normal").map_err(wrap)?;
-    db.query_row("pragma wal_autocheckpoint = 40000", [], |_| Ok(())).map_err(wrap)?;
-    Ok(Collector { store: layout.store.clone(), state: layout.state.clone(), links_index: layout.links_index.clone(), db, index: Index::default(), processes: Processes::default() })
+    db.pragma_update(None, "synchronous", "normal")
+        .map_err(wrap)?;
+    db.query_row("pragma wal_autocheckpoint = 40000", [], |_| Ok(()))
+        .map_err(wrap)?;
+    Ok(Collector {
+        store: layout.store.clone(),
+        state: layout.state.clone(),
+        links_index: layout.links_index.clone(),
+        db,
+        index: Index::default(),
+        processes: Processes::default(),
+    })
 }
 
 impl Collector {
-    fn invalidate<'a>(&mut self, flight: &[&'a String], references: &HashMap<String, Vec<String>>, refused: &mut HashSet<String>) -> rusqlite::Result<Vec<&'a String>> {
-        let transaction = self.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    fn invalidate<'a>(
+        &mut self,
+        flight: &[&'a String],
+        references: &HashMap<String, Vec<String>>,
+        refused: &mut HashSet<String>,
+        causes: &mut Vec<(String, &'static str)>,
+    ) -> rusqlite::Result<Vec<&'a String>> {
+        let transaction = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut gone = Vec::new();
         {
-            let mut statement = transaction.prepare_cached("delete from ValidPaths where path = ?")?;
+            let mut statement =
+                transaction.prepare_cached("delete from ValidPaths where path = ?")?;
             for path in flight {
                 if refused.contains(*path) {
                     continue;
@@ -576,9 +718,15 @@ impl Collector {
                 match statement.execute([path.as_str()]) {
                     Ok(1) => gone.push(*path),
                     Ok(_) => {
+                        causes.push(((*path).clone(), "already invalid"));
                         refused.insert((*path).clone());
                     }
-                    Err(rusqlite::Error::SqliteFailure(error, _)) if error.code == ErrorCode::ConstraintViolation => refuse(path, references, refused),
+                    Err(rusqlite::Error::SqliteFailure(error, _))
+                        if error.code == ErrorCode::ConstraintViolation =>
+                    {
+                        causes.push(((*path).clone(), "referenced by a live path"));
+                        refuse(path, references, refused)
+                    }
                     Err(error) => return Err(error),
                 }
             }
@@ -587,12 +735,29 @@ impl Collector {
         Ok(gone)
     }
 
-    fn sweep(&mut self, ordered: &[String], references: &HashMap<String, Vec<String>>, orphans: &[String], shared: &Mutex<Shared>, wake: i32, report: &mut Report) -> Result<(), String> {
+    fn sweep(
+        &mut self,
+        ordered: &[String],
+        references: &HashMap<String, Vec<String>>,
+        orphans: &[String],
+        shared: &Mutex<Shared>,
+        wake: i32,
+        report: &mut Report,
+        progress: &mut dyn FnMut(usize),
+    ) -> Result<(), String> {
         let clock = Instant::now();
-        let mut live: HashSet<Key> = store::directory_roots(&self.state).keys().filter_map(|path| key(path)).collect();
+        let mut live: HashSet<Key> = store::directory_roots(&self.state)
+            .keys()
+            .filter_map(|path| key(path))
+            .collect();
         live.extend(temp_roots(&self.state)?);
         report.rescanned = self.processes.refresh(&self.store);
-        if !report.rescanned && ordered.iter().filter_map(|path| key(path)).any(|hash| self.processes.roots.contains(&hash)) {
+        if !report.rescanned
+            && ordered
+                .iter()
+                .filter_map(|path| key(path))
+                .any(|hash| self.processes.roots.contains(&hash))
+        {
             self.processes.valid = false;
             report.rescanned = self.processes.refresh(&self.store);
         }
@@ -600,6 +765,7 @@ impl Collector {
         writable(&self.store)?;
         let mut linked: Vec<u64> = Vec::new();
         for (place, chunk) in ordered.chunks(CHUNK).enumerate() {
+            progress(place * CHUNK + chunk.len());
             self.processes.watch();
             let flight: Vec<&String> = {
                 let mut state = locked(shared);
@@ -609,24 +775,60 @@ impl Collector {
                         continue;
                     }
                     match key(path) {
-                        Some(hash) if !live.contains(&hash) && !self.processes.roots.contains(&hash) && !hash_part(path).is_some_and(|text| state.temp.contains(text)) => flight.push(path),
-                        _ => refuse(path, references, &mut report.refused),
+                        Some(hash)
+                            if !live.contains(&hash)
+                                && !self.processes.roots.contains(&hash)
+                                && !hash_part(path)
+                                    .is_some_and(|text| state.temp.contains(text)) =>
+                        {
+                            flight.push(path)
+                        }
+                        Some(hash) => {
+                            let cause = if live.contains(&hash) {
+                                "gc root"
+                            } else if self.processes.roots.contains(&hash) {
+                                "held by a process"
+                            } else {
+                                "temp root of a nix client"
+                            };
+                            report.causes.push((path.clone(), cause));
+                            refuse(path, references, &mut report.refused)
+                        }
+                        None => {
+                            report.causes.push((path.clone(), "not a store path"));
+                            refuse(path, references, &mut report.refused)
+                        }
                     }
                 }
-                state.flight = flight.iter().filter_map(|path| hash_part(path)).map(str::to_string).collect();
+                state.flight = flight
+                    .iter()
+                    .filter_map(|path| hash_part(path))
+                    .map(str::to_string)
+                    .collect();
                 flight
             };
             let clock = Instant::now();
-            let gone = self.invalidate(&flight, references, &mut report.refused);
+            let gone =
+                self.invalidate(&flight, references, &mut report.refused, &mut report.causes);
             report.database += clock.elapsed().as_secs_f64();
             let clock = Instant::now();
-            remove::prefetch(gone.iter().flatten().map(|path| format!("{}/{}", self.store, &path[LOGICAL.len()..])).collect(), READERS);
+            remove::prefetch(
+                gone.iter()
+                    .flatten()
+                    .map(|path| format!("{}/{}", self.store, &path[LOGICAL.len()..]))
+                    .collect(),
+                READERS,
+            );
             report.warming += clock.elapsed().as_secs_f64();
             let clock = Instant::now();
             for path in gone.iter().flatten() {
                 let mut outcome = remove::Outcome::default();
                 let single = Instant::now();
-                remove::remove_tree_linked(&format!("{}/{}", self.store, &path[LOGICAL.len()..]), &mut outcome, &mut Some(&mut linked));
+                remove::remove_tree_linked(
+                    &format!("{}/{}", self.store, &path[LOGICAL.len()..]),
+                    &mut outcome,
+                    &mut Some(&mut linked),
+                );
                 let spent = single.elapsed().as_secs_f64();
                 report.entries += outcome.removed as u64;
                 if spent > report.slowest.0 {
@@ -642,7 +844,9 @@ impl Collector {
             unsafe { libc::write(wake, b"x".as_ptr() as *const libc::c_void, 1) };
             if let Err(error) = gone {
                 report.error = Some(format!("nix database: {error}"));
-                report.refused.extend(ordered[place * CHUNK..].iter().cloned());
+                report
+                    .refused
+                    .extend(ordered[place * CHUNK..].iter().cloned());
                 break;
             }
         }
@@ -655,10 +859,18 @@ impl Collector {
             return;
         }
         let path = format!("{}/.links", self.store);
-        let Some(dir) = sys::open_dir(&path) else { return };
+        let Some(dir) = sys::open_dir(&path) else {
+            return;
+        };
         let clock = Instant::now();
-        let published = self.links_index.as_deref().filter(|file| std::path::Path::new(file).exists());
-        if !linked.is_empty() && (self.index.origin.is_none() || self.index.origin != stamp(published.unwrap_or(&path))) {
+        let published = self
+            .links_index
+            .as_deref()
+            .filter(|file| std::path::Path::new(file).exists());
+        if !linked.is_empty()
+            && (self.index.origin.is_none()
+                || self.index.origin != stamp(published.unwrap_or(&path)))
+        {
             self.index.load(&path, published);
         }
         report.indexing = clock.elapsed().as_secs_f64();
@@ -682,10 +894,22 @@ impl Collector {
         report.linking = clock.elapsed().as_secs_f64();
     }
 
-    fn run(&mut self, ordered: &[String], references: &HashMap<String, Vec<String>>, orphans: &[String]) -> Result<Report, String> {
+    fn run(
+        &mut self,
+        ordered: &[String],
+        references: &HashMap<String, Vec<String>>,
+        orphans: &[String],
+        progress: &mut dyn FnMut(usize),
+    ) -> Result<Report, String> {
         let mut report = Report::default();
         let clock = Instant::now();
-        let lock = std::fs::File::options().read(true).write(true).create(true).mode(0o600).open(format!("{}/gc.lock", self.state)).map_err(|error| format!("gc.lock: {error}"))?;
+        let lock = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .open(format!("{}/gc.lock", self.state))
+            .map_err(|error| format!("gc.lock: {error}"))?;
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
             return Err(failure("gc.lock"));
         }
@@ -707,7 +931,15 @@ impl Collector {
         let stop = AtomicBool::new(false);
         let result = std::thread::scope(|scope| {
             scope.spawn(|| serve(&listener, pipe[0], &shared, &stop));
-            let result = self.sweep(ordered, references, orphans, &shared, pipe[1], &mut report);
+            let result = self.sweep(
+                ordered,
+                references,
+                orphans,
+                &shared,
+                pipe[1],
+                &mut report,
+                progress,
+            );
             stop.store(true, Ordering::SeqCst);
             unsafe { libc::write(pipe[1], b"x".as_ptr() as *const libc::c_void, 1) };
             result
@@ -718,23 +950,46 @@ impl Collector {
     }
 }
 
-pub fn collect(layout: &Layout, ordered: &[String], references: &HashMap<String, Vec<String>>, orphans: &[String]) -> Result<Report, String> {
+pub fn collect(
+    layout: &Layout,
+    ordered: &[String],
+    references: &HashMap<String, Vec<String>>,
+    orphans: &[String],
+    progress: &mut dyn FnMut(usize),
+) -> Result<Report, String> {
     let mut held = locked(&COLLECTOR);
-    if !held.as_ref().is_some_and(|collector| collector.store == layout.store && collector.state == layout.state) {
+    if !held
+        .as_ref()
+        .is_some_and(|collector| collector.store == layout.store && collector.state == layout.state)
+    {
         *held = Some(open(layout)?);
     }
-    let Some(collector) = held.as_mut() else { return Err("no collector".into()) };
-    collector.run(ordered, references, orphans)
+    let Some(collector) = held.as_mut() else {
+        return Err("no collector".into());
+    };
+    collector.run(ordered, references, orphans, progress)
 }
 
-pub fn plan(layout: &Layout, paths: &[String]) -> Result<(Vec<String>, HashMap<String, Vec<String>>), String> {
+pub fn plan(
+    layout: &Layout,
+    paths: &[String],
+) -> Result<(Vec<String>, HashMap<String, Vec<String>>), String> {
     let wrap = |error: rusqlite::Error| format!("nix database: {error}");
-    let db = Connection::open_with_flags(format!("{}/db/db.sqlite", layout.state), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(wrap)?;
+    let db = Connection::open_with_flags(
+        format!("{}/db/db.sqlite", layout.state),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(wrap)?;
     let mut above: HashMap<&str, usize> = paths.iter().map(|path| (path.as_str(), 0)).collect();
     let mut references: HashMap<String, Vec<String>> = HashMap::new();
     let mut statement = db.prepare("select r.path from Refs join ValidPaths v on v.id = Refs.referrer join ValidPaths r on r.id = Refs.reference where v.path = ? and r.path != v.path").map_err(wrap)?;
     for path in above.keys().copied().collect::<Vec<&str>>() {
-        let below: Vec<String> = statement.query_map([path], |row| row.get::<_, String>(0)).map_err(wrap)?.flatten().filter(|other| above.contains_key(other.as_str())).collect();
+        let below: Vec<String> = statement
+            .query_map([path], |row| row.get::<_, String>(0))
+            .map_err(wrap)?
+            .flatten()
+            .filter(|other| above.contains_key(other.as_str()))
+            .collect();
         for other in &below {
             if let Some(count) = above.get_mut(other.as_str()) {
                 *count += 1;
@@ -742,13 +997,20 @@ pub fn plan(layout: &Layout, paths: &[String]) -> Result<(Vec<String>, HashMap<S
         }
         references.insert(path.to_string(), below);
     }
-    let mut ready: Vec<&str> = above.iter().filter(|(_, count)| **count == 0).map(|(path, _)| *path).collect();
+    let mut ready: Vec<&str> = above
+        .iter()
+        .filter(|(_, count)| **count == 0)
+        .map(|(path, _)| *path)
+        .collect();
     ready.sort_unstable();
     let mut ordered = Vec::with_capacity(above.len());
     while let Some(path) = ready.pop() {
         ordered.push(path.to_string());
         for other in &references[path] {
-            if let Some((known, count)) = above.get_key_value(other.as_str()).map(|(known, count)| (*known, *count)) {
+            if let Some((known, count)) = above
+                .get_key_value(other.as_str())
+                .map(|(known, count)| (*known, *count))
+            {
                 above.insert(known, count - 1);
                 if count == 1 {
                     ready.push(known);
@@ -777,16 +1039,38 @@ mod tests {
 
     #[test]
     fn hash_parts() {
-        assert_eq!(hash_part("/nix/store/0x92zw6ryvg0qn3vmhv1z2kki66yl2az-unit.service/bin/x"), Some("0x92zw6ryvg0qn3vmhv1z2kki66yl2az"));
+        assert_eq!(
+            hash_part("/nix/store/0x92zw6ryvg0qn3vmhv1z2kki66yl2az-unit.service/bin/x"),
+            Some("0x92zw6ryvg0qn3vmhv1z2kki66yl2az")
+        );
         assert_eq!(hash_part("/nix/store/short"), None);
-        assert_eq!(hash_part("/elsewhere/0x92zw6ryvg0qn3vmhv1z2kki66yl2az-unit"), None);
+        assert_eq!(
+            hash_part("/elsewhere/0x92zw6ryvg0qn3vmhv1z2kki66yl2az-unit"),
+            None
+        );
     }
 
     #[test]
     fn refusal_covers_references() {
-        let references: HashMap<String, Vec<String>> = [("a", vec!["b"]), ("b", vec!["c"]), ("c", vec![]), ("d", vec![])].into_iter().map(|(path, below)| (path.to_string(), below.into_iter().map(str::to_string).collect())).collect();
+        let references: HashMap<String, Vec<String>> = [
+            ("a", vec!["b"]),
+            ("b", vec!["c"]),
+            ("c", vec![]),
+            ("d", vec![]),
+        ]
+        .into_iter()
+        .map(|(path, below)| {
+            (
+                path.to_string(),
+                below.into_iter().map(str::to_string).collect(),
+            )
+        })
+        .collect();
         let mut refused = HashSet::new();
         refuse("a", &references, &mut refused);
-        assert_eq!(refused, ["a", "b", "c"].into_iter().map(str::to_string).collect());
+        assert_eq!(
+            refused,
+            ["a", "b", "c"].into_iter().map(str::to_string).collect()
+        );
     }
 }

@@ -1,9 +1,9 @@
 // Store index over the nix database: graph, liveness, exact per-path disk use from shared inodes, deletion.
 
 use crate::{gc, sys};
+use hashbrown::HashTable;
 use regex::Regex;
 use rusqlite::{params, Connection, OpenFlags};
-use hashbrown::HashTable;
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
 use std::process::Command;
@@ -54,6 +54,8 @@ pub struct Store {
     pub roots: HashSet<u32>,
     pub runtime_pids: Vec<i32>,
     pub live: Vec<bool>,
+    pub held: Vec<bool>,
+    temp_offsets: HashMap<String, u64>,
     pub dead: Vec<u32>,
     pub effective: HashMap<u32, i64>,
     sizes: Vec<u64>,
@@ -85,7 +87,11 @@ fn number(value: rusqlite::types::ValueRef) -> i64 {
 const STORE_DIR: &str = "/nix/store/";
 const ROOT_DIRS: [&str; 2] = ["/nix/var/nix/gcroots", "/nix/var/nix/profiles"];
 pub const TEMP_ROOTS: &str = "/nix/var/nix/temproots";
-const KERNEL_ROOTS: [&str; 3] = ["/proc/sys/kernel/modprobe", "/proc/sys/kernel/fbsplash", "/proc/sys/kernel/poweroff_cmd"];
+const KERNEL_ROOTS: [&str; 3] = [
+    "/proc/sys/kernel/modprobe",
+    "/proc/sys/kernel/fbsplash",
+    "/proc/sys/kernel/poweroff_cmd",
+];
 
 fn top_store_path(target: &str) -> Option<String> {
     let rest = target.strip_prefix(STORE_DIR)?;
@@ -94,7 +100,11 @@ fn top_store_path(target: &str) -> Option<String> {
 }
 
 fn absolute(target: &str, base: &str) -> String {
-    let joined = if target.starts_with('/') { target.to_string() } else { format!("{base}/{target}") };
+    let joined = if target.starts_with('/') {
+        target.to_string()
+    } else {
+        format!("{base}/{target}")
+    };
     let mut parts: Vec<&str> = Vec::new();
     for part in joined.split('/') {
         match part {
@@ -109,7 +119,9 @@ fn absolute(target: &str, base: &str) -> String {
 }
 
 fn read_link(path: &str) -> Option<String> {
-    std::fs::read_link(path).ok().map(|target| target.to_string_lossy().into_owned())
+    std::fs::read_link(path)
+        .ok()
+        .map(|target| target.to_string_lossy().into_owned())
 }
 
 fn parent(path: &str) -> &str {
@@ -129,17 +141,25 @@ fn add_root(roots: &mut HashMap<String, Vec<String>>, store_path: String, link: 
 fn find_roots(path: &str, roots: &mut HashMap<String, Vec<String>>) {
     let Some(info) = sys::lstat(path) else { return };
     if sys::is_dir(info.mode) {
-        let Ok(entries) = std::fs::read_dir(path) else { return };
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
         for entry in entries.flatten() {
-            find_roots(&format!("{path}/{}", entry.file_name().to_string_lossy()), roots);
+            find_roots(
+                &format!("{path}/{}", entry.file_name().to_string_lossy()),
+                roots,
+            );
         }
     } else if sys::is_link(info.mode) {
-        let Some(target) = read_link(path) else { return };
+        let Some(target) = read_link(path) else {
+            return;
+        };
         let target = absolute(&target, parent(path));
         if let Some(store_path) = top_store_path(&target) {
             add_root(roots, store_path, path.to_string());
         } else if sys::lstat(&target).is_some_and(|other| sys::is_link(other.mode)) {
-            if let Some(store_path) = read_link(&target).and_then(|second| top_store_path(&second)) {
+            if let Some(store_path) = read_link(&target).and_then(|second| top_store_path(&second))
+            {
                 add_root(roots, store_path, target);
             }
         }
@@ -156,19 +176,33 @@ fn mapped_path(line: &str) -> Option<&str> {
 }
 
 fn process_roots(roots: &mut HashMap<String, Vec<String>>) {
-    static MENTION: OnceLock<Regex> = OnceLock::new();
-    let mention = MENTION.get_or_init(|| Regex::new(r"/nix/store/[0-9a-z]+[0-9a-zA-Z+\-._?=]*").unwrap());
     let mut add = |target: &str, link: String| {
         if let Some(store_path) = top_store_path(target) {
             add_root(roots, store_path, link);
         }
     };
-    let Ok(entries) = std::fs::read_dir("/proc") else { return };
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
     for entry in entries.flatten() {
         let pid = entry.file_name().to_string_lossy().into_owned();
         if pid.is_empty() || !pid.bytes().all(|byte| byte.is_ascii_digit()) {
             continue;
         }
+        pid_roots(&pid, &mut add);
+    }
+    for file in KERNEL_ROOTS {
+        if let Ok(text) = std::fs::read_to_string(file) {
+            add(text.trim(), file.to_string());
+        }
+    }
+}
+
+fn pid_roots(pid: &str, add: &mut dyn FnMut(&str, String)) {
+    static MENTION: OnceLock<Regex> = OnceLock::new();
+    let mention =
+        MENTION.get_or_init(|| Regex::new(r"/nix/store/[0-9a-z]+[0-9a-zA-Z+\-._?=]*").unwrap());
+    {
         let proc = format!("/proc/{pid}");
         for name in ["exe", "cwd"] {
             let link = format!("{proc}/{name}");
@@ -200,11 +234,6 @@ fn process_roots(roots: &mut HashMap<String, Vec<String>>) {
             }
         }
     }
-    for file in KERNEL_ROOTS {
-        if let Ok(text) = std::fs::read_to_string(file) {
-            add(text.trim(), file.to_string());
-        }
-    }
 }
 
 fn runtime_roots(roots: &mut HashMap<String, Vec<String>>) {
@@ -214,15 +243,22 @@ fn runtime_roots(roots: &mut HashMap<String, Vec<String>>) {
             add_root(roots, store_path, link);
         }
     };
-    let Ok(files) = std::fs::read_dir(TEMP_ROOTS) else { return };
+    let Ok(files) = std::fs::read_dir(TEMP_ROOTS) else {
+        return;
+    };
     for file in files.flatten() {
         let pid = file.file_name().to_string_lossy().into_owned();
         if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
             continue;
         }
-        let Ok(contents) = std::fs::read(file.path()) else { continue };
+        let Ok(contents) = std::fs::read(file.path()) else {
+            continue;
+        };
         let link = format!("{{temp:{pid}}}");
-        for path in contents.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
+        for path in contents
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+        {
             add(&String::from_utf8_lossy(path), link.clone());
         }
     }
@@ -233,7 +269,10 @@ pub fn nix_setting(file: &str, name: &str) -> Option<String> {
     let mut found = None;
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
-        if let Some(included) = line.strip_prefix("!include ").or_else(|| line.strip_prefix("include ")) {
+        if let Some(included) = line
+            .strip_prefix("!include ")
+            .or_else(|| line.strip_prefix("include "))
+        {
             let included = absolute(included.trim(), parent(file));
             found = nix_setting(&included, name).or(found);
             continue;
@@ -289,7 +328,11 @@ pub fn walk(path: &str) -> Option<Walked> {
     if sys::is_dir(info.mode) && !sys::walk_tree(path, &mut account) {
         return None;
     }
-    Some(Walked { own, shared: shared.into_iter().collect(), used })
+    Some(Walked {
+        own,
+        shared: shared.into_iter().collect(),
+        used,
+    })
 }
 
 impl Store {
@@ -311,6 +354,8 @@ impl Store {
             roots: HashSet::new(),
             runtime_pids: Vec::new(),
             live: Vec::new(),
+            held: Vec::new(),
+            temp_offsets: HashMap::new(),
             dead: Vec::new(),
             effective: HashMap::new(),
             sizes: Vec::new(),
@@ -333,7 +378,9 @@ impl Store {
     }
 
     pub fn open_db(&mut self, uri: &str) -> rusqlite::Result<()> {
-        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let db = Connection::open_with_flags(uri, flags)?;
         let _ = db.pragma_update(None, "cache_size", -256);
         self.db = Some(db);
@@ -341,18 +388,29 @@ impl Store {
     }
 
     pub fn slot(&self, path: &str) -> Option<u32> {
-        self.index.find(self.link_hash.hash_one(path), |slot| self.paths[*slot as usize].path == path).copied()
+        self.index
+            .find(self.link_hash.hash_one(path), |slot| {
+                self.paths[*slot as usize].path == path
+            })
+            .copied()
     }
 
     fn index_insert(&mut self, slot: u32) {
         let (paths, state) = (&self.paths, &self.link_hash);
-        self.index.insert_unique(state.hash_one(paths[slot as usize].path.as_str()), slot, |slot| state.hash_one(paths[*slot as usize].path.as_str()));
+        self.index.insert_unique(
+            state.hash_one(paths[slot as usize].path.as_str()),
+            slot,
+            |slot| state.hash_one(paths[*slot as usize].path.as_str()),
+        );
     }
 
     fn index_remove(&mut self, slot: u32) {
         let paths = &self.paths;
         let path = paths[slot as usize].path.as_str();
-        if let Ok(found) = self.index.find_entry(self.link_hash.hash_one(path), |other| *other == slot) {
+        if let Ok(found) = self
+            .index
+            .find_entry(self.link_hash.hash_one(path), |other| *other == slot)
+        {
             found.remove();
         }
     }
@@ -362,7 +420,11 @@ impl Store {
     }
 
     pub fn alive_slots(&self) -> impl Iterator<Item = u32> + '_ {
-        self.paths.iter().enumerate().filter(|(_, path)| path.alive).map(|(slot, _)| slot as u32)
+        self.paths
+            .iter()
+            .enumerate()
+            .filter(|(_, path)| path.alive)
+            .map(|(slot, _)| slot as u32)
     }
 
     pub fn count(&self) -> usize {
@@ -373,16 +435,27 @@ impl Store {
         if let Some(value) = self.settings.get(name) {
             return *value;
         }
-        let value = nix_setting("/etc/nix/nix.conf", name).map(|value| value == "true").unwrap_or(name == "keep-derivations");
+        let value = nix_setting("/etc/nix/nix.conf", name)
+            .map(|value| value == "true")
+            .unwrap_or(name == "keep-derivations");
         self.settings.insert(name, value);
         value
     }
 
     pub fn load(&mut self) -> bool {
-        if self.db.is_none() && self.open_db("file:/nix/var/nix/db/db.sqlite?mode=ro").is_err() {
+        if self.db.is_none()
+            && self
+                .open_db("file:/nix/var/nix/db/db.sqlite?mode=ro")
+                .is_err()
+        {
             return false;
         }
-        let version: i64 = self.db.as_ref().unwrap().query_row("pragma data_version", [], |row| row.get(0)).unwrap_or(-1);
+        let version: i64 = self
+            .db
+            .as_ref()
+            .unwrap()
+            .query_row("pragma data_version", [], |row| row.get(0))
+            .unwrap_or(-1);
         if Some(version) == self.version {
             return false;
         }
@@ -396,7 +469,8 @@ impl Store {
             self.journal.push((path, false));
         }
         for slot in new {
-            self.journal.push((self.paths[slot as usize].path.clone(), true));
+            self.journal
+                .push((self.paths[slot as usize].path.clone(), true));
             if self.paths[slot as usize].own.is_none() {
                 self.pending.insert(slot);
             }
@@ -405,8 +479,87 @@ impl Store {
     }
 
     pub fn refresh_roots(&mut self) {
+        self.held.clear();
+        self.temp_offsets.clear();
         self.root_links = gc_roots();
+        self.hold_temp_roots();
         self.liveness();
+    }
+
+    pub fn is_held(&self, slot: u32) -> bool {
+        self.held.get(slot as usize).copied().unwrap_or(false)
+    }
+
+    pub fn hold(&mut self, target: &str) -> bool {
+        let Some(slot) = top_store_path(target).and_then(|path| self.slot(&path)) else {
+            return false;
+        };
+        if self.held.len() < self.paths.len() {
+            self.held.resize(self.paths.len(), false);
+        }
+        if self.held[slot as usize] {
+            return false;
+        }
+        let mut stack = vec![slot];
+        while let Some(slot) = stack.pop() {
+            if self.held[slot as usize] {
+                continue;
+            }
+            self.held[slot as usize] = true;
+            let held = &self.held;
+            stack.extend(
+                self.paths[slot as usize]
+                    .refs
+                    .iter()
+                    .filter(|other| !held[**other as usize]),
+            );
+        }
+        true
+    }
+
+    pub fn hold_pid(&mut self, pid: i32) -> bool {
+        let mut found = Vec::new();
+        pid_roots(&pid.to_string(), &mut |target: &str, _| {
+            found.push(target.to_string())
+        });
+        found
+            .iter()
+            .fold(false, |changed, target| self.hold(target) | changed)
+    }
+
+    pub fn hold_temp_roots(&mut self) -> bool {
+        use std::io::{Read, Seek};
+        let Ok(files) = std::fs::read_dir(TEMP_ROOTS) else {
+            return false;
+        };
+        let mut found = Vec::new();
+        for file in files.flatten() {
+            let name = file.file_name().to_string_lossy().into_owned();
+            let Ok(mut handle) = std::fs::File::open(file.path()) else {
+                continue;
+            };
+            let offset = self.temp_offsets.get(&name).copied().unwrap_or(0);
+            let mut appended = Vec::new();
+            if handle.seek(std::io::SeekFrom::Start(offset)).is_err()
+                || handle.read_to_end(&mut appended).is_err()
+            {
+                continue;
+            }
+            let complete = appended
+                .iter()
+                .rposition(|byte| *byte == 0)
+                .map_or(0, |end| end + 1);
+            self.temp_offsets.insert(name, offset + complete as u64);
+            found.extend(
+                appended[..complete]
+                    .split(|byte| *byte == 0)
+                    .filter(|path| !path.is_empty())
+                    .map(|path| String::from_utf8_lossy(path).into_owned()),
+            );
+        }
+        found
+            .iter()
+            .fold(false, |changed, target| self.hold(target) | changed)
     }
 
     pub fn liveness(&mut self) {
@@ -426,7 +579,11 @@ impl Store {
             }
         }
         let keep_derivations = self.setting("keep-derivations");
-        self.roots = self.root_links.keys().filter_map(|path| self.slot(path)).collect();
+        self.roots = self
+            .root_links
+            .keys()
+            .filter_map(|path| self.slot(path))
+            .collect();
         let reach = |roots: &mut dyn Iterator<Item = u32>| {
             let mut live = vec![false; self.paths.len()];
             let mut stack: Vec<u32> = roots.collect();
@@ -449,15 +606,30 @@ impl Store {
             live
         };
         let live = reach(&mut self.roots.iter().copied());
-        let lasting = reach(&mut self.root_links.iter().filter(|(_, links)| links.iter().any(|link| !link.starts_with("/proc/"))).filter_map(|(path, _)| self.slot(path)));
-        let mut pids: Vec<i32> = self.root_links.iter()
+        let lasting = reach(
+            &mut self
+                .root_links
+                .iter()
+                .filter(|(_, links)| links.iter().any(|link| !link.starts_with("/proc/")))
+                .filter_map(|(path, _)| self.slot(path)),
+        );
+        let mut pids: Vec<i32> = self
+            .root_links
+            .iter()
             .filter(|(path, _)| self.slot(path).is_some_and(|slot| !lasting[slot as usize]))
-            .flat_map(|(_, links)| links.iter().filter_map(|link| link.strip_prefix("/proc/")?.split('/').next()?.parse().ok()))
+            .flat_map(|(_, links)| {
+                links
+                    .iter()
+                    .filter_map(|link| link.strip_prefix("/proc/")?.split('/').next()?.parse().ok())
+            })
             .collect();
         pids.sort_unstable();
         pids.dedup();
         self.runtime_pids = pids;
-        self.dead = self.alive_slots().filter(|slot| !live[*slot as usize]).collect();
+        self.dead = self
+            .alive_slots()
+            .filter(|slot| !live[*slot as usize])
+            .collect();
         self.live = live;
         self.effective = self.effective_use(&self.dead.clone());
     }
@@ -479,22 +651,35 @@ impl Store {
     fn load_paths(&mut self) -> (Vec<String>, Vec<u32>) {
         let db = self.db.as_ref().unwrap();
         let _ = db.execute_batch("begin");
-        let ids: HashSet<i64> = db.prepare_cached("select id from ValidPaths").and_then(|mut statement| statement.query_map([], |row| row.get(0))?.collect()).unwrap_or_default();
-        let gone_ids: Vec<i64> = self.by_id.keys().filter(|id| !ids.contains(id)).copied().collect();
+        let ids: HashSet<i64> = db
+            .prepare_cached("select id from ValidPaths")
+            .and_then(|mut statement| statement.query_map([], |row| row.get(0))?.collect())
+            .unwrap_or_default();
+        let gone_ids: Vec<i64> = self
+            .by_id
+            .keys()
+            .filter(|id| !ids.contains(id))
+            .copied()
+            .collect();
         let mut gone = Vec::new();
         for id in gone_ids {
             let slot = self.by_id.remove(&id).unwrap();
             let refs = std::mem::take(&mut self.paths[slot as usize].refs);
             let ups = std::mem::take(&mut self.paths[slot as usize].referrers);
             for other in refs {
-                self.paths[other as usize].referrers.retain(|up| *up != slot);
+                self.paths[other as usize]
+                    .referrers
+                    .retain(|up| *up != slot);
             }
             for other in ups {
                 self.paths[other as usize].refs.retain(|down| *down != slot);
             }
             gone.push(self.paths[slot as usize].path.clone());
         }
-        let mut new: Vec<i64> = ids.into_iter().filter(|id| !self.by_id.contains_key(id)).collect();
+        let mut new: Vec<i64> = ids
+            .into_iter()
+            .filter(|id| !self.by_id.contains_key(id))
+            .collect();
         new.sort_unstable();
         let mut fresh = Vec::new();
         let mut rows = Vec::new();
@@ -503,7 +688,13 @@ impl Store {
             let sql = format!("select id, path, registrationTime, narSize, deriver from ValidPaths where id in ({marks})");
             if let Ok(mut statement) = db.prepare(&sql) {
                 let found = statement.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<i64>>(2)?, row.get::<_, Option<i64>>(3)?, row.get::<_, Option<String>>(4)?))
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
                 });
                 if let Ok(found) = found {
                     rows.extend(found.flatten());
@@ -515,7 +706,11 @@ impl Store {
             let marks = vec!["?"; chunk.len()].join(",");
             let sql = format!("select referrer, reference from Refs where referrer in ({marks})");
             if let Ok(mut statement) = db.prepare(&sql) {
-                if let Ok(found) = statement.query_map(rusqlite::params_from_iter(chunk.iter()), |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))) {
+                if let Ok(found) = statement
+                    .query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+                    })
+                {
                     edges.extend(found.flatten());
                 }
             }
@@ -534,7 +729,13 @@ impl Store {
             if let Some(slot) = self.slot(&path) {
                 self.release(slot);
             }
-            let slot = self.allocate(Path { path, registered: registered.unwrap_or(0), deriver, alive: true, ..Default::default() });
+            let slot = self.allocate(Path {
+                path,
+                registered: registered.unwrap_or(0),
+                deriver,
+                alive: true,
+                ..Default::default()
+            });
             self.index_insert(slot);
             self.by_id.insert(id, slot);
             fresh.push(slot);
@@ -543,7 +744,10 @@ impl Store {
             if referrer == reference {
                 continue;
             }
-            if let (Some(source), Some(target)) = (self.by_id.get(&referrer).copied(), self.by_id.get(&reference).copied()) {
+            if let (Some(source), Some(target)) = (
+                self.by_id.get(&referrer).copied(),
+                self.by_id.get(&reference).copied(),
+            ) {
                 if !self.paths[source as usize].refs.contains(&target) {
                     self.paths[source as usize].refs.push(target);
                     self.paths[target as usize].referrers.push(source);
@@ -571,7 +775,9 @@ impl Store {
         if let Some(parent) = std::path::Path::new(&self.cache_path).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let Ok(cache) = Connection::open(&self.cache_path) else { return };
+        let Ok(cache) = Connection::open(&self.cache_path) else {
+            return;
+        };
         let _ = cache.busy_timeout(std::time::Duration::from_secs(60));
         let _ = cache.pragma_update(None, "journal_mode", "wal");
         let _ = cache.pragma_update(None, "cache_size", -256);
@@ -579,7 +785,14 @@ impl Store {
         let mut stale = Vec::new();
         let mut loaded = Vec::new();
         if let Ok(mut statement) = cache.prepare("select path, own, used, inodes from store") {
-            if let Ok(rows) = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, number(row.get_ref(1)?), number(row.get_ref(2)?), row.get::<_, Vec<u8>>(3)?))) {
+            if let Ok(rows) = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    number(row.get_ref(1)?),
+                    number(row.get_ref(2)?),
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            }) {
                 for (path, own, used, blob) in rows.flatten() {
                     match self.slot(&path) {
                         Some(slot) => loaded.push((slot, own as u64, used, blob)),
@@ -589,7 +802,10 @@ impl Store {
             }
         }
         for (slot, own, used, blob) in loaded {
-            let pairs: Vec<(u64, u64)> = blob.chunks_exact(16).map(|pair| (sys::u64_at(pair, 0), sys::u64_at(pair, 8))).collect();
+            let pairs: Vec<(u64, u64)> = blob
+                .chunks_exact(16)
+                .map(|pair| (sys::u64_at(pair, 0), sys::u64_at(pair, 8)))
+                .collect();
             self.attach(slot, own, &pairs);
             let registered = self.paths[slot as usize].registered;
             self.paths[slot as usize].used = Some(used.max(registered));
@@ -602,7 +818,10 @@ impl Store {
             let _ = cache.execute_batch("commit");
         }
         self.cache = Some(cache);
-        self.pending = self.alive_slots().filter(|slot| self.paths[*slot as usize].own.is_none()).collect();
+        self.pending = self
+            .alive_slots()
+            .filter(|slot| self.paths[*slot as usize].own.is_none())
+            .collect();
     }
 
     fn attach(&mut self, slot: u32, own: u64, pairs: &[(u64, u64)]) {
@@ -611,10 +830,18 @@ impl Store {
         let mut held = Vec::with_capacity(pairs.len());
         for (ino, blocks) in pairs {
             let hash = self.link_hash.hash_one(*ino);
-            let link = match self.link_of.find(hash, |link| self.links[*link as usize].ino == *ino) {
+            let link = match self
+                .link_of
+                .find(hash, |link| self.links[*link as usize].ino == *ino)
+            {
                 Some(link) => *link,
                 None => {
-                    let record = Link { ino: *ino, blocks: *blocks, holders: 0, claimant: NOBODY };
+                    let record = Link {
+                        ino: *ino,
+                        blocks: *blocks,
+                        holders: 0,
+                        claimant: NOBODY,
+                    };
                     let link = match self.free_links.pop() {
                         Some(link) => {
                             self.links[link as usize] = record;
@@ -626,7 +853,9 @@ impl Store {
                         }
                     };
                     let (links, state) = (&self.links, &self.link_hash);
-                    self.link_of.insert_unique(hash, link, |link| state.hash_one(links[*link as usize].ino));
+                    self.link_of.insert_unique(hash, link, |link| {
+                        state.hash_one(links[*link as usize].ino)
+                    });
                     self.shared_total += blocks;
                     link
                 }
@@ -655,7 +884,12 @@ impl Store {
             if record.holders == 0 {
                 self.shared_total -= record.blocks;
                 let ino = record.ino;
-                if let Ok(found) = self.link_of.find_entry(self.link_hash.hash_one(ino), |other| links[*other as usize].ino == ino) {
+                if let Ok(found) = self
+                    .link_of
+                    .find_entry(self.link_hash.hash_one(ino), |other| {
+                        links[*other as usize].ino == ino
+                    })
+                {
                     found.remove();
                 }
                 self.free_links.push(link);
@@ -674,11 +908,17 @@ impl Store {
 
     pub fn measure(&mut self, slot: u32) -> bool {
         let path = self.paths[slot as usize].path.clone();
-        let Some(walked) = walk(&path) else { return false };
+        let Some(walked) = walk(&path) else {
+            return false;
+        };
         self.detach(slot);
         self.attach(slot, walked.own, &walked.shared);
         let entry = &mut self.paths[slot as usize];
-        let used = entry.used.unwrap_or(0).max(walked.used).max(entry.registered);
+        let used = entry
+            .used
+            .unwrap_or(0)
+            .max(walked.used)
+            .max(entry.registered);
         entry.used = Some(used);
         let mut blob = Vec::with_capacity(walked.shared.len() * 16);
         for (ino, blocks) in &walked.shared {
@@ -686,7 +926,10 @@ impl Store {
             blob.extend_from_slice(&blocks.to_ne_bytes());
         }
         if let Some(cache) = &self.cache {
-            let _ = cache.execute("insert or replace into store values (?, ?, ?, ?)", params![path, walked.own as i64, used, blob]);
+            let _ = cache.execute(
+                "insert or replace into store values (?, ?, ?, ?)",
+                params![path, walked.own as i64, used, blob],
+            );
         }
         self.walked += 1;
         true
@@ -698,7 +941,9 @@ impl Store {
             let _ = cache.execute_batch("begin");
         }
         while std::time::Instant::now() < deadline {
-            let Some(slot) = self.pending.iter().next().copied() else { break };
+            let Some(slot) = self.pending.iter().next().copied() else {
+                break;
+            };
             self.pending.remove(&slot);
             if self.paths[slot as usize].alive && self.measure(slot) {
                 done += 1;
@@ -729,7 +974,10 @@ impl Store {
             for slot in &self.touched {
                 let entry = &self.paths[*slot as usize];
                 if let (true, Some(used)) = (entry.alive, entry.used) {
-                    let _ = cache.execute("update store set used = ? where path = ?", params![used, entry.path]);
+                    let _ = cache.execute(
+                        "update store set used = ? where path = ?",
+                        params![used, entry.path],
+                    );
                 }
             }
             let _ = cache.execute_batch("commit");
@@ -747,8 +995,24 @@ impl Store {
         let mut stale = 0;
         self.links_blocks = sys::lstat(LINKS).map(|info| info.blocks).unwrap_or(0);
         if let Some(fd) = sys::open_walk(libc::AT_FDCWD, &sys::cstr(LINKS)) {
-            let unknown = |ino: u64| self.link_of.find(self.link_hash.hash_one(ino), |link| self.links[*link as usize].ino == ino).is_none();
-            let names = scan.entries.iter().filter(|entry| unknown(entry.0)).map(|entry| gc::link_name(&entry.1)).chain(scan.strays.iter().filter(|stray| unknown(stray.1)).map(|stray| stray.0.clone()));
+            let unknown = |ino: u64| {
+                self.link_of
+                    .find(self.link_hash.hash_one(ino), |link| {
+                        self.links[*link as usize].ino == ino
+                    })
+                    .is_none()
+            };
+            let names = scan
+                .entries
+                .iter()
+                .filter(|entry| unknown(entry.0))
+                .map(|entry| gc::link_name(&entry.1))
+                .chain(
+                    scan.strays
+                        .iter()
+                        .filter(|stray| unknown(stray.1))
+                        .map(|stray| stray.0.clone()),
+                );
             for name in names {
                 match sys::stat_at(fd, name.as_bytes()) {
                     Some(entry) if entry.nlink == 1 => {
@@ -788,11 +1052,13 @@ impl Store {
 
     pub fn compact(&mut self) {
         let (links, state) = (&self.links, &self.link_hash);
-        self.link_of.shrink_to_fit(|link| state.hash_one(links[*link as usize].ino));
+        self.link_of
+            .shrink_to_fit(|link| state.hash_one(links[*link as usize].ino));
         self.links.shrink_to_fit();
         self.paths.shrink_to_fit();
         let (paths, state) = (&self.paths, &self.link_hash);
-        self.index.shrink_to_fit(|slot| state.hash_one(paths[*slot as usize].path.as_str()));
+        self.index
+            .shrink_to_fit(|slot| state.hash_one(paths[*slot as usize].path.as_str()));
         self.by_id.shrink_to_fit();
     }
 
@@ -816,7 +1082,13 @@ impl Store {
     }
 
     fn rank_of(&self, slot: u32) -> (u32, u32) {
-        (self.priority.get(slot as usize).copied().unwrap_or(UNRANKED), slot)
+        (
+            self.priority
+                .get(slot as usize)
+                .copied()
+                .unwrap_or(UNRANKED),
+            slot,
+        )
     }
 
     fn attribute(&mut self) {
@@ -839,7 +1111,14 @@ impl Store {
         self.sizes.resize(self.paths.len(), 0);
         for (slot, entry) in self.paths.iter().enumerate() {
             let Some(own) = entry.own else { continue };
-            self.sizes[slot] = own + entry.links.iter().map(|link| &self.links[*link as usize]).filter(|record| record.claimant == slot as u32).map(|record| record.blocks).sum::<u64>();
+            self.sizes[slot] = own
+                + entry
+                    .links
+                    .iter()
+                    .map(|link| &self.links[*link as usize])
+                    .filter(|record| record.claimant == slot as u32)
+                    .map(|record| record.blocks)
+                    .sum::<u64>();
         }
         self.sized = true;
     }
@@ -874,7 +1153,9 @@ impl Store {
                 continue;
             }
             for up in &self.paths[slot as usize].referrers {
-                if !found.contains(up) && std::path::Path::new(&self.paths[*up as usize].path).exists() {
+                if !found.contains(up)
+                    && std::path::Path::new(&self.paths[*up as usize].path).exists()
+                {
                     stack.push(*up);
                 }
             }
@@ -898,20 +1179,42 @@ impl Store {
                 let above = entry.referrers.iter().filter(|up| dead_set.contains(up));
                 if expanded {
                     let base = entry.used.unwrap_or(entry.registered);
-                    let value = above.map(|up| effective.get(up).copied().unwrap_or(0)).fold(base, i64::max);
+                    let value = above
+                        .map(|up| effective.get(up).copied().unwrap_or(0))
+                        .fold(base, i64::max);
                     effective.insert(slot, value);
                     continue;
                 }
                 stack.push((slot, true));
-                stack.extend(above.filter(|up| !effective.contains_key(up)).map(|up| (*up, false)));
+                stack.extend(
+                    above
+                        .filter(|up| !effective.contains_key(up))
+                        .map(|up| (*up, false)),
+                );
             }
         }
         effective
     }
 
     pub fn order(&self, chosen: &HashSet<u32>) -> Vec<u32> {
-        let mut pending: HashMap<u32, usize> = chosen.iter().map(|slot| (*slot, self.paths[*slot as usize].referrers.iter().filter(|up| chosen.contains(up)).count())).collect();
-        let mut ready: Vec<u32> = pending.iter().filter(|(_, count)| **count == 0).map(|(slot, _)| *slot).collect();
+        let mut pending: HashMap<u32, usize> = chosen
+            .iter()
+            .map(|slot| {
+                (
+                    *slot,
+                    self.paths[*slot as usize]
+                        .referrers
+                        .iter()
+                        .filter(|up| chosen.contains(up))
+                        .count(),
+                )
+            })
+            .collect();
+        let mut ready: Vec<u32> = pending
+            .iter()
+            .filter(|(_, count)| **count == 0)
+            .map(|(slot, _)| *slot)
+            .collect();
         ready.sort_by_key(|slot| (self.effective.get(slot).copied().unwrap_or(0), *slot));
         let mut out = Vec::with_capacity(chosen.len());
         while let Some(slot) = ready.pop() {
@@ -931,7 +1234,20 @@ impl Store {
     pub fn deletion_plan(&self, paths: &[u32]) -> (Vec<u32>, HashMap<u32, Vec<u32>>) {
         let ordered = self.order(&self.dependents(paths.iter().copied()));
         let chosen: HashSet<u32> = ordered.iter().copied().collect();
-        let refs = ordered.iter().map(|slot| (*slot, self.paths[*slot as usize].refs.iter().filter(|down| chosen.contains(down)).copied().collect())).collect();
+        let refs = ordered
+            .iter()
+            .map(|slot| {
+                (
+                    *slot,
+                    self.paths[*slot as usize]
+                        .refs
+                        .iter()
+                        .filter(|down| chosen.contains(down))
+                        .copied()
+                        .collect(),
+                )
+            })
+            .collect();
         (ordered, refs)
     }
 }
@@ -943,12 +1259,30 @@ pub struct Deleted {
 
 pub fn delete(paths: &[String]) -> Deleted {
     static ALIVE: OnceLock<Regex> = OnceLock::new();
-    let alive_pattern = ALIVE.get_or_init(|| Regex::new(r"[Cc]annot delete path '([^']+)'").unwrap());
-    let Ok(result) = Command::new("nix-store").arg("--delete").args(paths).output() else {
-        return Deleted { ok: false, alive: HashSet::new() };
+    let alive_pattern =
+        ALIVE.get_or_init(|| Regex::new(r"[Cc]annot delete path '([^']+)'").unwrap());
+    let Ok(result) = Command::new("nix-store")
+        .arg("--delete")
+        .args(paths)
+        .output()
+    else {
+        return Deleted {
+            ok: false,
+            alive: HashSet::new(),
+        };
     };
-    let output = format!("{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
-    Deleted { ok: result.status.success(), alive: alive_pattern.captures_iter(&output).map(|found| found[1].to_string()).collect() }
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    Deleted {
+        ok: result.status.success(),
+        alive: alive_pattern
+            .captures_iter(&output)
+            .map(|found| found[1].to_string())
+            .collect(),
+    }
 }
 
 pub struct Swept {
@@ -957,24 +1291,50 @@ pub struct Swept {
     pub fallback: Option<String>,
 }
 
-pub fn delete_ordered(ordered: &[String], references: &HashMap<String, Vec<String>>, orphans: &[String]) -> Swept {
+pub fn delete_ordered(
+    ordered: &[String],
+    references: &HashMap<String, Vec<String>>,
+    orphans: &[String],
+    progress: &mut dyn FnMut(usize),
+) -> Swept {
     let mut fallback = None;
     if std::env::var("LEDGER_NATIVE_GC").as_deref() != Ok("0") {
-        match gc::collect(&gc::Layout::system(), ordered, references, orphans) {
-            Ok(report) => return Swept { refused: report.refused.clone(), report: Some(report), fallback: None },
+        match gc::collect(
+            &gc::Layout::system(),
+            ordered,
+            references,
+            orphans,
+            progress,
+        ) {
+            Ok(report) => {
+                return Swept {
+                    refused: report.refused.clone(),
+                    report: Some(report),
+                    fallback: None,
+                }
+            }
             Err(reason) => fallback = Some(reason),
         }
     }
     let mut refused: HashSet<String> = HashSet::new();
-    for chunk in ordered.chunks(DELETE_BATCH) {
-        let mut batch: Vec<String> = chunk.iter().filter(|path| !refused.contains(*path)).cloned().collect();
+    for (place, chunk) in ordered.chunks(DELETE_BATCH).enumerate() {
+        progress(place * DELETE_BATCH + chunk.len());
+        let mut batch: Vec<String> = chunk
+            .iter()
+            .filter(|path| !refused.contains(*path))
+            .cloned()
+            .collect();
         while !batch.is_empty() {
             let result = delete(&batch);
             if result.ok {
                 break;
             }
             let mut live: HashSet<String> = HashSet::new();
-            let mut stack: Vec<String> = if result.alive.is_empty() { batch.clone() } else { result.alive.into_iter().collect() };
+            let mut stack: Vec<String> = if result.alive.is_empty() {
+                batch.clone()
+            } else {
+                result.alive.into_iter().collect()
+            };
             while let Some(path) = stack.pop() {
                 if !live.insert(path.clone()) {
                     continue;
@@ -987,5 +1347,9 @@ pub fn delete_ordered(ordered: &[String], references: &HashMap<String, Vec<Strin
             refused.extend(live);
         }
     }
-    Swept { refused, report: None, fallback }
+    Swept {
+        refused,
+        report: None,
+        fallback,
+    }
 }

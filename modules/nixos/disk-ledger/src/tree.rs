@@ -12,7 +12,12 @@ pub const COST_FACTOR: f64 = 20.0;
 const NAMED: [&str; 2] = [".claude", ".git"];
 pub const STORE: &str = "/nix/store/";
 pub const NONE: u32 = u32::MAX;
-const WATCHED: u64 = sys::FAN_MODIFY | sys::FAN_MOVED_FROM | sys::FAN_MOVED_TO | sys::FAN_CREATE | sys::FAN_DELETE | sys::FAN_ONDIR;
+const WATCHED: u64 = sys::FAN_MODIFY
+    | sys::FAN_MOVED_FROM
+    | sys::FAN_MOVED_TO
+    | sys::FAN_CREATE
+    | sys::FAN_DELETE
+    | sys::FAN_ONDIR;
 
 pub fn clock() -> f64 {
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -64,12 +69,33 @@ fn join(parent: &str, name: &str) -> String {
     }
 }
 
-fn read(path: &str, device: u64, skip: &(dyn Fn(&str, &str) -> bool + Send + Sync), fresh: bool) -> Option<Raw> {
+fn read(
+    path: &str,
+    device: u64,
+    skip: &(dyn Fn(&str, &str) -> bool + Send + Sync),
+    fresh: bool,
+) -> Option<Raw> {
     let started = clock();
     let info = sys::lstat(path)?;
     let fd = sys::open_walk(libc::AT_FDCWD, &sys::cstr(path))?;
-    let (key, acl) = if fresh { (sys::handle_key(path, 0), Some(sys::listxattr_has(path, "system.posix_acl_default"))) } else { (None, None) };
-    let mut raw = Raw { blocks: info.blocks, newest: info.mtime, files: 0, multi: Vec::new(), dirs: Vec::new(), key, acl, cost: 0.0 };
+    let (key, acl) = if fresh {
+        (
+            sys::handle_key(path, 0),
+            Some(sys::listxattr_has(path, "system.posix_acl_default")),
+        )
+    } else {
+        (None, None)
+    };
+    let mut raw = Raw {
+        blocks: info.blocks,
+        newest: info.mtime,
+        files: 0,
+        multi: Vec::new(),
+        dirs: Vec::new(),
+        key,
+        acl,
+        cost: 0.0,
+    };
     let keep = |name: &[u8]| match std::str::from_utf8(name) {
         Ok(name) => !skip(path, name),
         Err(_) => !skip(path, &String::from_utf8_lossy(name)),
@@ -78,7 +104,8 @@ fn read(path: &str, device: u64, skip: &(dyn Fn(&str, &str) -> bool + Send + Syn
         raw.newest = raw.newest.max(entry.mtime);
         if sys::is_dir(entry.mode) {
             if entry.dev == device {
-                raw.dirs.push((String::from_utf8_lossy(&entry.name).into(), entry.ino));
+                raw.dirs
+                    .push((String::from_utf8_lossy(&entry.name).into(), entry.ino));
             }
         } else if entry.nlink > 1 {
             raw.multi.push((entry.ino, entry.blocks));
@@ -96,7 +123,9 @@ fn gather(device: u64, skip: &Skip, seeds: Vec<String>) -> HashMap<String, Raw> 
     let mut found = HashMap::new();
     let mut frontier = seeds;
     while found.len() < SERIAL {
-        let Some(path) = frontier.pop() else { return found };
+        let Some(path) = frontier.pop() else {
+            return found;
+        };
         if let Some(raw) = read(&path, device, &**skip, true) {
             frontier.extend(raw.dirs.iter().map(|(name, _)| join(&path, name)));
             found.insert(path, raw);
@@ -109,9 +138,15 @@ fn gather(device: u64, skip: &Skip, seeds: Vec<String>) -> HashMap<String, Raw> 
         work: Vec<String>,
         active: usize,
     }
-    let queue = std::sync::Mutex::new(Queue { work: frontier, active: 0 });
+    let queue = std::sync::Mutex::new(Queue {
+        work: frontier,
+        active: 0,
+    });
     let ready = std::sync::Condvar::new();
-    let threads = std::thread::available_parallelism().map(|count| count.get()).unwrap_or(4).clamp(2, 8);
+    let threads = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4)
+        .clamp(2, 8);
     let parts: Vec<Vec<(String, Raw)>> = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..threads)
             .map(|_| {
@@ -119,7 +154,9 @@ fn gather(device: u64, skip: &Skip, seeds: Vec<String>) -> HashMap<String, Raw> 
                     let mut out = Vec::new();
                     loop {
                         let next = {
-                            let mut state = queue.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                            let mut state = queue
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
                             loop {
                                 if let Some(path) = state.work.pop() {
                                     state.active += 1;
@@ -128,7 +165,9 @@ fn gather(device: u64, skip: &Skip, seeds: Vec<String>) -> HashMap<String, Raw> 
                                 if state.active == 0 {
                                     break None;
                                 }
-                                state = ready.wait(state).unwrap_or_else(|poisoned| poisoned.into_inner());
+                                state = ready
+                                    .wait(state)
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                             }
                         };
                         let Some(path) = next else {
@@ -136,10 +175,14 @@ fn gather(device: u64, skip: &Skip, seeds: Vec<String>) -> HashMap<String, Raw> 
                             return out;
                         };
                         let raw = read(&path, device, &**skip, true);
-                        let mut state = queue.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let mut state = queue
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         let added = raw.as_ref().map(|raw| raw.dirs.len()).unwrap_or(0);
                         if let Some(raw) = &raw {
-                            state.work.extend(raw.dirs.iter().map(|(name, _)| join(&path, name)));
+                            state
+                                .work
+                                .extend(raw.dirs.iter().map(|(name, _)| join(&path, name)));
                         }
                         state.active -= 1;
                         let finished = state.active == 0 && state.work.is_empty();
@@ -156,7 +199,10 @@ fn gather(device: u64, skip: &Skip, seeds: Vec<String>) -> HashMap<String, Raw> 
                 })
             })
             .collect();
-        workers.into_iter().map(|worker| worker.join().unwrap_or_default()).collect()
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap_or_default())
+            .collect()
     });
     found.extend(parts.into_iter().flatten());
     found
@@ -192,8 +238,16 @@ pub struct Tree {
 impl Tree {
     pub fn new(root: &str, skip: Skip) -> std::io::Result<Tree> {
         let info = sys::lstat(root).ok_or_else(std::io::Error::last_os_error)?;
-        let fd = sys::fanotify(sys::FAN_UNLIMITED_QUEUE | sys::FAN_REPORT_DFID_NAME | sys::FAN_NONBLOCK)?;
-        sys::fanotify_mark(fd, sys::FAN_MARK_ADD | sys::FAN_MARK_FILESYSTEM, WATCHED, libc::AT_FDCWD, Some(root))?;
+        let fd = sys::fanotify(
+            sys::FAN_UNLIMITED_QUEUE | sys::FAN_REPORT_DFID_NAME | sys::FAN_NONBLOCK,
+        )?;
+        sys::fanotify_mark(
+            fd,
+            sys::FAN_MARK_ADD | sys::FAN_MARK_FILESYSTEM,
+            WATCHED,
+            libc::AT_FDCWD,
+            Some(root),
+        )?;
         let mut tree = Tree::detached(root, info.ino, info.dev, skip);
         tree.fd = fd;
         let started = clock();
@@ -204,7 +258,13 @@ impl Tree {
     }
 
     pub fn detached(root: &str, ino: u64, device: u64, skip: Skip) -> Tree {
-        let node = Node { parent: NONE, name: root.into(), ino, attached: true, ..Default::default() };
+        let node = Node {
+            parent: NONE,
+            name: root.into(),
+            ino,
+            attached: true,
+            ..Default::default()
+        };
         Tree {
             skip,
             device,
@@ -255,13 +315,17 @@ impl Tree {
 
     pub fn child(&self, id: u32, name: &str) -> Option<u32> {
         let children = &self.nodes[id as usize].children;
-        children.binary_search_by(|child| (*self.nodes[*child as usize].name).cmp(name)).ok().map(|index| children[index])
+        children
+            .binary_search_by(|child| (*self.nodes[*child as usize].name).cmp(name))
+            .ok()
+            .map(|index| children[index])
     }
 
     pub fn compact(&mut self) {
         self.nodes.shrink_to_fit();
         let (nodes, state) = (&self.nodes, &self.key_hash);
-        self.keys.shrink_to_fit(|id| state.hash_one(nodes[*id as usize].key.as_deref().unwrap_or(&[])));
+        self.keys
+            .shrink_to_fit(|id| state.hash_one(nodes[*id as usize].key.as_deref().unwrap_or(&[])));
         self.holders.shrink_to_fit();
     }
 
@@ -304,7 +368,11 @@ impl Tree {
 
     fn owned(&self, id: u32) -> u64 {
         match &self.nodes[id as usize].multi {
-            Some(multi) => multi.iter().filter(|(ino, _)| self.holders.get(ino).and_then(|list| list.first()) == Some(&id)).map(|(_, blocks)| *blocks).sum(),
+            Some(multi) => multi
+                .iter()
+                .filter(|(ino, _)| self.holders.get(ino).and_then(|list| list.first()) == Some(&id))
+                .map(|(_, blocks)| *blocks)
+                .sum(),
             None => 0,
         }
     }
@@ -313,9 +381,15 @@ impl Tree {
         multi.sort_unstable();
         multi.dedup_by_key(|entry| entry.0);
         let old = self.nodes[id as usize].multi.take().unwrap_or_default();
-        let has = |list: &[(u64, u64)], ino: u64| list.binary_search_by_key(&ino, |entry| entry.0).is_ok();
+        let has = |list: &[(u64, u64)], ino: u64| {
+            list.binary_search_by_key(&ino, |entry| entry.0).is_ok()
+        };
         let mut touched = Vec::new();
-        for ino in old.iter().map(|entry| &entry.0).filter(|ino| !has(&multi, **ino)) {
+        for ino in old
+            .iter()
+            .map(|entry| &entry.0)
+            .filter(|ino| !has(&multi, **ino))
+        {
             if let Some(list) = self.holders.get_mut(ino) {
                 let first = list.first().copied();
                 list.retain(|other| *other != id);
@@ -326,10 +400,18 @@ impl Tree {
                 }
             }
         }
-        for ino in multi.iter().map(|entry| entry.0).filter(|ino| !has(&old, *ino)) {
+        for ino in multi
+            .iter()
+            .map(|entry| entry.0)
+            .filter(|ino| !has(&old, *ino))
+        {
             self.holders.entry(ino).or_default().push(id);
         }
-        self.nodes[id as usize].multi = if multi.is_empty() { None } else { Some(multi.into_boxed_slice()) };
+        self.nodes[id as usize].multi = if multi.is_empty() {
+            None
+        } else {
+            Some(multi.into_boxed_slice())
+        };
         self.nodes[id as usize].shared = self.owned(id);
         for other in touched {
             if !self.nodes[other as usize].attached {
@@ -354,7 +436,10 @@ impl Tree {
         }
         for current in subtree {
             if let Some(key) = self.nodes[current as usize].key.as_deref() {
-                if let Ok(found) = self.keys.find_entry(self.key_hash.hash_one(key), |other| *other == current) {
+                if let Ok(found) = self
+                    .keys
+                    .find_entry(self.key_hash.hash_one(key), |other| *other == current)
+                {
                     found.remove();
                 }
             }
@@ -393,7 +478,12 @@ impl Tree {
 
     pub fn scan(&mut self, id: u32) -> Vec<u32> {
         let path = self.path(id);
-        match read(&path, self.device, &*self.skip, self.nodes[id as usize].key.is_none()) {
+        match read(
+            &path,
+            self.device,
+            &*self.skip,
+            self.nodes[id as usize].key.is_none(),
+        ) {
             Some(raw) => self.apply(id, raw),
             None => {
                 self.vanished(id);
@@ -411,21 +501,32 @@ impl Tree {
             self.nodes[id as usize].key = sys::Key::of(&key);
             let nodes = &self.nodes;
             let key = nodes[id as usize].key.as_deref();
-            match self.keys.find_mut(hash, |other| nodes[*other as usize].key.as_deref() == key) {
+            match self
+                .keys
+                .find_mut(hash, |other| nodes[*other as usize].key.as_deref() == key)
+            {
                 Some(slot) => *slot = id,
                 None => {
                     let state = &self.key_hash;
-                    self.keys.insert_unique(hash, id, |other| state.hash_one(nodes[*other as usize].key.as_deref().unwrap_or(&[])));
+                    self.keys.insert_unique(hash, id, |other| {
+                        state.hash_one(nodes[*other as usize].key.as_deref().unwrap_or(&[]))
+                    });
                 }
             }
         }
-        let before = (self.nodes[id as usize].total, self.nodes[id as usize].newest, self.nodes[id as usize].children.len());
+        let before = (
+            self.nodes[id as usize].total,
+            self.nodes[id as usize].newest,
+            self.nodes[id as usize].children.len(),
+        );
         let old = std::mem::take(&mut self.nodes[id as usize].children);
         let mut used = vec![false; old.len()];
         let mut kept = Vec::with_capacity(raw.dirs.len());
         let mut new = Vec::new();
         for (name, ino) in raw.dirs {
-            let found = old.binary_search_by(|child| (*self.nodes[*child as usize].name).cmp(&*name)).ok();
+            let found = old
+                .binary_search_by(|child| (*self.nodes[*child as usize].name).cmp(&*name))
+                .ok();
             match found {
                 Some(index) if self.nodes[old[index] as usize].ino == ino => {
                     used[index] = true;
@@ -433,7 +534,13 @@ impl Tree {
                 }
                 _ => {
                     let named = NAMED.contains(&&*name);
-                    let created = self.allocate(Node { parent: id, name, ino, attached: true, ..Default::default() });
+                    let created = self.allocate(Node {
+                        parent: id,
+                        name,
+                        ino,
+                        attached: true,
+                        ..Default::default()
+                    });
                     if named {
                         self.named.insert(created);
                     }
@@ -452,7 +559,12 @@ impl Tree {
         self.nodes[id as usize].files = raw.files;
         self.set_multi(id, raw.multi);
         self.set_own(id);
-        let children_newest = self.nodes[id as usize].children.iter().map(|child| self.nodes[*child as usize].newest).max().unwrap_or(0);
+        let children_newest = self.nodes[id as usize]
+            .children
+            .iter()
+            .map(|child| self.nodes[*child as usize].newest)
+            .max()
+            .unwrap_or(0);
         let node = &mut self.nodes[id as usize];
         node.own_newest = raw.newest;
         node.newest = raw.newest.max(children_newest);
@@ -466,7 +578,8 @@ impl Tree {
         }
         self.scans += 1;
         for child in &new {
-            self.ring.push_back((*child, self.nodes[*child as usize].generation));
+            self.ring
+                .push_back((*child, self.nodes[*child as usize].generation));
         }
         new
     }
@@ -496,7 +609,9 @@ impl Tree {
         let mut buffer = std::mem::take(&mut self.buffer);
         buffer.resize(1 << 20, 0);
         for _ in 0..DRAIN_READS {
-            let Some(count) = sys::read_nonblocking(self.fd, &mut buffer) else { break };
+            let Some(count) = sys::read_nonblocking(self.fd, &mut buffer) else {
+                break;
+            };
             let data = &buffer[..count];
             let mut offset = 0;
             while offset + sys::EVENT_SIZE <= data.len() {
@@ -518,7 +633,11 @@ impl Tree {
                     key.extend_from_slice(&data[cursor + 16..cursor + 20]);
                     key.extend_from_slice(&data[cursor + 20..cursor + 20 + handle_bytes]);
                     let nodes = &self.nodes;
-                    match self.keys.find(self.key_hash.hash_one(key.as_slice()), |other| nodes[*other as usize].key.as_deref() == Some(key.as_slice())) {
+                    match self
+                        .keys
+                        .find(self.key_hash.hash_one(key.as_slice()), |other| {
+                            nodes[*other as usize].key.as_deref() == Some(key.as_slice())
+                        }) {
                         Some(id) => {
                             self.dirty.entry(*id).or_insert(now);
                         }
@@ -548,7 +667,10 @@ impl Tree {
     }
 
     pub fn next_due(&self) -> Option<f64> {
-        self.dirty.iter().map(|(id, since)| self.due(*id, *since)).min_by(f64::total_cmp)
+        self.dirty
+            .iter()
+            .map(|(id, since)| self.due(*id, *since))
+            .min_by(f64::total_cmp)
     }
 
     pub fn settle(&mut self, deadline: f64, force: bool) {
@@ -562,12 +684,19 @@ impl Tree {
             }
         }
         let now = clock();
-        let ready: Vec<u32> = self.dirty.iter().filter(|(id, since)| force || self.due(**id, **since) <= now).map(|(id, _)| *id).collect();
+        let ready: Vec<u32> = self
+            .dirty
+            .iter()
+            .filter(|(id, since)| force || self.due(**id, **since) <= now)
+            .map(|(id, _)| *id)
+            .collect();
         for id in ready {
             if clock() > deadline {
                 return;
             }
-            let Some(since) = self.dirty.remove(&id) else { continue };
+            let Some(since) = self.dirty.remove(&id) else {
+                continue;
+            };
             if self.nodes[id as usize].attached {
                 self.settled_from = Some(self.settled_from.map_or(since, |from| from.min(since)));
                 let new = self.scan(id);
@@ -578,8 +707,11 @@ impl Tree {
 
     pub fn verify(&mut self, deadline: f64) {
         while clock() < deadline {
-            let Some((id, generation)) = self.ring.pop_front() else { break };
-            if !self.nodes[id as usize].attached || self.nodes[id as usize].generation != generation {
+            let Some((id, generation)) = self.ring.pop_front() else {
+                break;
+            };
+            if !self.nodes[id as usize].attached || self.nodes[id as usize].generation != generation
+            {
                 continue;
             }
             let new = self.scan(id);
@@ -635,7 +767,10 @@ pub struct Resolver {
 
 impl Resolver {
     pub fn new(mount: &str) -> Option<Resolver> {
-        Some(Resolver { mount: sys::open_dir(mount)?, cache: HashMap::new() })
+        Some(Resolver {
+            mount: sys::open_dir(mount)?,
+            cache: HashMap::new(),
+        })
     }
 
     pub fn open(&self, key: &[u8], flags: i32) -> Option<i32> {
@@ -684,18 +819,46 @@ pub struct Opens {
 impl Opens {
     pub fn new(mount: &str, flush_seconds: f64) -> std::io::Result<Opens> {
         let fd = sys::fanotify(sys::FAN_REPORT_DFID_NAME | sys::FAN_NONBLOCK)?;
-        sys::fanotify_mark(fd, sys::FAN_MARK_ADD | sys::FAN_MARK_MOUNT, sys::FAN_OPEN | sys::FAN_OPEN_EXEC, libc::AT_FDCWD, Some(mount))?;
+        sys::fanotify_mark(
+            fd,
+            sys::FAN_MARK_ADD | sys::FAN_MARK_MOUNT,
+            sys::FAN_OPEN | sys::FAN_OPEN_EXEC,
+            libc::AT_FDCWD,
+            Some(mount),
+        )?;
         let resolver = Resolver::new(mount).ok_or_else(std::io::Error::last_os_error)?;
-        Ok(Opens { fd, mount: mount.into(), resolver, root_key: sys::handle_key(mount, 0), flush_seconds, flushed: clock(), ignoring: true, events: 0, ignored: 0, pid: std::process::id() as i32, buffer: vec![0u8; 1 << 20] })
+        Ok(Opens {
+            fd,
+            mount: mount.into(),
+            resolver,
+            root_key: sys::handle_key(mount, 0),
+            flush_seconds,
+            flushed: clock(),
+            ignoring: true,
+            events: 0,
+            ignored: 0,
+            pid: std::process::id() as i32,
+            buffer: vec![0u8; 1 << 20],
+        })
     }
 
     fn ignore(&mut self, key: &[u8]) {
         if !self.ignoring {
             return;
         }
-        let Some(fd) = self.resolver.open(key, libc::O_RDONLY | libc::O_DIRECTORY) else { return };
+        let Some(fd) = self.resolver.open(key, libc::O_RDONLY | libc::O_DIRECTORY) else {
+            return;
+        };
         let flags = sys::FAN_MARK_ADD | sys::FAN_MARK_IGNORE | sys::FAN_MARK_IGNORED_SURV_MODIFY;
-        if sys::fanotify_mark(self.fd, flags, sys::FAN_OPEN | sys::FAN_OPEN_EXEC | sys::FAN_EVENT_ON_CHILD, fd, None).is_err() {
+        if sys::fanotify_mark(
+            self.fd,
+            flags,
+            sys::FAN_OPEN | sys::FAN_OPEN_EXEC | sys::FAN_EVENT_ON_CHILD,
+            fd,
+            None,
+        )
+        .is_err()
+        {
             self.ignoring = false;
         } else {
             self.ignored += 1;
@@ -703,10 +866,16 @@ impl Opens {
         sys::close(fd);
     }
 
-    pub fn drain(&mut self, mut touch: impl FnMut(&str, i64)) {
+    pub fn drain(&mut self, mut touch: impl FnMut(&str, i64, i32, bool)) {
         let now = sys::now() as i64;
         if clock() - self.flushed >= self.flush_seconds {
-            let _ = sys::fanotify_mark(self.fd, sys::FAN_MARK_FLUSH, 0, libc::AT_FDCWD, Some(&self.mount));
+            let _ = sys::fanotify_mark(
+                self.fd,
+                sys::FAN_MARK_FLUSH,
+                0,
+                libc::AT_FDCWD,
+                Some(&self.mount),
+            );
             self.resolver.cache.clear();
             self.flushed = clock();
             self.ignored = 0;
@@ -714,7 +883,9 @@ impl Opens {
         let mut buffer = std::mem::take(&mut self.buffer);
         buffer.resize(1 << 20, 0);
         for _ in 0..DRAIN_READS {
-            let Some(count) = sys::read_nonblocking(self.fd, &mut buffer) else { break };
+            let Some(count) = sys::read_nonblocking(self.fd, &mut buffer) else {
+                break;
+            };
             let data = &buffer[..count];
             let mut offset = 0;
             while offset + sys::EVENT_SIZE <= data.len() {
@@ -724,6 +895,7 @@ impl Opens {
                 }
                 let header = u16::from_ne_bytes([data[offset + 6], data[offset + 7]]) as usize;
                 let pid = sys::i32_at(data, offset + 20);
+                let exec = sys::u64_at(data, offset + 8) & sys::FAN_OPEN_EXEC != 0;
                 self.events += 1;
                 let cursor = offset + header;
                 if pid != self.pid && cursor + 20 <= offset + length {
@@ -734,11 +906,18 @@ impl Opens {
                     if Some(&key) == self.root_key.as_ref() {
                         let raw = &data[cursor + 20 + handle_bytes..offset + length];
                         let name = raw.split(|byte| *byte == 0).next().unwrap_or_default();
-                        touch(&format!("{STORE}{}", String::from_utf8_lossy(name)), now);
+                        touch(
+                            &format!("{STORE}{}", String::from_utf8_lossy(name)),
+                            now,
+                            pid,
+                            exec,
+                        );
                     } else {
                         let known = self.resolver.cache.contains_key(&key);
-                        if let Some(found) = self.resolver.path(&key).as_deref().and_then(store_path) {
-                            touch(&found, now);
+                        if let Some(found) =
+                            self.resolver.path(&key).as_deref().and_then(store_path)
+                        {
+                            touch(&found, now, pid, exec);
                             if !known {
                                 self.ignore(&key);
                             }
@@ -751,4 +930,3 @@ impl Opens {
         self.buffer = buffer;
     }
 }
-

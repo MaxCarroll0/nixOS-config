@@ -14,15 +14,35 @@ impl Drop for Fixture {
 }
 
 fn fixture(name: &str) -> Fixture {
-    let base = std::env::temp_dir().join(format!("ledger-fixture-{name}-{}", std::process::id())).to_string_lossy().into_owned();
+    let base = std::env::temp_dir()
+        .join(format!("ledger-fixture-{name}-{}", std::process::id()))
+        .to_string_lossy()
+        .into_owned();
     let _ = fs::remove_dir_all(&base);
     fs::create_dir_all(&base).unwrap();
     Fixture { base }
 }
 
 fn git(args: &[&str]) {
-    let status = Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"]).args(args).env("GIT_CONFIG_NOSYSTEM", "1").env("HOME", "/nonexistent").output().unwrap();
-    assert!(status.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&status.stderr));
+    let status = Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("HOME", "/nonexistent")
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
 }
 
 fn make(path: &str, file: bool) {
@@ -65,7 +85,16 @@ fn me() -> String {
 }
 
 fn temp_work(path: &str, detail: Map<String, Value>) -> Work {
-    Work { kind: Kind::Temp, path: path.into(), links: Vec::new(), files: vec![path.into()], freed: 0, last_used: 0, detail }
+    Work {
+        kind: Kind::Temp,
+        path: path.into(),
+        links: Vec::new(),
+        files: vec![path.into()],
+        freed: 0,
+        last_used: 0,
+        detail,
+        store: Vec::new(),
+    }
 }
 
 #[test]
@@ -92,19 +121,60 @@ fn tmp_entries_are_classified_and_rechecked() {
         make(&format!("{tmp}/{name}"), name.ends_with(".log"));
     }
     git(&["init", "-q", &format!("{tmp}/unpushed/repo")]);
-    git(&["-C", &format!("{tmp}/unpushed/repo"), "commit", "-q", "--allow-empty", "-m", "x"]);
+    git(&[
+        "-C",
+        &format!("{tmp}/unpushed/repo"),
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "x",
+    ]);
     git(&["init", "-q", "--bare", &format!("{}/remote.git", fx.base)]);
-    git(&["clone", "-q", &format!("{}/remote.git", fx.base), &format!("{tmp}/pushed-clean/repo")]);
-    git(&["-C", &format!("{tmp}/pushed-clean/repo"), "commit", "-q", "--allow-empty", "-m", "x"]);
-    git(&["-C", &format!("{tmp}/pushed-clean/repo"), "push", "-q", "origin", "HEAD"]);
-    age(&fx.base, &format!("{tmp}/fresh"), SystemTime::now() - Duration::from_secs(5 * 86400));
+    git(&[
+        "clone",
+        "-q",
+        &format!("{}/remote.git", fx.base),
+        &format!("{tmp}/pushed-clean/repo"),
+    ]);
+    git(&[
+        "-C",
+        &format!("{tmp}/pushed-clean/repo"),
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "x",
+    ]);
+    git(&[
+        "-C",
+        &format!("{tmp}/pushed-clean/repo"),
+        "push",
+        "-q",
+        "origin",
+        "HEAD",
+    ]);
+    age(
+        &fx.base,
+        &format!("{tmp}/fresh"),
+        SystemTime::now() - Duration::from_secs(5 * 86400),
+    );
     let held = fs::File::open(format!("{tmp}/held/f")).unwrap();
 
     let user = me();
-    let mut model = Model::new(&format!("{}/home", fx.base), &user, None, BuildTimes::new(None));
+    let mut model = Model::new(
+        &format!("{}/home", fx.base),
+        &user,
+        None,
+        BuildTimes::new(None),
+    );
     model.tmp = tmp.clone();
     let busy = busy_paths();
-    let items: HashMap<String, Item> = model.tmp_items(&[], &busy, &Walked).into_iter().map(|item| (basename(&item.path).to_string(), item)).collect();
+    let items: HashMap<String, Item> = model
+        .tmp_items(&[], &busy, &Walked)
+        .into_iter()
+        .map(|item| (basename(&item.path).to_string(), item))
+        .collect();
     let scope = model.scope();
     let mut failures = Vec::new();
     for (name, want) in &cases {
@@ -113,26 +183,43 @@ fn tmp_entries_are_classified_and_rechecked() {
             Some(item) if item.detail["pattern"] == Value::Bool(true) => "temp".to_string(),
             Some(_) => "temp?".to_string(),
             None if busy.contains(&path) => "busy".to_string(),
-            None => model.protected.get(&path).cloned().unwrap_or_else(|| "skipped".into()),
+            None => model
+                .protected
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| "skipped".into()),
         };
         if got != *want {
             failures.push(format!("{name}: want {want}, got {got}"));
         }
         if let Some(item) = items.get(*name) {
             if let Some(refusal) = scope.refusal(&Work::of(item), &busy, &[], &process_starts()) {
-                failures.push(format!("{name}: candidate refused by the executor: {refusal}"));
+                failures.push(format!(
+                    "{name}: candidate refused by the executor: {refusal}"
+                ));
             }
         }
     }
     for name in ["held", own.as_str()] {
         let path = format!("{tmp}/{name}");
-        if scope.refusal(&temp_work(&path, Map::new()), &busy, &[], &process_starts()).is_none() {
+        if scope
+            .refusal(&temp_work(&path, Map::new()), &busy, &[], &process_starts())
+            .is_none()
+        {
             failures.push(format!("{name}: executor allowed an active entry"));
         }
     }
     let outside = format!("{}/home/notes", fx.base);
     fs::create_dir_all(&outside).unwrap();
-    if scope.refusal(&temp_work(&outside, Map::new()), &busy, &[], &process_starts()).is_none() {
+    if scope
+        .refusal(
+            &temp_work(&outside, Map::new()),
+            &busy,
+            &[],
+            &process_starts(),
+        )
+        .is_none()
+    {
         failures.push("executor allowed a path outside tmp".into());
     }
     drop(held);
@@ -143,29 +230,82 @@ fn tmp_entries_are_classified_and_rechecked() {
 fn only_known_caches_are_reclaimable() {
     let fx = fixture("cache");
     let cache = format!("{}/home/.cache", fx.base);
-    for name in ["mesa_shader_cache", "wake-peer", "nix-gcroots", "zoom/qmlcache", "zoom/qtpipelinecache-x", "khelpcenter/qmlcache", "khelpcenter/index"] {
+    for name in [
+        "mesa_shader_cache",
+        "wake-peer",
+        "nix-gcroots",
+        "zoom/qmlcache",
+        "zoom/qtpipelinecache-x",
+        "khelpcenter/qmlcache",
+        "khelpcenter/index",
+    ] {
         fs::create_dir_all(format!("{cache}/{name}")).unwrap();
     }
     fs::write(format!("{cache}/rofi-entry-history.txt"), "h").unwrap();
-    let mut model = Model::new(&format!("{}/home", fx.base), &me(), None, BuildTimes::new(None));
+    let mut model = Model::new(
+        &format!("{}/home", fx.base),
+        &me(),
+        None,
+        BuildTimes::new(None),
+    );
     model.tmp = format!("{}/tmp", fx.base);
     let scope = model.scope();
     let mut failures = Vec::new();
-    for (name, known) in [("mesa_shader_cache", true), ("zoom", true), ("khelpcenter", false), ("wake-peer", false), ("rofi-entry-history.txt", false), ("nix-gcroots", false)] {
+    for (name, known) in [
+        ("mesa_shader_cache", true),
+        ("zoom", true),
+        ("khelpcenter", false),
+        ("wake-peer", false),
+        ("rofi-entry-history.txt", false),
+        ("nix-gcroots", false),
+    ] {
         let path = format!("{cache}/{name}");
         if cache_known(&path) != known {
             failures.push(format!("{name}: cache_known should be {known}"));
         }
-        let work = Work { kind: Kind::Cache, path: path.clone(), links: Vec::new(), files: vec![path], freed: 0, last_used: 0, detail: Map::new() };
-        if scope.refusal(&work, &HashSet::new(), &[], &process_starts()).is_some() == known {
-            failures.push(format!("{name}: executor decision disagrees with cache_known"));
+        let work = Work {
+            kind: Kind::Cache,
+            path: path.clone(),
+            links: Vec::new(),
+            files: vec![path],
+            freed: 0,
+            last_used: 0,
+            detail: Map::new(),
+            store: Vec::new(),
+        };
+        if scope
+            .refusal(&work, &HashSet::new(), &[], &process_starts())
+            .is_some()
+            == known
+        {
+            failures.push(format!(
+                "{name}: executor decision disagrees with cache_known"
+            ));
         }
     }
-    for (name, inside) in [("mesa_shader_cache/deep/x", true), ("nix-gcroots/x", false), ("wake-peer/x", false), ("mesa_shader_cache/../wake-peer", false)] {
+    for (name, inside) in [
+        ("mesa_shader_cache/deep/x", true),
+        ("nix-gcroots/x", false),
+        ("wake-peer/x", false),
+        ("mesa_shader_cache/../wake-peer", false),
+    ] {
         let path = format!("{cache}/{name}");
         fs::create_dir_all(&path).unwrap();
-        let work = Work { kind: Kind::Cache, path: path.clone(), links: Vec::new(), files: vec![path], freed: 0, last_used: 0, detail: Map::new() };
-        if scope.refusal(&work, &HashSet::new(), &[], &process_starts()).is_none() != inside {
+        let work = Work {
+            kind: Kind::Cache,
+            path: path.clone(),
+            links: Vec::new(),
+            files: vec![path],
+            freed: 0,
+            last_used: 0,
+            detail: Map::new(),
+            store: Vec::new(),
+        };
+        if scope
+            .refusal(&work, &HashSet::new(), &[], &process_starts())
+            .is_none()
+            != inside
+        {
             failures.push(format!("{name}: inside a known cache should be {inside}"));
         }
     }
@@ -183,7 +323,10 @@ fn age_outweighs_kind_weight() {
     };
     assert!(Item::new(Kind::Dead, "dead", at(1.0)).score(now) > unknown_temp(1.0).score(now));
     assert!(unknown_temp(4.5).score(now) > Item::new(Kind::Cache, "cache", at(1.0)).score(now));
-    assert!(Item::new(Kind::Project, "old", at(90.0)).score(now) > Item::new(Kind::Temp, "young", at(22.0)).score(now));
+    assert!(
+        Item::new(Kind::Project, "old", at(90.0)).score(now)
+            > Item::new(Kind::Temp, "young", at(22.0)).score(now)
+    );
     assert!(Item::new(Kind::Cache, "cache", at(30.0)).score(now) > unknown_temp(60.0).score(now));
     assert!(unknown_temp(365.0).score(now) > Item::new(Kind::Cache, "cache", at(60.0)).score(now));
 }
@@ -198,15 +341,31 @@ fn clone_shrinks_and_restores() {
     let user = user_name(unsafe { libc::getuid() }).unwrap();
     git(&["init", "--bare", &remote]);
     git(&["init", &repo]);
-    git(&["-C", &repo, "config", &format!("url.{remote}.insteadOf"), "https://example.invalid/x.git"]);
-    git(&["-C", &repo, "remote", "add", "origin", "https://example.invalid/x.git"]);
+    git(&[
+        "-C",
+        &repo,
+        "config",
+        &format!("url.{remote}.insteadOf"),
+        "https://example.invalid/x.git",
+    ]);
+    git(&[
+        "-C",
+        &repo,
+        "remote",
+        "add",
+        "origin",
+        "https://example.invalid/x.git",
+    ]);
     fs::create_dir_all(format!("{repo}/src/deep")).unwrap();
     fs::write(format!("{repo}/src/deep/a.txt"), "a\n").unwrap();
     fs::write(format!("{repo}/b.txt"), "b\n").unwrap();
     fs::write(format!("{repo}/c.txt"), "c\n").unwrap();
     git(&["-C", &repo, "add", "."]);
     git(&["-C", &repo, "commit", "-m", "one"]);
-    assert!(clone_state(&repo, &user).err().unwrap().contains("unpushed"));
+    assert!(clone_state(&repo, &user)
+        .err()
+        .unwrap()
+        .contains("unpushed"));
     git(&["-C", &repo, "push", "origin", "main"]);
     fs::write(format!("{repo}/src/deep/a.txt"), "a2\n").unwrap();
     git(&["-C", &repo, "commit", "-q", "-am", "two"]);
@@ -227,23 +386,56 @@ fn clone_shrinks_and_restores() {
     assert_eq!(read("b.txt"), "changed\n");
     assert_eq!(read("new.txt"), "untracked\n");
     assert_eq!(clone_state(&repo, &user).err().unwrap(), "shrunk");
-    let restored = Command::new("bash").arg(format!("{repo}/.git/ledger/restore")).env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
-    assert!(restored.status.success(), "{}", String::from_utf8_lossy(&restored.stderr));
+    let restored = Command::new("bash")
+        .arg(format!("{repo}/.git/ledger/restore"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        restored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restored.stderr)
+    );
     assert_eq!(read("src/deep/a.txt"), "a2\n");
-    let log = Command::new("git").args(["-C", &repo, "log", "--format=%s", "local"]).output().unwrap();
+    let log = Command::new("git")
+        .args(["-C", &repo, "log", "--format=%s", "local"])
+        .output()
+        .unwrap();
     assert_eq!(String::from_utf8_lossy(&log.stdout), "two\none\n");
     assert_eq!(read("b.txt"), "changed\n");
-    let status = Command::new("git").args(["-C", &repo, "status", "--porcelain"]).output().unwrap();
+    let status = Command::new("git")
+        .args(["-C", &repo, "status", "--porcelain"])
+        .output()
+        .unwrap();
     let status = String::from_utf8_lossy(&status.stdout);
-    assert!(status.contains(" M b.txt") && status.contains("M  c.txt") && status.contains("?? new.txt"), "{status}");
+    assert!(
+        status.contains(" M b.txt") && status.contains("M  c.txt") && status.contains("?? new.txt"),
+        "{status}"
+    );
 }
 
 #[test]
 fn clone_urls() {
-    assert!(network_url("git@github.com:o/r.git") && network_url("https://x/y") && !network_url("/srv/r.git") && !network_url("file:///r") && !network_url("../r"));
-    assert_eq!(https_form("git@github.com:o/r.git").as_deref(), Some("https://github.com/o/r.git"));
-    assert_eq!(https_form("ssh://git@host:22/o/r").as_deref(), Some("https://host/o/r"));
-    assert!(clone_candidate("/home/u", "/home/u/src/x") && !clone_candidate("/home/u", "/home/u/.local/x") && !clone_candidate("/home/u", "/home/u"));
+    assert!(
+        network_url("git@github.com:o/r.git")
+            && network_url("https://x/y")
+            && !network_url("/srv/r.git")
+            && !network_url("file:///r")
+            && !network_url("../r")
+    );
+    assert_eq!(
+        https_form("git@github.com:o/r.git").as_deref(),
+        Some("https://github.com/o/r.git")
+    );
+    assert_eq!(
+        https_form("ssh://git@host:22/o/r").as_deref(),
+        Some("https://host/o/r")
+    );
+    assert!(
+        clone_candidate("/home/u", "/home/u/src/x")
+            && !clone_candidate("/home/u", "/home/u/.local/x")
+            && !clone_candidate("/home/u", "/home/u")
+    );
 }
 
 #[test]
@@ -258,10 +450,19 @@ fn games_use_last_play_or_install() {
     manifest("1", "Played Game", "Played", 4_000_000_000);
     manifest("2", "Fresh Game", "Fresh", 0);
     manifest("3", "Proton 9.0", "Proton 9.0", 0);
-    manifest("4", "Steamworks Common Redistributables", "Steamworks Shared", 0);
+    manifest(
+        "4",
+        "Steamworks Common Redistributables",
+        "Steamworks Shared",
+        0,
+    );
     fs::create_dir_all(format!("{apps}/shadercache/1")).unwrap();
     fs::create_dir_all(format!("{apps}/compatdata/1/pfx")).unwrap();
-    fs::write(format!("{apps}/compatdata/1/config_info"), format!("9.0-203\n{apps}/common/Proton 9.0/files/share/fonts/\n")).unwrap();
+    fs::write(
+        format!("{apps}/compatdata/1/config_info"),
+        format!("9.0-203\n{apps}/common/Proton 9.0/files/share/fonts/\n"),
+    )
+    .unwrap();
     fs::write(format!("{apps}/compatdata/1/pfx/user.reg"), "").unwrap();
     fs::create_dir_all(format!("{home}/.local/share/Steam/userdata/7/config")).unwrap();
     fs::write(format!("{home}/.local/share/Steam/userdata/7/config/localconfig.vdf"), "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"apps\"\n\t\t{\n\t\t\t\"1\"\n\t\t\t{\n\t\t\t\t\"cloud\"\n\t\t\t\t{\n\t\t\t\t}\n\t\t\t\t\"LastPlayed\"\t\t\"1500000000\"\n\t\t\t}\n\t\t}\n\t}\n}\n").unwrap();
@@ -270,28 +471,71 @@ fn games_use_last_play_or_install() {
     fs::create_dir_all(format!("{heroic}/store")).unwrap();
     fs::create_dir_all(format!("{home}/Games/Heroic/Crab")).unwrap();
     fs::write(format!("{heroic}/legendaryConfig/legendary/installed.json"), format!("{{\"Crab\": {{\"title\": \"Crab Game\", \"install_path\": \"{home}/Games/Heroic/Crab\"}}, \"Out\": {{\"title\": \"Escape\", \"install_path\": \"{home}/elsewhere\"}}}}")).unwrap();
-    fs::write(format!("{heroic}/store/timestamp.json"), "{\"Crab\": {\"lastPlayed\": \"2096-10-29T15:32:56.906Z\"}}").unwrap();
+    fs::write(
+        format!("{heroic}/store/timestamp.json"),
+        "{\"Crab\": {\"lastPlayed\": \"2096-10-29T15:32:56.906Z\"}}",
+    )
+    .unwrap();
     let found = games(&home, "");
     let titles: Vec<&str> = found.iter().map(|game| game.title.as_str()).collect();
-    assert_eq!(titles, ["Played Game", "Fresh Game", "Proton 9.0", "Crab Game"]);
+    assert_eq!(
+        titles,
+        ["Played Game", "Fresh Game", "Proton 9.0", "Crab Game"]
+    );
     assert!(found[2].tool && !found[0].tool);
     assert_eq!(found[2].played, 1_500_000_000);
     let played = &found[0];
     assert_eq!(played.played, 4_000_000_000);
-    assert!(played.files.contains(&format!("{apps}/shadercache/1")) && !played.files.iter().any(|file| file.contains("compatdata")));
+    assert!(
+        played.files.contains(&format!("{apps}/shadercache/1"))
+            && !played.files.iter().any(|file| file.contains("compatdata"))
+    );
     assert!(found[1].played == 0 && found[1].installed > 0);
     assert_eq!(found[3].played, iso_seconds("2096-10-29T15:32:56Z"));
     assert_eq!(iso_seconds("1970-01-02T00:00:01Z"), 86401);
     let mut model = Model::new(&home, &me(), None, BuildTimes::new(None));
     model.tmp = format!("{}/tmp", fx.base);
     let scope = model.scope();
-    let work = |path: String| Work { kind: Kind::Game, path: path.clone(), links: Vec::new(), files: vec![path], freed: 0, last_used: 0, detail: json!({"store": "none"}).as_object().cloned().unwrap() };
+    let work = |path: String| Work {
+        kind: Kind::Game,
+        path: path.clone(),
+        links: Vec::new(),
+        files: vec![path],
+        freed: 0,
+        last_used: 0,
+        detail: json!({"store": "none"}).as_object().cloned().unwrap(),
+        store: Vec::new(),
+    };
     if launcher_running("steam").is_none() && launcher_running("").is_none() {
-        assert_eq!(scope.refusal(&work(format!("{apps}/common/Fresh")), &HashSet::new(), &[], &process_starts()), None);
-        assert_eq!(scope.refusal(&work(format!("{apps}/common/Proton 9.0")), &HashSet::new(), &[], &process_starts()), None);
-        assert!(scope.refusal(&work(format!("{apps}/common/Steamworks Shared")), &HashSet::new(), &[], &process_starts()).is_some());
+        assert_eq!(
+            scope.refusal(
+                &work(format!("{apps}/common/Fresh")),
+                &HashSet::new(),
+                &[],
+                &process_starts()
+            ),
+            None
+        );
+        assert_eq!(
+            scope.refusal(
+                &work(format!("{apps}/common/Proton 9.0")),
+                &HashSet::new(),
+                &[],
+                &process_starts()
+            ),
+            None
+        );
+        assert!(scope
+            .refusal(
+                &work(format!("{apps}/common/Steamworks Shared")),
+                &HashSet::new(),
+                &[],
+                &process_starts()
+            )
+            .is_some());
     }
     forget_heroic(&home, "Crab", &me()).unwrap();
-    let left = fs::read_to_string(format!("{heroic}/legendaryConfig/legendary/installed.json")).unwrap();
+    let left =
+        fs::read_to_string(format!("{heroic}/legendaryConfig/legendary/installed.json")).unwrap();
     assert!(!left.contains("Crab") && left.contains("Escape"));
 }

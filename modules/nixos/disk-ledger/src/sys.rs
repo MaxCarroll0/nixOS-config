@@ -29,16 +29,29 @@ pub fn cstr(path: &str) -> CString {
 }
 
 pub fn fanotify(flags: u32) -> io::Result<i32> {
-    let fd = unsafe { libc::fanotify_init(flags, (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_LARGEFILE) as u32) };
+    let fd = unsafe {
+        libc::fanotify_init(
+            flags,
+            (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_LARGEFILE) as u32,
+        )
+    };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(fd)
 }
 
-pub fn fanotify_mark(fd: i32, flags: u32, mask: u64, dirfd: i32, path: Option<&str>) -> io::Result<()> {
+pub fn fanotify_mark(
+    fd: i32,
+    flags: u32,
+    mask: u64,
+    dirfd: i32,
+    path: Option<&str>,
+) -> io::Result<()> {
     let owned = path.map(cstr);
-    let pointer = owned.as_ref().map_or(std::ptr::null(), |value| value.as_ptr());
+    let pointer = owned
+        .as_ref()
+        .map_or(std::ptr::null(), |value| value.as_ptr());
     if unsafe { libc::fanotify_mark(fd, flags, mask, dirfd, pointer) } < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -76,7 +89,10 @@ impl Key {
     pub fn of(key: &[u8]) -> Option<Key> {
         let mut bytes = [0u8; 31];
         bytes.get_mut(..key.len())?.copy_from_slice(key);
-        Some(Key { len: key.len() as u8, bytes })
+        Some(Key {
+            len: key.len() as u8,
+            bytes,
+        })
     }
 }
 
@@ -93,7 +109,16 @@ pub fn handle_key(path: &str, flags: i32) -> Option<Vec<u8>> {
     buffer[..4].copy_from_slice(&128u32.to_ne_bytes());
     let mut mount: i32 = 0;
     let name = cstr(path);
-    let result = unsafe { libc::syscall(libc::SYS_name_to_handle_at, libc::AT_FDCWD, name.as_ptr(), buffer.as_mut_ptr(), &mut mount as *mut i32, flags) };
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_name_to_handle_at,
+            libc::AT_FDCWD,
+            name.as_ptr(),
+            buffer.as_mut_ptr(),
+            &mut mount as *mut i32,
+            flags,
+        )
+    };
     if result < 0 {
         return None;
     }
@@ -110,7 +135,14 @@ pub fn open_by_handle(mount: i32, key: &[u8], flags: i32) -> Option<i32> {
     buffer[..4].copy_from_slice(&(raw.len() as u32).to_ne_bytes());
     buffer[4..8].copy_from_slice(&key[..4]);
     buffer[8..].copy_from_slice(raw);
-    let fd = unsafe { libc::syscall(libc::SYS_open_by_handle_at, mount, buffer.as_mut_ptr(), flags | libc::O_CLOEXEC) };
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_open_by_handle_at,
+            mount,
+            buffer.as_mut_ptr(),
+            flags | libc::O_CLOEXEC,
+        )
+    };
     if fd < 0 {
         None
     } else {
@@ -119,7 +151,9 @@ pub fn open_by_handle(mount: i32, key: &[u8], flags: i32) -> Option<i32> {
 }
 
 pub fn fd_path(fd: i32) -> Option<String> {
-    std::fs::read_link(format!("/proc/self/fd/{fd}")).ok().map(|path| path.to_string_lossy().into_owned())
+    std::fs::read_link(format!("/proc/self/fd/{fd}"))
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 pub fn close(fd: i32) {
@@ -130,7 +164,12 @@ pub fn close(fd: i32) {
 
 pub fn open_dir(path: &str) -> Option<i32> {
     let name = cstr(path);
-    let fd = unsafe { libc::open(name.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
+    let fd = unsafe {
+        libc::open(
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
     if fd < 0 {
         None
     } else {
@@ -149,10 +188,24 @@ pub fn statx(path: &str) -> Option<Statx> {
     let name = cstr(path);
     let mut buffer: libc::statx = unsafe { std::mem::zeroed() };
     let mask = libc::STATX_BTIME | libc::STATX_MTIME | libc::STATX_SIZE;
-    if unsafe { libc::statx(libc::AT_FDCWD, name.as_ptr(), libc::AT_SYMLINK_NOFOLLOW, mask, &mut buffer) } != 0 {
+    if unsafe {
+        libc::statx(
+            libc::AT_FDCWD,
+            name.as_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+            mask,
+            &mut buffer,
+        )
+    } != 0
+    {
         return None;
     }
-    Some(Statx { mask: buffer.stx_mask, size: buffer.stx_size, btime: buffer.stx_btime.tv_sec, mtime: buffer.stx_mtime.tv_sec })
+    Some(Statx {
+        mask: buffer.stx_mask,
+        size: buffer.stx_size,
+        btime: buffer.stx_btime.tv_sec,
+        mtime: buffer.stx_mtime.tv_sec,
+    })
 }
 
 pub fn inotify() -> Option<i32> {
@@ -177,11 +230,19 @@ pub fn inotify_watch(fd: i32, path: &str, mask: u32) -> Option<i32> {
 pub fn listxattr_has(path: &str, wanted: &str) -> bool {
     let name = cstr(path);
     let mut buffer = vec![0u8; 4096];
-    let count = unsafe { libc::llistxattr(name.as_ptr(), buffer.as_mut_ptr() as *mut libc::c_char, buffer.len()) };
+    let count = unsafe {
+        libc::llistxattr(
+            name.as_ptr(),
+            buffer.as_mut_ptr() as *mut libc::c_char,
+            buffer.len(),
+        )
+    };
     if count <= 0 {
         return false;
     }
-    buffer[..count as usize].split(|byte| *byte == 0).any(|entry| entry == wanted.as_bytes())
+    buffer[..count as usize]
+        .split(|byte| *byte == 0)
+        .any(|entry| entry == wanted.as_bytes())
 }
 
 pub struct Statvfs {
@@ -202,16 +263,39 @@ pub fn statvfs(path: &str) -> Statvfs {
     let total = info.f_blocks as u64 * frsize;
     let free = info.f_bavail as u64 * frsize;
     let used = (info.f_blocks as u64 - info.f_bfree as u64) * frsize;
-    Statvfs { total, used, free, reserved: total - used - free, block: info.f_bsize as u64 }
+    Statvfs {
+        total,
+        used,
+        free,
+        reserved: total - used - free,
+        block: info.f_bsize as u64,
+    }
 }
 
 pub fn poll(fds: &[i32], timeout_ms: i32) -> Vec<i32> {
-    let mut entries: Vec<libc::pollfd> = fds.iter().map(|fd| libc::pollfd { fd: *fd, events: libc::POLLIN, revents: 0 }).collect();
-    let count = unsafe { libc::poll(entries.as_mut_ptr(), entries.len() as libc::nfds_t, timeout_ms) };
+    let mut entries: Vec<libc::pollfd> = fds
+        .iter()
+        .map(|fd| libc::pollfd {
+            fd: *fd,
+            events: libc::POLLIN,
+            revents: 0,
+        })
+        .collect();
+    let count = unsafe {
+        libc::poll(
+            entries.as_mut_ptr(),
+            entries.len() as libc::nfds_t,
+            timeout_ms,
+        )
+    };
     if count <= 0 {
         return Vec::new();
     }
-    entries.iter().filter(|entry| entry.revents != 0).map(|entry| entry.fd).collect()
+    entries
+        .iter()
+        .filter(|entry| entry.revents != 0)
+        .map(|entry| entry.fd)
+        .collect()
 }
 
 pub fn clock_ticks() -> f64 {
@@ -219,7 +303,10 @@ pub fn clock_ticks() -> f64 {
 }
 
 pub fn now() -> f64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 pub fn c_to_string(raw: &CStr) -> String {
@@ -344,7 +431,11 @@ pub fn stat_at(fd: i32, name: &[u8]) -> Option<Entry> {
     Some(from_stat(name.to_vec(), &info))
 }
 
-pub fn read_dir_where(fd: i32, mut keep: impl FnMut(&[u8]) -> bool, mut visit: impl FnMut(Entry)) -> bool {
+pub fn read_dir_where(
+    fd: i32,
+    mut keep: impl FnMut(&[u8]) -> bool,
+    mut visit: impl FnMut(Entry),
+) -> bool {
     let copy = unsafe { libc::dup(fd) };
     if copy < 0 {
         return false;
@@ -377,7 +468,9 @@ pub fn read_dir_where(fd: i32, mut keep: impl FnMut(&[u8]) -> bool, mut visit: i
 }
 
 pub fn walk_tree(path: &str, mut visit: impl FnMut(&Entry)) -> bool {
-    let Some(root) = open_walk(libc::AT_FDCWD, &cstr(path)) else { return false };
+    let Some(root) = open_walk(libc::AT_FDCWD, &cstr(path)) else {
+        return false;
+    };
     let mut stack = vec![root];
     while let Some(fd) = stack.pop() {
         read_dir_fd(fd, |entry| {
