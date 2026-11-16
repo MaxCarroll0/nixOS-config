@@ -136,7 +136,7 @@ Item {
             }
             x += w;
         }
-        return out;
+        return root.ordered ? out : root.model.mergeBoxes(out);
     }
 
     readonly property var ticks: {

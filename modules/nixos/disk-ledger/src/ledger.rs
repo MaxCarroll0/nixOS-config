@@ -175,9 +175,9 @@ pub fn rebuild_text(seconds: i64) -> String {
         return String::new();
     }
     if seconds < 3600 {
-        return format!(", rebuild est. ~{} min on today's store", (seconds as f64 / 60.0).round_ties_even() as i64);
+        return format!(", rebuild est. ~{} min", (seconds as f64 / 60.0).round_ties_even() as i64);
     }
-    format!(", rebuild est. ~{:.1} h on today's store", seconds as f64 / 3600.0)
+    format!(", rebuild est. ~{:.1} h", seconds as f64 / 3600.0)
 }
 
 fn downsample(points: &[Value]) -> Vec<Value> {
