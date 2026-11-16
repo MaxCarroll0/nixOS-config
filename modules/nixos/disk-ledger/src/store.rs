@@ -69,7 +69,6 @@ pub struct Store {
     pub orphan_count: u64,
     pub orphans: Vec<String>,
     pub stale_links: u64,
-    stale_requeued: u64,
     pub links_blocks: u64,
     pub walked: u64,
     pub journal: Vec<(String, bool)>,
@@ -369,7 +368,6 @@ impl Store {
             orphan_count: 0,
             orphans: Vec::new(),
             stale_links: 0,
-            stale_requeued: 0,
             links_blocks: 0,
             walked: 0,
             journal: Vec::new(),
@@ -464,10 +462,12 @@ impl Store {
         if self.cache.is_none() {
             self.load_cache();
         }
+        self.begin();
         for path in gone {
             self.forget(&path);
             self.journal.push((path, false));
         }
+        self.commit();
         for slot in new {
             self.journal
                 .push((self.paths[slot as usize].path.clone(), true));
@@ -651,16 +651,15 @@ impl Store {
     fn load_paths(&mut self) -> (Vec<String>, Vec<u32>) {
         let db = self.db.as_ref().unwrap();
         let _ = db.execute_batch("begin");
-        let ids: HashSet<i64> = db
-            .prepare_cached("select id from ValidPaths")
-            .and_then(|mut statement| statement.query_map([], |row| row.get(0))?.collect())
+        let mut known: Vec<i64> = self.by_id.keys().copied().collect();
+        known.sort_unstable();
+        let top = known.last().copied().unwrap_or(0);
+        let mut gone_ids = Vec::new();
+        vanished(db, &known, &mut gone_ids);
+        let ids: Vec<i64> = db
+            .prepare_cached("select id from ValidPaths where id > ?")
+            .and_then(|mut statement| statement.query_map([top], |row| row.get(0))?.collect())
             .unwrap_or_default();
-        let gone_ids: Vec<i64> = self
-            .by_id
-            .keys()
-            .filter(|id| !ids.contains(id))
-            .copied()
-            .collect();
         let mut gone = Vec::new();
         for id in gone_ids {
             let slot = self.by_id.remove(&id).unwrap();
@@ -1029,13 +1028,6 @@ impl Store {
         self.orphan_count = orphans.len() as u64;
         self.orphans = orphans;
         self.stale_links = stale;
-        if stale == 0 {
-            self.stale_requeued = 0;
-        } else if stale != self.stale_requeued {
-            self.stale_requeued = stale;
-            let all: Vec<u32> = self.alive_slots().collect();
-            self.pending.extend(all);
-        }
     }
 
     pub fn begin(&self) {
@@ -1291,6 +1283,26 @@ pub struct Swept {
     pub fallback: Option<String>,
 }
 
+fn vanished(db: &Connection, known: &[i64], out: &mut Vec<i64>) {
+    let (Some(first), Some(last)) = (known.first(), known.last()) else {
+        return;
+    };
+    let count: i64 = db
+        .prepare_cached("select count(*) from ValidPaths where id between ? and ?")
+        .and_then(|mut statement| statement.query_row([first, last], |row| row.get(0)))
+        .unwrap_or(known.len() as i64);
+    if count as usize >= known.len() {
+        return;
+    }
+    if count == 0 {
+        out.extend_from_slice(known);
+        return;
+    }
+    let (low, high) = known.split_at(known.len() / 2);
+    vanished(db, low, out);
+    vanished(db, high, out);
+}
+
 pub fn delete_ordered(
     ordered: &[String],
     references: &HashMap<String, Vec<String>>,
@@ -1351,5 +1363,41 @@ pub fn delete_ordered(
         refused,
         report: None,
         fallback,
+    }
+}
+
+#[cfg(test)]
+mod vanished_tests {
+    use super::*;
+
+    #[test]
+    fn finds_exactly_the_deleted_ids() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("create table ValidPaths (id integer primary key autoincrement not null)")
+            .unwrap();
+        for _ in 0..5000 {
+            db.execute("insert into ValidPaths default values", [])
+                .unwrap();
+        }
+        let deleted: Vec<i64> = (1..=5000)
+            .filter(|id| id % 97 == 3 || (1200..1300).contains(id))
+            .collect();
+        for id in &deleted {
+            db.execute("delete from ValidPaths where id = ?", [id])
+                .unwrap();
+        }
+        let known: Vec<i64> = (1..=5000).collect();
+        let mut found = Vec::new();
+        vanished(&db, &known, &mut found);
+        found.sort_unstable();
+        assert_eq!(found, deleted);
+        let mut none = Vec::new();
+        let alive: Vec<i64> = known
+            .iter()
+            .copied()
+            .filter(|id| !deleted.contains(id))
+            .collect();
+        vanished(&db, &alive, &mut none);
+        assert!(none.is_empty());
     }
 }

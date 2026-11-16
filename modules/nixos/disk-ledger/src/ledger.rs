@@ -481,6 +481,7 @@ pub struct Ledger {
     reporter: Sender<(String, bool)>,
     queue: Vec<String>,
     passed: HashSet<String>,
+    unlabelled: bool,
     level: f64,
     status: Map<String, Value>,
     last_event: Value,
@@ -704,6 +705,7 @@ impl Ledger {
             reporter,
             queue: Vec::new(),
             passed: HashSet::new(),
+            unlabelled: false,
             level: 0.0,
             status: probe::object(json!({"state": "idle"})),
             last_event: Value::Null,
@@ -1339,7 +1341,11 @@ impl Ledger {
         let queued = self
             .queue
             .iter()
-            .find(|path| !self.deleting.contains(*path) && !self.passed.contains(*path))
+            .find(|path| {
+                !self.deleting.contains(*path)
+                    && !self.lagging.contains_key(*path)
+                    && !self.passed.contains(*path)
+            })
             .and_then(|path| self.model.items.iter().position(|item| &item.path == path));
         self.next_rank = queued
             .or_else(|| {
@@ -2051,7 +2057,9 @@ impl Ledger {
     }
 
     fn row_spans(&mut self, key: &str) -> Value {
+        self.unlabelled = true;
         let mut rows = self.segment_rows(key);
+        self.unlabelled = false;
         let field = |entry: &Map<String, Value>, name: &str| {
             entry.get(name).and_then(Value::as_i64).unwrap_or(0)
         };
@@ -2136,6 +2144,9 @@ impl Ledger {
     }
 
     fn annotate_holders(&self, rows: &mut [Map<String, Value>], root: &str) {
+        if self.unlabelled {
+            return;
+        }
         let sessions = reclaim::live_sessions(&self.home);
         let holders = reclaim::holders(root);
         let clients = probe::hypr_clients();
@@ -3633,6 +3644,22 @@ impl Ledger {
         }
     }
 
+    fn eager(&self, item: &reclaim::Item) -> bool {
+        let slots = if item.kind == Kind::Dead {
+            &item.targets
+        } else {
+            &item.store
+        };
+        let mut work = Work::of(item);
+        work.store = slots
+            .iter()
+            .map(|slot| self.store.get(*slot))
+            .filter(|entry| entry.alive)
+            .map(|entry| entry.path.clone())
+            .collect();
+        eager(&work)
+    }
+
     fn select(&self, deficit: u64, free: i64) -> Vec<usize> {
         let emergency = free < self.emergency;
         let path_limit = if emergency { EMERGENCY_BURST } else { BURST };
@@ -3648,7 +3675,7 @@ impl Ledger {
             let item_files = item.files.len();
             if !batch.is_empty()
                 && (total >= deficit
-                    || eager(&Work::of(item)) != eager(&Work::of(&self.model.items[batch[0]]))
+                    || self.eager(item) != self.eager(&self.model.items[batch[0]])
                     || paths + item_paths > path_limit
                     || files + item_files > FILE_BURST
                     || (!emergency && total + item.freed() > BURST_BYTES))
@@ -4011,6 +4038,7 @@ impl Ledger {
                 self.sums_dirty = true;
             }
         }
+        laps.lap("load");
         if !self.store.pending.is_empty()
             && self
                 .store
@@ -4019,6 +4047,7 @@ impl Ledger {
         {
             self.sums_dirty = true;
         }
+        laps.lap("walk");
         if !self.store.journal.is_empty() || !self.handover.is_empty() {
             self.sync_registered();
         }
@@ -4265,6 +4294,13 @@ impl Ledger {
             }
             if readable.contains(&self.wake_read) {
                 self.finish();
+                if self.viewed() {
+                    let overview = self.build_overview();
+                    if self.set_overview(overview) {
+                        self.push_changes();
+                    }
+                    self.pushed = clock();
+                }
             }
             self.step();
         }
@@ -4685,6 +4721,7 @@ fn execute(job: Job, report: &dyn Fn(&str, bool)) -> Value {
         .collect();
     json!({
         "at": started as i64,
+        "ended": sys::now(),
         "stage": job.work[0].kind.name(),
         "kinds": job.work.iter().fold(Map::new(), |mut kinds, entry| { let count = kinds.get(entry.kind.name()).and_then(Value::as_u64).unwrap_or(0); kinds.insert(entry.kind.name().to_string(), json!(count + 1)); kinds }),
         "segment": job.work[0].kind.key(),
