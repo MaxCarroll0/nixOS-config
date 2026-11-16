@@ -13,7 +13,9 @@ Item {
     property var events: []
     property var tracker: ({})
     property var nodes: ({})
+    property var counts: ({})
     property var drill: []
+    property var extra: []
     property bool diagnostics: false
     property string targetOverride: ""
     property real receivedAt: 0
@@ -25,7 +27,10 @@ Item {
     readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000"
     readonly property string targetPath: `${home}/.config/caelestia/disk-target`
     readonly property bool live: socket.connected
-    readonly property var watches: ["overview", "history", "events"].concat(diagnostics ? ["tracker"] : []).concat(drill)
+    readonly property var watches: ["overview", "history", "events"].concat(diagnostics ? ["tracker"] : []).concat(drill).concat(extra)
+    readonly property var drillIds: drill.map(entry => typeof entry === "string" ? entry : entry.id).concat(extra)
+    readonly property int eventLimit: 10000
+    readonly property int nextSeq: events.length ? events[events.length - 1].seq + 1 : 0
 
     readonly property var history: historyData.points ?? []
     readonly property var historyItems: historyData.items ?? ({})
@@ -43,7 +48,20 @@ Item {
     readonly property bool collecting: collector.state === "collecting"
     readonly property string collectingStage: collecting ? (segment(kindKey[collector.kind] ?? "")?.label ?? collector.kind ?? "") : ""
 
-    readonly property var kindKey: ({ "dead": "dead", "cache": "cache", "temp": "temp", "stale shell": "stale_shell", "stray profile": "stray", "build": "build", "project": "project", "deploy": "deploy", "generation": "generation", "agent": "agent" })
+    readonly property var kindKey: ({
+            "dead": "dead",
+            "cache": "cache",
+            "temp": "temp",
+            "stale shell": "stale_shell",
+            "stray profile": "stray",
+            "build": "build",
+            "project": "project",
+            "deploy": "stray",
+            "generation": "generation",
+            "agent": "agent",
+            "git clone": "home_files",
+            "game": "home_files"
+        })
 
     readonly property real hue: Colours.palette.m3primary.hslHue < 0 ? 0.6 : Colours.palette.m3primary.hslHue
 
@@ -59,10 +77,8 @@ Item {
             running_system: tone(0, 0.5),
             home_profile: tone(0.04, 0.56),
             profiles: tone(0.07, 0.46),
-            previous: tone(0.1, 0.52),
             shells: tone(0.13, 0.44),
             processes: tone(0.16, 0.54),
-            roots: tone(0.19, 0.42),
             recent: tone(0.22, 0.5),
             building: tone(0.25, 0.46),
             metadata: tone(0.28, 0.36),
@@ -73,16 +89,13 @@ Item {
             stray: tone(0.5, 0.42),
             build: tone(0.54, 0.5),
             project: tone(0.58, 0.44),
-            deploy: tone(0.62, 0.54),
             generation: tone(0.66, 0.46),
             agent: tone(0.7, 0.4),
             home_files: tone(0.78, 0.5),
-            tmp_files: tone(0.84, 0.44),
             system_files: grey(0.5),
             swap: grey(0.44),
             held: grey(0.38),
             filesystem: grey(0.33),
-            changing: grey(0.28),
             reserved: grey(0.58)
         })
 
@@ -94,12 +107,29 @@ Item {
                 color: swatches[row.key] ?? grey(0.5),
                 bytes: row.bytes,
                 scheduled: row.scheduled,
+                reclaimBytes: row.reclaim_bytes ?? (row.reclaimable ? row.bytes : 0),
+                weight: row.reclaimable ? row.weight ?? -1 : -1,
+                spans: row.reclaim_spans ?? null,
                 items: row.items
             }))
 
     readonly property color hatchColor: Colours.light ? Colours.palette.m3onSurface : "white"
     readonly property color reclaimColor: Qt.hsla(0.36, 0.6, Colours.light ? 0.26 : 0.4, 1)
     readonly property color scheduledColor: Qt.hsla(0.08, 0.9, Colours.light ? 0.42 : 0.62, 1)
+
+    function mergeBoxes(boxes: var): var {
+        const out = [];
+        let last = null;
+        for (const box of boxes.filter(item => !item.scheduled).sort((a, b) => a.x - b.x)) {
+            if (last && box.x <= last.x + last.w + 4)
+                last.w = Math.max(last.w, box.x + box.w - last.x);
+            else {
+                last = Object.assign({}, box);
+                out.push(last);
+            }
+        }
+        return out.concat(boxes.filter(item => item.scheduled));
+    }
 
     function segment(key: string): var {
         return segments.find(item => item.key === key) ?? null;
@@ -130,14 +160,16 @@ Item {
         return nodes[id] ?? null;
     }
 
-    function watch(ids: var): void {
-        drill = ids.filter((id, index) => id && ids.indexOf(id) === index);
+    function count(id: string): int {
+        return counts[id] ?? (nodes[id] ?? []).length;
     }
 
     function subscribe(): void {
         if (!socket.connected)
             return;
-        socket.write(JSON.stringify({ watch: watches }) + "\n");
+        socket.write(JSON.stringify({
+            watch: watches
+        }) + "\n");
         socket.flush();
     }
 
@@ -148,8 +180,13 @@ Item {
         } catch (e) {
             return;
         }
-        if (paused && (!drill.includes(message.id) || message.id in nodes)) {
-            held[message.id] = message;
+        if (paused && (!drillIds.includes(message.id) || message.id in nodes)) {
+            const before = held[message.id];
+            held[message.id] = message.append && before ? {
+                id: message.id,
+                data: before.data,
+                append: (before.append ?? []).concat(message.append)
+            } : message;
             return;
         }
         apply(message);
@@ -160,19 +197,25 @@ Item {
         if (message.id === "overview") {
             overview = message.data;
             streamed = true;
-        }
-        else if (message.id === "history")
+        } else if (message.id === "history")
             historyData = message.data;
-        else if (message.id === "events")
-            events = message.data;
-        else if (message.id === "tracker")
+        else if (message.id === "events") {
+            const base = message.data ?? events;
+            const joined = message.append ? base.concat(message.append) : base;
+            events = joined.length > eventLimit ? joined.slice(joined.length - eventLimit) : joined;
+        } else if (message.id === "tracker")
             tracker = message.data;
         else {
             const copy = {};
+            const sizes = {};
             for (const id in nodes)
-                if (paused || drill.includes(id))
+                if (paused || drillIds.includes(id)) {
                     copy[id] = nodes[id];
+                    sizes[id] = counts[id];
+                }
             copy[message.id] = message.data;
+            sizes[message.id] = message.count ?? message.data.length;
+            counts = sizes;
             nodes = copy;
         }
     }
@@ -184,12 +227,12 @@ Item {
         const buffered = held;
         held = {};
         const kept = {};
-        for (const id of drill)
+        for (const id of drillIds)
             if (id in nodes)
                 kept[id] = nodes[id];
         nodes = kept;
         for (const id in buffered)
-            if (["overview", "history", "events", "tracker"].includes(id) || drill.includes(id))
+            if (["overview", "history", "events", "tracker"].includes(id) || drillIds.includes(id))
                 apply(buffered[id]);
     }
 
@@ -252,6 +295,17 @@ Item {
         Quickshell.execDetached(["sh", "-c", `mkdir -p "$(dirname "$1")" && printf %s "$2" > "$1"`, "disk-target", targetPath, String(value)]);
     }
 
+    function weightText(weight: real): string {
+        return weight >= 1 ? `×${Math.round(weight)}` : `×1/${Math.round(1 / weight)}`;
+    }
+
+    function weightOpacity(weight: real): real {
+        if (!(weight > 0))
+            return 1;
+        const reach = Math.max(0, Math.min(1, (Math.log2(weight) + 6) / 12));
+        return 1 - 0.6 * reach;
+    }
+
     function ageShade(base: color, lastUsed: real): color {
         if (!lastUsed)
             return base;
@@ -297,7 +351,10 @@ Item {
             try {
                 const data = JSON.parse(text());
                 root.overview = data;
-                root.historyData = { points: data.history ?? [], items: ({}) };
+                root.historyData = {
+                    points: data.history ?? [],
+                    items: ({})
+                };
                 root.events = data.events ?? [];
                 root.receivedAt = data.at ?? 0;
             } catch (e) {}

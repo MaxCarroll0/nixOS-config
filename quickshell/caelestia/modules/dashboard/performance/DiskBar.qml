@@ -25,7 +25,11 @@ Item {
         for (const segment of root.model.segments) {
             const w = root.width * root.model.current(segment.key) / root.model.total;
             if (w > 0) {
-                if (segment.reclaim) {
+                if (segment.reclaim && segment.spans) {
+                    open = null;
+                    const bytes = Math.max(1, root.model.current(segment.key));
+                    out.push(...root.model.mergeBoxes(segment.spans.map(span => ({ x: x + w * span[0] / bytes, w: w * span[1] / bytes, scheduled: false }))));
+                } else if (segment.reclaim) {
                     if (open)
                         open.w = x + w - open.x;
                     else {
@@ -61,12 +65,13 @@ Item {
         spacing: 0
 
         Repeater {
-            model: root.model.segments
+            model: root.model.segments.length
 
             delegate: Item {
                 id: piece
 
-                required property var modelData
+                required property int index
+                readonly property var modelData: root.model.segments[index] ?? ({})
 
                 readonly property real value: root.model.current(piece.modelData.key)
                 readonly property bool active: root.selected === piece.modelData.key || root.hovered === piece.modelData.key
@@ -79,7 +84,7 @@ Item {
                     anchors.fill: parent
                     anchors.rightMargin: 1
                     color: piece.modelData.color
-                    opacity: root.selected === "" || piece.active ? 1 : 0.35
+                    opacity: root.model.weightOpacity(piece.modelData.weight) * (root.selected === "" || piece.active ? 1 : 0.35)
                 }
 
                 Outline {
@@ -143,7 +148,7 @@ Item {
 
                     anchors.centerIn: parent
                     text: `${root.model.gib(root.model.free)} free`
-                    font: Tokens.font.body.builders.small.weight(Font.DemiBold).build()
+                    font: Tokens.font.body.builders.small.size(Math.min(Tokens.font.body.small.pointSize, root.height * 0.36)).weight(Font.DemiBold).build()
                     color: Colours.palette.m3onSurface
                 }
             }
@@ -158,12 +163,13 @@ Item {
     }
 
     Repeater {
-        model: root.boxes
+        model: root.boxes.length
 
         delegate: Item {
             id: box
 
-            required property var modelData
+            required property int index
+            readonly property var modelData: root.boxes[index] ?? ({})
 
             x: box.modelData.x
             width: Math.max(0, box.modelData.w - 1)

@@ -26,16 +26,7 @@ let
     '';
   };
 
-  collect = pkgs.writeShellApplication {
-    name = "store-collect";
-    runtimeInputs = [
-      config.nix.package
-      pkgs.python3
-    ];
-    text = ''
-      exec python3 ${./store-collect.py} "$@"
-    '';
-  };
+  daemon = pkgs.callPackage ../../pkgs/disk-ledger.nix { };
 
   stateDir = "/var/lib/disk-ledger";
   targetFile = "${home}/.config/caelestia/disk-target";
@@ -47,16 +38,10 @@ let
       pkgs.coreutils
       pkgs.e2fsprogs
       pkgs.git
-      pkgs.python3
+      pkgs.openssh
       pkgs.util-linux
     ];
     text = ''
-      export RETENTION_MODULE=${./project-closure-retention.py}
-      export COLLECT_MODULE=${./store-collect.py}
-      export TREE_MODULE=${./disk-tree.py}
-      export RECLAIM_MODULE=${./reclaim.py}
-      export PYTHONUNBUFFERED=1
-      export PYTHONDONTWRITEBYTECODE=1
       export LEDGER_HOME=${home}
       export LEDGER_USER=${cfg.user}
       export LEDGER_TARGET_BYTES=${toString (pressure.minFreeGiB * gib)}
@@ -68,7 +53,7 @@ let
       export LEDGER_UID=${uid}
       export LEDGER_TEXTFILE=/var/lib/node-exporter-textfile/disk-ledger.prom
       export LEDGER_OFFLOAD_DIR=${if cfg.offload.enable then "${home}/offload" else ""}
-      exec python3 ${./disk-ledger.py}
+      exec ${lib.getExe daemon} serve
     '';
   };
 
@@ -109,7 +94,7 @@ in
     pressure = {
       enable = lib.mkOption {
         type = lib.types.bool;
-        default = config.networking.hostName == "laptop";
+        default = true;
         description = "Whether the continuous collector keeps free space at the target.";
       };
 
@@ -124,39 +109,23 @@ in
   config = {
     nix.settings.keep-derivations = lib.mkIf pressure.enable false;
 
-    environment.systemPackages = [ collect ];
+    environment.systemPackages = [ daemon ];
 
     systemd.tmpfiles.rules = [ "d ${stateDir} 0755 root root -" ];
-
-    systemd.services.generation-expire = lib.mkIf (!pressure.enable) {
-      restartIfChanged = false;
-      description = "Keep the last 10 generations of every profile";
-      path = [ config.nix.package ];
-      serviceConfig = resourceLimits // {
-        Type = "oneshot";
-      };
-      script = ''
-        for profile in /nix/var/nix/profiles/system /nix/var/nix/profiles/default \
-            /nix/var/nix/profiles/per-user/*/* ${home}/.local/state/nix/profiles/*; do
-          case "$profile" in *-link) continue ;; esac
-          [ -L "$profile" ] || continue
-          nix-env --profile "$profile" --delete-generations +10
-        done
-      '';
-    };
-
-    systemd.timers.generation-expire = lib.mkIf (!pressure.enable) {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnCalendar = "daily";
-        Persistent = true;
-      };
-    };
 
     systemd.services.disk-ledger = {
       description = "Disk ledger for the storage tab and metrics, and the continuous collector";
       wantedBy = [ "multi-user.target" ];
-      after = [ "nix-daemon.socket" ];
+      requires = [ "sysinit.target" ];
+      after = [
+        "nix-daemon.socket"
+        "basic.target"
+        "multi-user.target"
+        "graphical.target"
+      ];
+      conflicts = [ "shutdown.target" ];
+      before = [ "shutdown.target" ];
+      unitConfig.DefaultDependencies = false;
       serviceConfig = resourceLimits // {
         Type = "simple";
         ExecStart = lib.getExe ledger;

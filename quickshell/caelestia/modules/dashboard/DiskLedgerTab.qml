@@ -16,29 +16,48 @@ Item {
     readonly property var node: trail.length ? trail[trail.length - 1] : null
     readonly property real paneWidth: 1160
     readonly property real chartHeight: 150
+    property var everShown: ({})
+    readonly property var shownSegments: ledger.segments.filter(segment => segment.bytes > 0 || root.everShown[segment.key])
     readonly property var rootRows: ledger.segments.filter(segment => segment.bytes > 0).map(segment => segmentNode(segment))
     property var range: null
-    property var bounds: null
     property var focusEvent: null
     readonly property var focusNode: !root.node ? null : root.node
     readonly property string focusSegment: root.trail.length ? root.trail[0].segment : ""
-    readonly property var nodeRows: root.node ? ledger.rows(root.node.id) : null
-    readonly property bool loading: root.node !== null && root.nodeRows === null && !root.focusEvent
+    readonly property bool collectable: !root.trail.length || root.trail[0].reclaimable
+    readonly property real historyWidth: root.collectable ? root.paneWidth / 2 - Tokens.spacing.large / 2 : root.paneWidth
+    readonly property var nodeRows: root.node ? (root.node.id.startsWith("group:") ? root.node.members : ledger.rows(root.node.id)) : null
+    readonly property bool loading: (root.node !== null && root.nodeRows === null && !root.focusEvent) || (root.focusEvent !== null && ledger.rows(root.takenId) === null)
+    readonly property string rateId: {
+        const focus = root.focusNode;
+        if (!focus || focus.id.startsWith("segment:") || !focus.path)
+            return "";
+        const first = ledger.events.find(event => event.at >= root.span[0]);
+        return `rate:${first ? first.seq : ledger.nextSeq}:${focus.path}`;
+    }
+    readonly property var rateBySeq: {
+        const out = {};
+        for (const [seq, amount] of ledger.rows(root.rateId) ?? [])
+            out[seq] = amount;
+        return out;
+    }
+    readonly property string takenId: root.focusEvent ? `taken:${root.focusEvent.events[0].seq}:${root.focusEvent.events[root.focusEvent.events.length - 1].seq}` : ""
     readonly property var entries: {
         if (root.focusEvent)
             return root.takenRows(root.focusEvent);
         if (!root.node)
             return root.rootRows;
         const color = root.trail[0].color;
-        return (root.nodeRows ?? []).filter(row => !row.missing).map(row => Object.assign({}, row, { color: color, segment: root.focusSegment }));
+        return (root.nodeRows ?? []).filter(row => !row.missing).map(row => Object.assign({}, row, {
+                color: color,
+                segment: root.focusSegment
+            }));
     }
     readonly property var span: {
         if (root.range !== null)
             return root.range;
         const points = ledger.history;
-        if (points.length < 2)
-            return [Date.now() / 1000 - 3600, Date.now() / 1000];
-        return [points[0].at, points[points.length - 1].at];
+        const end = points.length ? points[points.length - 1].at : Date.now() / 1000;
+        return [end - 7 * 86400, end];
     }
     readonly property var visiblePoints: {
         const [first, last] = root.span;
@@ -60,19 +79,29 @@ Item {
             if (last && event.at - last.at < 900)
                 last.events.push(event);
             else
-                out.push({ events: [event] });
+                out.push({
+                    events: [event]
+                });
         }
         return out.map(group => root.runFrom(group.events));
     }
 
     function runFrom(events: var): var {
-        const run = { run: true, at: events[0].at, events: events, freed: 0, seconds: 0, items: 0, failed: false, taken: ({}), free_gib: events[0].free_gib ?? 0 };
+        const run = {
+            run: true,
+            at: events[0].at,
+            events: events,
+            freed: 0,
+            seconds: 0,
+            items: 0,
+            failed: false,
+            free_gib: events[0].free_gib ?? 0
+        };
         for (const event of events) {
             run.freed += Math.max(0, event.freed ?? 0);
             run.seconds += event.seconds ?? 0;
             run.items += event.items ?? 0;
             run.failed = run.failed || event.status !== 0;
-            Object.assign(run.taken, event.taken ?? ({}));
         }
         return run;
     }
@@ -106,7 +135,12 @@ Item {
             return now;
         let match = trimmed.match(/^-\s*(\d+(?:\.\d+)?)\s*([mhdw])$/);
         if (match)
-            return now - parseFloat(match[1]) * ({ m: 60, h: 3600, d: 86400, w: 7 * 86400 })[match[2]];
+            return now - parseFloat(match[1]) * ({
+                    m: 60,
+                    h: 3600,
+                    d: 86400,
+                    w: 7 * 86400
+                })[match[2]];
         match = trimmed.match(/^(\d{4})[-\/](\d{2})[-\/](\d{2})(?:[ T](\d{1,2}):(\d{2}))?$/);
         if (match)
             return new Date(+match[1], +match[2] - 1, +match[3], +(match[4] ?? 0), +(match[5] ?? 0)).getTime() / 1000;
@@ -145,21 +179,6 @@ Item {
         root.range = [Math.min(from, to - 60), Math.max(to, from + 60)];
     }
 
-    function parseGib(text: string): real {
-        const value = parseFloat(text.trim());
-        return isNaN(value) ? NaN : value * 1073741824;
-    }
-
-    function setBounds(low: real, high: real): void {
-        if (isNaN(low) || isNaN(high) || high <= low)
-            return;
-        root.bounds = [Math.max(0, low), high];
-    }
-
-    function gibText(bytes: real): string {
-        return String(Math.round(bytes / 1073741824 * 10) / 10);
-    }
-
     function nodeValue(point: var, node: var): real {
         if (node.id.startsWith("segment:"))
             return ledger.valueOf(point, node.segment);
@@ -170,10 +189,11 @@ Item {
         let found = false;
         if (!node.path) {
             for (const row of node === root.node ? (root.nodeRows ?? []) : [])
-                if (row.path && row.path in items) {
-                    total += items[row.path];
-                    found = true;
-                }
+                for (const path of row.paths ?? [row.path])
+                    if (path && path in items) {
+                        total += items[path];
+                        found = true;
+                    }
             return found ? total : NaN;
         }
         if (node.path in items)
@@ -192,30 +212,88 @@ Item {
             return Math.max(0, event.freed ?? 0);
         if (focus.id.startsWith("segment:"))
             return event.segment === focus.segment ? Math.max(0, event.freed ?? 0) : null;
-        const taken = event.taken ?? ({});
-        let total = 0;
-        let any = false;
-        for (const key in taken) {
-            if (key === focus.path || key.startsWith(focus.path + "/")) {
-                total += taken[key];
-                any = true;
-            }
-        }
-        return any ? total : null;
+        return root.rateBySeq[event.seq] ?? null;
+    }
+
+    readonly property var eventSummary: {
+        const run = root.focusEvent;
+        if (!run)
+            return null;
+        const seqs = new Set(run.events.map(event => event.seq));
+        const entries = (ledger.rows(root.takenId) ?? []).filter(entry => seqs.has(entry.seq));
+        const taken = root.entries.slice().sort((a, b) => b.size - a.size);
+        const refusals = entries.reduce((acc, entry) => acc.concat(entry.refusals ?? []), []);
+        const reasons = {};
+        for (const refusal of refusals)
+            reasons[refusal.reason] = (reasons[refusal.reason] ?? 0) + 1;
+        const segments = {};
+        for (const row of taken)
+            segments[row.segment] = (segments[row.segment] ?? 0) + row.size;
+        const extra = [["in", Object.keys(segments).sort((a, b) => segments[b] - segments[a]).map(key => `${root.segmentLabel(key)} ${ledger.gib(segments[key])}`).join(", ")]];
+        if (refusals.length)
+            extra.push(["refused", Object.keys(reasons).map(reason => `${reasons[reason]} ${reason}`).join(", ")]);
+        for (const row of taken.slice(0, 12))
+            extra.push([ledger.gib(row.size), row.label, {
+                    path: row.path
+                }]);
+        if (taken.length > 12)
+            extra.push(["", `and ${taken.length - 12} more, hover the bar`]);
+        return {
+            label: `${run.events.length > 1 ? `${run.events.length} collections` : "collection"} at ${ledger.clock(run.at)}`,
+            size: run.freed,
+            kind: `${taken.length} paths freed in ${Math.round(run.seconds * 10) / 10}s${run.failed ? ", with failures" : ""}`,
+            extra: extra
+        };
     }
 
     function takenRows(run: var): var {
         const out = [];
-        for (const event of run.events) {
-            const taken = event.taken ?? ({});
+        const bySeq = {};
+        for (const event of run.events)
+            bySeq[event.seq] = event;
+        for (const entry of ledger.rows(root.takenId) ?? []) {
+            const event = bySeq[entry.seq];
+            if (!event)
+                continue;
+            const taken = entry.taken;
             for (const key of Object.keys(taken))
-                out.push({ id: `taken:${event.at}:${key}`, label: ledger.shortName(key), path: key, size: taken[key], last_used: 0, color: root.segmentColor(event.segment), segment: event.segment, kind: `collected ${root.segmentLabel(event.segment)}`, delvable: false, openable: false, reclaimable: true, scheduled: false });
+                out.push({
+                    id: `taken:${event.seq}:${key}`,
+                    label: ledger.shortName(key),
+                    path: key,
+                    size: taken[key],
+                    last_used: 0,
+                    color: root.segmentColor(event.segment),
+                    segment: event.segment,
+                    kind: `collected ${root.segmentLabel(event.segment)}`,
+                    delvable: false,
+                    openable: false,
+                    reclaimable: true,
+                    scheduled: false
+                });
         }
         return out;
     }
 
     function segmentNode(segment: var): var {
-        return { id: `segment:${segment.key}`, label: segment.label, path: "", size: segment.bytes, last_used: 0, color: segment.color, kind: segment.reclaim ? `${segment.items} reclaimable items` : "segment", segment: segment.key, delvable: true, openable: false, reclaimable: segment.reclaim, scheduled: segment.scheduled > 0 };
+        return {
+            id: `segment:${segment.key}`,
+            label: segment.label,
+            path: "",
+            size: segment.bytes,
+            last_used: 0,
+            color: segment.color,
+            kind: segment.reclaim ? `${segment.items} reclaimable items` : "segment",
+            segment: segment.key,
+            delvable: true,
+            openable: false,
+            reclaimable: segment.reclaim,
+            weight: segment.weight,
+            scheduled: segment.scheduled > 0,
+            scheduledBytes: segment.scheduled,
+            reclaimBytes: segment.reclaimBytes,
+            reclaimSpans: segment.spans
+        };
     }
 
     function pick(key: string): void {
@@ -227,10 +305,39 @@ Item {
     function delve(row: var): void {
         if (row.delvable)
             root.trail = root.trail.concat([row]);
-        else if (row.pid)
-            ledger.focusWindow(row.pid);
         else if (row.openable)
             ledger.open(row.path);
+    }
+
+    function jumpTo(path: string): void {
+        const area = path.startsWith("/tmp/") ? "temp" : path.startsWith("/home/") ? "home_files" : "system_files";
+        const segment = ledger.segment(area);
+        if (!segment || path.startsWith("/nix/store/"))
+            return;
+        const parts = path.split("/").filter(part => part);
+        const trail = [root.segmentNode(segment)];
+        for (let depth = area === "system_files" ? 1 : 2; depth < parts.length; depth++) {
+            const directory = "/" + parts.slice(0, depth).join("/");
+            trail.push({
+                id: `dir:files:${directory}`,
+                label: parts[depth - 1],
+                path: directory,
+                size: 0,
+                last_used: 0,
+                kind: "directory",
+                delvable: true,
+                openable: true,
+                reclaimable: false
+            });
+        }
+        root.trail = trail;
+    }
+
+    function follow(action: var): void {
+        if (action.pid)
+            ledger.focusWindow(action.pid);
+        else if (action.path)
+            root.jumpTo(action.path);
     }
 
     function repaint(): void {
@@ -238,10 +345,22 @@ Item {
         reclaims.requestPaint();
     }
 
+    FontMetrics {
+        id: smallLine
+
+        font: Tokens.font.body.small
+    }
+
     DiskLedgerModel {
         id: ledger
 
-        drill: root.trail.map(node => node.id)
+        drill: root.trail.filter(node => !node.id.startsWith("group:")).map(node => ({
+                    id: node.id,
+                    slots: Math.floor(root.paneWidth / slices.minSlice),
+                    total: node.size ?? 0
+                }))
+        extra: [root.rateId, root.takenId].filter(id => id !== "")
+        onNodesChanged: reclaims.requestPaint()
         onHistoryChanged: root.repaint()
         onEventsChanged: root.repaint()
         onOverviewChanged: root.repaint()
@@ -253,11 +372,9 @@ Item {
         slices.hovered = null;
         if (root.trail.length)
             root.focusEvent = null;
-        root.bounds = null;
         root.repaint();
     }
     onRangeChanged: root.repaint()
-    onBoundsChanged: root.repaint()
     onFocusEventChanged: {
         if (root.focusEvent)
             root.trail = [];
@@ -279,16 +396,18 @@ Item {
             spacing: Tokens.spacing.medium
 
             StyledText {
+                Layout.preferredWidth: 240
                 text: ledger.loaded ? `${ledger.gib(ledger.free)} free of ${ledger.gib(ledger.diskTotal)}` : "No ledger yet"
                 font: Tokens.font.title.medium
                 color: ledger.deficit > 0 ? Colours.palette.m3error : Colours.palette.m3onSurface
             }
 
             StyledText {
-                visible: ledger.collecting
-                text: `collecting ${ledger.collectingStage}`
+                Layout.preferredWidth: 220
+                text: ledger.collecting ? `collecting ${ledger.collectingStage}` : ""
                 font: Tokens.font.body.medium
                 color: Colours.palette.m3tertiary
+                elide: Text.ElideRight
             }
 
             IconButton {
@@ -337,7 +456,8 @@ Item {
                 }
                 text: String(ledger.targetGib)
                 onAccepted: ledger.setTarget(parseInt(text))
-                onActiveFocusChanged: if (!activeFocus) text = String(ledger.targetGib)
+                onActiveFocusChanged: if (!activeFocus)
+                    text = String(ledger.targetGib)
 
                 Connections {
                     target: ledger
@@ -369,20 +489,32 @@ Item {
             Layout.bottomMargin: 16
             model: ledger
             selected: root.trail.length ? root.trail[0].segment ?? "" : ""
-            onPicked: key => root.pick(key)
+            onPicked: key => {
+                if (root.focusSegment === key)
+                    root.trail = [];
+                else
+                    root.pick(key);
+            }
         }
 
         Flow {
+            id: legends
+
+            property real tallest: 0
+
             Layout.preferredWidth: root.paneWidth
+            Layout.preferredHeight: tallest
             spacing: Tokens.spacing.medium
+            onImplicitHeightChanged: tallest = Math.max(tallest, implicitHeight)
 
             Repeater {
-                model: ledger.segments.filter(segment => segment.bytes > 0)
+                model: root.shownSegments.length
 
                 delegate: Item {
                     id: legend
 
-                    required property var modelData
+                    required property int index
+                    readonly property var modelData: root.shownSegments[index] ?? ({})
 
                     readonly property bool lit: bar.hovered === legend.modelData.key || (root.trail.length > 0 && root.trail[0].segment === legend.modelData.key)
 
@@ -390,10 +522,15 @@ Item {
                         id: boldMetrics
 
                         font: Tokens.font.body.builders.small.weight(Font.DemiBold).build()
-                        text: legendText.text
+                        text: `${legend.modelData.label} 8888 KiB`
                     }
 
-                    implicitWidth: 12 + Tokens.spacing.extraSmall + boldMetrics.width
+                    Component.onCompleted: if (!root.everShown[legend.modelData.key])
+                        root.everShown = Object.assign({}, root.everShown, {
+                            [legend.modelData.key]: true
+                        })
+
+                    implicitWidth: Math.ceil((12 + Tokens.spacing.extraSmall + boldMetrics.width) / 24) * 24
                     implicitHeight: legendRow.implicitHeight
                     opacity: (bar.hovered === "" && root.trail.length === 0) || legend.lit ? 1 : 0.5
 
@@ -402,36 +539,36 @@ Item {
 
                         spacing: Tokens.spacing.extraSmall
 
-                    Item {
-                        anchors.verticalCenter: parent.verticalCenter
-                        implicitWidth: 12
-                        implicitHeight: 12
+                        Item {
+                            anchors.verticalCenter: parent.verticalCenter
+                            implicitWidth: 12
+                            implicitHeight: 12
 
-                        Rectangle {
-                            anchors.fill: parent
-                            anchors.margins: legend.lit ? 0 : 1
-                            color: legend.modelData.color
+                            Rectangle {
+                                anchors.fill: parent
+                                anchors.margins: legend.lit ? 0 : 1
+                                color: legend.modelData.color
+                                opacity: ledger.weightOpacity(legend.modelData.weight)
+                            }
+
+                            Outline {
+                                readonly property bool scheduled: legend.modelData.scheduled > 0
+
+                                visible: legend.modelData.reclaim
+                                dashed: !scheduled
+                                hatched: scheduled
+                                color: scheduled ? ledger.scheduledColor : ledger.reclaimColor
+                                lineWidth: scheduled ? 2 : 1.5
+                            }
                         }
 
-                        Outline {
-                            readonly property bool scheduled: legend.modelData.scheduled > 0
+                        StyledText {
+                            id: legendText
 
-                            visible: legend.modelData.reclaim
-                            dashed: !scheduled
-                            hatched: scheduled
-                            color: scheduled ? ledger.scheduledColor : ledger.reclaimColor
-                            lineWidth: scheduled ? 2 : 1.5
+                            text: `${legend.modelData.label} ${ledger.gib(legend.modelData.bytes)}`
+                            font: legend.lit ? Tokens.font.body.builders.small.weight(Font.DemiBold).build() : Tokens.font.body.small
+                            color: legend.lit ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant
                         }
-                    }
-
-                    StyledText {
-                        id: legendText
-
-                        text: `${legend.modelData.label} ${ledger.gib(legend.modelData.bytes)}`
-                        font: legend.lit ? Tokens.font.body.builders.small.weight(Font.DemiBold).build() : Tokens.font.body.small
-                        color: legend.lit ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant
-                    }
-
                     }
 
                     MouseArea {
@@ -439,14 +576,31 @@ Item {
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onEntered: bar.hovered = legend.modelData.key
-                        onExited: if (bar.hovered === legend.modelData.key) bar.hovered = ""
+                        onExited: if (bar.hovered === legend.modelData.key)
+                            bar.hovered = ""
                         onClicked: root.trail = [root.segmentNode(legend.modelData)]
                     }
                 }
             }
 
             Repeater {
-                model: [{ label: `free ${ledger.gib(ledger.free)}`, scheduled: false, free: true }, { label: "can be reclaimed", scheduled: false, free: false }, { label: "next collection", scheduled: true, free: false }]
+                model: [
+                    {
+                        label: `free ${ledger.gib(ledger.free)}`,
+                        scheduled: false,
+                        free: true
+                    },
+                    {
+                        label: "can be reclaimed",
+                        scheduled: false,
+                        free: false
+                    },
+                    {
+                        label: "next collection",
+                        scheduled: true,
+                        free: false
+                    }
+                ]
 
                 delegate: Row {
                     id: key
@@ -484,7 +638,7 @@ Item {
         }
 
         StyledText {
-            visible: bar.hoveredScheduled !== null
+            Layout.preferredHeight: smallLine.height
             text: bar.hoveredScheduled ? `next collection takes ${ledger.gib(bar.hoveredScheduled.bytes)} of ${bar.hoveredScheduled.label}` : ""
             font: Tokens.font.body.small
             color: ledger.scheduledColor
@@ -581,6 +735,8 @@ Item {
             id: slices
 
             capacity: root.node && !root.focusEvent ? root.node.size : 0
+            node: root.node && !root.focusEvent ? root.node.id : ""
+            weight: root.trail.length && root.trail[0].reclaimable && !root.focusEvent ? root.trail[0].weight ?? -1 : -1
             ordered: root.node === null && !root.focusEvent
 
             Layout.preferredWidth: root.paneWidth
@@ -595,8 +751,11 @@ Item {
 
         Facts {
             Layout.preferredWidth: root.paneWidth
-            item: slices.hovered
-            fallback: root.node ? [["items", String(root.entries.length)]] : []
+            Layout.preferredHeight: smallLine.height * (root.focusEvent ? 4 : 2) + Tokens.spacing.medium * (root.focusEvent ? 3 : 1)
+            clip: true
+            item: slices.hovered ?? (root.focusEvent ? root.eventSummary : root.node)
+            onFollowed: action => root.follow(action)
+            fallback: root.node ? [["items", String(root.focusEvent ? root.entries.length : ledger.count(root.node.id))]] : []
         }
 
         RowLayout {
@@ -608,7 +767,7 @@ Item {
                 spacing: Tokens.spacing.extraSmall
 
                 RowLayout {
-                    Layout.preferredWidth: root.paneWidth / 2 - Tokens.spacing.large / 2
+                    Layout.preferredWidth: root.historyWidth
                     spacing: Tokens.spacing.small
 
                     StyledText {
@@ -624,79 +783,6 @@ Item {
                     }
 
                     StyledTextField {
-                        id: lowField
-
-                        Layout.preferredWidth: 48
-                        verticalPadding: 2
-                        horizontalPadding: 6
-                        radius: 4
-                        horizontalAlignment: TextInput.AlignRight
-                        font: Tokens.font.body.small
-                        text: root.gibText(history.axis[0])
-                        onAccepted: root.setBounds(root.parseGib(text), history.axis[1])
-                        onActiveFocusChanged: if (!activeFocus) text = root.gibText(history.axis[0])
-
-                        Connections {
-                            target: history
-                            function onAxisChanged(): void {
-                                if (!lowField.activeFocus)
-                                    lowField.text = root.gibText(history.axis[0]);
-                            }
-                        }
-                    }
-
-                    StyledText {
-                        text: "–"
-                        font: Tokens.font.body.small
-                        color: Colours.palette.m3onSurfaceVariant
-                    }
-
-                    StyledTextField {
-                        id: highField
-
-                        Layout.preferredWidth: 48
-                        verticalPadding: 2
-                        horizontalPadding: 6
-                        radius: 4
-                        horizontalAlignment: TextInput.AlignRight
-                        font: Tokens.font.body.small
-                        text: root.gibText(history.axis[1])
-                        onAccepted: root.setBounds(history.axis[0], root.parseGib(text))
-                        onActiveFocusChanged: if (!activeFocus) text = root.gibText(history.axis[1])
-
-                        Connections {
-                            target: history
-                            function onAxisChanged(): void {
-                                if (!highField.activeFocus)
-                                    highField.text = root.gibText(history.axis[1]);
-                            }
-                        }
-                    }
-
-                    StyledText {
-                        text: "GiB"
-                        font: Tokens.font.body.small
-                        color: Colours.palette.m3onSurfaceVariant
-                    }
-
-                    StyledText {
-                        visible: root.bounds !== null
-                        text: "auto"
-                        font: Tokens.font.body.small
-                        color: Colours.palette.m3primary
-
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.bounds = null
-                        }
-                    }
-
-                    Item {
-                        Layout.preferredWidth: 12
-                    }
-
-                    StyledTextField {
                         id: fromField
 
                         Layout.preferredWidth: 92
@@ -706,7 +792,8 @@ Item {
                         font: Tokens.font.body.small
                         text: root.timeText(root.span[0])
                         onAccepted: root.setRange(root.parseTime(text, root.span[0]), root.span[1])
-                        onActiveFocusChanged: if (!activeFocus) text = root.timeText(root.span[0])
+                        onActiveFocusChanged: if (!activeFocus)
+                            text = root.timeText(root.span[0])
 
                         Connections {
                             target: root
@@ -733,7 +820,8 @@ Item {
                         font: Tokens.font.body.small
                         text: root.timeText(root.span[1])
                         onAccepted: root.setRange(root.span[0], root.parseTime(text, root.span[1]))
-                        onActiveFocusChanged: if (!activeFocus) text = root.timeText(root.span[1])
+                        onActiveFocusChanged: if (!activeFocus)
+                            text = root.timeText(root.span[1])
 
                         Connections {
                             target: root
@@ -782,7 +870,7 @@ Item {
                 Canvas {
                     id: history
 
-                    implicitWidth: root.paneWidth / 2 - Tokens.spacing.large / 2
+                    implicitWidth: root.historyWidth
                     implicitHeight: root.chartHeight
 
                     property var layout: null
@@ -791,6 +879,7 @@ Item {
                     property var runXs: []
 
                     onHoverPointChanged: requestPaint()
+                    onWidthChanged: requestPaint()
                     property real dragFrom: -1
                     property real dragTo: -1
 
@@ -839,7 +928,6 @@ Item {
                         }
                     }
 
-                    property var axis: [0, 1]
                     readonly property real plotLeft: 40
                     readonly property real plotBottom: height - 16
                     readonly property real plotWidth: width - plotLeft - 4
@@ -871,10 +959,8 @@ Item {
                         const series = focus ? [focus] : ledger.segments;
                         const valueFor = (point, item) => focus ? root.nodeValue(point, focus) : ledger.valueOf(point, item.key);
                         const auto = focus ? Math.max(1, ...points.map(point => valueFor(point, focus))) * 1.1 : ledger.diskTotal;
-                        const [low, top] = root.bounds ?? [0, auto];
-                        if (history.axis[0] !== low || history.axis[1] !== top)
-                            history.axis = [low, top];
-                        const y = bytes => plotBottom - plotHeight * (bytes - low) / (top - low);
+                        const top = auto;
+                        const y = bytes => plotBottom - plotHeight * bytes / top;
                         ctx.save();
                         ctx.beginPath();
                         ctx.rect(plotLeft, 4, plotWidth, plotHeight);
@@ -902,9 +988,19 @@ Item {
                             ctx.stroke();
                             for (let i = 0; i < points.length; i++)
                                 base[i] += valueFor(points[i], item);
-                            bands.push({ key: item.key ?? "", lows: lows, highs: base.slice() });
+                            bands.push({
+                                key: item.key ?? "",
+                                lows: lows,
+                                highs: base.slice()
+                            });
                         }
-                        history.layout = { xs: points.map(point => x(point.at)), points: points, bands: bands, y: y, top: top };
+                        history.layout = {
+                            xs: points.map(point => x(point.at)),
+                            points: points,
+                            bands: bands,
+                            y: y,
+                            top: top
+                        };
                         if (history.hoverPoint) {
                             ctx.strokeStyle = Colours.palette.m3onSurface;
                             ctx.lineWidth = 1;
@@ -951,7 +1047,11 @@ Item {
                                 continue;
                             const from = x(Math.max(first, start));
                             const to = Math.max(from + 1.5, x(Math.min(last, end)));
-                            history.runXs.push({ from: from, to: to, run: run });
+                            history.runXs.push({
+                                from: from,
+                                to: to,
+                                run: run
+                            });
                             ctx.fillStyle = Colours.palette.m3tertiary;
                             ctx.globalAlpha = 0.18;
                             ctx.fillRect(from, 4, to - from, plotBottom - 4);
@@ -986,7 +1086,7 @@ Item {
                         ctx.font = "10px sans-serif";
                         ctx.textAlign = "right";
                         for (let step = 0; step <= 4; step++) {
-                            const bytes = low + (top - low) * step / 4;
+                            const bytes = top * step / 4;
                             ctx.fillText(ledger.gib(bytes).replace(" GiB", "G").replace(" MiB", "M"), plotLeft - 4, y(bytes) + 3);
                         }
                         const labels = Math.min(6, points.length);
@@ -1168,8 +1268,12 @@ Item {
                 }
 
                 Flow {
+                    property real tallest: smallLine.height * 3 + Tokens.spacing.small * 2
+
                     Layout.preferredWidth: history.implicitWidth
-                    visible: history.hoverPoint !== null
+                    Layout.preferredHeight: tallest
+                    onImplicitHeightChanged: tallest = Math.max(tallest, implicitHeight)
+                    opacity: history.hoverPoint !== null ? 1 : 0
                     spacing: Tokens.spacing.small
 
                     StyledText {
@@ -1185,9 +1289,32 @@ Item {
                                 return [];
                             const focus = root.focusNode;
                             if (focus && !focus.id.startsWith("segment:"))
-                                return [{ key: "", label: focus.label, color: Colours.palette.m3primary, size: root.nodeValue(point, focus), bold: true }];
-                            const rows = ledger.segments.filter(item => !focus || item.key === focus.segment).map(item => ({ key: item.key, label: item.label, color: item.color, size: ledger.valueOf(point, item.key), bold: item.key === history.hoverKey || (focus && focus.segment === item.key) })).filter(row => row.size > 0);
-                            return focus ? rows : rows.concat([{ key: "free", label: "free", color: "transparent", size: point.free ?? 0, bold: false, free: true }]);
+                                return [
+                                    {
+                                        key: "",
+                                        label: focus.label,
+                                        color: Colours.palette.m3primary,
+                                        size: root.nodeValue(point, focus),
+                                        bold: true
+                                    }
+                                ];
+                            const rows = ledger.segments.filter(item => !focus || item.key === focus.segment).map(item => ({
+                                        key: item.key,
+                                        label: item.label,
+                                        color: item.color,
+                                        size: ledger.valueOf(point, item.key),
+                                        bold: item.key === history.hoverKey || (focus && focus.segment === item.key)
+                                    })).filter(row => row.size > 0);
+                            return focus ? rows : rows.concat([
+                                {
+                                    key: "free",
+                                    label: "free",
+                                    color: "transparent",
+                                    size: point.free ?? 0,
+                                    bold: false,
+                                    free: true
+                                }
+                            ]);
                         }
 
                         RowLayout {
@@ -1225,14 +1352,22 @@ Item {
 
             ColumnLayout {
                 Layout.alignment: Qt.AlignTop
+                visible: root.collectable
                 spacing: Tokens.spacing.extraSmall
 
                 StyledText {
                     Layout.maximumWidth: root.paneWidth / 2 - Tokens.spacing.large / 2
-                    text: root.focusNode ? `collection rate from ${root.focusNode.label}` : "collection rate"
+                    text: (root.focusNode ? `collections from ${root.focusNode.label}` : "collections") + reclaims.zoom.map(level => ` › ${level.events.length} at ${ledger.clock(level.events[0].at)}`).join("")
                     font: Tokens.font.title.small
                     color: Colours.palette.m3primary
                     elide: Text.ElideMiddle
+
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: reclaims.zoom.length > 0
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: reclaims.zoomOut()
+                    }
                 }
 
                 Canvas {
@@ -1241,13 +1376,18 @@ Item {
                     implicitWidth: root.paneWidth / 2 - Tokens.spacing.large / 2
                     implicitHeight: root.chartHeight
 
-                    property var points: []
+                    property var bars: []
+                    property var zoom: []
                     property var hoveredEvent: null
                     property real dragFrom: -1
                     property real dragTo: -1
                     readonly property real plotLeft: 44
                     readonly property real plotWidth: width - plotLeft - 4
+                    readonly property real barWidth: 4
+                    readonly property real minGap: 6
+                    readonly property real maxBar: 24
 
+                    onZoomChanged: reclaims.requestPaint()
                     onHoveredEventChanged: {
                         reclaims.requestPaint();
                         history.requestPaint();
@@ -1257,38 +1397,93 @@ Item {
                         return bar.hovered === key || root.focusSegment === key;
                     }
 
-                    function xOf(at: real): real {
-                        const [first, last] = root.span;
-                        return reclaims.plotLeft + reclaims.plotWidth * (at - first) / Math.max(1, last - first);
+                    function barAt(px: real): var {
+                        return reclaims.bars.find(item => px >= item.x - 1 && px < item.x + item.w + 1) ?? null;
                     }
 
-                    function atOf(px: real): real {
-                        const [first, last] = root.span;
-                        return first + (last - first) * Math.max(0, Math.min(1, (px - reclaims.plotLeft) / reclaims.plotWidth));
+                    Connections {
+                        target: root
+
+                        function onSpanChanged(): void {
+                            reclaims.zoom = [];
+                        }
+                    }
+
+                    function zoomOut(): void {
+                        reclaims.zoom = reclaims.zoom.slice(0, -1);
+                        root.focusEvent = null;
+                    }
+
+                    function zoomInto(item: var): void {
+                        const events = item.entries.map(entry => entry.event);
+                        const from = events[0].at;
+                        const to = events[events.length - 1].at;
+                        const pad = Math.max(0.5, (to - from) * 0.1);
+                        reclaims.zoom = reclaims.zoom.concat([
+                            {
+                                events: events,
+                                from: to > from ? from - pad : from,
+                                to: to > from ? to + pad : from
+                            }
+                        ]);
+                        root.focusEvent = root.runFrom(events);
+                    }
+
+                    function makeBar(entries: var, x: real, w: real): var {
+                        return {
+                            x: x,
+                            w: w,
+                            entries: entries,
+                            total: entries.reduce((acc, entry) => acc + entry.amount, 0)
+                        };
+                    }
+
+                    function layoutBars(entries: var, first: real, last: real): var {
+                        if (entries.length === 0)
+                            return [];
+                        if (last <= first) {
+                            const slots = Math.max(1, Math.floor(reclaims.plotWidth / reclaims.minGap));
+                            const per = Math.ceil(entries.length / slots);
+                            const count = Math.ceil(entries.length / per);
+                            const step = reclaims.plotWidth / count;
+                            const out = [];
+                            for (let index = 0; index < count; index++)
+                                out.push(reclaims.makeBar(entries.slice(index * per, (index + 1) * per), reclaims.plotLeft + index * step + Math.max(0, step - reclaims.maxBar) / 2, Math.min(reclaims.maxBar, Math.max(1, step - 1))));
+                            return out;
+                        }
+                        const scale = (reclaims.plotWidth - reclaims.barWidth) / (last - first);
+                        const groups = [];
+                        for (const entry of entries) {
+                            const x = reclaims.plotLeft + (entry.event.at - first) * scale;
+                            const tail = groups[groups.length - 1];
+                            if (tail && x - tail.x < reclaims.minGap) {
+                                tail.entries.push(entry);
+                                tail.end = x;
+                            } else
+                                groups.push({
+                                    x: x,
+                                    end: x,
+                                    entries: [entry]
+                                });
+                        }
+                        return groups.map(group => reclaims.makeBar(group.entries, group.x, group.end - group.x + reclaims.barWidth));
                     }
 
                     onPaint: {
                         const ctx = getContext("2d");
                         ctx.reset();
-                        const [first, last] = root.span;
+                        const level = reclaims.zoom.length ? reclaims.zoom[reclaims.zoom.length - 1] : null;
+                        const [first, last] = level ? [level.from, level.to] : root.span;
                         const bottom = height - 16;
                         const plotHeight = bottom - 6;
                         ctx.font = "10px sans-serif";
-                        const events = ledger.events.filter(event => event.at >= first && event.at <= last).map(event => ({ event: event, amount: root.eventAmount(event) })).filter(entry => entry.amount !== null && entry.amount > 0);
-                        const stages = [];
-                        for (const entry of events)
-                            if (!stages.includes(entry.event.segment))
-                                stages.push(entry.event.segment);
-                        const bins = Math.max(12, Math.min(96, Math.round(reclaims.plotWidth / 6)));
-                        const binSeconds = Math.max(60, (last - first) / bins);
-                        const rates = Array.from({ length: bins }, () => ({}));
-                        for (const entry of events) {
-                            const index = Math.min(bins - 1, Math.max(0, Math.floor((entry.event.at - first) / binSeconds)));
-                            rates[index][entry.event.segment] = (rates[index][entry.event.segment] ?? 0) + entry.amount * 3600 / binSeconds;
-                        }
-                        const steps = events.map(entry => ({ at: entry.event.at, event: entry.event }));
-                        reclaims.points = steps.map(step => ({ x: reclaims.xOf(step.at), event: step.event }));
-                        const peak = Math.max(268435456, ...rates.map(bin => Object.values(bin).reduce((a, b) => a + b, 0)));
+                        const entries = (level ? level.events : ledger.events.filter(event => event.at >= first && event.at <= last)).map(event => ({
+                                    event: event,
+                                    amount: root.eventAmount(event)
+                                })).filter(entry => entry.amount !== null && entry.amount > 0);
+                        const bars = reclaims.layoutBars(entries, first, last);
+                        reclaims.bars = bars;
+                        const peak = Math.max(1048576, ...bars.map(item => item.total));
                         const y = bytes => bottom - plotHeight * bytes / peak;
                         const right = reclaims.plotLeft + reclaims.plotWidth;
                         ctx.strokeStyle = Colours.palette.m3outlineVariant;
@@ -1297,59 +1492,57 @@ Item {
                         ctx.moveTo(reclaims.plotLeft, bottom + 0.5);
                         ctx.lineTo(right, bottom + 0.5);
                         ctx.stroke();
-                        if (root.focusEvent) {
-                            const events = root.focusEvent.events;
-                            const from = reclaims.xOf(events[0].at);
-                            const to = reclaims.xOf(events[events.length - 1].at);
-                            ctx.fillStyle = Qt.alpha(Colours.palette.m3primary, 0.15);
-                            ctx.fillRect(Math.min(from, to) - 2, 6, Math.abs(to - from) + 4, plotHeight);
-                        }
                         const anyLit = bar.hovered !== "" || root.trail.length > 0;
-                        const barWidth = reclaims.plotWidth / bins;
-                        rates.forEach((bin, index) => {
+                        const chosen = root.focusEvent ? new Set(root.focusEvent.events.map(event => event.seq)) : null;
+                        for (const item of bars) {
+                            const selected = chosen && item.entries.some(entry => chosen.has(entry.event.seq));
+                            if (selected) {
+                                ctx.fillStyle = Qt.alpha(Colours.palette.m3primary, 0.15);
+                                ctx.fillRect(item.x, 6, item.w, plotHeight);
+                            }
                             let below = 0;
-                            const x = reclaims.plotLeft + barWidth * index;
-                            for (const stage of stages) {
-                                const value = bin[stage] ?? 0;
-                                if (value <= 0)
-                                    continue;
-                                ctx.fillStyle = root.segmentColor(stage);
-                                ctx.globalAlpha = !anyLit || reclaims.stageLit(stage) ? 0.85 : 0.3;
-                                ctx.fillRect(x + 0.5, y(below + value), Math.max(1, barWidth - 1), y(below) - y(below + value));
-                                below += value;
+                            for (const entry of item.entries) {
+                                const top = Math.min(y(below + entry.amount), y(below) - 2);
+                                ctx.fillStyle = root.segmentColor(entry.event.segment);
+                                ctx.globalAlpha = !anyLit || reclaims.stageLit(entry.event.segment) ? 0.9 : 0.3;
+                                ctx.fillRect(item.x + 0.5, top, Math.max(1, item.w - 1), y(below) - top);
+                                below = bottom - top >= 2 ? below + entry.amount : peak * (bottom - top) / plotHeight;
                             }
-                        });
-                        ctx.globalAlpha = 1;
-                        for (const step of steps)
-                            if (step.event.status !== 0) {
+                            ctx.globalAlpha = 1;
+                            if (item.entries.some(entry => entry.event.status !== 0)) {
                                 ctx.fillStyle = Colours.palette.m3error;
-                                ctx.fillRect(reclaims.xOf(step.at) - 1, bottom - 4, 3, 4);
+                                ctx.fillRect(item.x, bottom + 2, Math.max(2, item.w - 1), 3);
                             }
+                            if (item.entries.length > 1 && item.w + 8 >= ctx.measureText(String(item.entries.length)).width) {
+                                ctx.fillStyle = Colours.palette.m3onSurfaceVariant;
+                                ctx.textAlign = "center";
+                                ctx.fillText(String(item.entries.length), item.x + item.w / 2, Math.max(14, y(item.total) - 3));
+                            }
+                            if (reclaims.hoveredEvent && item.entries.some(entry => entry.event === reclaims.hoveredEvent)) {
+                                ctx.strokeStyle = Colours.palette.m3onSurface;
+                                ctx.strokeRect(item.x + 0.5, y(item.total) - 1.5, Math.max(1, item.w - 1), bottom - y(item.total) + 1);
+                            }
+                        }
                         if (reclaims.dragFrom >= 0) {
                             ctx.fillStyle = Qt.alpha(Colours.palette.m3primary, 0.25);
                             ctx.fillRect(Math.min(reclaims.dragFrom, reclaims.dragTo), 6, Math.abs(reclaims.dragTo - reclaims.dragFrom), plotHeight);
-                        }
-                        if (reclaims.hoveredEvent) {
-                            const x = reclaims.xOf(reclaims.hoveredEvent.at);
-                            ctx.strokeStyle = Colours.palette.m3onSurface;
-                            ctx.beginPath();
-                            ctx.moveTo(x + 0.5, 6);
-                            ctx.lineTo(x + 0.5, bottom);
-                            ctx.stroke();
                         }
                         ctx.fillStyle = Colours.palette.m3onSurfaceVariant;
                         ctx.textAlign = "right";
                         for (let step = 0; step <= 2; step++) {
                             const bytes = peak * step / 2;
-                            ctx.fillText(ledger.gib(bytes).replace(" GiB", "G").replace(" MiB", "M") + "/h", reclaims.plotLeft - 4, y(bytes) + 3);
+                            ctx.fillText(ledger.gib(bytes).replace(" GiB", "G").replace(" MiB", "M").replace(" KiB", "K"), reclaims.plotLeft - 4, y(bytes) + 3);
                         }
-                        ctx.textAlign = "center";
-                        for (let tick = 0; tick <= 3; tick++) {
-                            const at = first + (last - first) * tick / 3;
-                            ctx.textAlign = tick === 0 ? "left" : tick === 3 ? "right" : "center";
-                            ctx.fillText(ledger.axisLabel(at, last - first), reclaims.xOf(at), height - 4);
+                        const labels = last > first ? Math.max(1, Math.min(4, Math.floor(reclaims.plotWidth / 90))) : 0;
+                        const fine = last - first < 3600;
+                        ctx.textAlign = "left";
+                        for (let step = 0; step <= labels; step++) {
+                            const at = first + (last - first) * step / labels;
+                            const label = fine ? Qt.formatDateTime(new Date(at * 1000), "HH:mm:ss") : ledger.clock(at);
+                            const width = ctx.measureText(label).width;
+                            ctx.fillText(label, Math.min(Math.max(reclaims.plotLeft + reclaims.plotWidth * step / labels - width / 2, reclaims.plotLeft), right - width), height - 4);
                         }
-                        if (steps.length === 0) {
+                        if (bars.length === 0) {
                             ctx.textAlign = "center";
                             ctx.fillText("nothing collected in this window", reclaims.plotLeft + reclaims.plotWidth / 2, bottom - plotHeight / 2);
                         }
@@ -1358,17 +1551,25 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         hoverEnabled: true
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
                         cursorShape: reclaims.hoveredEvent ? Qt.PointingHandCursor : Qt.CrossCursor
 
                         function nearest(px: real): var {
-                            let best = null;
-                            for (const point of reclaims.points)
-                                if (Math.abs(point.x - px) <= 8 && (!best || Math.abs(point.x - px) < Math.abs(best.x - px)))
-                                    best = point;
-                            return best ? best.event : null;
+                            const item = reclaims.barAt(px);
+                            if (!item)
+                                return null;
+                            return item.entries.reduce((best, entry) => !best || entry.amount > best.amount ? entry : best, null).event;
+                        }
+
+                        function eventsBetween(from: real, to: real): var {
+                            return reclaims.bars.filter(item => item.x + item.w > from && item.x < to).reduce((acc, item) => acc.concat(item.entries.map(entry => entry.event)), []);
                         }
 
                         onPressed: mouse => {
+                            if (mouse.button === Qt.RightButton) {
+                                reclaims.zoomOut();
+                                return;
+                            }
                             reclaims.dragFrom = mouse.x;
                             reclaims.dragTo = mouse.x;
                         }
@@ -1390,17 +1591,25 @@ Item {
                             bar.hovered = "";
                         }
                         onReleased: mouse => {
+                            if (mouse.button === Qt.RightButton)
+                                return;
                             const from = Math.min(reclaims.dragFrom, mouse.x);
                             const to = Math.max(reclaims.dragFrom, mouse.x);
                             reclaims.dragFrom = -1;
                             reclaims.dragTo = -1;
                             if (to - from > 4) {
-                                const [start, end] = [reclaims.atOf(from), reclaims.atOf(to)];
-                                const events = ledger.events.filter(event => event.at >= start && event.at <= end && root.eventAmount(event) !== null);
+                                const events = eventsBetween(from, to);
                                 root.focusEvent = events.length ? root.runFrom(events) : null;
                             } else {
-                                const event = nearest(mouse.x);
-                                root.focusEvent = event && !(root.focusEvent && root.focusEvent.events.length === 1 && root.focusEvent.events[0] === event) ? root.runFrom([event]) : null;
+                                const item = reclaims.barAt(mouse.x);
+                                if (item && item.entries.length > 1) {
+                                    reclaims.zoomInto(item);
+                                    reclaims.requestPaint();
+                                    return;
+                                }
+                                const events = item ? item.entries.map(entry => entry.event) : [];
+                                const same = root.focusEvent && events.length && root.focusEvent.events.length === events.length && root.focusEvent.events.every((event, index) => event === events[index]);
+                                root.focusEvent = events.length && !same ? root.runFrom(events) : null;
                             }
                             reclaims.requestPaint();
                         }
@@ -1409,11 +1618,13 @@ Item {
 
                 Facts {
                     Layout.preferredWidth: root.paneWidth / 2 - Tokens.spacing.large / 2
+                    Layout.preferredHeight: smallLine.height * 3 + Tokens.spacing.medium * 2
+                    clip: true
                     item: {
                         const event = reclaims.hoveredEvent;
                         if (!event)
                             return null;
-                        const taken = Object.entries(event.taken ?? ({})).sort((a, b) => b[1] - a[1]).slice(0, 3);
+                        const taken = event.top ?? [];
                         return {
                             label: ledger.clock(event.at),
                             path: "",
@@ -1423,7 +1634,7 @@ Item {
                             extra: [["paths", String(event.items ?? 0)], ["duration", `${event.seconds} s`], ["free before", `${event.free_gib} GiB`]].concat(event.refused ? [["held", String(event.refused)]] : []).concat(event.status !== 0 ? [["status", "failed"]] : []).concat(taken.map(([path, size]) => ["", `${ledger.shortName(path).replace(/^.*\//, "")} ${ledger.gib(size)}`]))
                         };
                     }
-                    fallback: root.focusEvent ? [["selected", `${root.focusEvent.events.length} collections`], ["freed", ledger.gib(root.focusEvent.freed)], ["paths", String(root.focusEvent.items)]] : [["", "drag to select a window, click a step for its paths"]]
+                    fallback: root.focusEvent ? [["selected", `${root.focusEvent.events.length} collections`], ["freed", ledger.gib(root.focusEvent.freed)], ["paths", String(root.focusEvent.items)]] : []
                 }
             }
         }
@@ -1434,6 +1645,7 @@ Item {
 
         property var item: null
         property var fallback: []
+        signal followed(var action)
 
         readonly property var pairs: {
             if (!item)
@@ -1443,10 +1655,22 @@ Item {
             out.push(["size", ledger.gib(item.size)]);
             if (item.last_used)
                 out.push(["last used", ledger.ago(item.last_used)]);
+            if (item.rank !== undefined)
+                out.push(["rank", `#${item.rank + 1} to collect`]);
+            else if (item.ranks)
+                out.push(["ranks", `#${item.ranks[0] + 1} to #${item.ranks[1] + 1}`]);
+            if (item.weight > 0)
+                out.push(["weight", ledger.weightText(item.weight)]);
             if (item.kind)
                 out.push(["", item.kind]);
             for (const link of item.roots ?? [])
-                out.push(["held by", ledger.shortName(link)]);
+                out.push(["held by", ledger.shortName(link), link.startsWith("/") && !link.startsWith("/proc/") ? {
+                        path: link
+                    } : null]);
+            if (item.holder)
+                out.push(["held by", item.holder, item.pid ? {
+                        pid: item.pid
+                    } : null]);
             if (item.scheduled)
                 out.push(["", "next collection"]);
             return out.concat(item.extra ?? []);
@@ -1455,12 +1679,13 @@ Item {
         spacing: Tokens.spacing.medium
 
         Repeater {
-            model: facts.pairs
+            model: facts.pairs.length
 
             delegate: Row {
                 id: fact
 
-                required property var modelData
+                required property int index
+                readonly property var modelData: facts.pairs[index] ?? ({})
 
                 spacing: Tokens.spacing.extraSmall
 
@@ -1472,9 +1697,18 @@ Item {
                 }
 
                 StyledText {
+                    readonly property var action: fact.modelData[2] ?? null
+
                     text: fact.modelData[1]
                     font: Tokens.font.body.builders.small.weight(Font.DemiBold).build()
-                    color: Colours.palette.m3onSurface
+                    color: action ? Colours.palette.m3primary : Colours.palette.m3onSurface
+
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: parent.action !== null
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: facts.followed(parent.action)
+                    }
                 }
             }
         }

@@ -39,6 +39,7 @@ let
         postPatch = (old.postPatch or "") + ''
           cp -r --no-preserve=mode ${../quickshell/caelestia}/. .
           sed -i 's/flickableDirection: Flickable.HorizontalFlick/&\n            interactive: false/' modules/dashboard/Content.qml
+          sed -i 's/screenState.launcher || screenState.session ? WlrKeyboardFocus.OnDemand/screenState.launcher || screenState.session || screenState.dashboard ? WlrKeyboardFocus.OnDemand/' modules/drawers/ContentWindow.qml
         '';
       });
 

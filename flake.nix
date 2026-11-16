@@ -306,6 +306,8 @@
 
         bookshelf = inputs.bookshelf.packages.x86_64-linux.default;
 
+        disk-ledger = (pkgsFor "x86_64-linux").callPackage ./pkgs/disk-ledger.nix { };
+
         installer-iso =
           (lib.nixosSystem {
             system = "x86_64-linux";

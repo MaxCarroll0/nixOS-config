@@ -11,6 +11,7 @@ StyledRect {
 
     readonly property color accent: Colours.palette.m3secondary
     readonly property var head: ledger.head
+    readonly property var shownSegments: ledger.segments.filter(segment => segment.bytes > 0).concat([{ key: "free", label: "free", color: "transparent", bytes: ledger.free, free: true }])
 
     color: Colours.tPalette.m3surfaceContainer
     radius: Tokens.rounding.medium
@@ -107,12 +108,13 @@ StyledRect {
             spacing: Tokens.spacing.medium
 
             Repeater {
-                model: ledger.segments.filter(segment => segment.bytes > 0).concat([{ key: "free", label: "free", color: "transparent", bytes: ledger.free, free: true }])
+                model: root.shownSegments.length
 
                 delegate: Item {
                     id: legend
 
-                    required property var modelData
+                    required property int index
+                    readonly property var modelData: root.shownSegments[index] ?? ({})
 
                     implicitWidth: legendRow.implicitWidth
                     implicitHeight: legendRow.implicitHeight

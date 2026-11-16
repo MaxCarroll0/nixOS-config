@@ -76,11 +76,11 @@ deleted files still held open or mapped, the ext4 orphan file and the directorie
 | Command | Does |
 |---|---|
 | `project-closure-retention` | report or evict project closures by tier against the budget |
-| `store-collect --need-gib N` | report or delete dead store paths, oldest first, until N GiB is freed |
-| `systemctl status disk-gc` | the continuous collector; its state is in `/run/user/1000/disk-pressure.json` |
-| `project-scratch-clean` | report or remove recorded build artefacts, scratch dirs and caches |
+| `disk-ledger candidates` | dry run: every reclaimable item in collection order, and what is protected and why |
+| `disk-ledger store [--path P]` | store index summary: registered, orphan and dead bytes, exact size of a path |
+| `systemctl status disk-ledger` | the ledger and continuous collector; the tab reads `/run/user/1000/disk-tree.sock` |
 
-Source: `modules/nixos/disk.nix` and the scripts beside it.
+Source: `modules/nixos/disk.nix` and the Rust crate in `modules/nixos/disk-ledger/`.
 
 ## Power
 
