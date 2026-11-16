@@ -74,7 +74,7 @@ StyledRect {
 
                 StyledText {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: `collecting ${ledger.collectingStage}`
+                    text: ledger.collectingText
                     font: Tokens.font.body.medium
                     color: Colours.palette.m3tertiary
                 }

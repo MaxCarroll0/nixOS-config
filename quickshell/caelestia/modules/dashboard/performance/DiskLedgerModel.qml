@@ -18,10 +18,37 @@ Item {
     property var extra: []
     property bool diagnostics: false
     property string targetOverride: ""
+    property int pendingTarget: 0
+    readonly property bool targetPending: pendingTarget > 0
     property real receivedAt: 0
     property bool paused: false
     property bool streamed: false
     property var held: ({})
+    property bool keepsSnapshot: false
+
+    Component.onCompleted: {
+        const saved = keepsSnapshot ? DiskSnapshot.model : null;
+        if (!saved)
+            return;
+        overview = saved.overview;
+        historyData = saved.historyData;
+        events = saved.events;
+        nodes = saved.nodes;
+        counts = saved.counts;
+        receivedAt = saved.receivedAt;
+        paused = true;
+    }
+    Component.onDestruction: {
+        if (keepsSnapshot)
+            DiskSnapshot.model = paused ? {
+                overview: overview,
+                historyData: historyData,
+                events: events,
+                nodes: nodes,
+                counts: counts,
+                receivedAt: receivedAt
+            } : null;
+    }
 
     readonly property string home: Quickshell.env("HOME") || "/home/max"
     readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000"
@@ -40,14 +67,22 @@ Item {
     readonly property real free: overview.free ?? 0
     readonly property real diskTotal: disk.total ?? 0
     readonly property real total: Math.max(1, diskTotal)
-    readonly property real targetGib: targetOverride !== "" && !isNaN(parseInt(targetOverride)) ? parseInt(targetOverride) : Math.round((overview.target ?? 0) / 1073741824)
+    readonly property real targetGib: targetPending ? pendingTarget : targetOverride !== "" && !isNaN(parseInt(targetOverride)) ? parseInt(targetOverride) : Math.round((overview.target ?? 0) / 1073741824)
     readonly property real target: targetGib * 1073741824
-    readonly property real deficit: targetOverride !== "" ? Math.max(0, target - free) : (overview.deficit ?? 0)
+    readonly property real deficit: targetPending || targetOverride !== "" ? Math.max(0, target - free) : (overview.deficit ?? 0)
     readonly property bool due: deficit > 0
     readonly property bool loaded: overview.segments !== undefined
     readonly property date updated: new Date(receivedAt * 1000)
     readonly property bool collecting: collector.state === "collecting"
     readonly property string collectingStage: collecting ? (segment(kindKey[collector.kind] ?? "")?.label ?? collector.kind ?? "") : ""
+    readonly property string collectingText: {
+        if (!collecting)
+            return "";
+        const first = (collector.head ?? [])[0] ?? "";
+        const name = first.startsWith(home + "/") ? `~${first.slice(home.length)}` : first.replace(/^\/nix\/store\/[a-z0-9]{32}-/, "");
+        const more = (collector.items ?? 1) > 1 ? ` +${collector.items - 1} more` : "";
+        return name ? `${collectingStage}: ${name}${more}` : collectingStage;
+    }
 
     readonly property var kindKey: ({
             "dead": "dead",
@@ -114,16 +149,21 @@ Item {
                 bytes: row.bytes,
                 scheduled: row.scheduled,
                 deleting: row.deleting ?? 0,
+                lagging: row.lagging ?? 0,
+                deletingSpans: row.deleting_spans ?? null,
+                laggingSpans: row.lagging_spans ?? null,
                 reclaimBytes: row.reclaim_bytes ?? (row.reclaimable ? row.bytes : 0),
                 weight: row.reclaimable ? row.weight ?? -1 : -1,
                 spans: row.reclaim_spans ?? null,
                 scheduledSpans: row.scheduled_spans ?? null,
+                nextSpan: row.next_span ?? null,
                 items: row.items
             }))
 
     readonly property color hatchColor: Colours.light ? Colours.palette.m3onSurface : "white"
     readonly property color reclaimColor: Qt.hsla(0.36, 0.6, Colours.light ? 0.26 : 0.4, 1)
     readonly property color deletingColor: Qt.hsla(0.0, 0.8, Colours.light ? 0.45 : 0.55, 1)
+    readonly property color laggingColor: Qt.hsla(0.0, 0.8, Colours.light ? 0.45 : 0.55, 0.45)
     readonly property color scheduledColor: Qt.hsla(0.08, 0.9, Colours.light ? 0.42 : 0.62, 1)
 
     function segment(key: string): var {
@@ -154,6 +194,11 @@ Item {
     function deletingFraction(key: string): real {
         const value = current(key);
         return value > 0 ? Math.min(1, (segment(key)?.deleting ?? 0) / value) : 0;
+    }
+
+    function laggingFraction(key: string): real {
+        const value = current(key);
+        return value > 0 ? Math.min(1, (segment(key)?.lagging ?? 0) / value) : 0;
     }
 
     function rows(id: string): var {
@@ -289,10 +334,28 @@ Item {
         Quickshell.execDetached(["hyprctl", "dispatch", "focuswindow", `pid:${pid}`]);
     }
 
+    function proposeTarget(gib: int): void {
+        const value = Math.max(5, Math.min(200, gib));
+        const saved = targetOverride !== "" && !isNaN(parseInt(targetOverride)) ? parseInt(targetOverride) : Math.round((overview.target ?? 0) / 1073741824);
+        pendingTarget = value === saved ? 0 : value;
+    }
+
+    function applyTarget(): void {
+        if (targetPending)
+            setTarget(pendingTarget);
+        pendingTarget = 0;
+    }
+
     function setTarget(gib: int): void {
         const value = Math.max(5, Math.min(200, gib));
         targetOverride = String(value);
         Quickshell.execDetached(["sh", "-c", `mkdir -p "$(dirname "$1")" && printf %s "$2" > "$1"`, "disk-target", targetPath, String(value)]);
+        if (socket.connected) {
+            socket.write(JSON.stringify({
+                target: value
+            }) + "\n");
+            socket.flush();
+        }
     }
 
     function weightText(weight: real): string {

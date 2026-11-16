@@ -56,9 +56,10 @@ const IDLE_PUSH: f64 = 30.0;
 const IDLE_FILES: f64 = 60.0;
 const VERIFY_PERIOD: f64 = 10.0;
 const COLLECT_SECONDS: f64 = 0.1;
+const LAGGING_SECONDS: f64 = 600.0;
 const RENDER_SECONDS: f64 = 5.0;
 const IDLE_WRITE: f64 = 60.0;
-const TARGET_SECONDS: f64 = 5.0;
+const TARGET_SECONDS: f64 = 60.0;
 const CATCH_UP: f64 = 0.25;
 const COST_FACTOR: f64 = 20.0;
 const FILE_BURST: usize = 256;
@@ -326,6 +327,7 @@ struct Job {
     references: HashMap<String, Vec<String>>,
     orphans: Vec<String>,
     scope: Scope,
+    audit: Value,
 }
 
 struct Statfs {
@@ -366,6 +368,7 @@ pub struct Ledger {
     model_version: u64,
     scheduled_cache: Option<(u64, i64, HashMap<&'static str, i64>, i64)>,
     spans_cache: std::cell::RefCell<Option<(f64, u64, Value)>>,
+    settled: std::cell::RefCell<HashMap<String, i64>>,
     agent_titles: HashMap<String, (u64, String, String)>,
     file_cache: Option<(u64, HashMap<&'static str, i64>, HashMap<String, i64>)>,
     model_cost: f64,
@@ -389,6 +392,8 @@ pub struct Ledger {
     status: Map<String, Value>,
     last_event: Value,
     paused_until: f64,
+    lagging: HashMap<String, (f64, u64)>,
+    batch: u64,
     store_dirty: HashMap<String, f64>,
     links_dirty: Option<f64>,
     scanning: Option<std::thread::JoinHandle<gc::LinkScan>>,
@@ -427,6 +432,7 @@ pub struct Ledger {
     recorded: u64,
     collected_at: f64,
     cut_rank: i64,
+    next_rank: i64,
     planned: Vec<bool>,
     deleting: HashSet<String>,
     pushed: f64,
@@ -552,6 +558,7 @@ impl Ledger {
             model_version: 0,
             scheduled_cache: None,
             spans_cache: std::cell::RefCell::new(None),
+            settled: std::cell::RefCell::new(HashMap::new()),
             agent_titles: HashMap::new(),
             file_cache: None,
             model_cost: 0.0,
@@ -575,6 +582,8 @@ impl Ledger {
             status: probe::object(json!({"state": "idle"})),
             last_event: Value::Null,
             paused_until: 0.0,
+            lagging: HashMap::new(),
+            batch: 0,
             store_dirty: HashMap::new(),
             links_dirty: None,
             scanning: Some(scanning),
@@ -613,6 +622,7 @@ impl Ledger {
             recorded: 0,
             collected_at: f64::NEG_INFINITY,
             cut_rank: -1,
+            next_rank: -1,
             planned: Vec::new(),
             deleting: HashSet::new(),
             pushed: 0.0,
@@ -698,6 +708,9 @@ impl Ledger {
             }
         }
         self.by_path.shrink_to_fit();
+        let now = clock();
+        let by_path = &self.by_path;
+        self.lagging.retain(|path, (since, _)| by_path.contains_key(path) && now - *since < LAGGING_SECONDS);
         self.claim_of.shrink_to_fit();
         self.claim_sets.clear();
         self.sums_dirty = true;
@@ -988,7 +1001,7 @@ impl Ledger {
             if cumulative >= deficit {
                 break;
             }
-            if item.freed() == 0 || !(self.deleting.contains(&item.path) || self.available(item)) {
+            if item.freed() == 0 || self.lagging.contains_key(&item.path) || !(self.deleting.contains(&item.path) || self.available(item)) {
                 continue;
             }
             planned[index] = true;
@@ -1002,11 +1015,33 @@ impl Ledger {
         self.planned.get(index).copied().unwrap_or(false)
     }
 
+    fn is_doomed(&self, path: &str) -> bool {
+        self.deleting.contains(path) || (self.deleting.is_empty() && self.lagging.get(path).is_some_and(|entry| entry.1 == self.batch))
+    }
+
+    fn is_lagging(&self, path: &str) -> bool {
+        self.lagging.contains_key(path) && !self.is_doomed(path)
+    }
+
+    fn is_next(&self, index: usize) -> bool {
+        self.next_rank == index as i64
+    }
+
+    fn settle(&self, path: &str, last_used: i64) -> i64 {
+        let mut settled = self.settled.borrow_mut();
+        let held = settled.entry(path.to_string()).or_insert(last_used);
+        if (last_used - *held).abs() > 60 {
+            *held = last_used;
+        }
+        *held
+    }
+
     fn build_overview(&mut self) -> Value {
         let (disk, segments, residual) = self.compose();
         let target = self.target();
         let deficit = (target + MARGIN - disk.free).max(0);
-        let (cut, planned) = self.cut(deficit.max(MARGIN));
+        let (cut, planned) = self.cut(deficit);
+        self.next_rank = self.model.items.iter().position(|item| item.freed() > 0 && !self.deleting.contains(&item.path) && !self.lagging.contains_key(&item.path) && self.available(item)).map_or(-1, |index| index as i64);
         let planned_key = planned.iter().filter(|flag| **flag).count() as i64 * 1_000_003 + cut;
         self.planned = planned;
         if self.scheduled_cache.as_ref().is_none_or(|cache| cache.0 != self.model_version || cache.1 != planned_key) {
@@ -1021,17 +1056,21 @@ impl Ledger {
             self.scheduled_cache = Some((self.model_version, planned_key, scheduled, reclaimable));
         }
         let (_, _, scheduled, reclaimable) = self.scheduled_cache.clone().unwrap_or_default();
+        let mut lagging: HashMap<&'static str, i64> = HashMap::new();
         let mut deleting: HashMap<&'static str, i64> = HashMap::new();
-        for path in &self.deleting {
+        for path in self.deleting.iter().chain(self.lagging.keys()) {
             if let Some(item) = self.by_path.get(path).and_then(|index| self.model.items.get(*index)) {
-                *deleting.entry(item.kind.key()).or_insert(0) += item.freed() as i64;
+                let into = if self.is_doomed(path) { &mut deleting } else { &mut lagging };
+                *into.entry(item.kind.key()).or_insert(0) += item.freed() as i64;
             }
         }
         let home = self.home_spans();
+        let generation = self.row_spans("generation");
+        let head_item = usize::try_from(self.next_rank).ok().and_then(|index| self.model.items.get(index));
         let live_temp = segments.get("tmp_files").copied().unwrap_or(0) + segments.get("tmp_roots").copied().unwrap_or(0);
-        let rows: Vec<Value> = SEGMENTS.iter().map(|(key, label, group, can)| json!({"key": key, "label": label, "group": group, "reclaimable": can, "bytes": segments.get(key).copied().unwrap_or(0) + match *key { "temp" => live_temp, "generation" => segments.get("previous").copied().unwrap_or(0), "home_profile" => segments.get("profiles").copied().unwrap_or(0), "processes" => segments.get("shells").copied().unwrap_or(0), "agent" => segments.get("agent_files").copied().unwrap_or(0), "stray" => segments.get("deploy").copied().unwrap_or(0) + segments.get("roots").copied().unwrap_or(0), "home_files" => segments.get("repo").copied().unwrap_or(0) + segments.get("game").copied().unwrap_or(0), _ => 0 }, "weight": Kind::from_name(key).filter(|kind| kind.key() == *key).map(Kind::weight), "reclaim_bytes": if *can { folded(key).iter().map(|part| segments.get(part).copied().unwrap_or(0)).sum::<i64>() } else { 0 }, "scheduled": folded(key).iter().map(|part| scheduled.get(part).copied().unwrap_or(0)).sum::<i64>(), "deleting": folded(key).iter().map(|part| deleting.get(part).copied().unwrap_or(0)).sum::<i64>(), "items": if *can { folded(key).iter().map(|part| self.kind_items.get(*part).map(Vec::len).unwrap_or(0)).sum::<usize>() } else { 0 }, "reclaim_spans": if *key == "home_files" { home["reclaim"].clone() } else { Value::Null }, "scheduled_spans": if *key == "home_files" { home["scheduled"].clone() } else { Value::Null }})).collect();
+        let rows: Vec<Value> = SEGMENTS.iter().map(|(key, label, group, can)| json!({"key": key, "label": label, "group": group, "reclaimable": can, "bytes": segments.get(key).copied().unwrap_or(0) + match *key { "temp" => live_temp, "generation" => segments.get("previous").copied().unwrap_or(0), "home_profile" => segments.get("profiles").copied().unwrap_or(0), "processes" => segments.get("shells").copied().unwrap_or(0), "agent" => segments.get("agent_files").copied().unwrap_or(0), "stray" => segments.get("deploy").copied().unwrap_or(0) + segments.get("roots").copied().unwrap_or(0), "home_files" => segments.get("repo").copied().unwrap_or(0) + segments.get("game").copied().unwrap_or(0), _ => 0 }, "weight": Kind::from_name(key).filter(|kind| kind.key() == *key).map(Kind::weight), "reclaim_bytes": if *can { folded(key).iter().map(|part| segments.get(part).copied().unwrap_or(0)).sum::<i64>() } else { 0 }, "scheduled": folded(key).iter().map(|part| scheduled.get(part).copied().unwrap_or(0)).sum::<i64>(), "deleting": folded(key).iter().map(|part| deleting.get(part).copied().unwrap_or(0)).sum::<i64>(), "lagging": folded(key).iter().map(|part| lagging.get(part).copied().unwrap_or(0)).sum::<i64>(), "deleting_spans": match *key { "home_files" => home["deleting"].clone(), "generation" => generation["deleting"].clone(), _ => Value::Null }, "lagging_spans": match *key { "home_files" => home["lagging"].clone(), "generation" => generation["lagging"].clone(), _ => Value::Null }, "items": if *can { folded(key).iter().map(|part| self.kind_items.get(*part).map(Vec::len).unwrap_or(0)).sum::<usize>() } else { 0 }, "reclaim_spans": match *key { "home_files" => home["reclaim"].clone(), "generation" => generation["reclaim"].clone(), _ => Value::Null }, "scheduled_spans": match *key { "home_files" => home["scheduled"].clone(), "generation" => generation["scheduled"].clone(), _ => Value::Null }, "next_span": if *key == "home_files" { home["next"].get(0).cloned().unwrap_or(Value::Null) } else if *key == "generation" { generation["next"].get(0).cloned().unwrap_or(Value::Null) } else { head_item.filter(|item| folded(key).contains(&item.kind.key())).map(|item| json!([0, item.freed()])).unwrap_or(Value::Null) }})).collect();
         self.cut_rank = cut;
-        let head = self.model.items.iter().find(|item| item.freed() > 0).map(|item| json!({"path": item.path, "label": short(&item.path, &self.home), "kind": item.kind.key(), "size": item.freed(), "last_used": item.last_used}));
+        let head = usize::try_from(self.next_rank).ok().and_then(|index| self.model.items.get(index)).map(|item| json!({"path": item.path, "label": short(&item.path, &self.home), "kind": item.kind.key(), "size": item.freed(), "last_used": item.last_used}));
         json!({
             "next": head,
             "disk": {"total": disk.total, "used": disk.used, "free": disk.free, "reserved": disk.reserved},
@@ -1136,7 +1175,9 @@ impl Ledger {
             "reclaimable": true,
             "rank": item.rank,
             "scheduled": self.is_planned(item.rank),
-            "deleting": self.deleting.contains(&item.path),
+            "next": self.is_next(item.rank),
+            "deleting": self.is_doomed(&item.path),
+            "lagging": self.is_lagging(&item.path),
             "delvable": !item.store.is_empty() || !item.files.is_empty(),
             "openable": !item.files.is_empty() && !item.path.starts_with("/nix/store/"),
             "roots": item.links.iter().take(6).collect::<Vec<_>>(),
@@ -1271,21 +1312,29 @@ impl Ledger {
                 own.insert("reclaimBytes".into(), json!(item.freed()));
                 own.insert("reclaimSpans".into(), json!([[0, (item.freed() as i64).min(size)]]));
                 own.insert("scheduledSpans".into(), json!(if self.is_planned(item.rank) { vec![[0, (item.freed() as i64).min(size)]] } else { Vec::new() }));
+                own.insert("nextSpans".into(), json!(if self.is_next(item.rank) { vec![[0, (item.freed() as i64).min(size)]] } else { Vec::new() }));
+                own.insert("deletingSpans".into(), json!(if self.is_doomed(&item.path) { vec![[0, (item.freed() as i64).min(size)]] } else { Vec::new() }));
+                own.insert("laggingSpans".into(), json!(if self.is_lagging(&item.path) { vec![[0, (item.freed() as i64).min(size)]] } else { Vec::new() }));
                 own.insert("delvable".into(), json!(true));
                 entry = own;
             } else {
                 let inside: Vec<&&Item> = kept.iter().filter(|item| item.path.starts_with(&format!("{child_path}/"))).collect();
                 if !inside.is_empty() {
                     entry.insert("reclaimable".into(), json!(true));
-                    let [spans, planned] = self.reclaim_spans(&child_path);
+                    let [spans, planned, next, doomed, lagging] = self.reclaim_spans(&child_path);
                     entry.insert("reclaimBytes".into(), json!(spans.iter().map(|span| span[1]).sum::<i64>().min(size)));
                     entry.insert("reclaimSpans".into(), json!(spans));
                     entry.insert("scheduledBytes".into(), json!(planned.iter().map(|span| span[1]).sum::<i64>().min(size)));
                     entry.insert("scheduledSpans".into(), json!(planned));
+                    entry.insert("nextSpans".into(), json!(next));
+                    entry.insert("deletingSpans".into(), json!(doomed));
+                    entry.insert("laggingSpans".into(), json!(lagging));
                     entry.insert("scheduled".into(), json!(inside.iter().any(|item| self.is_planned(item.rank))));
-                    entry.insert("deletingBytes".into(), json!(inside.iter().filter(|item| self.deleting.contains(&item.path)).map(|item| item.freed() as i64).sum::<i64>().min(size)));
+                    entry.insert("deletingBytes".into(), json!(inside.iter().filter(|item| self.is_doomed(&item.path)).map(|item| item.freed() as i64).sum::<i64>().min(size)));
                 }
             }
+            let settled = self.settle(&child_path, number(entry.get("last_used")));
+            entry.insert("last_used".into(), json!(settled));
             rows.push(entry);
         }
         let mut loose = node.own as i64 - if path == "/" { self.swap } else { 0 } - if context == "store" { node.dir_blocks as i64 } else { 0 };
@@ -1296,8 +1345,11 @@ impl Ledger {
             let label = format!("{count} file{} in {place}", if count == 1 { "" } else { "s" });
             rows.push(row(format!("loose:{context}:{base}"), label, format!("{base}/*"), loose, node.own_newest, "files".into(), context == "item", false, true, false));
         }
+        let cache = format!("{}/.cache", self.home);
         if context == "files" && (base == "/tmp" || base.starts_with("/tmp/")) {
-            self.annotate_tmp(&mut rows);
+            self.annotate_holders(&mut rows, "/tmp");
+        } else if context == "files" && (base == cache || base.starts_with(&format!("{cache}/"))) {
+            self.annotate_holders(&mut rows, &cache);
         }
         rows
     }
@@ -1334,15 +1386,15 @@ impl Ledger {
         rows
     }
 
-    fn reclaim_spans(&self, path: &str) -> [Vec<[i64; 2]>; 2] {
+    fn reclaim_spans(&self, path: &str) -> [Vec<[i64; 2]>; 5] {
         let rows = self.dir_rows(path, "files");
         let timed = !rows.is_empty() && rows.iter().all(|row| number(row.get("last_used")) > 0);
         let mut list: Vec<&Map<String, Value>> = rows.iter().filter(|row| number(row.get("size")) > 0).collect();
-        list.sort_by_key(|row| if timed { number(row.get("last_used")) } else { -number(row.get("size")) });
-        let mut out: [Vec<[i64; 2]>; 2] = [Vec::new(), Vec::new()];
+        list.sort_by_key(|row| (if timed { number(row.get("last_used")) } else { -number(row.get("size")) }, row.get("id").and_then(Value::as_str).unwrap_or("").to_string()));
+        let mut out: [Vec<[i64; 2]>; 5] = Default::default();
         let mut offset = 0i64;
         for row in list {
-            for (key, spans) in ["reclaimSpans", "scheduledSpans"].iter().zip(out.iter_mut()) {
+            for (key, spans) in ["reclaimSpans", "scheduledSpans", "nextSpans", "deletingSpans", "laggingSpans"].iter().zip(out.iter_mut()) {
                 for span in row.get(*key).and_then(Value::as_array).into_iter().flatten() {
                     let (start, length) = (offset + number(span.get(0)), number(span.get(1)));
                     match spans.last_mut() {
@@ -1356,27 +1408,98 @@ impl Ledger {
         out
     }
 
+    fn clone_store(&self) -> Vec<&Item> {
+        ["repo", "game"].iter().flat_map(|kind| self.kind_items.get(*kind).into_iter().flatten()).map(|index| &self.model.items[*index]).filter(|item| item.store_bytes > 0).collect()
+    }
+
+    fn clone_store_row(&self) -> Option<Map<String, Value>> {
+        let items = self.clone_store();
+        let size: i64 = items.iter().map(|item| item.store_bytes as i64).sum();
+        if size == 0 {
+            return None;
+        }
+        let newest = items.iter().map(|item| item.last_used).max().unwrap_or(0);
+        let scheduled = items.iter().any(|item| self.is_planned(item.rank));
+        let mut entry = row("meta:clone-store".into(), "nix store kept by clones and games".into(), String::new(), size, newest, format!("store paths rooted inside {} git clones and game dirs, outside /home", items.len()), true, scheduled, false, false);
+        entry.insert("next".into(), json!(items.iter().any(|item| self.is_next(item.rank))));
+        entry.insert("deleting".into(), json!(items.iter().any(|item| self.is_doomed(&item.path))));
+        entry.insert("lagging".into(), json!(items.iter().any(|item| self.is_lagging(&item.path))));
+        Some(entry)
+    }
+
+    fn row_spans(&mut self, key: &str) -> Value {
+        let mut rows = self.segment_rows(key);
+        let field = |entry: &Map<String, Value>, name: &str| entry.get(name).and_then(Value::as_i64).unwrap_or(0);
+        let flag = |entry: &Map<String, Value>, name: &str| entry.get(name).and_then(Value::as_bool).unwrap_or(false);
+        let timed = !rows.is_empty() && rows.iter().all(|entry| field(entry, "last_used") > 0);
+        rows.sort_by(|a, b| {
+            let primary = if timed { field(a, "last_used").cmp(&field(b, "last_used")) } else { field(b, "size").cmp(&field(a, "size")) };
+            primary.then_with(|| a.get("id").and_then(Value::as_str).cmp(&b.get("id").and_then(Value::as_str)))
+        });
+        let (mut reclaim, mut planned, mut next, mut doomed, mut lagging) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut offset = 0;
+        for entry in rows.iter().filter(|entry| field(entry, "size") > 0) {
+            let span = [offset, field(entry, "size")];
+            if flag(entry, "reclaimable") {
+                reclaim.push(span);
+            }
+            if flag(entry, "scheduled") {
+                planned.push(span);
+            }
+            if flag(entry, "next") {
+                next.push(span);
+            }
+            if flag(entry, "deleting") {
+                doomed.push(span);
+            }
+            if flag(entry, "lagging") {
+                lagging.push(span);
+            }
+            offset += span[1];
+        }
+        json!({"reclaim": reclaim, "scheduled": planned, "next": next, "deleting": doomed, "lagging": lagging})
+    }
+
     fn home_spans(&self) -> Value {
-        let key = self.model_version ^ (self.planned.iter().filter(|planned| **planned).count() as u64) << 32 ^ (self.deleting.len() as u64) << 52;
+        let key = self.model_version ^ (self.planned.iter().filter(|planned| **planned).count() as u64) << 32 ^ (self.deleting.len() as u64) << 52 ^ (self.lagging.len() as u64) << 44 ^ self.batch << 8 ^ (self.next_rank as u64) << 12;
         let mut cache = self.spans_cache.borrow_mut();
         if let Some((at, version, spans)) = cache.as_ref() {
             if *version == key && clock() - at < 10.0 {
                 return spans.clone();
             }
         }
-        let [reclaim, planned] = self.reclaim_spans("/home");
-        let spans = json!({"reclaim": reclaim, "scheduled": planned});
+        let [mut reclaim, mut planned, mut next, mut doomed, mut lagging] = self.reclaim_spans("/home");
+        let items = self.clone_store();
+        let mut offset = self.node_total("/home");
+        for item in items {
+            let span = [offset, item.store_bytes as i64];
+            reclaim.push(span);
+            if self.is_planned(item.rank) {
+                planned.push(span);
+            }
+            if self.is_next(item.rank) {
+                next.push(span);
+            }
+            if self.is_doomed(&item.path) {
+                doomed.push(span);
+            }
+            if self.is_lagging(&item.path) {
+                lagging.push(span);
+            }
+            offset += item.store_bytes as i64;
+        }
+        let spans = json!({"reclaim": reclaim, "scheduled": planned, "next": next, "deleting": doomed, "lagging": lagging});
         *cache = Some((clock(), key, spans.clone()));
         spans
     }
 
-    fn annotate_tmp(&self, rows: &mut [Map<String, Value>]) {
+    fn annotate_holders(&self, rows: &mut [Map<String, Value>], root: &str) {
         let sessions = reclaim::live_sessions(&self.home);
-        let holders = reclaim::tmp_holders("/tmp");
+        let holders = reclaim::holders(root);
         let clients = probe::hypr_clients();
         for entry in rows.iter_mut() {
             let path = entry.get("path").and_then(Value::as_str).unwrap_or("").trim_end_matches("/*").to_string();
-            if !path.starts_with("/tmp/") {
+            if !path.starts_with(&format!("{root}/")) {
                 continue;
             }
             let reason = std::iter::successors(Some(path.as_str()), |current| Some(dirname(current)).filter(|parent| parent.len() > 4)).find_map(|current| self.model.protected.get(current)).cloned();
@@ -1449,6 +1572,21 @@ impl Ledger {
         let mut live = 0i64;
         for project in reclaim::list_sorted(&scratch) {
             let directory = format!("{scratch}/{project}");
+            if !project.starts_with('-') {
+                let size = self.node_total(&directory);
+                if size <= 0 || self.by_path.contains_key(&directory) {
+                    continue;
+                }
+                let label = match project.as_str() {
+                    "bash-edit-diff" => "Claude Code edit snapshots".to_string(),
+                    "bundled-skills" => "Claude Code bundled skills".to_string(),
+                    _ => format!("Claude Code {project}"),
+                };
+                let newest = self.tree.find(&directory).map(|id| self.tree.node(id).newest).unwrap_or(0);
+                rows.push(row(format!("dir:files:{directory}"), label, directory.clone(), size, newest, "shared by every agent session".into(), false, false, true, true));
+                live += size;
+                continue;
+            }
             for session in reclaim::list_sorted(&directory) {
                 let path = format!("{directory}/{session}");
                 if self.by_path.contains_key(&path) || !std::path::Path::new(&path).is_dir() {
@@ -1485,7 +1623,7 @@ impl Ledger {
         let scratch = self.scratch_root();
         entries.extend(self.dir_rows("/tmp", "files").into_iter().filter(|entry| entry.get("path").and_then(Value::as_str) != Some(scratch.as_str())));
         let mut roots = self.segment_rows("tmp_roots");
-        self.annotate_tmp(&mut roots);
+        self.annotate_holders(&mut roots, "/tmp");
         entries.extend(roots);
         let mut order: Vec<String> = Vec::new();
         let mut families: HashMap<String, Vec<Map<String, Value>>> = HashMap::new();
@@ -1644,7 +1782,11 @@ impl Ledger {
                 rows.push(row("meta:store".into(), "store directory".into(), "/nix/store".into(), dirs, 0, format!("directory entries for {} paths", self.store.count()), false, false, false, false));
                 rows
             }
-            "home_files" => self.dir_rows("/home", "files"),
+            "home_files" => {
+                let mut rows = self.dir_rows("/home", "files");
+                rows.extend(self.clone_store_row());
+                rows
+            }
             "system_files" => self.dir_rows("/", "files").into_iter().filter(|row| !matches!(row.get("path").and_then(Value::as_str), Some("/nix" | "/home" | "/tmp"))).collect(),
             "swap" => vec![row("swap".into(), "/swapfile".into(), "/swapfile".into(), self.swap, 0, "swap".into(), false, false, false, false)],
             "held" => self.held.iter().map(|held| row(format!("held:{}", held.path), short(&held.path, &self.home), held.path.clone(), held.size as i64, if held.last_used > 1 { held.last_used } else { 0 }, format!("deleted, still {} by {}", held.how, held.holders.join(", ")), false, false, false, false)).collect(),
@@ -1895,11 +2037,15 @@ impl Ledger {
         }
         client.buffer.extend_from_slice(&data[..count]);
         let mut subscribed = false;
+        let mut retarget = None;
         let viewed = self.viewed.get();
         while let Some(end) = client.buffer.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = client.buffer.drain(..=end).collect();
             let line = &line[..line.len() - 1];
             let request: Value = serde_json::from_slice(line).unwrap_or_else(|_| json!({"watch": [String::from_utf8_lossy(line).trim()]}));
+            if let Some(gib) = request.get("target").and_then(Value::as_f64) {
+                retarget = Some(gib);
+            }
             if let Some(list) = request.get("watch").and_then(Value::as_array) {
                 client.watches = list.iter().take(WATCHES).map(Watch::parse).collect();
                 let keys: HashSet<String> = client.watches.iter().map(Watch::key).collect();
@@ -1909,6 +2055,11 @@ impl Ledger {
                 }
                 subscribed = true;
             }
+        }
+        if let Some(gib) = retarget {
+            self.target_bytes = (gib * GIB as f64) as i64;
+            self.target_at = clock();
+            self.collected_at = 0.0;
         }
         if subscribed {
             if !viewed && self.viewed() {
@@ -1929,7 +2080,7 @@ impl Ledger {
     }
 
     fn stamp(&self) -> [u64; 6] {
-        [self.tree.revision, self.model_version, self.cut_rank as u64 ^ (self.planned.iter().filter(|flag| **flag).count() as u64) << 20 ^ (self.deleting.len() as u64) << 40, self.files_at.to_bits(), self.held_at.to_bits(), self.recorded]
+        [self.tree.revision, self.model_version, self.cut_rank as u64 ^ (self.next_rank as u64) << 52 ^ (self.planned.iter().filter(|flag| **flag).count() as u64) << 20 ^ (self.deleting.len() as u64) << 40 ^ (self.lagging.len() as u64) << 32 ^ self.batch << 8, self.files_at.to_bits(), self.held_at.to_bits(), self.recorded]
     }
 
     fn render(&mut self, watch: &Watch) -> Rc<(String, u64)> {
@@ -2141,7 +2292,7 @@ impl Ledger {
         }
         if let Some(index) = self.model.merged.iter().copied().find(|index| reclaim::is_dir(&self.model.items[*index].path)) {
             if self.collecting {
-                self.start(vec![index], 0.0, None);
+                self.start(vec![index], 0.0, None, 0);
             }
             return;
         }
@@ -2189,7 +2340,7 @@ impl Ledger {
             self.set_status(with(json!({"state": "planned", "batches": batches.len(), "nix_calls": calls, "claimed": claimed, "urgency": level, "plan_ms": ((clock() - started) * 1e4).round() / 10.0, "plan": batches.into_iter().take(40).collect::<Vec<_>>()})));
             return;
         }
-        self.start(batch, level, Some(base));
+        self.start(batch, level, Some(base), deficit);
     }
 
     fn available(&self, item: &reclaim::Item) -> bool {
@@ -2207,7 +2358,7 @@ impl Ledger {
         let emergency = free < self.emergency;
         let path_limit = if emergency { EMERGENCY_BURST } else { BURST };
         let (mut batch, mut total, mut paths, mut files) = (Vec::new(), 0u64, 0usize, 0usize);
-        for (index, item) in self.model.items.iter().enumerate().filter(|(_, item)| item.freed() > 0 && self.available(item)) {
+        for (index, item) in self.model.items.iter().enumerate().filter(|(_, item)| item.freed() > 0 && !self.lagging.contains_key(&item.path) && self.available(item)) {
             let item_paths = if item.kind == Kind::Dead { item.targets.len() } else { item.store.len() };
             let item_files = item.files.len();
             if !batch.is_empty() && (total >= deficit || paths + item_paths > path_limit || files + item_files > FILE_BURST || (!emergency && total + item.freed() > BURST_BYTES)) {
@@ -2233,11 +2384,20 @@ impl Ledger {
         let references: HashMap<String, Vec<String>> = references.iter().map(|(slot, refs)| (name(slot), refs.iter().map(name).collect())).collect();
         let work: Vec<Work> = batch.iter().map(|index| Work::of(&self.model.items[*index])).collect();
         let orphans = if ordered.is_empty() { Vec::new() } else { self.store.orphans.clone() };
-        Job { work, ordered, references, orphans, scope: self.model.scope() }
+        Job { work, ordered, references, orphans, scope: self.model.scope(), audit: Value::Null }
     }
 
-    fn start(&mut self, batch: Vec<usize>, level: f64, base: Option<Map<String, Value>>) {
-        let job = self.plan(&batch);
+    fn audit(&self, batch: &[usize], deficit: i64) -> Value {
+        let last = batch.iter().copied().max().unwrap_or(0);
+        let chosen: HashSet<usize> = batch.iter().copied().collect();
+        let passed: Vec<Value> = self.model.items.iter().enumerate().take(last).filter(|(index, item)| !chosen.contains(index) && item.freed() > 0).take(20).map(|(index, item)| json!({"rank": index, "path": item.path, "freed": item.freed(), "skipped": self.skipped.contains_key(&item.path), "available": self.available(item), "lagging": self.is_lagging(&item.path)})).collect();
+        let following = self.model.items.iter().enumerate().skip(last + 1).find(|(_, item)| item.freed() > 0 && self.available(item)).map(|(index, item)| json!({"rank": index, "path": item.path, "freed": item.freed()}));
+        json!({"deficit": deficit, "free": statfs().free, "target": self.target_bytes, "ranks": batch.iter().take(200).collect::<Vec<_>>(), "passed": passed, "following": following})
+    }
+
+    fn start(&mut self, batch: Vec<usize>, level: f64, base: Option<Map<String, Value>>, deficit: i64) {
+        let mut job = self.plan(&batch);
+        job.audit = self.audit(&batch, deficit);
         self.deleting = batch.iter().map(|index| self.model.items[*index].path.clone()).collect();
         for index in &batch {
             self.skipped.insert(self.model.items[*index].path.clone(), clock() + SKIP_SECONDS);
@@ -2263,8 +2423,15 @@ impl Ledger {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+        let refused: HashSet<String> = result.get("refusals").and_then(Value::as_array).into_iter().flatten().filter_map(|refusal| refusal.get("path").and_then(Value::as_str).map(String::from)).collect();
         self.record(result);
-        self.deleting.clear();
+        let since = clock();
+        self.batch += 1;
+        for path in self.deleting.drain() {
+            if !refused.contains(&path) {
+                self.lagging.insert(path, (since, self.batch));
+            }
+        }
         self.paused_until = clock() + PAUSE * (1.0 - self.level);
         self.roots_due = Some(clock());
         self.model_dirty = true;
@@ -2674,11 +2841,17 @@ fn execute(job: Job) -> Value {
     let files = job.work.iter().any(|entry| !entry.files.is_empty());
     let busy = if files { reclaim::busy_paths() } else { HashSet::new() };
     let sessions = if files { reclaim::live_sessions(&job.scope.home) } else { Vec::new() };
+    let starts = if files { reclaim::process_starts() } else { HashMap::new() };
+    let checked = sys::now();
+    let mut check_seconds = 0.0;
     let mut boot = false;
     let mut collector = Value::Null;
     let mut removals: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for entry in &job.work {
-        if let Some(reason) = job.scope.refusal(entry, &busy, &sessions) {
+        let checking = sys::now();
+        let refusal = job.scope.refusal(entry, &busy, &sessions, &starts);
+        check_seconds += sys::now() - checking;
+        if let Some(reason) = refusal {
             refused.insert(entry.path.clone());
             refusals.push(json!({"at": sys::now() as i64, "path": entry.path, "kind": entry.kind.name(), "reason": reason}));
             continue;
@@ -2718,6 +2891,7 @@ fn execute(job: Job) -> Value {
             boot = true;
         }
     }
+    let removing = sys::now();
     for (owner, paths) in &removals {
         let (uid, gid) = if owner == "root" { (0, 0) } else { match reclaim::user_ids(owner) { Some(ids) => ids, None => { status = -1; continue; } } };
         let outcome = remove::remove_as(uid, gid, paths.clone());
@@ -2726,6 +2900,7 @@ fn execute(job: Job) -> Value {
             refusals.push(json!({"at": sys::now() as i64, "path": path, "kind": "file", "reason": format!("remove failed: {}", std::io::Error::from_raw_os_error(*code))}));
         }
     }
+    let storing = sys::now();
     if !job.ordered.is_empty() {
         let swept = store::delete_ordered(&job.ordered, &job.references, &job.orphans);
         collector = match (&swept.report, &swept.fallback) {
@@ -2758,6 +2933,8 @@ fn execute(job: Job) -> Value {
         "refusals": refusals.into_iter().take(50).collect::<Vec<_>>(),
         "seconds": round(sys::now() - started),
         "collector": collector,
+        "audit": job.audit,
+        "timing": {"scan": round(checked - started), "check": round(check_seconds), "entries": round(removing - checked), "remove": round(storing - removing), "store": round(sys::now() - storing)},
         "taken": taken,
         "oldest": job.work.iter().map(|entry| entry.last_used).min(),
         "newest": job.work.iter().map(|entry| entry.last_used).max(),

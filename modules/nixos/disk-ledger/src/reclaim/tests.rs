@@ -119,20 +119,20 @@ fn tmp_entries_are_classified_and_rechecked() {
             failures.push(format!("{name}: want {want}, got {got}"));
         }
         if let Some(item) = items.get(*name) {
-            if let Some(refusal) = scope.refusal(&Work::of(item), &busy, &[]) {
+            if let Some(refusal) = scope.refusal(&Work::of(item), &busy, &[], &process_starts()) {
                 failures.push(format!("{name}: candidate refused by the executor: {refusal}"));
             }
         }
     }
     for name in ["held", own.as_str()] {
         let path = format!("{tmp}/{name}");
-        if scope.refusal(&temp_work(&path, Map::new()), &busy, &[]).is_none() {
+        if scope.refusal(&temp_work(&path, Map::new()), &busy, &[], &process_starts()).is_none() {
             failures.push(format!("{name}: executor allowed an active entry"));
         }
     }
     let outside = format!("{}/home/notes", fx.base);
     fs::create_dir_all(&outside).unwrap();
-    if scope.refusal(&temp_work(&outside, Map::new()), &busy, &[]).is_none() {
+    if scope.refusal(&temp_work(&outside, Map::new()), &busy, &[], &process_starts()).is_none() {
         failures.push("executor allowed a path outside tmp".into());
     }
     drop(held);
@@ -157,7 +157,7 @@ fn only_known_caches_are_reclaimable() {
             failures.push(format!("{name}: cache_known should be {known}"));
         }
         let work = Work { kind: Kind::Cache, path: path.clone(), links: Vec::new(), files: vec![path], freed: 0, last_used: 0, detail: Map::new() };
-        if scope.refusal(&work, &HashSet::new(), &[]).is_some() == known {
+        if scope.refusal(&work, &HashSet::new(), &[], &process_starts()).is_some() == known {
             failures.push(format!("{name}: executor decision disagrees with cache_known"));
         }
     }
@@ -165,7 +165,7 @@ fn only_known_caches_are_reclaimable() {
         let path = format!("{cache}/{name}");
         fs::create_dir_all(&path).unwrap();
         let work = Work { kind: Kind::Cache, path: path.clone(), links: Vec::new(), files: vec![path], freed: 0, last_used: 0, detail: Map::new() };
-        if scope.refusal(&work, &HashSet::new(), &[]).is_none() != inside {
+        if scope.refusal(&work, &HashSet::new(), &[], &process_starts()).is_none() != inside {
             failures.push(format!("{name}: inside a known cache should be {inside}"));
         }
     }
@@ -287,9 +287,9 @@ fn games_use_last_play_or_install() {
     let scope = model.scope();
     let work = |path: String| Work { kind: Kind::Game, path: path.clone(), links: Vec::new(), files: vec![path], freed: 0, last_used: 0, detail: json!({"store": "none"}).as_object().cloned().unwrap() };
     if launcher_running("steam").is_none() && launcher_running("").is_none() {
-        assert_eq!(scope.refusal(&work(format!("{apps}/common/Fresh")), &HashSet::new(), &[]), None);
-        assert_eq!(scope.refusal(&work(format!("{apps}/common/Proton 9.0")), &HashSet::new(), &[]), None);
-        assert!(scope.refusal(&work(format!("{apps}/common/Steamworks Shared")), &HashSet::new(), &[]).is_some());
+        assert_eq!(scope.refusal(&work(format!("{apps}/common/Fresh")), &HashSet::new(), &[], &process_starts()), None);
+        assert_eq!(scope.refusal(&work(format!("{apps}/common/Proton 9.0")), &HashSet::new(), &[], &process_starts()), None);
+        assert!(scope.refusal(&work(format!("{apps}/common/Steamworks Shared")), &HashSet::new(), &[], &process_starts()).is_some());
     }
     forget_heroic(&home, "Crab", &me()).unwrap();
     let left = fs::read_to_string(format!("{heroic}/legendaryConfig/legendary/installed.json")).unwrap();

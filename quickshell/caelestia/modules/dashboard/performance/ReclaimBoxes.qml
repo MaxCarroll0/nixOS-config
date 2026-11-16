@@ -1,4 +1,5 @@
 import QtQuick
+import "boxes.js" as Boxes
 
 Canvas {
     id: root
@@ -6,19 +7,21 @@ Canvas {
     property var spans: []
     property color color: "white"
     property real lineWidth: 2
-    property real gap: 2
+    property real outset: 0
+    readonly property real minBox: 2 * root.lineWidth + 3
 
-    readonly property var merged: {
-        const sorted = root.spans.filter(span => span.w > 0).sort((a, b) => a.x - b.x);
-        const out = [];
-        for (const span of sorted) {
-            const last = out[out.length - 1];
-            if (last && span.x <= last.x + last.w + root.gap)
-                last.w = Math.max(last.w, span.x + span.w - last.x);
-            else
-                out.push({ x: span.x, w: span.w });
+    readonly property var merged: Boxes.merge(root.spans, root.minBox)
+
+    function edge(ctx: var, from: real, to: real, y: real, notches: var): void {
+        let at = from;
+        for (const notch of notches) {
+            const cut = notch - root.lineWidth / 2;
+            if (cut > at)
+                ctx.fillRect(at, y, cut - at, root.lineWidth);
+            at = Math.max(at, notch + root.lineWidth / 2);
         }
-        return out;
+        if (to > at)
+            ctx.fillRect(at, y, to - at, root.lineWidth);
     }
 
     onMergedChanged: requestPaint()
@@ -28,16 +31,17 @@ Canvas {
     onPaint: {
         const ctx = getContext("2d");
         ctx.reset();
-        ctx.strokeStyle = root.color;
         ctx.fillStyle = root.color;
-        ctx.lineWidth = root.lineWidth;
-        const inset = root.lineWidth / 2;
+        const line = root.lineWidth;
         for (const span of root.merged) {
-            if (span.w < 2 * root.lineWidth + 3) {
-                ctx.fillRect(Math.round(span.x + span.w / 2 - root.lineWidth / 2), 0, root.lineWidth, height);
+            if (span.w < root.minBox) {
+                ctx.fillRect(Math.round(span.x + span.w / 2 - line / 2), 0, line, height);
                 continue;
             }
-            ctx.strokeRect(span.x + inset, inset, span.w - root.lineWidth, height - root.lineWidth);
+            ctx.fillRect(span.x, 0, line, height);
+            ctx.fillRect(span.x + span.w - line, 0, line, height);
+            root.edge(ctx, span.x + line, span.x + span.w - line, 0, span.notches);
+            root.edge(ctx, span.x + line, span.x + span.w - line, height - line, span.notches);
         }
     }
 }

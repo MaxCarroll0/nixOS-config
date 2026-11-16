@@ -388,8 +388,8 @@ pub fn owner_pid(name: &str) -> Option<i64> {
     pid_temp().captures(name).and_then(|found| found[1].parse().ok()).filter(|pid| alive(*pid, None))
 }
 
-pub fn tmp_holders(tmp: &str) -> Vec<(String, i64)> {
-    let prefix = format!("{tmp}/");
+pub fn holders(root: &str) -> Vec<(String, i64)> {
+    let prefix = format!("{root}/");
     let mut found = Vec::new();
     for pid in pids() {
         let Ok(number) = pid.parse::<i64>() else { continue };
@@ -397,6 +397,9 @@ pub fn tmp_holders(tmp: &str) -> Vec<(String, i64)> {
         let mut targets: Vec<String> = read_link(&join(&proc, "cwd")).into_iter().collect();
         if let Some(fds) = list_dir(&join(&proc, "fd")) {
             targets.extend(fds.iter().filter_map(|fd| read_link(&format!("{proc}/fd/{fd}"))));
+        }
+        if let Ok(maps) = std::fs::read_to_string(join(&proc, "maps")) {
+            targets.extend(maps.lines().filter_map(|line| line.find(&prefix).map(|at| line[at..].to_string())));
         }
         if let Ok(environ) = std::fs::read(join(&proc, "environ")) {
             targets.extend(environ.split(|byte| *byte == 0).filter_map(|entry| entry.strip_prefix(&b"TMPDIR="[..])).map(|value| String::from_utf8_lossy(value).into_owned()));
@@ -805,7 +808,7 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub fn refusal(&self, entry: &Work, busy: &HashSet<String>, sessions: &[Session]) -> Option<String> {
+    pub fn refusal(&self, entry: &Work, busy: &HashSet<String>, sessions: &[Session], starts: &HashMap<String, Vec<f64>>) -> Option<String> {
         for link in &entry.links {
             if lexists(link) && !is_symlink(link) {
                 return Some(format!("not a link: {link}"));
@@ -835,7 +838,7 @@ impl Scope {
                         return Some("not a temp entry".into());
                     }
                     let used = walk_used(path).max(lstat_time(path));
-                    if let Some(reason) = temp_activity(path, used, &process_starts()) {
+                    if let Some(reason) = temp_activity(path, used, starts) {
                         return Some(reason.into());
                     }
                 }

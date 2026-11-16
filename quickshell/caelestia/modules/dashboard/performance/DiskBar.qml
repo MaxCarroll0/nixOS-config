@@ -4,6 +4,7 @@ import QtQuick
 import Caelestia.Config
 import qs.components
 import qs.services
+import "boxes.js" as Boxes
 
 Item {
     id: root
@@ -19,47 +20,35 @@ Item {
     readonly property color divider: Colours.tPalette.m3surfaceContainer
 
     readonly property var boxes: {
-        const out = [];
+        const pieces = [];
         let x = 0;
         for (const segment of root.model.segments) {
-            const w = root.width * root.model.current(segment.key) / root.model.total;
-            const inner = Math.max(0, w - 1);
-            if (w > 0 && segment.reclaim) {
-                if (segment.spans) {
-                    const bytes = Math.max(1, root.model.current(segment.key));
-                    for (const span of segment.spans) {
-                        const from = x + w * span[0] / bytes;
-                        const to = Math.min(x + inner, from + w * span[1] / bytes);
-                        if (to > from)
-                            out.push({ x: from, w: to - from, scheduled: false });
-                    }
-                } else
-                    out.push({ x: x, w: inner, scheduled: false });
-                const scheduled = root.model.scheduledFraction(segment.key);
-                const mark = { scheduled: true, key: segment.key, label: segment.label, bytes: root.model.scheduledBytes(segment.key) };
-                if (segment.scheduledSpans && scheduled > 0) {
-                    const bytes = Math.max(1, root.model.current(segment.key));
-                    for (const span of segment.scheduledSpans) {
-                        const from = x + w * span[0] / bytes;
-                        const to = Math.min(x + w, from + w * span[1] / bytes + 1);
-                        const last = out[out.length - 1];
-                        if (last && last.scheduled && last.key === segment.key && from <= last.x + last.w + 2)
-                            last.w = Math.max(last.w, to - last.x);
-                        else if (to > from)
-                            out.push(Object.assign({ x: from, w: to - from }, mark));
-                    }
-                } else if (scheduled > 0)
-                    out.push(Object.assign({ x: x, w: Math.min(w, w * scheduled + 1) }, mark));
-                const deleting = root.model.deletingFraction(segment.key);
-                if (deleting > 0)
-                    out.push({ x: x, w: Math.min(w, w * deleting + 1), deleting: true });
-            }
+            const bytes = root.model.current(segment.key);
+            const w = root.width * bytes / root.model.total;
+            const scheduled = segment.reclaim ? root.model.scheduledBytes(segment.key) : 0;
+            pieces.push({
+                x: x,
+                w: w,
+                bytes: bytes,
+                key: segment.key,
+                label: segment.label,
+                reclaimSpans: segment.reclaim ? segment.spans ?? null : null,
+                reclaimBytes: segment.reclaim ? segment.reclaimBytes ?? 0 : 0,
+                scheduledSpans: scheduled > 0 ? segment.scheduledSpans ?? null : null,
+                scheduledBytes: scheduled,
+                nextSpans: segment.nextSpan ? [segment.nextSpan] : null,
+                deletingSpans: segment.deletingSpans ?? null,
+                deletingBytes: segment.reclaim ? root.model.deletingFraction(segment.key) * bytes : 0,
+                laggingSpans: segment.laggingSpans ?? null,
+                laggingBytes: segment.reclaim ? root.model.laggingFraction(segment.key) * bytes : 0
+            });
             x += w;
         }
-        return out;
+        return Boxes.layout(pieces);
     }
 
     implicitHeight: 22
+    readonly property font labelFont: Tokens.font.body.builders.small.size(Math.min(Tokens.font.body.small.pointSize, root.implicitHeight * 0.36)).weight(Font.DemiBold).build()
 
     Rectangle {
         anchors.fill: parent
@@ -96,7 +85,7 @@ Item {
                     anchors.fill: parent
                     anchors.rightMargin: 1
                     color: piece.modelData.color
-                    opacity: root.model.weightOpacity(piece.modelData.weight) * (root.selected === "" || piece.active ? 1 : 0.35)
+                    opacity: root.selected === "" || piece.active ? 1 : 0.35
                 }
 
                 Outline {
@@ -160,7 +149,7 @@ Item {
 
                     anchors.centerIn: parent
                     text: `${root.model.gib(root.model.free)} free`
-                    font: Tokens.font.body.builders.small.size(Math.min(Tokens.font.body.small.pointSize, root.height * 0.36)).weight(Font.DemiBold).build()
+                    font: root.labelFont
                     color: Colours.palette.m3onSurface
                 }
             }
@@ -175,20 +164,29 @@ Item {
     }
 
     ReclaimBoxes {
-        anchors.fill: parent
+        y: -outset
+        width: parent.width
+        height: root.height + 2 * outset
+        outset: 3
         opacity: root.selected === "" ? 1 : 0.35
-        spans: root.boxes.filter(box => !box.scheduled && !box.deleting)
+        spans: root.boxes.filter(box => !box.scheduled && !box.deleting && !box.lagging && !box.next)
         color: root.model.reclaimColor
     }
 
-    Pointers {
-        y: -size - 1
-        width: parent.width
-        height: root.height + 2 * (size + 1)
-        barHeight: root.height
-        opacity: (root.model.due ? 1 : 0.5) * (root.selected === "" ? 1 : 0.35)
-        marks: root.boxes.filter(box => box.scheduled)
+    ReclaimBoxes {
+        anchors.fill: parent
+        opacity: root.selected === "" ? 1 : 0.35
+        spans: root.boxes.filter(box => box.scheduled)
         color: root.model.scheduledColor
+    }
+
+    Pointers {
+        y: -size - 4
+        width: parent.width
+        height: root.height + 2 * (size + 4)
+        barHeight: root.height + 6
+        marks: root.boxes.filter(box => box.next)
+        color: root.model.deletingColor
     }
 
     Repeater {
@@ -206,22 +204,26 @@ Item {
             opacity: root.selected === "" ? 1 : 0.35
 
             Rectangle {
+                visible: box.modelData.lagging === true
+                anchors.fill: parent
+                color: root.model.laggingColor
+            }
+
+            Rectangle {
                 visible: box.modelData.deleting === true
                 anchors.fill: parent
                 color: root.model.deletingColor
             }
 
-            Outline {
-                visible: box.modelData.scheduled === true
-                hatched: true
-                faint: !root.model.due
-                color: root.model.scheduledColor
-                lineWidth: 2
-            }
-
             MouseArea {
-                anchors.fill: parent
-                visible: box.modelData.scheduled
+                readonly property real reach: box.modelData.next ? 10 : 0
+
+                x: Math.min(0, (parent.width - 8) / 2)
+                y: -reach
+                width: Math.max(parent.width, 8)
+                height: parent.height + 2 * reach
+                z: box.modelData.next ? 1 : 0
+                visible: box.modelData.scheduled === true || box.modelData.next === true
                 hoverEnabled: true
                 acceptedButtons: Qt.NoButton
                 onEntered: {

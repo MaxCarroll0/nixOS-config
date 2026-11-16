@@ -103,7 +103,41 @@ fn shell_command(pid: i64) -> String {
     args.iter().enumerate().map(|(index, arg)| if index == 0 { basename(arg).to_string() } else { arg.clone() }).collect::<Vec<_>>().join(" ")
 }
 
+pub fn build_client(pid: i64) -> Option<i64> {
+    let mut current = pid;
+    for _ in 0..16 {
+        if current <= 1 {
+            break;
+        }
+        let raw = std::fs::read(format!("/proc/{current}/cmdline")).unwrap_or_default();
+        let args: Vec<String> = String::from_utf8_lossy(&raw).split('\0').filter(|arg| !arg.is_empty()).map(String::from).collect();
+        if args.len() == 2 && basename(&args[0]) == "nix-daemon" {
+            return args[1].parse::<i64>().ok().filter(|client| std::path::Path::new(&format!("/proc/{client}")).exists());
+        }
+        current = parent_pid(current);
+    }
+    None
+}
+
+fn readable(command: &str, home: &str) -> String {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    let Some(program) = words.first().map(|word| basename(word)) else { return String::new() };
+    if !program.starts_with("nix") {
+        return brief(command);
+    }
+    let verb = words.iter().skip(1).find(|word| !word.starts_with('-') && !word.contains('/') && !word.contains('#')).copied().filter(|_| program == "nix");
+    let target = words.iter().rev().find(|word| word.contains('#')).map(|word| {
+        let (source, attr) = word.split_once('#').unwrap_or((word, ""));
+        let path = source.split('?').next().unwrap_or(source).trim_start_matches("git+file://").trim_start_matches("path:");
+        let place = if path.starts_with('/') { short(path, home) } else { path.to_string() };
+        if place == "." || place.is_empty() { format!("#{attr}") } else { format!("{place}#{attr}") }
+    }).or_else(|| words.iter().rev().find(|word| word.ends_with(".drv") || word.ends_with(".nix")).map(|word| basename(word).to_string()));
+    let text = [Some(program), verb, target.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    if text.chars().count() > 72 { format!("{}…", text.chars().take(71).collect::<String>()) } else { text }
+}
+
 pub fn describe_shell(pid: i64, home: &str, clients: &HashMap<i64, Value>) -> (String, String, Option<Value>) {
+    let pid = build_client(pid).unwrap_or(pid);
     let cwd = std::fs::read_link(format!("/proc/{pid}/cwd")).map(|path| short(&path.to_string_lossy(), home)).unwrap_or_default();
     let mut window = None;
     let mut current = pid;
@@ -112,7 +146,7 @@ pub fn describe_shell(pid: i64, home: &str, clients: &HashMap<i64, Value>) -> (S
         current = parent_pid(current);
     }
     let command = shell_command(pid);
-    (if command.is_empty() { format!("pid {pid}") } else { brief(&command) }, cwd, window)
+    (if command.is_empty() { format!("pid {pid}") } else { readable(&command, home) }, cwd, window)
 }
 
 pub fn parents_within(path: &str, stop: &str) -> Vec<String> {
@@ -218,7 +252,10 @@ pub fn held_open(device: u64) -> Vec<Held> {
                 let Ok(target) = std::fs::read_link(&link) else { continue };
                 let target = target.to_string_lossy().into_owned();
                 let Some(path) = target.strip_suffix(" (deleted)") else { continue };
-                let command = std::fs::read_to_string(format!("/proc/{pid}/comm")).map(|text| text.trim().to_string()).unwrap_or_else(|_| pid.clone());
+                let command = match pid.parse::<i64>().ok().and_then(build_client) {
+                    Some(client) => readable(&shell_command(client), &std::env::var("LEDGER_HOME").unwrap_or_default()),
+                    None => std::fs::read_to_string(format!("/proc/{pid}/comm")).map(|text| text.trim().to_string()).unwrap_or_else(|_| pid.clone()),
+                };
                 let position = *by_ino.entry(info.ino()).or_insert_with(|| {
                     owners.push(Held { path: path.to_string(), size: info.blocks() * 512, last_used: info.mtime(), how, holders: Vec::new() });
                     owners.len() - 1

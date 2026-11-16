@@ -4,6 +4,7 @@ import QtQuick
 import Caelestia.Config
 import qs.components
 import qs.services
+import "boxes.js" as Boxes
 
 Item {
     id: root
@@ -16,27 +17,20 @@ Item {
     property string node: ""
     property real weight: -1
     readonly property real minSlice: 3
-    readonly property real settleSeconds: 60
-    readonly property var lastOrder: ({})
     signal clicked(var row)
     signal rightClicked(var row)
 
     readonly property bool timed: !root.ordered && (root.rows ?? []).length > 0 && root.rows.every(row => row.last_used > 0)
     readonly property real barHeight: 28
+    readonly property font labelFont: Tokens.font.body.builders.small.size(Math.min(Tokens.font.body.small.pointSize, 22 * 0.36)).weight(Font.DemiBold).build()
     readonly property real axisHeight: root.ordered ? 0 : 14
 
     readonly property var slices: {
         const list = root.rows.filter(row => row.size > 0);
         const timed = root.timed;
         const presorted = list.length > 0 && list.every(row => row.at !== undefined || row.from !== undefined);
-        if (!root.ordered && !presorted) {
-            const before = Object.assign({}, root.lastOrder);
-            const settled = (a, b) => Math.abs(a.last_used - b.last_used) <= root.settleSeconds && a.id in before && b.id in before;
-            list.sort((a, b) => timed ? (settled(a, b) ? before[a.id] - before[b.id] : a.last_used - b.last_used) : b.size - a.size);
-            for (const id in root.lastOrder)
-                delete root.lastOrder[id];
-            list.forEach((item, index) => root.lastOrder[item.id] = index);
-        }
+        if (!root.ordered && !presorted)
+            list.sort((a, b) => (timed ? a.last_used - b.last_used : b.size - a.size) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
         const used = list.reduce((acc, item) => acc + item.size, 0);
         const total = Math.max(1, used, root.capacity);
         const minShare = root.minSlice / Math.max(1, root.width);
@@ -87,88 +81,40 @@ Item {
             reclaimable: members.every(item => item.reclaimable),
             weight: members.some(item => item.weight !== undefined) ? members.reduce((acc, item) => Math.max(acc, item.weight ?? -1), -1) : undefined,
             scheduled: members.every(item => item.scheduled),
+            next: members.some(item => item.next === true || (item.nextSpans ?? []).length > 0),
             scheduledBytes: members.reduce((acc, item) => acc + (item.scheduledBytes ?? (item.scheduled ? item.size : 0)), 0),
-            deletingBytes: members.reduce((acc, item) => acc + (item.deletingBytes ?? (item.deleting ? item.size : 0)), 0),
+            deletingBytes: members.reduce((acc, item) => acc + (item.deletingBytes ?? (item.deleting === true ? item.size : 0)), 0),
+            laggingBytes: members.reduce((acc, item) => acc + (item.laggingBytes ?? (item.lagging === true ? item.size : 0)), 0),
             reclaimBytes: members.reduce((acc, item) => acc + (item.reclaimBytes ?? (item.reclaimable ? item.size : 0)), 0),
             members: members
         };
     }
 
     readonly property var boxes: {
-        const out = [];
+        const pieces = [];
         let x = 0;
-        let openScheduled = null;
         for (const slice of root.slices) {
             const w = root.width * slice.share;
-            const inner = Math.max(0, w - 1);
-            if (slice.reclaimable && slice.reclaimSpans) {
-                for (const span of slice.reclaimSpans) {
-                    const from = x + w * span[0] / Math.max(1, slice.size);
-                    const to = Math.min(x + inner, from + w * span[1] / Math.max(1, slice.size));
-                    if (to > from)
-                        out.push({
-                            x: from,
-                            w: to - from,
-                            scheduled: false
-                        });
-                }
-                openScheduled = null;
-                if (slice.scheduledSpans) {
-                    for (const span of slice.scheduledSpans) {
-                        const from = x + w * span[0] / Math.max(1, slice.size);
-                        const to = Math.min(x + w, from + w * span[1] / Math.max(1, slice.size));
-                        if (to > from)
-                            out.push({
-                                x: from,
-                                w: to - from,
-                                scheduled: true
-                            });
-                    }
-                } else {
-                    const part = Math.min(1, (slice.scheduledBytes ?? (slice.scheduled ? slice.size : 0)) / Math.max(1, slice.size));
-                    if (part > 0)
-                        out.push({
-                            x: x,
-                            w: w * part,
-                            scheduled: true
-                        });
-                }
-            } else if (slice.reclaimable) {
-                const reach = slice.reclaimBytes !== undefined ? Math.min(1, slice.reclaimBytes / Math.max(1, slice.size)) : 1;
-                out.push({
-                    x: x,
-                    w: Math.min(inner, w * reach),
-                    scheduled: false
-                });
-                const part = slice.scheduledBytes !== undefined ? Math.min(1, slice.scheduledBytes / Math.max(1, slice.size)) : slice.scheduled ? 1 : 0;
-                if (part > 0) {
-                    if (openScheduled)
-                        openScheduled.w = x + w * part - openScheduled.x;
-                    else {
-                        openScheduled = {
-                            x: x,
-                            w: w * part,
-                            scheduled: true
-                        };
-                        out.push(openScheduled);
-                    }
-                    if (part < 1)
-                        openScheduled = null;
-                } else
-                    openScheduled = null;
-            } else {
-                openScheduled = null;
-            }
-            const doomed = slice.deleting === true ? 1 : Math.min(1, (slice.deletingBytes ?? 0) / Math.max(1, slice.size));
-            if (doomed > 0)
-                out.push({
-                    x: x,
-                    w: w * doomed,
-                    deleting: true
-                });
+            pieces.push({
+                x: x,
+                w: w,
+                bytes: slice.size,
+                key: slice.id,
+                label: slice.label,
+                reclaimSpans: slice.reclaimSpans ?? null,
+                reclaimBytes: slice.reclaimBytes ?? (slice.reclaimable ? slice.size : 0),
+                scheduledSpans: slice.scheduledSpans ?? null,
+                scheduledBytes: slice.scheduledBytes ?? (slice.scheduled ? slice.size : 0),
+                nextSpans: (slice.nextSpans ?? []).length ? slice.nextSpans : null,
+                nextBytes: slice.next === true ? slice.size : 0,
+                deletingSpans: (slice.deletingSpans ?? []).length ? slice.deletingSpans : null,
+                deletingBytes: slice.deleting === true ? slice.size : slice.deletingBytes ?? 0,
+                laggingSpans: (slice.laggingSpans ?? []).length ? slice.laggingSpans : null,
+                laggingBytes: slice.lagging === true ? slice.size : slice.laggingBytes ?? 0
+            });
             x += w;
         }
-        return out;
+        return Boxes.layout(pieces);
     }
 
     readonly property var ticks: {
@@ -290,10 +236,19 @@ Item {
     }
 
     ReclaimBoxes {
+        y: -outset
+        width: parent.width
+        height: root.barHeight + 2 * outset
+        outset: 3
+        spans: root.boxes.filter(box => !box.scheduled && !box.deleting && !box.lagging && !box.next)
+        color: root.model.reclaimColor
+    }
+
+    ReclaimBoxes {
         width: parent.width
         height: root.barHeight
-        spans: root.boxes.filter(box => !box.scheduled && !box.deleting)
-        color: root.model.reclaimColor
+        spans: root.boxes.filter(box => box.scheduled)
+        color: root.model.scheduledColor
     }
 
     Row {
@@ -312,11 +267,12 @@ Item {
 
                 width: row.width * label.modelData.share
                 height: root.barHeight
+                clip: true
 
                 Rectangle {
                     anchors.centerIn: parent
                     visible: tag.visible && label.modelData.reclaimable === true
-                    width: Math.min(label.width - 1, tag.implicitWidth + 16)
+                    width: Math.min(label.width - 2, tag.implicitWidth + 12)
                     height: Math.min(root.barHeight - 6, tag.implicitHeight + 6)
                     color: Colours.tPalette.m3surfaceContainer
 
@@ -331,15 +287,15 @@ Item {
                     id: tag
 
                     anchors.centerIn: parent
-                    visible: label.width > amount.implicitWidth + 8
+                    visible: label.width > amount.implicitWidth + 12
                     spacing: 4
 
                     StyledText {
-                        readonly property real room: label.width - 12 - amount.implicitWidth
+                        readonly property real room: label.width - 16 - amount.implicitWidth - tag.spacing
 
                         visible: room > 24
                         text: label.modelData.label
-                        font: Tokens.font.body.small
+                        font: root.labelFont
                         color: Colours.palette.m3onSurface
                         elide: /^[~/]/.test(label.modelData.label) ? Text.ElideLeft : Text.ElideRight
                         width: Math.min(implicitWidth, room)
@@ -349,7 +305,7 @@ Item {
                         id: amount
 
                         text: root.model.gib(label.modelData.size)
-                        font: Tokens.font.body.small
+                        font: root.labelFont
                         color: Colours.palette.m3onSurface
                     }
                 }
@@ -371,28 +327,26 @@ Item {
             height: root.barHeight
 
             Rectangle {
+                visible: box.modelData.lagging === true
+                anchors.fill: parent
+                color: root.model.laggingColor
+            }
+
+            Rectangle {
                 visible: box.modelData.deleting === true
                 anchors.fill: parent
                 color: root.model.deletingColor
             }
 
-            Outline {
-                visible: box.modelData.scheduled === true
-                hatched: true
-                faint: !root.model.due
-                color: root.model.scheduledColor
-                lineWidth: 2
-            }
         }
     }
 
     Pointers {
-        y: -size - 1
+        y: -size - 4
         width: parent.width
-        height: root.barHeight + 2 * (size + 1)
-        barHeight: root.barHeight
-        opacity: root.model.due ? 1 : 0.5
-        marks: root.boxes.filter(box => box.scheduled)
-        color: root.model.scheduledColor
+        height: root.barHeight + 2 * (size + 4)
+        barHeight: root.barHeight + 6
+        marks: root.boxes.filter(box => box.next)
+        color: root.model.deletingColor
     }
 }

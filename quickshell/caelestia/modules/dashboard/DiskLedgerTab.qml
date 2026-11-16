@@ -12,7 +12,9 @@ import qs.modules.dashboard.performance
 Item {
     id: root
 
-    property var trail: []
+    property var trail: DiskSnapshot.model ? DiskSnapshot.trail : []
+
+    Component.onDestruction: DiskSnapshot.trail = root.trail
     readonly property var node: trail.length ? trail[trail.length - 1] : null
     readonly property real paneWidth: 1160
     readonly property real chartHeight: 150
@@ -307,7 +309,8 @@ Item {
             scheduled: segment.scheduled > 0,
             scheduledBytes: segment.scheduled,
             reclaimBytes: segment.reclaimBytes,
-            reclaimSpans: segment.spans
+            reclaimSpans: segment.spans,
+            scheduledSpans: segment.scheduledSpans
         };
     }
 
@@ -371,6 +374,8 @@ Item {
     DiskLedgerModel {
         id: ledger
 
+        keepsSnapshot: true
+
         drill: root.trail.filter(node => !node.id.startsWith("group:")).map(node => ({
                     id: node.id,
                     slots: Math.floor(root.paneWidth / slices.minSlice),
@@ -421,7 +426,7 @@ Item {
 
             StyledText {
                 Layout.preferredWidth: 220
-                text: ledger.collecting ? `collecting ${ledger.collectingStage}` : ""
+                text: ledger.collectingText
                 font: Tokens.font.body.medium
                 color: Colours.palette.m3tertiary
                 elide: Text.ElideRight
@@ -454,7 +459,7 @@ Item {
             IconButton {
                 icon: "remove"
                 type: IconButton.Text
-                onClicked: ledger.setTarget(ledger.targetGib - 5)
+                onClicked: ledger.proposeTarget(ledger.targetGib - 5)
             }
 
             StyledTextField {
@@ -472,7 +477,7 @@ Item {
                     top: 200
                 }
                 text: String(ledger.targetGib)
-                onAccepted: ledger.setTarget(parseInt(text))
+                onAccepted: ledger.proposeTarget(parseInt(text))
                 onActiveFocusChanged: if (!activeFocus)
                     text = String(ledger.targetGib)
 
@@ -494,7 +499,21 @@ Item {
             IconButton {
                 icon: "add"
                 type: IconButton.Text
-                onClicked: ledger.setTarget(ledger.targetGib + 5)
+                onClicked: ledger.proposeTarget(ledger.targetGib + 5)
+            }
+
+            IconButton {
+                visible: ledger.targetPending
+                icon: "check"
+                type: IconButton.Tonal
+                onClicked: ledger.applyTarget()
+            }
+
+            IconButton {
+                visible: ledger.targetPending
+                icon: "close"
+                type: IconButton.Text
+                onClicked: ledger.pendingTarget = 0
             }
         }
 
@@ -593,11 +612,17 @@ Item {
                         free: false
                     },
                     {
-                        label: "next collection",
+                        label: "collecting",
                         scheduled: true,
                         free: false
+                    },
+                    {
+                        label: "next collection",
+                        pointer: true,
+                        scheduled: false,
+                        free: false
                     }
-                ]
+                ].filter(entry => entry.scheduled ? ledger.due : entry.pointer ? ledger.head !== null : true)
 
                 delegate: Row {
                     id: key
@@ -619,17 +644,25 @@ Item {
 
                         ReclaimBoxes {
                             anchors.fill: parent
-                            visible: !key.modelData.scheduled && !key.modelData.free
+                            visible: !key.modelData.free && !key.modelData.pointer
                             spans: [{ x: 0, w: width }]
-                            color: ledger.reclaimColor
+                            color: key.modelData.scheduled ? ledger.scheduledColor : ledger.reclaimColor
+                        }
+
+                        Pointers {
+                            anchors.fill: parent
+                            visible: key.modelData.pointer === true
+                            size: 5
+                            barHeight: 0
+                            marks: [{ x: 1, w: 10 }]
+                            color: ledger.deletingColor
                         }
 
                         Outline {
-                            visible: key.modelData.scheduled || key.modelData.free
+                            visible: key.modelData.free
                             hatched: true
-                            faint: key.modelData.scheduled && !ledger.due
-                            color: key.modelData.free ? ledger.hatchColor : ledger.scheduledColor
-                            lineWidth: key.modelData.scheduled ? 2 : 1
+                            color: ledger.hatchColor
+                            lineWidth: 1
                         }
                     }
 
@@ -644,9 +677,9 @@ Item {
 
         StyledText {
             Layout.preferredHeight: smallLine.height
-            text: bar.hoveredScheduled ? `next collection ${ledger.due ? "takes" : "would take"} ${ledger.gib(bar.hoveredScheduled.bytes)} of ${bar.hoveredScheduled.label}` : ""
+            color: bar.hoveredScheduled?.next ? ledger.deletingColor : ledger.scheduledColor
+            text: !bar.hoveredScheduled ? "" : bar.hoveredScheduled.next ? (ledger.head ? `next collection: ${ledger.head.label}, ${ledger.gib(ledger.head.size)}` : "") : `collecting: ${ledger.gib(bar.hoveredScheduled.bytes)} of ${bar.hoveredScheduled.label}`
             font: Tokens.font.body.small
-            color: ledger.scheduledColor
         }
 
         RowLayout {
@@ -950,7 +983,7 @@ Item {
                         }
                     }
 
-                    readonly property real plotLeft: 40
+                    readonly property real plotLeft: 44
                     readonly property real plotBottom: height - 16
                     readonly property real plotWidth: width - plotLeft - 4
 
@@ -1067,8 +1100,8 @@ Item {
                             const end = run.events[run.events.length - 1].at + (run.events[run.events.length - 1].seconds ?? 0);
                             if (end < first || start > last)
                                 continue;
-                            const from = x(Math.max(first, start));
-                            const to = Math.max(from + 1.5, x(Math.min(last, end)));
+                            const from = Math.floor(x(Math.max(first, start)));
+                            const to = Math.max(from + 2, Math.ceil(x(Math.min(last, end))));
                             history.runXs.push({
                                 from: from,
                                 to: to,
@@ -1446,16 +1479,27 @@ Item {
                         return null;
                     }
 
+                    property bool zooming: false
+
                     Connections {
                         target: root
 
                         function onSpanChanged(): void {
-                            reclaims.zoom = [];
+                            if (!reclaims.zooming)
+                                reclaims.zoom = [];
                         }
                     }
 
+                    function zoomTo(range: var, stack: var): void {
+                        reclaims.zooming = true;
+                        root.range = range;
+                        reclaims.zoom = stack;
+                        reclaims.zooming = false;
+                    }
+
                     function zoomOut(): void {
-                        reclaims.zoom = reclaims.zoom.slice(0, -1);
+                        if (reclaims.zoom.length)
+                            reclaims.zoomTo(reclaims.zoom[reclaims.zoom.length - 1].previous, reclaims.zoom.slice(0, -1));
                         root.focusEvent = null;
                     }
 
@@ -1463,14 +1507,13 @@ Item {
                         const events = item.entries.map(entry => entry.event);
                         const from = events[0].at;
                         const to = events[events.length - 1].at;
-                        const pad = Math.max(0.5, (to - from) * 0.1);
-                        reclaims.zoom = reclaims.zoom.concat([
+                        const pad = Math.max(30, (to - from) * 0.1);
+                        reclaims.zoomTo([from - pad, to + pad], reclaims.zoom.concat([
                             {
                                 events: events,
-                                from: to > from ? from - pad : from,
-                                to: to > from ? to + pad : from
+                                previous: root.range
                             }
-                        ]);
+                        ]));
                         root.focusEvent = root.runFrom(events);
                     }
 
@@ -1496,10 +1539,10 @@ Item {
                                 out.push(reclaims.makeBar(entries.slice(index * per, (index + 1) * per), reclaims.plotLeft + index * step + Math.max(0, step - reclaims.maxBar) / 2, Math.min(reclaims.maxBar, Math.max(1, step - 1))));
                             return out;
                         }
-                        const scale = (reclaims.plotWidth - reclaims.barWidth) / (last - first);
+                        const scale = reclaims.plotWidth / (last - first);
                         const groups = [];
                         for (const entry of entries) {
-                            const x = reclaims.plotLeft + (entry.event.at - first) * scale;
+                            const x = Math.min(reclaims.plotLeft + reclaims.plotWidth - reclaims.barWidth, reclaims.plotLeft + (entry.event.at - first) * scale);
                             const tail = groups[groups.length - 1];
                             if (tail && x - tail.x < reclaims.minGap) {
                                 tail.entries.push(entry);
@@ -1517,12 +1560,11 @@ Item {
                     onPaint: {
                         const ctx = getContext("2d");
                         ctx.reset();
-                        const level = reclaims.zoom.length ? reclaims.zoom[reclaims.zoom.length - 1] : null;
-                        const [first, last] = level ? [level.from, level.to] : root.span;
+                        const [first, last] = root.span;
                         const bottom = height - 16;
                         const plotHeight = bottom - 6;
                         ctx.font = "10px sans-serif";
-                        const entries = (level ? level.events : ledger.events.filter(event => event.at >= first && event.at <= last)).map(event => ({
+                        const entries = ledger.events.filter(event => event.at >= first && event.at <= last).map(event => ({
                                     event: event,
                                     amount: root.eventAmount(event)
                                 })).filter(entry => entry.amount !== null && entry.amount > 0);
