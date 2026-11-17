@@ -2566,6 +2566,17 @@ pub struct CloneState {
     pub submodules: Vec<(String, CloneState)>,
 }
 
+impl CloneState {
+    pub fn shrunk_paths(&self, repo: &str) -> Vec<String> {
+        let mut out = vec![join(&self.git_dir, "objects")];
+        out.extend(self.clean.iter().map(|path| join(repo, path)));
+        for (path, sub) in &self.submodules {
+            out.extend(sub.shrunk_paths(path));
+        }
+        out
+    }
+}
+
 #[derive(Clone)]
 pub struct Partial {
     pub remote: String,

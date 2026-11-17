@@ -1401,7 +1401,7 @@ mod attribution_tests {
     #[test]
     fn detach_then_attribute_matches_a_fresh_store() {
         for seed in 1..=40u64 {
-            let mut rng = Rng(seed * 0x9e37_79b9_7f4a_7c15);
+            let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
             let count = 30 + rng.next(60) as usize;
             let inodes = 1 + rng.next(80);
             let layout: Vec<(u64, Vec<(u64, u64)>)> = (0..count)

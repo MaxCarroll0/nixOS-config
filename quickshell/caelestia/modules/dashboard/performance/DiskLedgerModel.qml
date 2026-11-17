@@ -145,23 +145,124 @@ Item {
             reserved: grey(0.58)
         })
 
+    readonly property real ghostSeconds: 1
+    property var ghosts: []
+    property var redSeen: ({})
+    property real ghostNow: 0
+    readonly property real ghostTotal: ghosts.reduce((acc, ghost) => acc + ghost.len, 0)
+    readonly property real shownFree: Math.max(0, free - ghostTotal)
+
+    function shiftOf(key: string, at: real): real {
+        let out = at;
+        for (const ghost of ghosts)
+            if (ghost.key === key && ghost.start <= out)
+                out += ghost.len;
+        return out;
+    }
+
+    function shiftSpan(key: string, span: var): var {
+        if (!span)
+            return span;
+        const start = shiftOf(key, span[0]);
+        let end = start + span[1];
+        for (const ghost of ghosts)
+            if (ghost.key === key && ghost.start > start && ghost.start < end)
+                end += ghost.len;
+        return [start, end - start];
+    }
+
+    function shiftSpans(key: string, list: var): var {
+        return list ? list.map(span => shiftSpan(key, span)) : list;
+    }
+
+    function ghostBytes(key: string): real {
+        return ghosts.reduce((acc, ghost) => acc + (ghost.key === key ? ghost.len : 0), 0);
+    }
+
+    function trackGhosts(): void {
+        const now = Date.now() / 1000;
+        const present = {};
+        for (const row of overview.segments ?? [])
+            for (const red of row.red_spans ?? [])
+                if (red[2])
+                    present[red[2]] = Math.max(0, red[1]);
+        const added = [];
+        for (const path of Object.keys(redSeen)) {
+            const was = redSeen[path];
+            const left = present[path] ?? 0;
+            if (left < was.len)
+                added.push({
+                    key: was.key,
+                    start: was.start + left,
+                    len: was.len - left,
+                    at: now
+                });
+        }
+        if (added.length)
+            ghosts = ghosts.concat(added).sort((a, b) => a.start - b.start);
+        const seen = {};
+        for (const row of overview.segments ?? [])
+            for (const red of row.red_spans ?? []) {
+                if (!red[2] || red[1] <= 0)
+                    continue;
+                const span = shiftSpan(row.key, [red[0], red[1]]);
+                seen[red[2]] = {
+                    key: row.key,
+                    start: span[0],
+                    len: span[1]
+                };
+            }
+        redSeen = seen;
+        ghostNow = now;
+    }
+
+    function expireGhosts(): void {
+        const now = Date.now() / 1000;
+        ghostNow = now;
+        const expired = ghosts.filter(ghost => now - ghost.at >= ghostSeconds);
+        if (!expired.length)
+            return;
+        let kept = ghosts.filter(ghost => now - ghost.at < ghostSeconds);
+        const seen = Object.assign({}, redSeen);
+        for (const gone of expired) {
+            const pull = entry => entry.key === gone.key && entry.start > gone.start ? Object.assign({}, entry, {
+                    start: entry.start - gone.len
+                }) : entry;
+            kept = kept.map(pull);
+            for (const path of Object.keys(seen))
+                seen[path] = pull(seen[path]);
+        }
+        redSeen = seen;
+        ghosts = kept;
+    }
+
+    onOverviewChanged: trackGhosts()
+
+    Timer {
+        running: root.ghosts.length > 0
+        interval: 16
+        repeat: true
+        onTriggered: root.expireGhosts()
+    }
+
     readonly property var segments: (overview.segments ?? []).map(row => ({
                 key: row.key,
                 label: row.label,
                 group: row.group,
                 reclaim: row.reclaimable,
                 color: swatches[row.key] ?? grey(0.5),
-                bytes: row.bytes,
+                bytes: row.bytes + ghostBytes(row.key),
                 scheduled: row.scheduled,
                 deleting: row.deleting ?? 0,
                 lagging: row.lagging ?? 0,
-                deletingSpans: row.deleting_spans ?? null,
-                laggingSpans: row.lagging_spans ?? null,
+                deletingSpans: shiftSpans(row.key, row.deleting_spans ?? null),
+                laggingSpans: shiftSpans(row.key, row.lagging_spans ?? null),
                 reclaimBytes: row.reclaim_bytes ?? (row.reclaimable ? row.bytes : 0),
                 weight: row.reclaimable ? row.weight ?? -1 : -1,
-                spans: row.reclaim_spans ?? null,
-                scheduledSpans: row.scheduled_spans ?? null,
-                nextSpan: row.next_span ?? null,
+                spans: shiftSpans(row.key, row.reclaim_spans ?? null),
+                scheduledSpans: shiftSpans(row.key, row.scheduled_spans ?? null),
+                nextSpan: shiftSpan(row.key, row.next_span ?? null),
+                ghostSpans: ghosts.filter(ghost => ghost.key === row.key),
                 items: row.items
             }))
 

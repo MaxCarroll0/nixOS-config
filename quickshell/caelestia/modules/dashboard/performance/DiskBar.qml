@@ -19,7 +19,7 @@ Item {
     readonly property real targetX: width * (1 - model.target / model.total)
     readonly property color divider: Colours.tPalette.m3surfaceContainer
 
-    readonly property var boxes: {
+    readonly property var pieces: {
         const pieces = [];
         let x = 0;
         for (const segment of root.model.segments) {
@@ -40,12 +40,21 @@ Item {
                 deletingSpans: segment.deletingSpans ?? null,
                 deletingBytes: segment.reclaim ? root.model.deletingFraction(segment.key) * bytes : 0,
                 laggingSpans: segment.laggingSpans ?? null,
-                laggingBytes: segment.reclaim ? root.model.laggingFraction(segment.key) * bytes : 0
+                laggingBytes: segment.reclaim ? root.model.laggingFraction(segment.key) * bytes : 0,
+                ghostSpans: segment.ghostSpans
             });
             x += w;
         }
-        return Boxes.layout(pieces);
+        return pieces;
     }
+
+    readonly property var boxes: Boxes.layout(root.pieces)
+
+    readonly property var ghostBoxes: root.pieces.flatMap(piece => piece.ghostSpans.map(ghost => ({
+                    x: piece.x + piece.w * ghost.start / Math.max(1, piece.bytes),
+                    w: piece.w * ghost.len / Math.max(1, piece.bytes),
+                    at: ghost.at
+                })))
 
     implicitHeight: 22
     readonly property font labelFont: Tokens.font.body.builders.small.size(Math.min(Tokens.font.body.small.pointSize, root.implicitHeight * 0.36)).weight(Font.DemiBold).build()
@@ -109,7 +118,7 @@ Item {
         Item {
             id: free
 
-            width: pieces.width * root.model.free / root.model.total
+            width: pieces.width * root.model.shownFree / root.model.total
             height: pieces.height
 
             Canvas {
@@ -237,6 +246,23 @@ Item {
                         root.hovered = "";
                 }
             }
+        }
+    }
+
+    Repeater {
+        model: root.ghostBoxes.length
+
+        delegate: Rectangle {
+            id: ghost
+
+            required property int index
+            readonly property var modelData: root.ghostBoxes[index] ?? ({})
+
+            x: ghost.modelData.x
+            width: Math.max(1, ghost.modelData.w - 1)
+            height: root.height
+            color: root.model.deletingColor
+            opacity: Math.max(0, 1 - (root.model.ghostNow - ghost.modelData.at) / root.model.ghostSeconds)
         }
     }
 
