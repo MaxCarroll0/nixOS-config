@@ -484,12 +484,9 @@ in
           "tailscaled.service"
         ];
         wants = [ "network-online.target" ];
-        serviceConfig = {
-          Type = "oneshot";
-          ExecStart = "${powerStateReporter}/bin/report-power-state running";
-          Restart = "on-failure";
-          RestartSec = "15s";
-        };
+        restartIfChanged = false;
+        script = "until ${powerStateReporter}/bin/report-power-state running; do sleep 15; done";
+        serviceConfig.Type = "simple";
       };
 
       powerManagement.powerDownCommands = lib.mkAfter ''
