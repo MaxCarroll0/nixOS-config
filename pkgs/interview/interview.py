@@ -4,8 +4,11 @@ import argparse
 import contextlib
 import datetime as dt
 import fcntl
+import hashlib
+import re
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -27,6 +30,8 @@ LOG = STATE / "log.jsonl"
 LOCK = STATE / "lock"
 
 BUILD_DIRS = {"_build", "target", "bin", "obj", "__pycache__", ".pytest_cache", "build", "improved"}
+REVIEW_FILES = {"review.md", "SOLUTIONS.md", ".interview.json"}
+MAIN_FILE = {"ocaml": "solution.ml", "rust": "src/lib.rs", "c": "solution.c", "csharp": "Solution.cs", "python": "solution.py"}
 
 EVENT_GUIDE = {
     "STARTED": "Interview clock started. Present the problem, then interview.",
@@ -34,9 +39,11 @@ EVENT_GUIDE = {
     "WARN_5": "5 minutes of coding left. No new subproblems; help the candidate land and test what they have.",
     "PAUSED": "Candidate paused the clock and is with the tutor. Do not continue the interview until RESUMED.",
     "RESUMED": "Clock running again. Pick up where the interview left off.",
+    "FINISH_APPROVED": "You approved finishing early; the candidate can now press Finish early, or run `interview done` yourself if they asked to finish.",
+    "HINT": "The candidate took the next ladder rung themselves; do not repeat it, build on it.",
     "CODING_OVER": "Coding phase over and the submission is frozen. Stop coaching and run /review now.",
     "REVIEW_WARN": "3 minutes of review left. Give the remaining top improvements and wrap up.",
-    "REVIEW_OVER": "Review over and the interview is logged. Thank the candidate and offer the next track from `interview today`.",
+    "REVIEW_OVER": "Review over and the interview is logged. Sign off in two lines; the next interview starts automatically after the break with a fresh interviewer.",
 }
 
 
@@ -50,6 +57,8 @@ def config() -> dict:
         "on_pause": None,
         "on_resume": None,
         "on_complete": None,
+        "on_start": None,
+        "auto": {"enabled": False, "days": ["Mon", "Tue", "Wed", "Thu", "Fri"], "start": "05:00", "break_minutes": 5},
     }
     with contextlib.suppress(FileNotFoundError):
         cfg.update(json.loads(CONFIG_PATH.read_text()))
@@ -165,8 +174,15 @@ def solution_files(root: Path):
     for path in root.rglob("*"):
         if any(part in BUILD_DIRS for part in path.relative_to(root).parts):
             continue
-        if path.is_file() and path.name != "review.md":
+        if path.is_file() and path.name not in REVIEW_FILES:
             yield path
+
+
+def digest(root: Path) -> str:
+    h = hashlib.sha256()
+    for path in sorted(solution_files(root)):
+        h.update(str(path.relative_to(root)).encode() + b"\0" + path.read_bytes() + b"\0")
+    return h.hexdigest()
 
 
 def freeze(cur: dict) -> None:
@@ -187,6 +203,56 @@ def freeze(cur: dict) -> None:
         subprocess.run(["emacsclient", "--eval", elisp], capture_output=True, timeout=5)
 
 
+REVIEW_TEMPLATE = """# Review: {lang} {problem}
+
+Fill this in during the review phase. Compare against SOLUTIONS.md beside it.
+
+## Result
+
+- finished: {how} after {minutes} active minutes
+- hidden tests: {hidden} (rerun with `interview submit-tests`; full output is shown during review)
+- hints used: {hints}
+
+## My approach
+
+- method:
+- time and space:
+
+## Against the listed solutions
+
+- closest listed method:
+- what the better method does that mine does not:
+
+## Mistakes and slow spots
+
+-
+
+## Three improvements
+
+1.
+2.
+3.
+
+## Revisit
+
+- redo in `improved/` (`interview revisit {dir}`)? yes / no
+"""
+
+
+def open_review(cur: dict, early: bool) -> None:
+    session = Path(cur["dir"])
+    solutions = problem_dir(cur["problem"]) / "SOLUTIONS.md"
+    with contextlib.suppress(OSError):
+        if solutions.exists():
+            shutil.copyfile(solutions, session / "SOLUTIONS.md")
+        review = session / "review.md"
+        if not review.exists():
+            review.write_text(REVIEW_TEMPLATE.format(
+                lang=cur["lang"], problem=cur["problem"], dir=cur["dir"],
+                how="early" if early else "at time", minutes=round(cur["used_before"] / 60),
+                hidden=cur.get("hidden_tests") or "not run", hints=len(cur.get("hints", []))))
+
+
 def end_coding(cur: dict, at: float, early: bool) -> dict:
     if cur.get("running_since") is not None:
         cur["used_before"] = coding_used(cur, at)
@@ -197,6 +263,7 @@ def end_coding(cur: dict, at: float, early: bool) -> dict:
         run_hook(config()["on_resume"])
     log("coding", cur, cur["started"], at, active=round(cur["used_before"]), early=early)
     freeze(cur)
+    open_review(cur, early)
     cur["phase"] = "review"
     cur["review_started"] = at
     cur["early"] = early
@@ -249,11 +316,19 @@ def completed_on(date: str) -> list[dict]:
     return [e for e in read_jsonl(LOG) if e["kind"] == "complete" and e["date"] == date]
 
 
+def schedule() -> dict:
+    try:
+        return tomllib.loads(Path(config()["repo"], "schedule.toml").read_text())
+    except (FileNotFoundError, tomllib.TOMLDecodeError):
+        return {}
+
+
 def plan_today(at: float) -> list[dict]:
     cfg = config()
     today = day_of(at)
     done = {e["track"]: e for e in completed_on(today)}
     history = [e for e in read_jsonl(LOG) if e["kind"] == "complete"]
+    planned = schedule().get(today, {})
     cur = load_current()
     out = []
     for track, langs in cfg["tracks"].items():
@@ -263,9 +338,25 @@ def plan_today(at: float) -> list[dict]:
         if cur and cur["track"] == track:
             out.append({"track": track, "lang": cur["lang"], "status": cur["phase"], "problem": cur["problem"]})
             continue
+        lang = next((lang for lang in langs if lang in planned), None)
+        if lang:
+            out.append({"track": track, "lang": lang, "status": "pending", "problem": planned[lang]})
+            continue
         count = sum(1 for e in history if e["track"] == track)
         out.append({"track": track, "lang": langs[count % len(langs)], "status": "pending", "problem": None})
     return out
+
+
+def pick(at: float, choice: str | None) -> tuple[str, str] | str:
+    plan = [p for p in plan_today(at) if p["status"] == "pending"]
+    if choice:
+        plan = [p for p in plan if choice in (p["track"], p["lang"])]
+    for p in plan:
+        if p["problem"]:
+            return p["lang"], p["problem"]
+    if not plan:
+        return f"nothing pending today{' for ' + choice if choice else ''}; see `interview today`"
+    return f"no problem scheduled today for {plan[0]['lang']}; add one to schedule.toml or pass LANG PROBLEM"
 
 
 def status_dict(at: float) -> dict:
@@ -292,7 +383,13 @@ def status_dict(at: float) -> dict:
             "running_since": cur.get("running_since"),
             "pause_started": cur.get("pause_started"),
             "pause_seconds": cur["pause_seconds"],
+            "finish_approved": cur.get("finish_approved"),
+            "hidden_tests": cur.get("hidden_tests"),
+            "hints": len(cur.get("hints", [])),
         })
+        if cur["phase"] in ("coding", "paused"):
+            out["can_finish"] = bool(cur.get("finish_approved")) or (
+                cur.get("hidden_tests") == "pass" and cur.get("hidden_digest") == digest(Path(cur["dir"])))
         if cur["phase"] in ("coding", "paused"):
             out["coding_left"] = max(0, round(coding_left(cur, at)))
         if cur["phase"] == "review":
@@ -308,9 +405,10 @@ def status_line(s: dict) -> str:
         return head + " No interview running."
     where = f"{s['lang']} {s['problem']} ({s['dir']})"
     if s["phase"] == "coding":
-        return head + f" CODING {where}: {s['coding_left'] // 60}m{s['coding_left'] % 60:02d}s of coding left; scope every request to fit."
+        approved = " Finishing early is allowed (approved or hidden tests pass)." if s.get("can_finish") else ""
+        return head + f" CODING {where}: {s['coding_left'] // 60}m{s['coding_left'] % 60:02d}s of coding left; scope every request to fit.{approved}"
     if s["phase"] == "paused":
-        return head + f" PAUSED {where}: clock stopped with {s['coding_left'] // 60}m left; candidate is with the tutor."
+        return head + f" PAUSED {where}: clock stopped with {s['coding_left'] // 60}m{s['coding_left'] % 60:02d}s left; candidate is with the tutor."
     return head + f" REVIEW {where}: {s['review_left'] // 60}m{s['review_left'] % 60:02d}s of review left; submission frozen at tag sub/{s['session']}."
 
 
@@ -318,49 +416,153 @@ def problem_dir(problem: str) -> Path:
     return Path(config()["repo"], "problems", problem)
 
 
-def cmd_start(args) -> int:
+HOWTO = """# Working on {lang} {problem}
+
+The clock is running: {minutes} minutes of coding, paused with SUPER+F5 or the bar. Read PROMPT.md,
+then edit {main}. All commands work without the interviewer.
+
+| step | command |
+|---|---|
+| run the visible tests | `interview run` |
+| run the hidden tests (pass or fail and a count only) | `interview submit-tests` |
+| next hint from the ladder | `interview hint` |
+| time left | `interview status` |
+| finish early (hidden tests passed on the current code) | `interview done` |
+| end the review and log the interview | `interview close` |
+
+`interview done` works once `interview submit-tests` has passed on exactly the files as they are
+now; otherwise wait for the clock, or ask the interviewer to approve. When coding ends the files
+freeze, and SOLUTIONS.md (a short list of methods with their complexity) and a review.md
+template appear here. During review, `interview submit-tests` shows the full hidden output and
+`interview hint --all` the whole ladder with its follow-ups. Compare your approach against
+SOLUTIONS.md, fill in review.md, then `interview close`.
+"""
+
+
+def open_files(dest: Path, lang: str) -> None:
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        subprocess.run(["emacsclient", "-n", str(dest / "PROMPT.md"), str(dest / MAIN_FILE[lang])],
+                       capture_output=True, timeout=5)
+
+
+def begin(at: float, lang: str | None, problem: str | None, minutes: int | None = None,
+          review_minutes: int | None = None, again: bool = False) -> tuple[dict, Path] | str:
     cfg = config()
+    if load_current():
+        return "an interview is already running; see `interview status`"
+    if not problem:
+        if lang not in cfg["tracks"] and lang not in MAIN_FILE and lang is not None:
+            return f"unknown track or language {lang}"
+        chosen = pick(at, lang)
+        if isinstance(chosen, str):
+            return chosen
+        lang, problem = chosen
+    if lang not in MAIN_FILE:
+        return f"unknown language {lang}"
+    track = track_of(lang)
+    if track in {e["track"] for e in completed_on(day_of(at))} and not again:
+        return f"{track} is already done today; pass --again to repeat it"
+    template = problem_dir(problem) / "templates" / lang
+    if not template.is_dir():
+        return f"no template at {template}"
+    sid = f"{day_of(at)}-{lang}-{problem}"
+    dest = Path(cfg["repo"], "sessions", day_of(at), f"{lang}-{problem}")
+    if dest.exists():
+        return f"{dest} exists; this problem was already attempted in {lang} today"
+    shutil.copytree(template, dest)
+    budget = (minutes or cfg["coding_minutes"]) * 60
+    prompt = problem_dir(problem) / "PROMPT.md"
+    if prompt.exists():
+        shutil.copyfile(prompt, dest / "PROMPT.md")
+    (dest / "HOWTO.md").write_text(HOWTO.format(lang=lang, problem=problem, minutes=budget // 60, main=MAIN_FILE[lang]))
+    repo = Path(cfg["repo"])
+    git(repo, "add", "--", str(dest))
+    git(repo, "commit", "-q", "-m", f"interview: start {sid}", "--", str(dest))
+    cur = {
+        "id": sid,
+        "track": track,
+        "lang": lang,
+        "problem": problem,
+        "dir": str(dest),
+        "phase": "coding",
+        "started": at,
+        "coding_budget": budget,
+        "review_budget": (review_minutes or cfg["review_minutes"]) * 60,
+        "used_before": 0,
+        "running_since": at,
+        "pause_seconds": 0,
+        "warned": [],
+    }
+    save_current(cur)
+    emit(cur, "STARTED", f"{lang} {problem}, {budget // 60} minutes, files in {dest}")
+    return cur, dest
+
+
+def cmd_start(args) -> int:
+    with locked():
+        started = begin(now(), args.lang, args.problem, args.minutes, args.review_minutes, args.again)
+    if isinstance(started, str):
+        print(started, file=sys.stderr)
+        return 1
+    cur, dest = started
+    print(f"started {cur['id']}: {dest}\nread {dest / 'PROMPT.md'}, edit {dest / MAIN_FILE[cur['lang']]}; {dest / 'HOWTO.md'} lists the commands")
+    if args.open:
+        open_files(dest, cur["lang"])
+    return 0
+
+
+def unlocked_today(cfg: dict) -> bool:
+    profile = cfg["auto"].get("lockdown_profile")
+    if not profile:
+        return False
+    try:
+        out = subprocess.run([cfg["auto"].get("lockdown", "lockdown"), "status", "--json"], capture_output=True, text=True, timeout=10).stdout
+        return bool(json.loads(out).get(profile, {}).get("override"))
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        return False
+
+
+def auto_due(at: float) -> str | None:
+    cfg = config()
+    auto = cfg["auto"]
+    moment = dt.datetime.fromtimestamp(at)
+    if not auto.get("enabled"):
+        return "automatic start is off"
+    if moment.strftime("%a") not in auto["days"]:
+        return f"no interviews on {moment.strftime('%A')}"
+    if moment.strftime("%H:%M") < auto["start"]:
+        return f"interviews start at {auto['start']}"
+    if load_current():
+        return "an interview is running"
+    done = completed_on(day_of(at))
+    if len({e["track"] for e in done}) >= auto.get("count", cfg["required_per_day"]):
+        return "today's interviews are done"
+    if done:
+        last = max(dt.datetime.fromisoformat(e["end"]).timestamp() for e in done)
+        wait = last + auto["break_minutes"] * 60 - at
+        if wait > 0:
+            return f"break: next interview in {round(wait / 60)} minutes"
+    if unlocked_today(cfg):
+        return "unlocked with the password today"
+    return None
+
+
+def cmd_auto(args) -> int:
     at = now()
     with locked():
-        if load_current():
-            print("an interview is already running; see `interview status`", file=sys.stderr)
-            return 1
-        track = track_of(args.lang)
-        if track in {e["track"] for e in completed_on(day_of(at))} and not args.again:
-            print(f"{track} is already done today; pass --again to repeat it", file=sys.stderr)
-            return 1
-        template = problem_dir(args.problem) / "templates" / args.lang
-        if not template.is_dir():
-            print(f"no template at {template}", file=sys.stderr)
-            return 1
-        sid = f"{day_of(at)}-{args.lang}-{args.problem}"
-        dest = Path(cfg["repo"], "sessions", day_of(at), f"{args.lang}-{args.problem}")
-        if dest.exists():
-            print(f"{dest} exists; this problem was already attempted in {args.lang} today", file=sys.stderr)
-            return 1
-        shutil.copytree(template, dest)
-        repo = Path(cfg["repo"])
-        git(repo, "add", "--", str(dest))
-        git(repo, "commit", "-q", "-m", f"interview: start {sid}", "--", str(dest))
-        budget = (args.minutes or cfg["coding_minutes"]) * 60
-        cur = {
-            "id": sid,
-            "track": track,
-            "lang": args.lang,
-            "problem": args.problem,
-            "dir": str(dest),
-            "phase": "coding",
-            "started": at,
-            "coding_budget": budget,
-            "review_budget": (args.review_minutes or cfg["review_minutes"]) * 60,
-            "used_before": 0,
-            "running_since": at,
-            "pause_seconds": 0,
-            "warned": [],
-        }
-        save_current(cur)
-        emit(cur, "STARTED", f"{args.lang} {args.problem}, {budget // 60} minutes, files in {dest}")
-    print(f"started {sid}: {dest}")
+        reason = auto_due(at)
+        if reason is None:
+            started = begin(at, None, None)
+            reason = started if isinstance(started, str) else None
+    if reason is not None:
+        if args.verbose:
+            print(f"not starting: {reason}")
+        return 0
+    cur, dest = started
+    print(f"started {cur['id']}: {dest}")
+    hook = config()["on_start"]
+    if hook:
+        run_hook([*hook, str(dest / "PROMPT.md"), str(dest / MAIN_FILE[cur["lang"]])])
     return 0
 
 
@@ -416,8 +618,24 @@ def do_done(cur: dict, at: float):
     if cur["phase"] not in ("coding", "paused"):
         print(f"cannot finish coding during {cur['phase']}", file=sys.stderr)
         return 1
+    solved = cur.get("hidden_tests") == "pass" and cur.get("hidden_digest") == digest(Path(cur["dir"]))
+    if not (cur.get("finish_approved") or solved):
+        print("finishing early needs `interview submit-tests` to pass on the current files, or the interviewer's approval", file=sys.stderr)
+        return 1
     save_current(end_coding(cur, at, early=True))
     return "coding finished; review started"
+
+
+def cmd_approve_finish(args) -> int:
+    def approve(cur: dict, at: float):
+        if cur["phase"] not in ("coding", "paused"):
+            print(f"nothing to approve during {cur['phase']}", file=sys.stderr)
+            return 1
+        cur["finish_approved"] = args.reason
+        save_current(cur)
+        emit(cur, "FINISH_APPROVED", args.reason)
+        return "finishing early approved"
+    return mutate(approve)
 
 
 def do_close(cur: dict, at: float):
@@ -430,7 +648,7 @@ def do_close(cur: dict, at: float):
 
 def nix_run(repo: Path, cwd: Path, command: list[str]) -> int:
     if shutil.which("nix") and (repo / "flake.nix").exists():
-        command = ["nix", "develop", str(repo), "--command", *command]
+        command = ["nix", "develop", str(repo), "--command", "bash", "-c", shlex.join(command), "interview"]
     return subprocess.run(command, cwd=cwd).returncode
 
 
@@ -447,31 +665,99 @@ def cmd_run(args) -> int:
     return nix_run(Path(config()["repo"]), session_dir(args.dir), ["just", "test"])
 
 
+def test_counts(output: str) -> str:
+    passed = failed = 0
+    for m in re.finditer(r"^(\d+)/(\d+) passed$", output, re.M):
+        passed += int(m[1])
+        failed += int(m[2]) - int(m[1])
+    for m in re.finditer(r"test result: \w+\. (\d+) passed; (\d+) failed", output):
+        passed += int(m[1])
+        failed += int(m[2])
+    for line in re.findall(r"^.* in [\d.]+s.*$", output, re.M):
+        counts = dict((kind, int(n)) for n, kind in re.findall(r"(\d+) (passed|failed|errors?)", line))
+        passed += counts.get("passed", 0)
+        failed += counts.get("failed", 0) + counts.get("error", 0) + counts.get("errors", 0)
+    return f"{passed}/{passed + failed} cases pass" if passed + failed else "no cases ran: the code may not compile, see `interview run`"
+
+
 def cmd_submit_tests(args) -> int:
     session = session_dir(args.dir)
-    meta = load_current()
+    cur = load_current()
+    meta = cur if cur and Path(cur["dir"]) == session else None
     problem = meta["problem"] if meta else session.name.split("-", 1)[1]
     lang = meta["lang"] if meta else session.name.split("-", 1)[0]
     hidden = problem_dir(problem) / "hidden" / lang
+    secret = bool(meta) and meta["phase"] in ("coding", "paused") and not args.show
     scratch = STATE / "hidden-run"
     shutil.rmtree(scratch, ignore_errors=True)
-    shutil.copytree(session, scratch, ignore=shutil.ignore_patterns(*BUILD_DIRS))
+    shutil.copytree(session, scratch, ignore=shutil.ignore_patterns(*BUILD_DIRS, *REVIEW_FILES))
     for path in scratch.rglob("*"):
         path.chmod(path.stat().st_mode | stat.S_IWUSR)
     if hidden.is_dir():
         shutil.copytree(hidden, scratch, dirs_exist_ok=True)
     else:
         print(f"no hidden tests at {hidden}; running visible tests only")
-    code = nix_run(Path(config()["repo"]), scratch, ["just", "test"])
+    state = digest(session)
+    if secret:
+        repo = Path(config()["repo"])
+        command = ["nix", "develop", str(repo), "--command", "bash", "-c", "just test", "interview"] if shutil.which("nix") and (repo / "flake.nix").exists() else ["just", "test"]
+        result = subprocess.run(command, cwd=scratch, capture_output=True, text=True)
+        code = result.returncode
+        summary = test_counts(result.stdout + result.stderr)
+    else:
+        code = nix_run(Path(config()["repo"]), scratch, ["just", "test"])
+        summary = ""
     shutil.rmtree(scratch, ignore_errors=True)
     if meta:
         with locked():
             cur = load_current()
             if cur and cur["id"] == meta["id"]:
                 cur["hidden_tests"] = "pass" if code == 0 else "fail"
+                cur["hidden_digest"] = state if code == 0 else None
                 save_current(cur)
-    print(f"hidden tests: {'PASS' if code == 0 else 'FAIL'}")
+    print(f"hidden tests: {'PASS' if code == 0 else 'FAIL'}{' (' + summary + ')' if summary else ''}")
+    if secret and code == 0 and meta["phase"] == "coding":
+        print("you may finish early now with `interview done` (or keep improving)")
     return code
+
+
+def ladder_rungs(problem: str) -> list[str]:
+    text = (problem_dir(problem) / "LADDER.md").read_text()
+    rungs, current = [], None
+    for line in text.splitlines():
+        if re.match(r"^\d+\.\s", line):
+            current = re.sub(r"^\d+\.\s+", "", line)
+            rungs.append(current)
+        elif current is not None and line.startswith("   ") and line.strip():
+            rungs[-1] += " " + line.strip()
+    return rungs
+
+
+def cmd_hint(args) -> int:
+    with locked():
+        cur = load_current()
+        if not cur:
+            print("no interview running", file=sys.stderr)
+            return 1
+        rungs = ladder_rungs(cur["problem"])
+        if args.all:
+            if cur["phase"] != "review":
+                print("the whole ladder opens during review; `interview hint` gives the next rung", file=sys.stderr)
+                return 1
+            for n, rung in enumerate(rungs, 1):
+                print(f"{n}. {rung}")
+            return 0
+        given = cur.get("hints", [])
+        hints = [r for r in rungs if not r.lower().startswith("follow-up")]
+        if len(given) >= len(hints):
+            print("no hints left; follow-ups open during review with `interview hint --all`")
+            return 0
+        rung = hints[len(given)]
+        cur["hints"] = given + [now()]
+        save_current(cur)
+        emit(cur, "HINT", f"candidate revealed ladder hint {len(given) + 1}: {rung}")
+    print(f"hint {len(given) + 1}/{len(hints)}: {rung}")
+    return 0
 
 
 def cmd_status(args) -> int:
@@ -620,7 +906,7 @@ def cmd_revisit(args) -> int:
     if dest.exists():
         print(f"{dest} already exists")
         return 0
-    shutil.copytree(session, dest, ignore=shutil.ignore_patterns(*BUILD_DIRS, "review.md", ".interview.json"))
+    shutil.copytree(session, dest, ignore=shutil.ignore_patterns(*BUILD_DIRS, *REVIEW_FILES))
     for path in dest.rglob("*"):
         path.chmod(path.stat().st_mode | stat.S_IWUSR)
     print(f"writable copy at {dest}")
@@ -642,8 +928,9 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("start", help="start an interview on a problem")
-    p.add_argument("lang", choices=["ocaml", "rust", "c", "csharp", "python"])
-    p.add_argument("problem")
+    p.add_argument("lang", nargs="?", help="language or track; default: the first pending scheduled one")
+    p.add_argument("problem", nargs="?", help="default: today's problem from schedule.toml")
+    p.add_argument("--open", action="store_true", help="open PROMPT.md and the solution file in Emacs")
     p.add_argument("--minutes", type=int)
     p.add_argument("--review-minutes", type=int)
     p.add_argument("--again", action="store_true")
@@ -652,6 +939,10 @@ def main() -> int:
     for name, fn in (("pause", do_pause), ("resume", do_resume), ("toggle", do_toggle), ("done", do_done), ("close", do_close)):
         p = sub.add_parser(name)
         p.set_defaults(fn=lambda _a, fn=fn: mutate(fn))
+
+    p = sub.add_parser("approve-finish", help="interviewer only: allow the candidate to finish coding early")
+    p.add_argument("reason")
+    p.set_defaults(fn=cmd_approve_finish)
 
     p = sub.add_parser("status")
     p.add_argument("--json", action="store_true")
@@ -680,7 +971,12 @@ def main() -> int:
 
     p = sub.add_parser("submit-tests", help="run the hidden tests")
     p.add_argument("dir", nargs="?")
+    p.add_argument("--show", action="store_true", help="print the full output even while coding")
     p.set_defaults(fn=cmd_submit_tests)
+
+    p = sub.add_parser("hint", help="reveal the next ladder hint; --all shows the whole ladder during review")
+    p.add_argument("--all", action="store_true")
+    p.set_defaults(fn=cmd_hint)
 
     p = sub.add_parser("log")
     p.add_argument("--json", action="store_true")
@@ -694,6 +990,10 @@ def main() -> int:
     p = sub.add_parser("revisit")
     p.add_argument("dir")
     p.set_defaults(fn=cmd_revisit)
+
+    p = sub.add_parser("auto", help="start the next scheduled interview if one is due now; run by the shell while the candidate is at the keyboard")
+    p.add_argument("--verbose", action="store_true")
+    p.set_defaults(fn=cmd_auto)
 
     p = sub.add_parser("daemon")
     p.set_defaults(fn=cmd_daemon)

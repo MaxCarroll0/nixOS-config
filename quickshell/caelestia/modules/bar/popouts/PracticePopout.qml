@@ -97,7 +97,7 @@ ColumnLayout {
 
             StyledText {
                 Layout.fillWidth: true
-                text: Practice.phase === "review" ? "Submission frozen; reviewing with the interviewer." : Practice.phase === "paused" ? "Clock stopped. The tutor window is up; SUPER+p resumes." : `Paused ${Practice.hours(root.cur?.pause_seconds ?? 0)} so far. SUPER+p pauses.`
+                text: Practice.phase === "review" ? "Submission frozen; reviewing with the interviewer." : Practice.phase === "paused" ? "Clock stopped. The tutor window is up; SUPER+F5 resumes." : `Paused ${Practice.hours(root.cur?.pause_seconds ?? 0)} so far. ${Practice.finishApproved ? "Finishing early is allowed." : "Finish early: pass interview submit-tests, or ask the interviewer."}`
                 color: Colours.palette.m3onSurfaceVariant
                 font: Tokens.font.body.small
                 wrapMode: Text.WordWrap
@@ -122,6 +122,7 @@ ColumnLayout {
 
         IconTextButton {
             Layout.fillWidth: true
+            visible: Practice.finishApproved
             icon: "flag"
             text: "Finish early"
             inactiveColour: Colours.palette.m3secondaryContainer
@@ -129,6 +130,17 @@ ColumnLayout {
             verticalPadding: Tokens.padding.extraSmall
             onClicked: Practice.finishEarly()
         }
+    }
+
+    IconTextButton {
+        Layout.fillWidth: true
+        visible: !Practice.active
+        icon: "play_arrow"
+        text: "Start next interview"
+        inactiveColour: Colours.palette.m3primaryContainer
+        inactiveOnColour: Colours.palette.m3onPrimaryContainer
+        verticalPadding: Tokens.padding.extraSmall
+        onClicked: Practice.startNext()
     }
 
     IconTextButton {

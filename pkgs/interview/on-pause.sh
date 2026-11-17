@@ -3,5 +3,6 @@ lockdown state interview paused || true
 if hyprctl clients -j | jq -e 'any(.[]; .class == "interview-tutor")' >/dev/null; then
   exit 0
 fi
-cd "$INTERVIEW_REPO/tutor"
-exec kitty --class interview-tutor --title "tutor" claude "/tutor"
+systemd-run --user --collect --quiet --unit="interview-tutor-$(date +%s)" \
+  --working-directory="$INTERVIEW_REPO/tutor" \
+  kitty --class interview-tutor --title tutor claude "/tutor"

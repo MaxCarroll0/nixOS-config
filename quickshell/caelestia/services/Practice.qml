@@ -3,6 +3,7 @@ pragma Singleton
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 
 Singleton {
     id: root
@@ -33,6 +34,7 @@ Singleton {
     readonly property real todaySeconds: today?.total ?? 0
     readonly property bool testing: tests.running
     readonly property bool locked: lockdown !== null
+    readonly property bool finishApproved: (phase === "coding" || phase === "paused") && (!!current?.finish_approved || current?.hidden_tests === "pass")
 
     readonly property var langColours: ({
             ocaml: "#ee7a37",
@@ -116,6 +118,10 @@ Singleton {
 
     function toggle(): void {
         command(["toggle"]);
+    }
+
+    function startNext(): void {
+        command(["start", "--open"]);
     }
 
     function finishEarly(): void {
@@ -214,6 +220,31 @@ Singleton {
             root.now = Date.now() / 1000;
             currentFile.reload();
             lockdownFile.reload();
+        }
+    }
+
+    IdleMonitor {
+        id: presence
+
+        timeout: 120
+        respectInhibitors: false
+    }
+
+    Process {
+        id: autoStart
+
+        command: ["interview", "auto"]
+        onExited: currentFile.reload()
+    }
+
+    Timer {
+        interval: 30000
+        running: !presence.isIdle && !root.active
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: {
+            if (!autoStart.running)
+                autoStart.running = true;
         }
     }
 

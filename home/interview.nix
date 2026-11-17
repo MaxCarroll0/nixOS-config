@@ -21,13 +21,32 @@ let
         name = "interview-${name}";
         runtimeInputs = [
           config.services.lockdown.package
+          interview
           pkgs.jq
+          pkgs.libnotify
           pkgs.util-linux
         ];
-        runtimeEnv.INTERVIEW_REPO = repo;
+        runtimeEnv = {
+          INTERVIEW_REPO = repo;
+          INTERVIEW_WORKSPACE = "interview";
+        };
         text = builtins.readFile ../pkgs/interview/${name}.sh;
       }
     );
+
+  planWeek = pkgs.writeShellApplication {
+    name = "interview-plan-week";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+      interview
+    ];
+    runtimeEnv = {
+      INTERVIEW_REPO = repo;
+      PLAN_ACCOUNT = "mjvcarroll@gmail.com";
+    };
+    text = builtins.readFile ../pkgs/interview/plan-week.sh;
+  };
 
   lockdown = lib.getExe config.services.lockdown.package;
   interviewExe = lib.getExe interview;
@@ -84,6 +103,21 @@ in
       lockdown
       "check"
     ];
+    on_start = [ (hook "on-start") ];
+    auto = {
+      enabled = true;
+      days = [
+        "Mon"
+        "Tue"
+        "Wed"
+        "Thu"
+        "Fri"
+      ];
+      start = "05:00";
+      break_minutes = 5;
+      inherit lockdown;
+      lockdown_profile = "interview";
+    };
   };
 
   systemd.user.services.interviewd = {
@@ -99,7 +133,34 @@ in
     Install.WantedBy = [ "graphical-session.target" ];
   };
 
+  systemd.user.services.interview-plan-week = {
+    Unit = {
+      Description = "Plan next week's interview problems with Claude";
+      After = [ "network-online.target" ];
+      StartLimitIntervalSec = 0;
+    };
+    Service = {
+      Type = "oneshot";
+      ExecStart = lib.getExe planWeek;
+      Environment = [ "PATH=${config.home.profileDirectory}/bin:/run/current-system/sw/bin" ];
+      Restart = "on-failure";
+      RestartSec = "30min";
+      TimeoutStartSec = "2h";
+    };
+  };
+
+  systemd.user.timers.interview-plan-week = {
+    Unit.Description = "Plan next week's interviews when the weekly usage limit resets (Saturday 16:59)";
+    Timer = {
+      OnCalendar = "Sat 17:05";
+      Persistent = true;
+    };
+    Install.WantedBy = [ "timers.target" ];
+  };
+
   services.lockdown.profiles.interview = {
+    workspace = "interview";
+    days = [ ];
     start = "05:00";
     password = "c2fGUFHyYmUS3666DRKm347";
     message = "Weekday interviews: finish two of today's three to unlock.";
@@ -114,19 +175,35 @@ in
       ];
       paused = [ { class = "^interview%-tutor$"; } ];
     };
+    actions = [
+      {
+        label = "Open interviewer";
+        command = [ (hook "on-engage") ];
+      }
+      {
+        label = "Start next";
+        command = [
+          interviewExe
+          "start"
+          "--open"
+        ];
+      }
+      {
+        label = "Pause / resume";
+        command = [
+          interviewExe
+          "toggle"
+        ];
+      }
+    ];
     binds = [
       {
-        key = "SUPER+p";
+        key = "SUPER+F5";
         command = "${interviewExe} toggle";
         description = "pause or resume the interview clock";
       }
       {
-        key = "SUPER+Return";
-        command = "emacsclient -c -n";
-        description = "new Emacs frame";
-      }
-      {
-        key = "SUPER+i";
+        key = "SUPER+F6";
         command = hook "on-engage";
         description = "reopen Emacs and the interviewer";
       }

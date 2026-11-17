@@ -72,3 +72,22 @@ index 29bd3f5..cfc23dd 100644
              Behavior on contentX {
                  Anim {}
              }
+diff --git a/shell.qml b/shell.qml
+--- a/shell.qml
++++ b/shell.qml
+@@ -12,6 +12,7 @@
+ import qs.modules.background
+ import qs.modules.drawers
+ import qs.modules.lock
++import qs.modules.lockdown
+ import qs.modules.whichkey
+ import qs.modules.wmoverlay
+ import qs.daemons
+@@ -48,6 +49,7 @@
+     AreaPicker {}
+     WhichKey {}
+     WmOverlay {}
++    LockdownBanner {}
+     Lock {
+         id: lock
+     }
