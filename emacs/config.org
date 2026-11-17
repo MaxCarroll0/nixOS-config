@@ -50,6 +50,18 @@ Lexical binding.
 
 #+end_src
 
+Backups and auto-saves go under the XDG state dir, where the disk ledger ages each file out as temp.
+
+#+begin_src emacs-lisp
+
+(let ((state (expand-file-name "emacs/" (or (getenv "XDG_STATE_HOME") "~/.local/state"))))
+  (dolist (dir '("backups/" "auto-save/"))
+    (make-directory (expand-file-name dir state) t))
+  (setq backup-directory-alist `(("." . ,(expand-file-name "backups/" state)))
+        auto-save-file-name-transforms `((".*" ,(expand-file-name "auto-save/" state) t))))
+
+#+end_src
+
 ** Session
 Desktop state restores buffers and frames in the systemd-managed Emacs daemon.
 
