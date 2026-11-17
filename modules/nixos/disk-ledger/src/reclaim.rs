@@ -113,9 +113,10 @@ pub enum Kind {
     Repo,
     Game,
     Trash,
+    Download,
 }
 
-pub const KINDS: [Kind; 13] = [
+pub const KINDS: [Kind; 14] = [
     Kind::Dead,
     Kind::Cache,
     Kind::Temp,
@@ -129,6 +130,7 @@ pub const KINDS: [Kind; 13] = [
     Kind::Repo,
     Kind::Game,
     Kind::Trash,
+    Kind::Download,
 ];
 
 impl Kind {
@@ -147,6 +149,7 @@ impl Kind {
             Kind::Repo => "git clone",
             Kind::Game => "game",
             Kind::Trash => "recycle bin",
+            Kind::Download => "download",
         }
     }
 
@@ -156,6 +159,7 @@ impl Kind {
             Kind::Stray => "stray",
             Kind::Repo => "repo",
             Kind::Trash => "trash",
+            Kind::Download => "downloads",
             other => other.name(),
         }
     }
@@ -165,7 +169,7 @@ impl Kind {
             Kind::Dead | Kind::Cache | Kind::StaleShell => 64.0,
             Kind::Stray => 16.0,
             Kind::Build | Kind::Project | Kind::Deploy => 4.0,
-            Kind::Temp | Kind::Generation | Kind::Agent | Kind::Trash => 1.0,
+            Kind::Temp | Kind::Generation | Kind::Agent | Kind::Trash | Kind::Download => 1.0,
             Kind::Repo => 1.0 / 16.0,
             Kind::Game => 1.0 / 4.0,
         }
@@ -1331,6 +1335,11 @@ impl Scope {
                         return Some("not in the recycle bin".into());
                     }
                 }
+                Kind::Download => {
+                    if parent != join(&self.home, "Downloads") || name == ".." {
+                        return Some("not in Downloads".into());
+                    }
+                }
                 other => return Some(format!("{} owns no files", other.name())),
             }
         }
@@ -1583,6 +1592,7 @@ impl Model {
         found.extend(self.clone_items(files, repos));
         found.extend(self.game_items());
         found.extend(self.trash_items());
+        found.extend(self.download_items(files));
         found.extend(self.build_items(files));
         let mut containers = HashMap::new();
         for item in found {
@@ -3435,6 +3445,19 @@ impl Model {
                 Item::new(Kind::Trash, path.clone(), deleted)
                     .with_files(vec![path, record])
                     .with_detail(json!({"owner": self.user, "origin": origin}))
+            })
+            .collect()
+    }
+
+    fn download_items(&self, files: &dyn Files) -> Vec<Item> {
+        let downloads = join(&self.home, "Downloads");
+        list_sorted(&downloads)
+            .into_iter()
+            .map(|name| {
+                let path = join(&downloads, &name);
+                Item::new(Kind::Download, path.clone(), files.used(&path))
+                    .with_files(vec![path])
+                    .with_detail(json!({"owner": self.user}))
             })
             .collect()
     }

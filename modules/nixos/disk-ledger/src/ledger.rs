@@ -17,7 +17,7 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -70,7 +70,7 @@ const EVENTS_READ: usize = 4000;
 const WATCHES: usize = 16;
 const SWEPT: usize = 40;
 
-pub const SEGMENTS: [(&str, &str, &str, bool); 22] = [
+pub const SEGMENTS: [(&str, &str, &str, bool); 23] = [
     ("running_system", "running system", "live", false),
     ("home_profile", "profiles", "live", false),
     ("processes", "in use", "live", false),
@@ -87,6 +87,7 @@ pub const SEGMENTS: [(&str, &str, &str, bool); 22] = [
     ("generation", "generations", "reclaim", true),
     ("agent", "agent work", "reclaim", true),
     ("trash", "recycle bin", "reclaim", true),
+    ("downloads", "downloads", "reclaim", true),
     ("home_files", "home files", "files", true),
     ("system_files", "system files", "files", false),
     ("swap", "swapfile", "system", false),
@@ -465,6 +466,7 @@ pub struct Ledger {
     exits: HashMap<i32, i32>,
     commands: Sender<sweep::Command>,
     sweep_events: Receiver<sweep::Event>,
+    round: Arc<AtomicU64>,
     swept: VecDeque<Value>,
     handed: Vec<String>,
     session_open: bool,
@@ -643,7 +645,9 @@ impl Ledger {
         let (commands, orders) = channel();
         let (reporter, sweep_events) = channel();
         let wake = pipe[1];
-        std::thread::spawn(move || sweep::run(orders, reporter, wake));
+        let round = Arc::new(AtomicU64::new(0));
+        let shared = round.clone();
+        std::thread::spawn(move || sweep::run(orders, reporter, wake, shared));
         let floor = env("LEDGER_TARGET_BYTES").parse().unwrap_or(20 * GIB);
         let internals = probe::hidden_inodes(&source);
         laps.lap("probes");
@@ -692,6 +696,7 @@ impl Ledger {
             exits: HashMap::new(),
             commands,
             sweep_events,
+            round,
             swept: VecDeque::new(),
             handed: Vec::new(),
             session_open: false,
@@ -871,6 +876,9 @@ impl Ledger {
         self.sums_dirty = true;
         self.model_version += 1;
         self.ranking += 1;
+        self.round.store(self.ranking, Ordering::Release);
+        let deleting = &self.deleting;
+        self.handed.retain(|path| deleting.contains(path));
     }
 
     fn target(&mut self) -> i64 {
@@ -1502,6 +1510,10 @@ impl Ledger {
                     format!("{store} game {}, {when}; saves and prefixes are kept, reinstall from {store}", item.text("title"))
                 }
             }
+            Kind::Download => format!(
+                "in Downloads, last used {}",
+                probe::local("%Y-%m-%d %H:%M", item.last_used)
+            ),
             Kind::Trash => {
                 let origin = item.text("origin");
                 let from = if origin.is_empty() {
@@ -3428,6 +3440,7 @@ impl Ledger {
             "generation",
             "agent",
             "trash",
+            "downloads",
             "home_files",
         ] {
             let mut members: Vec<&Item> = folded(key)
@@ -3640,6 +3653,7 @@ impl Ledger {
             },
             scope: self.model.scope(),
             level,
+            round: self.ranking,
         }
     }
 

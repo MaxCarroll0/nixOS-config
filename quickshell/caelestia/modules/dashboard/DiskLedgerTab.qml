@@ -1450,9 +1450,7 @@ Item {
                     property real dragTo: -1
                     readonly property real plotLeft: 44
                     readonly property real plotWidth: width - plotLeft - 4
-                    readonly property real barWidth: 4
-                    readonly property real minGap: 6
-                    readonly property real maxBar: 24
+                    readonly property real barWidth: 6
 
                     onZoomChanged: reclaims.requestPaint()
                     onHoveredEventChanged: {
@@ -1530,31 +1528,30 @@ Item {
                         if (entries.length === 0)
                             return [];
                         if (last <= first) {
-                            const slots = Math.max(1, Math.floor(reclaims.plotWidth / reclaims.minGap));
+                            const slots = Math.max(1, Math.floor(reclaims.plotWidth / (reclaims.barWidth + 1)));
                             const per = Math.ceil(entries.length / slots);
                             const count = Math.ceil(entries.length / per);
                             const step = reclaims.plotWidth / count;
                             const out = [];
                             for (let index = 0; index < count; index++)
-                                out.push(reclaims.makeBar(entries.slice(index * per, (index + 1) * per), reclaims.plotLeft + index * step + Math.max(0, step - reclaims.maxBar) / 2, Math.min(reclaims.maxBar, Math.max(1, step - 1))));
+                                out.push(reclaims.makeBar(entries.slice(index * per, (index + 1) * per), reclaims.plotLeft + index * step + (step - reclaims.barWidth) / 2, reclaims.barWidth));
                             return out;
                         }
                         const scale = reclaims.plotWidth / (last - first);
+                        const pitch = reclaims.barWidth + 1;
                         const groups = [];
                         for (const entry of entries) {
                             const x = Math.min(reclaims.plotLeft + reclaims.plotWidth - reclaims.barWidth, reclaims.plotLeft + (entry.event.at - first) * scale);
                             const tail = groups[groups.length - 1];
-                            if (tail && x - tail.x < reclaims.minGap) {
+                            if (tail && x < tail.x + pitch)
                                 tail.entries.push(entry);
-                                tail.end = x;
-                            } else
+                            else
                                 groups.push({
                                     x: x,
-                                    end: x,
                                     entries: [entry]
                                 });
                         }
-                        return groups.map(group => reclaims.makeBar(group.entries, group.x, group.end - group.x + reclaims.barWidth));
+                        return groups.map(group => reclaims.makeBar(group.entries, group.x, reclaims.barWidth));
                     }
 
                     onPaint: {

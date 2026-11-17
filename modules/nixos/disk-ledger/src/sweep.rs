@@ -7,7 +7,9 @@ use crate::store;
 use crate::sys;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::time::Duration;
 
 const BUCKET: f64 = (1u64 << 30) as f64;
@@ -22,6 +24,7 @@ pub struct Task {
     pub orphans: Vec<String>,
     pub scope: Scope,
     pub level: f64,
+    pub round: u64,
 }
 
 pub enum Command {
@@ -56,6 +59,7 @@ impl Snapshot {
 
 struct Worker {
     events: Sender<Event>,
+    round: Arc<AtomicU64>,
     wake: i32,
     session: Option<Result<gc::Session, String>>,
     snapshot: Option<Snapshot>,
@@ -93,6 +97,10 @@ impl Worker {
     fn refuse(&mut self, work: &Work, reason: String) {
         self.refusals.push(json!({"at": sys::now() as i64, "path": work.path, "kind": work.kind.name(), "reason": reason}));
         self.send(Event::Refused(work.path.clone(), reason));
+    }
+
+    fn stale(&self, task: &Task) -> bool {
+        task.round < self.round.load(Ordering::Acquire)
     }
 
     fn pace(&mut self, bytes: u64, level: f64) {
@@ -229,7 +237,14 @@ impl Worker {
             self.free = free();
         }
         let work = &task.work;
+        if self.stale(&task) {
+            return;
+        }
         self.pace(work.freed, task.level);
+        if self.stale(&task) {
+            self.tokens += work.freed as f64;
+            return;
+        }
         if let Err(reason) = self.files(&task) {
             return self.refuse(work, reason);
         }
@@ -304,9 +319,10 @@ impl Worker {
     }
 }
 
-pub fn run(commands: Receiver<Command>, events: Sender<Event>, wake: i32) {
+pub fn run(commands: Receiver<Command>, events: Sender<Event>, wake: i32, round: Arc<AtomicU64>) {
     let mut worker = Worker {
         events,
+        round,
         wake,
         session: None,
         snapshot: None,
