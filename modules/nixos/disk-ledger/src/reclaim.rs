@@ -88,14 +88,6 @@ pattern!(
     r"^(\.?org\.chromium\.Chromium\..+|scoped_dir.+)$"
 );
 pattern!(
-    known_caches,
-    r"^(appstream|cabal|ddcutil|kitty|lua-language-server|org\.kde\.unitconversion|arxiv-to-prompt|biome|bookmarksrunner|chromium|google-chrome|deno|distrobox|dune|dvisvgm|emacs|fontconfig|gh|go-build|gstreamer-1\.0|hie-bios|ksvg-elements|ksycoca6_.+|matplotlib|mesa_shader_cache|mesa_shader_cache_db|mpv|nix|node|org-persist|pip|pre-commit|qtshadercache-.+|typescript|uv|workspacesclient|yarn|at-spi|doc)$"
-);
-pattern!(
-    qt_cache,
-    r"^(qmlcache|qtpipelinecache-.+|qtshadercache-.+|_qt_QGfxShaderBuilder_.+)$"
-);
-pattern!(
     runtime_temp,
     r"^(\.[A-Za-z0-9]+-unix|hsperfdata_.*|cc-daemon-\d+|claude-\d+|claude-mcp-.*|systemd-private-.*|\.X\d+-lock|tmux-\d+|zellij-\d+|emacs\d+|ssh-.*|gpg-.*|pulse-.*|dbus-.*|kitty-.*|nvim.*|xdg-.*|lost\+found)$"
 );
@@ -681,15 +673,7 @@ fn nix_running() -> Option<String> {
 }
 
 pub fn cache_known(path: &str) -> bool {
-    if known_caches().is_match(basename(path)) {
-        return true;
-    }
-    match list_dir(path) {
-        Some(children) => {
-            !children.is_empty() && children.iter().all(|child| qt_cache().is_match(child))
-        }
-        None => false,
-    }
+    basename(path) != "nix-gcroots"
 }
 
 pub fn user_ids(user: &str) -> Option<(u32, u32)> {
@@ -1674,7 +1658,7 @@ impl Model {
             for name in list_sorted(&base) {
                 let child = join(&base, &name);
                 if !cache_known(&child) {
-                    self.protect(&child, "unknown cache, not derivable");
+                    self.protect(&child, "deploy roots");
                     continue;
                 }
                 found.push(

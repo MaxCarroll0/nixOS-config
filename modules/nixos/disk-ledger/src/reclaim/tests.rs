@@ -228,7 +228,7 @@ fn tmp_entries_are_classified_and_rechecked() {
 }
 
 #[test]
-fn only_known_caches_are_reclaimable() {
+fn everything_in_cache_but_roots_is_reclaimable() {
     let fx = fixture("cache");
     let cache = format!("{}/home/.cache", fx.base);
     for name in [
@@ -256,9 +256,9 @@ fn only_known_caches_are_reclaimable() {
     for (name, known) in [
         ("mesa_shader_cache", true),
         ("zoom", true),
-        ("khelpcenter", false),
-        ("wake-peer", false),
-        ("rofi-entry-history.txt", false),
+        ("khelpcenter", true),
+        ("wake-peer", true),
+        ("rofi-entry-history.txt", true),
         ("nix-gcroots", false),
     ] {
         let path = format!("{cache}/{name}");
@@ -288,7 +288,7 @@ fn only_known_caches_are_reclaimable() {
     for (name, inside) in [
         ("mesa_shader_cache/deep/x", true),
         ("nix-gcroots/x", false),
-        ("wake-peer/x", false),
+        ("wake-peer/x", true),
         ("mesa_shader_cache/../wake-peer", false),
     ] {
         let path = format!("{cache}/{name}");
