@@ -204,7 +204,17 @@ in
         alsa.enable = true;
         alsa.support32Bit = true;
         pulse.enable = true;
+        # The SPACETOUCH dongle (0666:0880) reports -42..0 dB but is silent below about -35 dB.
+        wireplumber.extraConfig."51-spacetouch-soft-mixer"."monitor.alsa.rules" = [
+          {
+            matches = [ { "device.name" = "~alsa_card.usb-SPACETOUCH_USB_Audio.*"; } ];
+            actions.update-props."api.alsa.soft-mixer" = true;
+          }
+        ];
       };
+      services.udev.extraRules = ''
+        ACTION=="add", SUBSYSTEM=="sound", KERNEL=="controlC*", ATTRS{idVendor}=="0666", ATTRS{idProduct}=="0880", RUN+="${pkgs.alsa-utils}/bin/amixer -c %n set PCM 100%% unmute"
+      '';
 
       # Discord's Krisp suppression is Windows/macOS only, so denoise in PipeWire.
       services.pipewire.extraConfig.pipewire."99-rnnoise-source" = {
