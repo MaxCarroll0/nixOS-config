@@ -71,6 +71,8 @@ const EVENTS_DUMPED: usize = 40;
 const EVENTS_READ: usize = 4000;
 const WATCHES: usize = 16;
 const SWEPT: usize = 40;
+const COMMIT_SECONDS: f64 = 6.0;
+const SWEPT_LOG_BYTES: u64 = 8 << 20;
 
 pub const SEGMENTS: [(&str, &str, &str, bool); 23] = [
     ("running_system", "running system", "live", false),
@@ -438,6 +440,7 @@ pub struct Ledger {
     collecting: bool,
     kinds: Option<Vec<Kind>>,
     swept_from: i64,
+    last_done: f64,
     released: i64,
     planning: bool,
     skipped: HashMap<String, f64>,
@@ -674,6 +677,7 @@ impl Ledger {
             emergency: env("LEDGER_EMERGENCY_BYTES").parse().unwrap_or(5 * GIB),
             collecting: env("LEDGER_COLLECT") == "1",
             swept_from: 0,
+            last_done: 0.0,
             released: 0,
             kinds: Some(env("LEDGER_KINDS"))
                 .filter(|names| !names.is_empty())
@@ -1251,7 +1255,7 @@ impl Ledger {
     }
 
     fn compose(&mut self) -> (Statfs, HashMap<&'static str, i64>, i64) {
-        let disk = statfs();
+        let disk = self.disk();
         let (parts, file_kinds) = self.file_parts();
         let mut segments: HashMap<&'static str, i64> = HashMap::new();
         for (key, value) in self
@@ -3780,13 +3784,20 @@ impl Ledger {
         }
     }
 
-    fn collect(&mut self, now: f64) {
-        let measured = statfs().free;
-        if !self.session_open && self.handed.is_empty() {
-            self.swept_from = measured;
+    fn disk(&mut self) -> Statfs {
+        let mut disk = statfs();
+        if !self.session_open && self.handed.is_empty() && clock() - self.last_done >= COMMIT_SECONDS {
+            self.swept_from = disk.free;
             self.released = 0;
         }
-        let free = measured.max(self.swept_from + self.released);
+        let free = disk.free.max(self.swept_from + self.released);
+        disk.used -= free - disk.free;
+        disk.free = free;
+        disk
+    }
+
+    fn collect(&mut self, now: f64) {
+        let free = self.disk().free;
         let target = self.target() + MARGIN;
         let deficit = target - free;
         let base = probe::object(
@@ -3912,8 +3923,19 @@ impl Ledger {
             .as_str()
             .and_then(|path| self.by_path.get(path))
         {
+            let item = &self.model.items[*index];
             detail["rank"] = json!(index);
             detail["ranking"] = json!(self.ranking);
+            detail["kind"] = json!(item.kind.name());
+            detail["last_used"] = json!(item.last_used);
+            detail["bytes"] = json!(item.store_bytes + item.file_bytes);
+        }
+        let log = self.state.join("swept.jsonl");
+        if std::fs::metadata(&log).map(|meta| meta.len()).unwrap_or(0) > SWEPT_LOG_BYTES {
+            let _ = std::fs::rename(&log, self.state.join("swept.jsonl.1"));
+        }
+        if let Ok(mut handle) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
+            let _ = writeln!(handle, "{}", detail);
         }
         self.swept.push_back(detail);
         if self.swept.len() > SWEPT {
@@ -3930,6 +3952,7 @@ impl Ledger {
                 buffer.len(),
             )
         };
+        let mut finished = false;
         while let Ok(event) = self.sweep_events.try_recv() {
             self.batch += 1;
             match event {
@@ -3942,7 +3965,12 @@ impl Ledger {
                     self.deleting.insert(path);
                 }
                 sweep::Event::Done(path, detail) => {
-                    self.released += detail["released"].as_i64().unwrap_or(0);
+                    finished = true;
+                    self.last_done = clock();
+                    self.released += detail["released"]
+                        .as_i64()
+                        .unwrap_or(0)
+                        .max(detail["freed"].as_i64().unwrap_or(0));
                     self.note(detail);
                     self.deleting.remove(&path);
                     self.handed.retain(|other| *other != path);
@@ -3960,6 +3988,9 @@ impl Ledger {
                     self.record(summary);
                 }
             }
+        }
+        if finished {
+            self.reload_store(clock());
         }
         self.settle_lagging();
     }
@@ -4111,6 +4142,18 @@ impl Ledger {
         }
     }
 
+    fn reload_store(&mut self, now: f64) {
+        self.db_checked = now;
+        let (changed, added) = self.store.load();
+        if added {
+            self.roots_due = self.roots_due.or(Some(now));
+        }
+        self.sums_dirty |= changed;
+        if changed {
+            self.settle_lagging();
+        }
+    }
+
     fn step(&mut self) {
         let now = clock();
         let viewed = self.viewed();
@@ -4120,15 +4163,7 @@ impl Ledger {
             list: Vec::new(),
         };
         if now - self.db_checked >= DB_SECONDS {
-            self.db_checked = now;
-            let (changed, added) = self.store.load();
-            if added {
-                self.roots_due = self.roots_due.or(Some(now));
-            }
-            self.sums_dirty |= changed;
-            if changed {
-                self.settle_lagging();
-            }
+            self.reload_store(now);
         }
         laps.lap("load");
         if !self.store.pending.is_empty()

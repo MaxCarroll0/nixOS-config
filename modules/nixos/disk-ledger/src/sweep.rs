@@ -86,6 +86,7 @@ struct Worker {
     claimed: u64,
     refusals: Vec<Value>,
     free: i64,
+    shrinking: Vec<std::thread::JoinHandle<Result<u64, Value>>>,
 }
 
 fn free() -> i64 {
@@ -173,81 +174,130 @@ impl Worker {
             .map_or(Ok(()), Err)
     }
 
-    fn remove_files(&self, task: &Task) -> Result<Option<u64>, String> {
-        let work = &task.work;
-        let scope = &task.scope;
-        for link in &work.links {
-            crate::ledger::record_root(link, &scope.user);
-            let _ = std::fs::remove_file(link);
-        }
-        if work.kind == Kind::Game
-            && work.detail.get("store").and_then(Value::as_str) == Some("heroic")
-        {
-            reclaim::forget_heroic(
-                &scope.home,
-                work.detail.get("id").and_then(Value::as_str).unwrap_or(""),
-                &scope.user,
-            )?;
-        }
-        if work.kind == Kind::Repo {
-            return match reclaim::user_ids(&scope.user) {
-                Some((uid, gid)) => {
-                    reclaim::shrink_clone(&work.path, &scope.user, uid, gid).map(|_| None)
+    fn reap(&mut self, wait: bool) {
+        let (done, running): (Vec<_>, Vec<_>) = std::mem::take(&mut self.shrinking)
+            .into_iter()
+            .partition(|handle| wait || handle.is_finished());
+        self.shrinking = running;
+        for handle in done {
+            match handle.join() {
+                Ok(Ok(freed)) => {
+                    self.items += 1;
+                    self.claimed += freed;
                 }
-                None => Err("unknown user".into()),
-            };
-        }
-        if reclaim::truthy(work.detail.get("compress").unwrap_or(&Value::Null)) {
-            return match reclaim::user_ids(&scope.user) {
-                Some((uid, gid)) => {
-                    reclaim::shrink_worktree(&work.path, &scope.user, uid, gid).map(|_| None)
-                }
-                None => Err("unknown user".into()),
-            };
-        }
-        if reclaim::truthy(work.detail.get("worktree").unwrap_or(&Value::Null)) {
-            if let Some(repo) = work.detail.get("repo").and_then(Value::as_str) {
-                reclaim::run_as(
-                    &scope.user,
-                    &[
-                        "git", "-C", repo, "worktree", "remove", "--force", &work.path,
-                    ],
-                    None,
-                );
+                Ok(Err(refusal)) => self.refusals.push(refusal),
+                Err(_) => {}
             }
-        }
-        let owner = work
-            .detail
-            .get("owner")
-            .and_then(Value::as_str)
-            .unwrap_or(&scope.user);
-        let paths: Vec<String> = work
-            .files
-            .iter()
-            .filter(|path| reclaim::lexists(path))
-            .cloned()
-            .collect();
-        if paths.is_empty() {
-            return Ok(Some(0));
-        }
-        let ids = if owner == "root" {
-            Some((0, 0))
-        } else {
-            reclaim::user_ids(owner)
-        };
-        let Some((uid, gid)) = ids else {
-            return Err(format!("unknown user {owner}"));
-        };
-        let outcome = remove::remove_as(uid, gid, paths);
-        match outcome.failed.first() {
-            Some((path, code)) => Err(format!(
-                "remove failed: {path}: {}",
-                std::io::Error::from_raw_os_error(*code)
-            )),
-            None => Ok(Some(outcome.released)),
         }
     }
 
+    fn shrink(&mut self, task: Task) {
+        let events = self.events.clone();
+        let wake = self.wake;
+        let send = move |event: Event| {
+            let _ = events.send(event);
+            unsafe { libc::write(wake, b"s".as_ptr() as *const libc::c_void, 1) };
+        };
+        self.shrinking.push(std::thread::spawn(move || {
+            let work = &task.work;
+            let started = sys::now();
+            match remove_files(&task) {
+                Ok(_) => {
+                    let round = |value: f64| (value * 1e4).round() / 10.0;
+                    send(Event::Done(
+                        work.path.clone(),
+                        json!({"path": work.path, "kind": work.kind.name(), "freed": work.freed, "released": Value::Null, "last_used": work.last_used, "refused": 0, "ms": round(sys::now() - started)}),
+                    ));
+                    Ok(work.freed)
+                }
+                Err(reason) => {
+                    send(Event::Refused(work.path.clone(), reason.clone()));
+                    Err(json!({"at": sys::now() as i64, "path": work.path, "kind": work.kind.name(), "reason": reason}))
+                }
+            }
+        }));
+    }
+}
+
+fn in_place(work: &Work) -> bool {
+    work.kind == Kind::Repo || reclaim::truthy(work.detail.get("compress").unwrap_or(&Value::Null))
+}
+
+fn remove_files(task: &Task) -> Result<Option<u64>, String> {
+    let work = &task.work;
+    let scope = &task.scope;
+    for link in &work.links {
+        crate::ledger::record_root(link, &scope.user);
+        let _ = std::fs::remove_file(link);
+    }
+    if work.kind == Kind::Game && work.detail.get("store").and_then(Value::as_str) == Some("heroic")
+    {
+        reclaim::forget_heroic(
+            &scope.home,
+            work.detail.get("id").and_then(Value::as_str).unwrap_or(""),
+            &scope.user,
+        )?;
+    }
+    if work.kind == Kind::Repo {
+        return match reclaim::user_ids(&scope.user) {
+            Some((uid, gid)) => {
+                reclaim::shrink_clone(&work.path, &scope.user, uid, gid).map(|_| None)
+            }
+            None => Err("unknown user".into()),
+        };
+    }
+    if reclaim::truthy(work.detail.get("compress").unwrap_or(&Value::Null)) {
+        return match reclaim::user_ids(&scope.user) {
+            Some((uid, gid)) => {
+                reclaim::shrink_worktree(&work.path, &scope.user, uid, gid).map(|_| None)
+            }
+            None => Err("unknown user".into()),
+        };
+    }
+    if reclaim::truthy(work.detail.get("worktree").unwrap_or(&Value::Null)) {
+        if let Some(repo) = work.detail.get("repo").and_then(Value::as_str) {
+            reclaim::run_as(
+                &scope.user,
+                &[
+                    "git", "-C", repo, "worktree", "remove", "--force", &work.path,
+                ],
+                None,
+            );
+        }
+    }
+    let owner = work
+        .detail
+        .get("owner")
+        .and_then(Value::as_str)
+        .unwrap_or(&scope.user);
+    let paths: Vec<String> = work
+        .files
+        .iter()
+        .filter(|path| reclaim::lexists(path))
+        .cloned()
+        .collect();
+    if paths.is_empty() {
+        return Ok(Some(0));
+    }
+    let ids = if owner == "root" {
+        Some((0, 0))
+    } else {
+        reclaim::user_ids(owner)
+    };
+    let Some((uid, gid)) = ids else {
+        return Err(format!("unknown user {owner}"));
+    };
+    let outcome = remove::remove_as(uid, gid, paths);
+    match outcome.failed.first() {
+        Some((path, code)) => Err(format!(
+            "remove failed: {path}: {}",
+            std::io::Error::from_raw_os_error(*code)
+        )),
+        None => Ok(Some(outcome.released)),
+    }
+}
+
+impl Worker {
     fn store(&mut self, task: &Task) -> (HashSet<String>, Value) {
         if task.ordered.is_empty() {
             return (HashSet::new(), Value::Null);
@@ -277,7 +327,8 @@ impl Worker {
     }
 
     fn item(&mut self, task: Task) {
-        if self.items == 0 && self.refusals.is_empty() {
+        self.reap(false);
+        if self.items == 0 && self.refusals.is_empty() && self.shrinking.is_empty() {
             self.started = sys::now();
             self.free = free();
         }
@@ -294,8 +345,11 @@ impl Worker {
             return self.refuse(work, reason);
         }
         self.send(Event::Begun(work.path.clone(), sys::now()));
+        if in_place(work) {
+            return self.shrink(task);
+        }
         let started = sys::now();
-        let files = match self.remove_files(&task) {
+        let files = match remove_files(&task) {
             Ok(released) => released,
             Err(reason) => return self.refuse(work, reason),
         };
@@ -322,6 +376,7 @@ impl Worker {
     }
 
     fn close(&mut self) {
+        self.reap(true);
         let report = match self.session.take() {
             Some(Ok(session)) => {
                 let report = &session.report;
@@ -385,9 +440,13 @@ pub fn run(commands: Receiver<Command>, events: Sender<Event>, wake: i32, round:
         claimed: 0,
         refusals: Vec::new(),
         free: 0,
+        shrinking: Vec::new(),
     };
     loop {
-        let open = worker.session.is_some() || worker.items > 0 || !worker.refusals.is_empty();
+        let open = worker.session.is_some()
+            || worker.items > 0
+            || !worker.refusals.is_empty()
+            || !worker.shrinking.is_empty();
         let command = if open {
             commands.recv_timeout(IDLE)
         } else {

@@ -170,8 +170,8 @@ impl Kind {
 
     pub fn weight(self) -> f64 {
         match self {
-            Kind::Dead | Kind::Cache | Kind::StaleShell => 64.0,
-            Kind::Stray => 16.0,
+            Kind::Dead | Kind::StaleShell => 64.0,
+            Kind::Cache | Kind::Stray => 16.0,
             Kind::Build | Kind::Project | Kind::Deploy => 4.0,
             Kind::Temp | Kind::Generation | Kind::Agent | Kind::Trash | Kind::Download => 1.0,
             Kind::Repo => 1.0 / 16.0,

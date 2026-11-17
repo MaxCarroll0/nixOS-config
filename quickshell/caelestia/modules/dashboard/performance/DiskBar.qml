@@ -189,6 +189,18 @@ Item {
         color: root.model.scheduledColor
     }
 
+    readonly property var nextMark: root.boxes.find(box => box.next) ?? null
+
+    StyledText {
+        visible: root.nextMark !== null && root.model.head !== null
+        anchors.bottom: parent.top
+        anchors.bottomMargin: 10
+        x: root.nextMark ? Math.max(0, Math.min(root.nextMark.x + root.nextMark.w / 2 - implicitWidth / 2, parent.width - implicitWidth)) : 0
+        text: root.model.head ? `${root.model.head.label} ${root.model.gib(root.model.head.size)}` : ""
+        font: Tokens.font.body.small
+        color: root.model.deletingColor
+    }
+
     Pointers {
         y: -size - 4
         width: parent.width

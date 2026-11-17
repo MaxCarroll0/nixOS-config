@@ -75,14 +75,15 @@ Item {
     readonly property bool loaded: overview.segments !== undefined
     readonly property date updated: new Date(receivedAt * 1000)
     readonly property bool collecting: collector.state === "collecting"
-    readonly property string collectingStage: collecting ? (segment(kindKey[collector.kind] ?? "")?.label ?? collector.kind ?? "") : ""
+    readonly property string collectingStage: collecting ? (segment(head?.kind ?? "")?.label ?? "") : ""
     readonly property string collectingText: {
         if (!collecting)
             return "";
-        const first = (collector.head ?? [])[0] ?? "";
+        const handed = collector.handed ?? [];
+        const first = collector.deleting ?? handed[0] ?? "";
         const name = first.startsWith(home + "/") ? `~${first.slice(home.length)}` : first.replace(/^\/nix\/store\/[a-z0-9]{32}-/, "");
-        const more = (collector.items ?? 1) > 1 ? ` +${collector.items - 1} more` : "";
-        return name ? `${collectingStage}: ${name}${more}` : collectingStage;
+        const more = handed.length > 1 ? ` +${handed.length - 1} queued` : "";
+        return name ? `deleting ${name}${more}` : "collecting";
     }
 
     readonly property var kindKey: ({
