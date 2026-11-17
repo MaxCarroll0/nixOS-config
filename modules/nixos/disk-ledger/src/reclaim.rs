@@ -1720,7 +1720,7 @@ impl Model {
                 }
                 continue;
             }
-            if !(item.kind == Kind::Repo || item.flag("compress")) {
+            if !(matches!(item.kind, Kind::Repo | Kind::Game) || item.flag("compress")) {
                 containers.insert(item.path.clone(), items.len());
             }
             items.push(item);
