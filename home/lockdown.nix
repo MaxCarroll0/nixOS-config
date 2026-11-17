@@ -49,70 +49,105 @@ let
     };
   };
 
-  profileType = lib.types.submodule {
+  actionType = lib.types.submodule {
     options = {
-      days = lib.mkOption {
-        type = lib.types.listOf (lib.types.ints.between 1 7);
-        default = [
-          1
-          2
-          3
-          4
-          5
-        ];
-        description = "ISO weekdays the profile engages on; the default is Monday to Friday.";
-      };
-      start = lib.mkOption {
+      label = lib.mkOption {
         type = lib.types.str;
-        description = "Local HH:MM from which the profile engages.";
+        description = "Button text on the lock banner.";
       };
-      end = lib.mkOption {
-        type = lib.types.str;
-        default = "24:00";
-        description = "Local HH:MM at which the profile stops engaging; the default is midnight.";
-      };
-      password = lib.mkOption {
-        type = lib.types.str;
-        description = "Plaintext password that releases the profile until midnight.";
-      };
-      releaseCheck = lib.mkOption {
-        type = lib.types.nullOr (lib.types.listOf lib.types.str);
-        default = null;
-        description = "Command whose exit status 0 releases the profile for the rest of the day; null never releases.";
-      };
-      allow = lib.mkOption {
-        type = lib.types.attrsOf (lib.types.listOf ruleType);
-        description = "Windows kept visible per substate; the profile starts each day in substate active.";
-      };
-      binds = lib.mkOption {
-        type = lib.types.listOf bindType;
-        default = [ ];
-        description = "Keys available inside the lockdown submap while this profile is engaged.";
-      };
-      onEngage = lib.mkOption {
-        type = lib.types.nullOr (lib.types.listOf lib.types.str);
-        default = null;
-        description = "Command run when the profile engages.";
-      };
-      onRelease = lib.mkOption {
-        type = lib.types.nullOr (lib.types.listOf lib.types.str);
-        default = null;
-        description = "Command run when the profile releases.";
-      };
-      message = lib.mkOption {
-        type = lib.types.str;
-        default = "";
-        description = "Text shown on the unlock prompt.";
+      command = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        description = "Command run detached when the button is pressed.";
       };
     };
   };
+
+  profileType = lib.types.submodule (
+    { name, ... }:
+    {
+      options = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Whether the profile is evaluated at all; a disabled profile never engages.";
+        };
+        workspace = lib.mkOption {
+          type = lib.types.str;
+          default = name;
+          description = "Named workspace the lockdown pins focus to; allowlisted windows live there.";
+        };
+        actions = lib.mkOption {
+          type = lib.types.listOf actionType;
+          default = [ ];
+          description = "Buttons shown on the lock banner while the profile is engaged.";
+        };
+        days = lib.mkOption {
+          type = lib.types.listOf (lib.types.ints.between 1 7);
+          default = [
+            1
+            2
+            3
+            4
+            5
+          ];
+          description = "ISO weekdays the profile engages on; the default is Monday to Friday.";
+        };
+        start = lib.mkOption {
+          type = lib.types.str;
+          description = "Local HH:MM from which the profile engages.";
+        };
+        end = lib.mkOption {
+          type = lib.types.str;
+          default = "24:00";
+          description = "Local HH:MM at which the profile stops engaging; the default is midnight.";
+        };
+        password = lib.mkOption {
+          type = lib.types.str;
+          description = "Plaintext password that releases the profile until midnight.";
+        };
+        releaseCheck = lib.mkOption {
+          type = lib.types.nullOr (lib.types.listOf lib.types.str);
+          default = null;
+          description = "Command whose exit status 0 releases the profile for the rest of the day; null never releases.";
+        };
+        allow = lib.mkOption {
+          type = lib.types.attrsOf (lib.types.listOf ruleType);
+          description = "Windows kept visible per substate; the profile starts each day in substate active.";
+        };
+        binds = lib.mkOption {
+          type = lib.types.listOf bindType;
+          default = [ ];
+          description = "Keys available inside the lockdown submap while this profile is engaged.";
+        };
+        onEngage = lib.mkOption {
+          type = lib.types.nullOr (lib.types.listOf lib.types.str);
+          default = null;
+          description = "Command run when the profile engages.";
+        };
+        onRelease = lib.mkOption {
+          type = lib.types.nullOr (lib.types.listOf lib.types.str);
+          default = null;
+          description = "Command run when the profile releases.";
+        };
+        message = lib.mkOption {
+          type = lib.types.str;
+          default = "";
+          description = "Text shown on the unlock prompt.";
+        };
+      };
+    }
+  );
 
   stripRule = r: lib.filterAttrs (_: v: v != null) r;
 
   promptClass = "lockdown-prompt";
 
+  enabled = lib.filterAttrs (_: p: p.enable) cfg.profiles;
+
   profilesJson = lib.mapAttrs (_: p: {
     inherit (p)
+      workspace
+      actions
       days
       start
       end
@@ -124,9 +159,9 @@ let
     on_release = p.onRelease;
     allow = lib.mapAttrs (_: map stripRule) p.allow;
     allow_always = [ { class = "^${promptClass}$"; } ];
-  }) cfg.profiles;
+  }) enabled;
 
-  allBinds = lib.concatLists (lib.mapAttrsToList (_: p: p.binds) cfg.profiles);
+  allBinds = lib.concatLists (lib.mapAttrsToList (_: p: p.binds) enabled);
 
   exec = cmd: "hl.dsp.exec_cmd(${luaStr cmd})";
 
@@ -135,7 +170,12 @@ let
     ${lib.concatMapStringsSep "\n" (
       b: "  hl.bind(${luaStr b.key}, ${exec b.command}, { description = ${luaStr b.description} })"
     ) allBinds}
-      hl.bind("SUPER+Escape", ${exec "kitty --class ${promptClass} -e ${lib.getExe lockdown} prompt"}, { description = "unlock with password" })
+      hl.bind("SUPER+F1", ${exec "kitty --class ${promptClass} -e ${lib.getExe lockdown} prompt"}, { description = "unlock with password" })
+      hl.bind("SUPER+h", hl.dsp.focus({ direction = "l" }), { description = "focus left" })
+      hl.bind("SUPER+l", hl.dsp.focus({ direction = "r" }), { description = "focus right" })
+      hl.bind("SUPER+k", hl.dsp.focus({ direction = "u" }), { description = "focus up" })
+      hl.bind("SUPER+j", hl.dsp.focus({ direction = "d" }), { description = "focus down" })
+      hl.bind("SUPER+SHIFT+f", hl.dsp.window.fullscreen({ mode = "fullscreen" }), { description = "toggle fullscreen" })
       hl.bind("XF86AudioRaiseVolume", ${exec "wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+"}, { repeating = true })
       hl.bind("XF86AudioLowerVolume", ${exec "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"}, { repeating = true })
       hl.bind("XF86AudioMute", ${exec "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"})
@@ -179,7 +219,7 @@ in
     };
   };
 
-  config = lib.mkIf (cfg.profiles != { }) {
+  config = lib.mkIf (enabled != { }) {
     home.packages = [
       lockdown
       pkgs.brightnessctl
@@ -205,7 +245,10 @@ in
     systemd.user.timers.lockdown = {
       Unit.Description = "Evaluate lockdown profiles at each start and every minute";
       Timer = {
-        OnCalendar = [ "minutely" ] ++ lib.mapAttrsToList (_: calendar) cfg.profiles;
+        OnCalendar = [
+          "minutely"
+        ]
+        ++ lib.mapAttrsToList (_: calendar) (lib.filterAttrs (_: p: p.days != [ ]) enabled);
         Persistent = true;
         AccuracySec = "5s";
       };

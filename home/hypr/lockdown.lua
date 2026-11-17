@@ -1,9 +1,9 @@
--- Lockdown enforcement: hides windows outside the engaged profile's allowlist and pins the lockdown submap.
+-- Lockdown enforcement: pins focus to the engaged profile's own workspace and keeps only allowlisted windows on it.
 
-local M = { source = nil, active = nil, origin = {}, kb_options = nil }
+local M = { source = nil, active = nil, kb_options = nil, opened = {} }
 
 local runtime = (os.getenv("XDG_RUNTIME_DIR") or "/run/user/1000") .. "/lockdown/active.lua"
-local hidden = "special:lockdown"
+local stash = "special:lockdown"
 
 local function read_active()
     local file = io.open(runtime, "r")
@@ -29,44 +29,61 @@ local function allowed(window)
     return false
 end
 
-local function workspace_name(window)
-    return window.workspace and window.workspace.name or nil
+local function home()
+    return "name:" .. M.active.workspace
 end
 
-local function hide(window)
-    local ws = workspace_name(window)
-    if ws == hidden then return end
-    M.origin[window.address] = window.workspace.id
-    hl.dispatch(hl.dsp.window.move({ workspace = hidden, follow = false, window = window }))
+local function on(window, name)
+    return window.workspace ~= nil and window.workspace.name == name
 end
 
-local function reveal(window)
-    if workspace_name(window) ~= hidden then return end
-    local target = M.origin[window.address] or hl.get_active_workspace().id
-    M.origin[window.address] = nil
+local function move(window, target)
     hl.dispatch(hl.dsp.window.move({ workspace = target, follow = false, window = window }))
-    return target
 end
 
-local function enforce_window(window)
+local function maximise(window)
+    if window.fullscreen == 0 then
+        hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 1, client = 0, window = "address:" .. window.address }))
+    end
+end
+
+local function free_workspace()
+    local used = {}
+    for _, window in ipairs(hl.get_windows()) do
+        if window.workspace and window.workspace.id then used[window.workspace.id] = true end
+    end
+    local id = 1
+    while used[id] do id = id + 1 end
+    return id
+end
+
+local function settle(window)
     if not (M.active and window and window.mapped and window.workspace) then return end
+    local here = on(window, M.active.workspace)
+    local stashed = on(window, stash)
     if allowed(window) then
-        local target = reveal(window)
-        if target then
-            hl.dispatch(hl.dsp.focus({ workspace = target }))
-            hl.dispatch(hl.dsp.focus({ window = window }))
+        if stashed or (M.opened[window.address] and not here) then
+            move(window, home())
+            maximise(window)
+        elseif here then
+            maximise(window)
         end
-    else
-        hide(window)
+    elseif here then
+        M.opened[window.address] = true
+        move(window, stash)
     end
 end
 
 local function enforce()
     if not M.active then return end
-    for _, window in ipairs(hl.get_windows()) do enforce_window(window) end
+    for _, window in ipairs(hl.get_windows()) do settle(window) end
     local special = hl.get_active_special_workspace()
-    if special and special.name == hidden then
+    if special and special.name == stash then
         hl.dispatch(hl.dsp.workspace.toggle_special("lockdown"))
+    end
+    local current = hl.get_active_workspace()
+    if not (current and current.name == M.active.workspace) then
+        hl.dispatch(hl.dsp.focus({ workspace = home() }))
     end
     if hl.get_current_submap() ~= "lockdown" then hl.dispatch(hl.dsp.submap("lockdown")) end
 end
@@ -81,10 +98,14 @@ local function engage()
 end
 
 local function release()
+    local target = nil
     for _, window in ipairs(hl.get_windows()) do
-        if window.workspace and workspace_name(window) == hidden then reveal(window) end
+        if on(window, stash) then
+            target = target or free_workspace()
+            move(window, target)
+        end
     end
-    M.origin = {}
+    M.opened = {}
     if M.kb_options ~= nil then
         hl.config({ ["input.kb_options"] = M.kb_options })
         M.kb_options = nil
@@ -105,7 +126,13 @@ local function poll()
 end
 
 hl.on("window.open", function(window)
-    if M.active then hl.timer(function() enforce_window(window) end, { timeout = 50, type = "oneshot" }) end
+    if not M.active then return end
+    M.opened[window.address] = true
+    hl.timer(function() settle(window) end, { timeout = 50, type = "oneshot" })
+end)
+
+hl.on("window.close", function(window)
+    M.opened[window.address] = nil
 end)
 
 hl.on("keybinds.submap", function()

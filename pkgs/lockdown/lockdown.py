@@ -113,6 +113,7 @@ def publish(active: dict | None) -> None:
     fields = [
         f"profile = {lua_string(active['profile'])}",
         f"substate = {lua_string(active['substate'])}",
+        f"workspace = {lua_string(active['workspace'])}",
         f"allow = {lua_rules(active['allow'])}",
     ]
     text = "return { " + ", ".join(fields) + " }\n"
@@ -148,6 +149,8 @@ def apply(at: dt.datetime) -> dict:
                 "profile": name,
                 "substate": substate,
                 "allow": allow,
+                "workspace": profile.get("workspace") or name,
+                "actions": profile.get("actions", []),
                 "message": profile.get("message", ""),
                 "reason": why,
             }
