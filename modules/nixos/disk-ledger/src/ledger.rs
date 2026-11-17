@@ -70,7 +70,7 @@ const EVENTS_READ: usize = 4000;
 const WATCHES: usize = 16;
 const SWEPT: usize = 40;
 
-pub const SEGMENTS: [(&str, &str, &str, bool); 21] = [
+pub const SEGMENTS: [(&str, &str, &str, bool); 22] = [
     ("running_system", "running system", "live", false),
     ("home_profile", "profiles", "live", false),
     ("processes", "in use", "live", false),
@@ -86,6 +86,7 @@ pub const SEGMENTS: [(&str, &str, &str, bool); 21] = [
     ("project", "project closures", "reclaim", true),
     ("generation", "generations", "reclaim", true),
     ("agent", "agent work", "reclaim", true),
+    ("trash", "recycle bin", "reclaim", true),
     ("home_files", "home files", "files", true),
     ("system_files", "system files", "files", false),
     ("swap", "swapfile", "system", false),
@@ -1499,6 +1500,18 @@ impl Ledger {
                 } else {
                     format!("{store} game {}, {when}; saves and prefixes are kept, reinstall from {store}", item.text("title"))
                 }
+            }
+            Kind::Trash => {
+                let origin = item.text("origin");
+                let from = if origin.is_empty() {
+                    String::new()
+                } else {
+                    format!(" from {}", short(origin, &self.home))
+                };
+                format!(
+                    "in the recycle bin since {}{from}",
+                    probe::local("%Y-%m-%d %H:%M", item.last_used)
+                )
             }
             Kind::Repo => {
                 let dirty = if item.flag("dirty") {
@@ -3402,6 +3415,7 @@ impl Ledger {
             "project",
             "generation",
             "agent",
+            "trash",
             "home_files",
         ] {
             let mut members: Vec<&Item> = folded(key)

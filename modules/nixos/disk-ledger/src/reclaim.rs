@@ -112,9 +112,10 @@ pub enum Kind {
     Agent,
     Repo,
     Game,
+    Trash,
 }
 
-pub const KINDS: [Kind; 12] = [
+pub const KINDS: [Kind; 13] = [
     Kind::Dead,
     Kind::Cache,
     Kind::Temp,
@@ -127,6 +128,7 @@ pub const KINDS: [Kind; 12] = [
     Kind::Agent,
     Kind::Repo,
     Kind::Game,
+    Kind::Trash,
 ];
 
 impl Kind {
@@ -144,6 +146,7 @@ impl Kind {
             Kind::Agent => "agent",
             Kind::Repo => "git clone",
             Kind::Game => "game",
+            Kind::Trash => "recycle bin",
         }
     }
 
@@ -152,6 +155,7 @@ impl Kind {
             Kind::StaleShell => "stale_shell",
             Kind::Stray => "stray",
             Kind::Repo => "repo",
+            Kind::Trash => "trash",
             other => other.name(),
         }
     }
@@ -161,7 +165,7 @@ impl Kind {
             Kind::Dead | Kind::Cache | Kind::StaleShell => 64.0,
             Kind::Stray => 16.0,
             Kind::Build | Kind::Project | Kind::Deploy => 4.0,
-            Kind::Temp | Kind::Generation | Kind::Agent => 1.0,
+            Kind::Temp | Kind::Generation | Kind::Agent | Kind::Trash => 1.0,
             Kind::Repo => 1.0 / 16.0,
             Kind::Game => 1.0 / 4.0,
         }
@@ -1293,6 +1297,13 @@ impl Scope {
                         return Some("not a shrinkable clone".into());
                     }
                 }
+                Kind::Trash => {
+                    let trash = join(&self.home, ".local/share/Trash");
+                    let record = parent == join(&trash, "info") && name.ends_with(".trashinfo");
+                    if !(record || parent == join(&trash, "files")) || name == ".." {
+                        return Some("not in the recycle bin".into());
+                    }
+                }
                 other => return Some(format!("{} owns no files", other.name())),
             }
         }
@@ -1544,6 +1555,7 @@ impl Model {
         found.extend(self.agent_worktrees(files, worktrees));
         found.extend(self.clone_items(files, repos));
         found.extend(self.game_items());
+        found.extend(self.trash_items());
         found.extend(self.build_items(files));
         let mut containers = HashMap::new();
         for item in found {
@@ -3138,12 +3150,62 @@ pub fn games(home: &str, only: &str) -> Vec<Game> {
 }
 
 impl Model {
+    fn trash_items(&self) -> Vec<Item> {
+        let trash = join(&self.home, ".local/share/Trash");
+        let bin = join(&trash, "files");
+        list_sorted(&bin)
+            .into_iter()
+            .map(|name| {
+                let path = join(&bin, &name);
+                let record = join(&trash, &format!("info/{name}.trashinfo"));
+                let deleted = if lexists(&record) {
+                    lstat_time(&record)
+                } else {
+                    lstat_time(&path)
+                };
+                let origin = std::fs::read_to_string(&record)
+                    .ok()
+                    .and_then(|text| {
+                        text.lines()
+                            .find_map(|line| line.strip_prefix("Path=").map(percent_decoded))
+                    })
+                    .unwrap_or_default();
+                Item::new(Kind::Trash, path.clone(), deleted)
+                    .with_files(vec![path, record])
+                    .with_detail(json!({"owner": self.user, "origin": origin}))
+            })
+            .collect()
+    }
+
     fn game_items(&mut self) -> Vec<Item> {
         games(&self.home, "").into_iter().map(|game| {
             let used = (game.played.max(game.installed) as f64).max(0.0);
             Item::new(Kind::Game, game.root.clone(), used).with_files(game.files.clone()).with_detail(json!({"owner": self.user, "store": game.store, "id": game.id, "title": game.title, "played": game.played, "installed": game.installed, "tool": game.tool}))
         }).collect()
     }
+}
+
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let escaped = (bytes[index] == b'%')
+            .then(|| text.get(index + 1..index + 3))
+            .flatten()
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escaped {
+            Some(byte) => {
+                out.push(byte);
+                index += 3;
+            }
+            None => {
+                out.push(bytes[index]);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 pub fn forget_heroic(home: &str, id: &str, user: &str) -> Result<(), String> {

@@ -96,7 +96,8 @@ Item {
             "generation": "generation",
             "agent": "agent",
             "git clone": "home_files",
-            "game": "home_files"
+            "game": "home_files",
+            "recycle bin": "trash"
         })
 
     readonly property real hue: Colours.palette.m3primary.hslHue < 0 ? 0.6 : Colours.palette.m3primary.hslHue
@@ -132,6 +133,7 @@ Item {
             project: tone(0.58, 0.44),
             generation: tone(0.66, 0.46),
             agent: tone(0.7, 0.4),
+            trash: tone(0.74, 0.48),
             home_files: tone(0.78, 0.5),
             system_files: grey(0.5),
             swap: grey(0.44),
