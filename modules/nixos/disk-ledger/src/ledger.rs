@@ -401,6 +401,7 @@ struct Client {
     watches: Vec<Watch>,
     sent: HashMap<String, u64>,
     events_upto: Option<u64>,
+    frame: u64,
 }
 
 struct Statfs {
@@ -3182,6 +3183,7 @@ impl Ledger {
                     watches: Vec::new(),
                     sent: HashMap::new(),
                     events_upto: None,
+                    frame: 0,
                 },
             );
         }
@@ -3284,40 +3286,61 @@ impl Ledger {
             Some(client) => client.watches.clone(),
             None => return false,
         };
+        let mut messages: Vec<Rc<(String, u64)>> = Vec::new();
+        let mut sent: Vec<(String, u64)> = Vec::new();
+        let mut events = None;
         for watch in watches {
             if watch.id == "events" {
-                if !self.push_events(fd) {
-                    return false;
-                }
+                events = self.events_message(fd);
                 continue;
             }
             let node_id = watch.key();
             let entry = self.render(&watch);
-            let Some(client) = self.clients.get_mut(&fd) else {
+            let Some(client) = self.clients.get(&fd) else {
                 return false;
             };
             if client.sent.get(&node_id) == Some(&entry.1) {
                 continue;
             }
-            let mut line = entry.0.clone().into_bytes();
-            line.push(b'\n');
-            if client.stream.write_all(&line).is_err() {
-                self.clients.remove(&fd);
-                return false;
+            sent.push((node_id, entry.1));
+            messages.push(entry);
+        }
+        if messages.is_empty() && events.is_none() {
+            return true;
+        }
+        let Some(client) = self.clients.get_mut(&fd) else {
+            return false;
+        };
+        client.frame += 1;
+        let mut line = format!("{{\"frame\":{},\"messages\":[", client.frame).into_bytes();
+        for (index, text) in messages
+            .iter()
+            .map(|entry| entry.0.as_str())
+            .chain(events.as_ref().map(|(text, _)| text.as_str()))
+            .enumerate()
+        {
+            if index > 0 {
+                line.push(b',');
             }
-            client.sent.insert(node_id, entry.1);
+            line.extend_from_slice(text.as_bytes());
+        }
+        line.extend_from_slice(b"]}\n");
+        if client.stream.write_all(&line).is_err() {
+            self.clients.remove(&fd);
+            return false;
+        }
+        client.sent.extend(sent);
+        if let Some((_, next)) = events {
+            client.events_upto = Some(next);
         }
         true
     }
 
-    fn push_events(&mut self, fd: i32) -> bool {
+    fn events_message(&mut self, fd: i32) -> Option<(String, u64)> {
         let first = self.events.first().map(seq_of).unwrap_or(self.next_seq);
-        let upto = match self.clients.get(&fd) {
-            Some(client) => client.events_upto,
-            None => return false,
-        };
+        let upto = self.clients.get(&fd)?.events_upto;
         let line = match upto {
-            Some(upto) if upto == self.next_seq => return true,
+            Some(upto) if upto == self.next_seq => return None,
             Some(upto) if upto >= first => {
                 let start = self.events.partition_point(|event| seq_of(event) < upto);
                 json!({"id": "events", "append": &self.events[start..]}).to_string()
@@ -3330,18 +3353,7 @@ impl Ledger {
                 self.events_text.clone().unwrap()
             }
         };
-        let next = self.next_seq;
-        let Some(client) = self.clients.get_mut(&fd) else {
-            return false;
-        };
-        let mut bytes = line.into_bytes();
-        bytes.push(b'\n');
-        if client.stream.write_all(&bytes).is_err() {
-            self.clients.remove(&fd);
-            return false;
-        }
-        client.events_upto = Some(next);
-        true
+        Some((line, self.next_seq))
     }
 
     fn push_changes(&mut self) {

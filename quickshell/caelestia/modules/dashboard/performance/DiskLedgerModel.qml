@@ -21,6 +21,7 @@ Item {
     property int pendingTarget: 0
     readonly property bool targetPending: pendingTarget > 0
     property real receivedAt: 0
+    property int frame: 0
     property bool paused: false
     property bool streamed: false
     property var held: ({})
@@ -227,41 +228,54 @@ Item {
         } catch (e) {
             return;
         }
-        if (paused && (!drillIds.includes(message.id) || message.id in nodes)) {
-            const before = held[message.id];
-            held[message.id] = message.append && before ? {
-                id: message.id,
-                data: before.data,
-                append: (before.append ?? []).concat(message.append)
-            } : message;
-            return;
+        const fresh = [];
+        for (const one of message.messages ?? [message]) {
+            if (paused && (!drillIds.includes(one.id) || one.id in nodes)) {
+                const before = held[one.id];
+                held[one.id] = one.append && before ? {
+                    id: one.id,
+                    data: before.data,
+                    append: (before.append ?? []).concat(one.append)
+                } : one;
+            } else
+                fresh.push(one);
         }
-        apply(message);
+        apply(fresh);
+        if (message.frame !== undefined)
+            frame = message.frame;
     }
 
-    function apply(message: var): void {
+    function apply(messages: var): void {
         receivedAt = Date.now() / 1000;
-        if (message.id === "overview") {
-            overview = message.data;
-            streamed = true;
-        } else if (message.id === "history")
-            historyData = message.data;
-        else if (message.id === "events") {
-            const base = message.data ?? events;
-            const joined = message.append ? base.concat(message.append) : base;
-            events = joined.length > eventLimit ? joined.slice(joined.length - eventLimit) : joined;
-        } else if (message.id === "tracker")
-            tracker = message.data;
-        else {
-            const copy = {};
-            const sizes = {};
-            for (const id in nodes)
-                if (paused || drillIds.includes(id)) {
-                    copy[id] = nodes[id];
-                    sizes[id] = counts[id];
+        let copy = null;
+        let sizes = null;
+        for (const message of messages) {
+            if (message.id === "overview") {
+                overview = message.data;
+                streamed = true;
+            } else if (message.id === "history")
+                historyData = message.data;
+            else if (message.id === "events") {
+                const base = message.data ?? events;
+                const joined = message.append ? base.concat(message.append) : base;
+                events = joined.length > eventLimit ? joined.slice(joined.length - eventLimit) : joined;
+            } else if (message.id === "tracker")
+                tracker = message.data;
+            else {
+                if (copy === null) {
+                    copy = {};
+                    sizes = {};
+                    for (const id in nodes)
+                        if (paused || drillIds.includes(id)) {
+                            copy[id] = nodes[id];
+                            sizes[id] = counts[id];
+                        }
                 }
-            copy[message.id] = message.data;
-            sizes[message.id] = message.count ?? message.data.length;
+                copy[message.id] = message.data;
+                sizes[message.id] = message.count ?? message.data.length;
+            }
+        }
+        if (copy !== null) {
             counts = sizes;
             nodes = copy;
         }
@@ -278,9 +292,7 @@ Item {
             if (id in nodes)
                 kept[id] = nodes[id];
         nodes = kept;
-        for (const id in buffered)
-            if (["overview", "history", "events", "tracker"].includes(id) || drillIds.includes(id))
-                apply(buffered[id]);
+        apply(Object.keys(buffered).filter(id => ["overview", "history", "events", "tracker"].includes(id) || drillIds.includes(id)).map(id => buffered[id]));
     }
 
     function gib(bytes: real): string {
