@@ -178,7 +178,6 @@
       onlyWhenActive = true;
     };
     piFirmware.enable = true;
-    grafana.anonymousViewer = true;
     grafana.domain = "pi";
     smart.selfTest.enable = true;
     server.enable = true;
