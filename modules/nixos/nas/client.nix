@@ -57,6 +57,8 @@ in
         "vers=3.1.1"
         "seal"
         "cache=strict"
+        "rsize=262144"
+        "wsize=262144"
         "uid=max"
         "gid=users"
         "file_mode=0600"
