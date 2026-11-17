@@ -808,3 +808,11 @@ fn emacs_backups_are_temp_items() {
         )
         .is_some());
 }
+
+#[test]
+fn run_as_streams_input_larger_than_a_pipe() {
+    let input = "x".repeat(1 << 20) + "\n";
+    let output = run_as("root", &["cat"], Some(&input));
+    assert!(output.status.success());
+    assert_eq!(output.stdout.len(), input.len());
+}

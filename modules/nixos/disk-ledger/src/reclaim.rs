@@ -759,11 +759,21 @@ pub fn run_as(user: &str, command: &[&str], input: Option<&str>) -> Output {
             stderr: Vec::new(),
         };
     };
-    if let (Some(text), Some(mut stdin)) = (input, running.stdin.take()) {
-        use std::io::Write;
-        let _ = stdin.write_all(text.as_bytes());
+    let feeder = match (input, running.stdin.take()) {
+        (Some(text), Some(mut stdin)) => {
+            let text = text.to_string();
+            Some(std::thread::spawn(move || {
+                use std::io::Write;
+                let _ = stdin.write_all(text.as_bytes());
+            }))
+        }
+        _ => None,
+    };
+    let output = running.wait_with_output();
+    if let Some(feeder) = feeder {
+        let _ = feeder.join();
     }
-    running.wait_with_output().unwrap_or_else(|_| Output {
+    output.unwrap_or_else(|_| Output {
         status: std::os::unix::process::ExitStatusExt::from_raw(127 << 8),
         stdout: Vec::new(),
         stderr: Vec::new(),
