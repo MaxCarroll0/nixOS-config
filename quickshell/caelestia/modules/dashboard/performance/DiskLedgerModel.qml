@@ -394,17 +394,18 @@ Item {
                 root.subscribe();
             } else {
                 root.streamed = false;
-                retry.start();
             }
         }
-        onError: retry.start()
     }
 
     Timer {
-        id: retry
-
         interval: 2000
-        onTriggered: socket.connected = true
+        repeat: true
+        running: !socket.connected
+        onTriggered: {
+            socket.connected = false;
+            socket.connected = true;
+        }
     }
 
     FileView {

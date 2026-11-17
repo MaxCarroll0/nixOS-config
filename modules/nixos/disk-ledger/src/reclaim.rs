@@ -1314,6 +1314,15 @@ impl Scope {
                     {
                         return Some("not a shrinkable clone".into());
                     }
+                    let worktrees = entry.detail.get("worktrees").and_then(Value::as_array);
+                    if worktrees
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .any(|tree| busy.contains(tree))
+                    {
+                        return Some("a linked worktree is in use".into());
+                    }
                 }
                 Kind::Trash => {
                     let trash = join(&self.home, ".local/share/Trash");
@@ -1851,7 +1860,11 @@ impl Model {
         for (repo, used) in repos {
             match known.get(&repo).map(|check| &check.state) {
                 Some(Ok(state)) => {
-                    let detail = json!({"owner": self.user, "clone": true, "dirty": state.dirty, "head": state.head, "remote": state.remote, "tracked_bytes": state.bytes, "clean_files": state.clean.len(), "unpushed": state.unpushed});
+                    let worktrees = state
+                        .partial
+                        .as_ref()
+                        .map(|partial| partial.worktrees.clone());
+                    let detail = json!({"owner": self.user, "clone": true, "dirty": state.dirty, "head": state.head, "remote": state.remote, "tracked_bytes": state.bytes, "clean_files": state.clean.len(), "unpushed": state.unpushed, "partial": state.partial.is_some(), "worktrees": worktrees.unwrap_or_default()});
                     let mut item = Item::new(Kind::Repo, repo.clone(), used)
                         .with_files(vec![join(&repo, ".git/objects")])
                         .with_detail(detail);
@@ -2282,11 +2295,16 @@ impl Model {
         for (index, total) in totals {
             let item = &mut self.items[index];
             item.file_bytes = if item.kind == Kind::Repo {
-                item.detail
+                let estimate = item
+                    .detail
                     .get("tracked_bytes")
                     .and_then(Value::as_u64)
-                    .unwrap_or(0)
-                    .max(total)
+                    .unwrap_or(0);
+                if truthy(item.detail.get("partial").unwrap_or(&Value::Null)) {
+                    estimate.min(total)
+                } else {
+                    estimate.max(total)
+                }
             } else {
                 total
             };
@@ -2387,6 +2405,15 @@ pub struct CloneState {
     pub remote: String,
     pub unpushed: usize,
     pub bundle: String,
+    pub partial: Option<Partial>,
+}
+
+#[derive(Clone)]
+pub struct Partial {
+    pub remote: String,
+    pub worktrees: Vec<String>,
+    pub heads: Vec<String>,
+    pub present: Vec<String>,
 }
 
 pub struct CloneCheck {
@@ -2479,12 +2506,9 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
     {
         return Err(format!("{marker} in progress"));
     }
-    if !list_dir(&join(&dot, "worktrees"))
+    let linked = !list_dir(&join(&dot, "worktrees"))
         .unwrap_or_default()
-        .is_empty()
-    {
-        return Err("has linked worktrees".into());
-    }
+        .is_empty();
     for (name, reason) in [
         (".git/modules", "has submodules"),
         (".gitmodules", "has submodules"),
@@ -2496,10 +2520,10 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
         }
     }
     let config = git(user, repo, &["config", "--list", "-z"], None).ok_or("unreadable config")?;
-    let mut remotes: Vec<String> = Vec::new();
+    let mut remotes: Vec<(String, String)> = Vec::new();
     for entry in config.split('\0') {
-        let (key, value) = entry.split_once('\n').unwrap_or((entry, ""));
-        let key = key.to_ascii_lowercase();
+        let (original, value) = entry.split_once('\n').unwrap_or((entry, ""));
+        let key = original.to_ascii_lowercase();
         if (key == "core.sparsecheckout" || key == "core.bare") && value == "true" {
             return Err(format!("{key} set"));
         }
@@ -2507,22 +2531,21 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
             return Err("partial clone".into());
         }
         if key.starts_with("remote.") && key.ends_with(".url") && network_url(value) {
-            remotes.push(value.to_string());
+            let name = &original["remote.".len()..original.len() - ".url".len()];
+            remotes.push((name.to_string(), value.to_string()));
         }
     }
     if remotes.is_empty() {
         return Err("no online remote".into());
     }
-    if git(
+    let stashed = git(
         user,
         repo,
         &["rev-parse", "--verify", "--quiet", "refs/stash"],
         None,
     )
-    .is_some()
-    {
-        return Err("has stash entries".into());
-    }
+    .is_some();
+    let partial = linked || stashed;
     let head = git(user, repo, &["rev-parse", "--verify", "HEAD"], None)
         .ok_or("no commits")?
         .trim()
@@ -2531,10 +2554,10 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
     let mut tracked: Vec<&str> = Vec::new();
     for entry in listing.split('\0').filter(|entry| entry.len() > 2) {
         let tag = entry.as_bytes()[0];
-        if tag == b'S' || tag.is_ascii_lowercase() {
+        if !partial && (tag == b'S' || tag.is_ascii_lowercase()) {
             return Err("skip-worktree or assume-unchanged files".into());
         }
-        if tag == b'M' {
+        if !partial && tag == b'M' {
             return Err("unmerged files".into());
         }
         tracked.push(&entry[2..]);
@@ -2563,14 +2586,29 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
         }
     }
     let mut shas: HashSet<String> = HashSet::new();
-    let mut reached: Option<&String> = None;
-    for url in &remotes {
-        if let Some(found) = advertised(user, repo, url) {
-            reached = reached.or(Some(url));
+    let mut reached: Option<&(String, String)> = None;
+    for named in &remotes {
+        if let Some(found) = advertised(user, repo, &named.1) {
+            reached = reached.or(Some(named));
             shas.extend(found);
         }
     }
-    let remote = reached.ok_or("remote unreachable")?.clone();
+    let (remote_name, remote) = reached.ok_or("remote unreachable")?.clone();
+    let mut worktrees: Vec<String> = Vec::new();
+    let mut heads: Vec<String> = Vec::new();
+    if linked {
+        let listing = git(user, repo, &["worktree", "list", "--porcelain", "-z"], None)
+            .ok_or("unreadable worktrees")?;
+        for field in listing.split('\0') {
+            if let Some(path) = field.strip_prefix("worktree ") {
+                if path != repo {
+                    worktrees.push(path.to_string());
+                }
+            } else if let Some(sha) = field.strip_prefix("HEAD ") {
+                heads.push(sha.to_string());
+            }
+        }
+    }
     let refs = git(
         user,
         repo,
@@ -2584,6 +2622,7 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
     )
     .ok_or("unreadable refs")?;
     let mut tips: Vec<String> = vec![head.clone()];
+    tips.extend(heads.iter().cloned());
     for line in refs.lines() {
         tips.push(
             line.split_once(' ')
@@ -2605,16 +2644,17 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
         .map(|tip| format!("{tip}\n"))
         .chain(present.iter().map(|sha| format!("^{sha}\n")))
         .collect();
-    let unpushed: usize = git(
-        user,
-        repo,
-        &["rev-list", "--count", "--stdin"],
-        Some(&input),
-    )
-    .ok_or("rev-list failed")?
-    .trim()
-    .parse()
-    .unwrap_or(usize::MAX);
+    let everything: &[&str] = if partial {
+        &["--all", "--reflog", "--indexed-objects"]
+    } else {
+        &[]
+    };
+    let counted = [&["rev-list", "--count", "--stdin"][..], everything].concat();
+    let unpushed: usize = git(user, repo, &counted, Some(&input))
+        .ok_or("rev-list failed")?
+        .trim()
+        .parse()
+        .unwrap_or(usize::MAX);
     if unpushed != 0 && present.is_empty() {
         return Err(format!(
             "{unpushed} unpushed commits and nothing on the remote"
@@ -2625,20 +2665,45 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
             .iter()
             .map(|sha| format!("^{sha}\n"))
             .collect::<String>();
-    let kept: u64 = if unpushed == 0 {
+    let usage = |args: &[&str], input: &str| -> Result<u64, String> {
+        let words = [
+            &["rev-list", "--objects", "--disk-usage", "--stdin"][..],
+            args,
+        ]
+        .concat();
+        Ok(git(user, repo, &words, Some(input))
+            .ok_or("rev-list failed")?
+            .trim()
+            .parse()
+            .unwrap_or(u64::MAX))
+    };
+    let kept: u64 = if unpushed == 0 && !partial {
         0
     } else {
-        git(
-            user,
-            repo,
-            &["rev-list", "--objects", "--disk-usage", "--stdin"],
-            Some(&input),
-        )
-        .ok_or("rev-list failed")?
-        .trim()
-        .parse()
-        .unwrap_or(u64::MAX)
+        usage(everything, &input)?
     };
+    if partial {
+        let positive: String = tips.iter().map(|tip| format!("{tip}\n")).collect();
+        let structure = usage(&["--all", "--reflog", "--filter=blob:none"], &positive)?;
+        let bytes = walk_size(&join(&dot, "objects"))
+            .saturating_sub(kept)
+            .saturating_sub(structure);
+        return Ok(CloneState {
+            head,
+            dirty,
+            clean: Vec::new(),
+            bytes,
+            remote,
+            unpushed,
+            bundle: String::new(),
+            partial: Some(Partial {
+                remote: remote_name,
+                worktrees,
+                heads: tips,
+                present: present.iter().map(|sha| sha.to_string()).collect(),
+            }),
+        });
+    }
     let mut clean = Vec::new();
     let mut bytes = walk_size(&join(&dot, "objects")).saturating_sub(kept);
     for path in tracked {
@@ -2664,6 +2729,7 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
         remote,
         unpushed,
         bundle,
+        partial: None,
     })
 }
 
@@ -2726,6 +2792,9 @@ pub fn shrink_clone(repo: &str, user: &str, uid: u32, gid: u32) -> Result<u64, S
     use std::os::unix::fs::MetadataExt;
     let started = sys::now();
     let state = clone_state(repo, user)?;
+    if let Some(partial) = &state.partial {
+        return partial_shrink(repo, user, uid, gid, partial).map(|_| state.bytes);
+    }
     let dot = join(repo, ".git");
     let keep = join(repo, SHRUNK);
     let staged = join(&keep, "staged.patch");
@@ -2848,6 +2917,176 @@ pub fn shrink_clone(repo: &str, user: &str, uid: u32, gid: u32) -> Result<u64, S
         return Err("could not recreate the empty object store".into());
     }
     Ok(state.bytes)
+}
+
+const LOCAL_PACK: &str = "local";
+const STRUCTURE_PACK: &str = "structure";
+
+fn partial_shrink(
+    repo: &str,
+    user: &str,
+    uid: u32,
+    gid: u32,
+    partial: &Partial,
+) -> Result<(), String> {
+    let dot = join(repo, ".git");
+    let objects = join(&dot, "objects");
+    let pack_dir = join(&objects, "pack");
+    let stage = join(&dot, "ledger-partial");
+    let old = join(&stage, "old");
+    if lexists(&stage) {
+        return Err("a partial shrink was interrupted".into());
+    }
+    if !run_as(user, &["mkdir", "-p", &old], None).status.success() {
+        return Err("could not create the staging directory".into());
+    }
+    for tree in std::iter::once(repo).chain(partial.worktrees.iter().map(String::as_str)) {
+        if is_dir(tree) {
+            run_as(
+                user,
+                &["git", "-C", tree, "update-index", "-q", "--refresh"],
+                None,
+            );
+        }
+    }
+    let heads: String = partial.heads.iter().map(|sha| format!("{sha}\n")).collect();
+    let negated: String = partial
+        .present
+        .iter()
+        .map(|sha| format!("^{sha}\n"))
+        .collect();
+    let pack = |name: &str, args: &[&str], input: &str| -> Option<String> {
+        let base = join(&stage, name);
+        let words = [
+            &["pack-objects", "-q", "--all", "--reflog"][..],
+            args,
+            &[base.as_str()],
+        ]
+        .concat();
+        git(user, repo, &words, Some(input)).map(|hash| format!("{name}-{}", hash.trim()))
+    };
+    let built = pack(
+        LOCAL_PACK,
+        &["--indexed-objects"],
+        &(heads.clone() + &negated),
+    )
+    .and_then(|local| {
+        pack(STRUCTURE_PACK, &["--filter=blob:none"], &heads).map(|structure| (local, structure))
+    });
+    let Some((local, structure)) = built else {
+        crate::remove::remove_as(uid, gid, vec![stage]);
+        return Err("pack-objects failed".into());
+    };
+    let marked = [
+        (&local, "keep"),
+        (&local, "promisor"),
+        (&structure, "promisor"),
+    ]
+    .iter()
+    .all(|(name, suffix)| write_as(user, &join(&stage, &format!("{name}.{suffix}")), ""));
+    let config = [
+        ("core.repositoryformatversion", "1".to_string()),
+        ("extensions.partialClone", partial.remote.clone()),
+        (
+            &format!("remote.{}.promisor", partial.remote),
+            "true".into(),
+        ),
+        (
+            &format!("remote.{}.partialclonefilter", partial.remote),
+            "blob:none".into(),
+        ),
+    ];
+    let configured = marked
+        && config
+            .iter()
+            .all(|(key, value)| git(user, repo, &["config", key, value], None).is_some());
+    let unconfigure = || {
+        for (key, _) in &config[1..] {
+            git(user, repo, &["config", "--unset", key], None);
+        }
+    };
+    if !configured {
+        unconfigure();
+        crate::remove::remove_as(uid, gid, vec![stage]);
+        return Err("could not mark the repository as a partial clone".into());
+    }
+    let mut moved: Vec<(String, String)> = Vec::new();
+    let mut fresh: Vec<String> = Vec::new();
+    let mut failed = false;
+    for name in [&local, &structure] {
+        for suffix in ["keep", "promisor", "pack", "rev", "idx"] {
+            let from = join(&stage, &format!("{name}.{suffix}"));
+            if !lexists(&from) {
+                continue;
+            }
+            let to = join(&pack_dir, &format!("pack-{name}.{suffix}"));
+            failed |= std::fs::rename(&from, &to).is_err();
+            fresh.push(to);
+        }
+    }
+    if !failed {
+        for entry in list_dir(&pack_dir).unwrap_or_default() {
+            let path = join(&pack_dir, &entry);
+            if fresh.contains(&path) {
+                continue;
+            }
+            let to = join(&old, &format!("pack.{entry}"));
+            failed |= std::fs::rename(&path, &to).is_err();
+            moved.push((path, to));
+        }
+        for entry in list_dir(&objects).unwrap_or_default() {
+            if entry.len() == 2 && entry.bytes().all(|b| b.is_ascii_hexdigit()) {
+                let path = join(&objects, &entry);
+                let to = join(&old, &entry);
+                failed |= std::fs::rename(&path, &to).is_err();
+                moved.push((path, to));
+            }
+        }
+    }
+    let missing = |args: &[&str], input: &str| -> bool {
+        let words = [
+            &[
+                "env",
+                "GIT_NO_LAZY_FETCH=1",
+                "git",
+                "-C",
+                repo,
+                "rev-list",
+                "--objects",
+                "--missing=print",
+                "--stdin",
+            ][..],
+            args,
+        ]
+        .concat();
+        let output = run_as(user, &words, Some(input));
+        !output.status.success() || stdout(&output).lines().any(|line| line.starts_with('?'))
+    };
+    let broken = failed
+        || missing(
+            &["--all", "--reflog", "--indexed-objects"],
+            &(heads.clone() + &negated),
+        )
+        || missing(&["--all", "--reflog", "--filter=blob:none"], &heads);
+    if broken {
+        for (from, to) in moved.iter().rev() {
+            let _ = std::fs::rename(to, from);
+        }
+        for path in &fresh {
+            let _ = std::fs::remove_file(path);
+        }
+        unconfigure();
+        crate::remove::remove_as(uid, gid, vec![stage]);
+        return Err("the partial clone failed verification and was rolled back".into());
+    }
+    let outcome = crate::remove::remove_as(uid, gid, vec![stage]);
+    if let Some((path, code)) = outcome.failed.first() {
+        return Err(format!(
+            "remove failed at {path}: {}",
+            std::io::Error::from_raw_os_error(*code)
+        ));
+    }
+    Ok(())
 }
 
 pub struct Game {

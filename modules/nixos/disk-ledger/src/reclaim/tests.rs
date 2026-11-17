@@ -539,3 +539,24 @@ fn games_use_last_play_or_install() {
         fs::read_to_string(format!("{heroic}/legendaryConfig/legendary/installed.json")).unwrap();
     assert!(!left.contains("Crab") && left.contains("Escape"));
 }
+
+#[test]
+#[ignore]
+fn partial_shrink_of_a_copied_clone() {
+    let Ok(repo) = std::env::var("LEDGER_TEST_REPO") else {
+        return;
+    };
+    let user = std::env::var("USER").unwrap();
+    let state = clone_state(&repo, &user).expect("clone state");
+    assert!(state.partial.is_some());
+    let before = walk_size(&join(&repo, ".git/objects"));
+    let (uid, gid) = user_ids(&user).unwrap();
+    let estimate = shrink_clone(&repo, &user, uid, gid).expect("shrink");
+    let after = walk_size(&join(&repo, ".git/objects"));
+    eprintln!(
+        "before {before} after {after} estimate {estimate} unpushed {}",
+        state.unpushed
+    );
+    assert!(before - after >= estimate / 2);
+    assert!(matches!(clone_state(&repo, &user), Err(reason) if reason == "partial clone"));
+}
