@@ -1378,3 +1378,75 @@ mod vanished_tests {
         assert!(none.is_empty());
     }
 }
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self, bound: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % bound
+        }
+    }
+
+    fn sizes(store: &mut Store) -> Vec<u64> {
+        (0..store.paths.len() as u32).map(|slot| store.size(slot)).collect()
+    }
+
+    #[test]
+    fn detach_then_attribute_matches_a_fresh_store() {
+        for seed in 1..=40u64 {
+            let mut rng = Rng(seed * 0x9e37_79b9_7f4a_7c15);
+            let count = 30 + rng.next(60) as usize;
+            let inodes = 1 + rng.next(80);
+            let layout: Vec<(u64, Vec<(u64, u64)>)> = (0..count)
+                .map(|_| {
+                    let own = rng.next(1000);
+                    let mut pairs: Vec<(u64, u64)> = (0..rng.next(12))
+                        .map(|_| {
+                            let ino = 1 + rng.next(inodes);
+                            (ino, ino * 8)
+                        })
+                        .collect();
+                    pairs.sort_unstable();
+                    pairs.dedup();
+                    (own, pairs)
+                })
+                .collect();
+            let ranks: Vec<u32> = (0..count).map(|_| rng.next(5) as u32).collect();
+            let build = |keep: &dyn Fn(usize) -> bool| {
+                let mut store = Store::new("/nonexistent/cache.sqlite");
+                store.paths.resize_with(count, Path::default);
+                for (slot, (own, pairs)) in layout.iter().enumerate() {
+                    if keep(slot) {
+                        store.attach(slot as u32, *own, pairs);
+                    }
+                }
+                for (slot, rank) in ranks.iter().enumerate() {
+                    store.rank(&[slot as u32], *rank);
+                }
+                store
+            };
+            let mut live = build(&|_| true);
+            let mut gone = vec![false; count];
+            for _ in 0..4 {
+                for _ in 0..1 + rng.next(count as u64 / 4) {
+                    let slot = rng.next(count as u64) as usize;
+                    gone[slot] = true;
+                    live.detach(slot as u32);
+                }
+                let mut fresh = build(&|slot| !gone[slot]);
+                assert_eq!(sizes(&mut live), sizes(&mut fresh), "seed {seed}");
+                assert_eq!(live.own_total, fresh.own_total, "seed {seed}");
+                assert_eq!(live.shared_total, fresh.shared_total, "seed {seed}");
+                let total: u64 = sizes(&mut live).iter().sum();
+                assert_eq!(total, live.own_total + live.shared_total, "seed {seed}");
+            }
+        }
+    }
+}

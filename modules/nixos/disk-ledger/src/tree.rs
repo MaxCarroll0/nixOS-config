@@ -48,6 +48,107 @@ pub struct Node {
 
 pub type Skip = std::sync::Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 
+fn unescape_mount(field: &str) -> String {
+    let bytes = field.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let octal = bytes.get(at + 1..at + 4).and_then(|digits| {
+            std::str::from_utf8(digits)
+                .ok()
+                .and_then(|digits| u8::from_str_radix(digits, 8).ok())
+        });
+        match (bytes[at], octal) {
+            (b'\\', Some(byte)) => {
+                out.push(byte);
+                at += 4;
+            }
+            (byte, _) => {
+                out.push(byte);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+pub struct Mount {
+    pub id: u32,
+    pub parent: u32,
+    pub dev: u64,
+    pub point: String,
+}
+
+pub fn mounts(mountinfo: &str) -> Vec<Mount> {
+    mountinfo
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(' ');
+            let id = fields.next()?.parse().ok()?;
+            let parent = fields.next()?.parse().ok()?;
+            let (major, minor) = fields.next()?.split_once(':')?;
+            let point = fields.nth(1)?;
+            Some(Mount {
+                id,
+                parent,
+                dev: libc::makedev(major.parse().ok()?, minor.parse().ok()?),
+                point: unescape_mount(point),
+            })
+        })
+        .collect()
+}
+
+pub fn foreign_mounts(mountinfo: &str, device: u64) -> HashSet<String> {
+    mounts(mountinfo)
+        .into_iter()
+        .filter(|mount| mount.dev != device)
+        .map(|mount| mount.point)
+        .collect()
+}
+
+pub fn under_any(path: &str, points: &HashSet<String>) -> bool {
+    let mut at = path;
+    loop {
+        if points.contains(at) {
+            return true;
+        }
+        match at.rfind('/') {
+            Some(0) if at.len() > 1 => at = "/",
+            Some(0) | None => return false,
+            Some(cut) => at = &at[..cut],
+        }
+    }
+}
+
+pub fn within_device(device: u64, skip: Skip) -> Skip {
+    let read = move || {
+        foreign_mounts(
+            &std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default(),
+            device,
+        )
+    };
+    let mounts = std::sync::RwLock::new((clock(), read()));
+    std::sync::Arc::new(move |parent: &str, name: &str| {
+        if skip(parent, name) {
+            return true;
+        }
+        let stale = mounts
+            .read()
+            .map(|guard| clock() - guard.0 > 1.0)
+            .unwrap_or(true);
+        if stale {
+            let fresh = read();
+            if let Ok(mut guard) = mounts.write() {
+                *guard = (clock(), fresh);
+            }
+        }
+        mounts
+            .read()
+            .map(|guard| guard.1.contains(&join(parent, name)))
+            .unwrap_or(false)
+    })
+}
+
 const SERIAL: usize = 64;
 
 pub struct Raw {
@@ -248,7 +349,7 @@ impl Tree {
             libc::AT_FDCWD,
             Some(root),
         )?;
-        let mut tree = Tree::detached(root, info.ino, info.dev, skip);
+        let mut tree = Tree::detached(root, info.ino, info.dev, within_device(info.dev, skip));
         tree.fd = fd;
         let started = clock();
         tree.ring.push_back((tree.root, 0));
@@ -928,5 +1029,32 @@ impl Opens {
             }
         }
         self.buffer = buffer;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn foreign_mounts_are_named_without_stat() {
+        let root = libc::makedev(259, 5);
+        let mountinfo = "\
+26 1 259:5 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p5 rw
+27 26 259:5 /nix/store /nix/store ro,relatime shared:2 - ext4 /dev/nvme0n1p5 rw
+28 26 0:25 / /proc rw shared:3 - proc proc rw
+91 26 0:58 / /mnt/nas\\040share rw shared:40 - cifs //pi/nas rw";
+        let mounts = foreign_mounts(mountinfo, root);
+        assert_eq!(
+            mounts,
+            HashSet::from(["/proc".to_string(), "/mnt/nas share".to_string()])
+        );
+        let skip = within_device(root, std::sync::Arc::new(|_: &str, _: &str| false));
+        assert!(skip("/", "proc") || !std::path::Path::new("/proc/self").exists());
+        assert!(!skip("/", "home"));
+        assert!(under_any("/mnt/nas share/a/b", &mounts));
+        assert!(under_any("/proc", &mounts));
+        assert!(!under_any("/mnt/nas", &mounts));
+        assert!(!under_any("/home/x", &mounts));
     }
 }

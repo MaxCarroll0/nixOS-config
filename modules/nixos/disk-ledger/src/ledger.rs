@@ -1942,6 +1942,9 @@ impl Ledger {
                 entries
                     .flatten()
                     .filter_map(|entry| {
+                        if entry.file_type().ok()?.is_dir() {
+                            return None;
+                        }
                         let info = entry.metadata().ok()?;
                         if info.is_dir() {
                             return None;

@@ -367,6 +367,10 @@ pub fn held_open(device: u64) -> Vec<Held> {
     let mut owners: Vec<Held> = Vec::new();
     let mut by_ino: HashMap<u64, usize> = HashMap::new();
     let root = sys::open_dir("/").unwrap_or(-1);
+    let foreign = crate::tree::foreign_mounts(
+        &std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default(),
+        device,
+    );
     let pids: Vec<String> = list_dir("/proc")
         .unwrap_or_default()
         .into_iter()
@@ -382,13 +386,6 @@ pub fn held_open(device: u64) -> Vec<Held> {
             };
             for name in names {
                 let link = join(&directory, &name);
-                let Ok(info) = std::fs::metadata(&link) else {
-                    continue;
-                };
-                use std::os::unix::fs::MetadataExt;
-                if info.nlink() != 0 || info.dev() != device || !info.is_file() {
-                    continue;
-                }
                 let Ok(target) = std::fs::read_link(&link) else {
                     continue;
                 };
@@ -396,6 +393,16 @@ pub fn held_open(device: u64) -> Vec<Held> {
                 let Some(path) = target.strip_suffix(" (deleted)") else {
                     continue;
                 };
+                if crate::tree::under_any(path, &foreign) {
+                    continue;
+                }
+                let Ok(info) = std::fs::metadata(&link) else {
+                    continue;
+                };
+                use std::os::unix::fs::MetadataExt;
+                if info.nlink() != 0 || info.dev() != device || !info.is_file() {
+                    continue;
+                }
                 let command = match pid.parse::<i64>().ok().and_then(build_client) {
                     Some(client) => readable(
                         &shell_command(client),
@@ -548,55 +555,25 @@ pub fn hidden_inodes(source: &str) -> Vec<(String, u64)> {
     rows.into_iter().filter(|row| row.1 != 0).collect()
 }
 
-fn unescape(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'\\'
-            && index + 3 < bytes.len() + 0
-            && bytes[index + 1..index + 4]
-                .iter()
-                .all(|byte| (b'0'..=b'7').contains(byte))
-        {
-            out.push(
-                (bytes[index + 1] - b'0') * 64
-                    + (bytes[index + 2] - b'0') * 8
-                    + (bytes[index + 3] - b'0'),
-            );
-            index += 4;
-        } else {
-            out.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 pub fn covered_mountpoints(root: &str) -> Vec<String> {
     let Some(device) = sys::lstat(root).map(|info| info.dev) else {
         return Vec::new();
     };
-    let mut targets: Vec<String> = Vec::new();
-    for line in std::fs::read_to_string("/proc/self/mountinfo")
-        .unwrap_or_default()
-        .lines()
-    {
-        let Some(field) = line.split_whitespace().nth(4) else {
-            continue;
-        };
-        let target = unescape(field);
-        if target == root {
-            continue;
-        }
-        let (Some(inner), Some(outer)) = (sys::lstat(&target), sys::lstat(dirname(&target))) else {
-            continue;
-        };
-        if inner.dev != device && outer.dev == device && !targets.contains(&target) {
-            targets.push(target);
-        }
-    }
+    let table = crate::tree::mounts(
+        &std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default(),
+    );
+    let dev_of: HashMap<u32, u64> = table.iter().map(|mount| (mount.id, mount.dev)).collect();
+    let mut targets: Vec<String> = table
+        .into_iter()
+        .filter(|mount| {
+            mount.point != root
+                && mount.dev != device
+                && dev_of.get(&mount.parent) == Some(&device)
+        })
+        .map(|mount| mount.point)
+        .collect();
     targets.sort();
+    targets.dedup();
     targets
 }
 
