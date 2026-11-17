@@ -1720,7 +1720,9 @@ impl Model {
                 }
                 continue;
             }
-            containers.insert(item.path.clone(), items.len());
+            if !(item.kind == Kind::Repo || item.flag("compress")) {
+                containers.insert(item.path.clone(), items.len());
+            }
             items.push(item);
         }
         containers
@@ -2135,8 +2137,10 @@ impl Model {
         }
         let key = project_for(link)?;
         let position = *project_index.entry(key.clone()).or_insert_with(|| {
-            projects
-                .push(Item::new(Kind::Project, key.clone(), 0.0).with_detail(json!({"roots": []})));
+            projects.push(
+                Item::new(Kind::Project, format!("{key} roots"), 0.0)
+                    .with_detail(json!({"roots": []})),
+            );
             projects.len() - 1
         });
         let item = &mut projects[position];
