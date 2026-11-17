@@ -11,6 +11,7 @@
     ../../modules/nixos/desktop-env.nix
     ../../modules/nixos/gaming.nix
     ../../modules/nixos/vpn.nix
+    ../../modules/nixos/wifi.nix
     ../../modules/nixos/wake.nix
     ../../modules/nixos/build-client.nix
     ../../modules/nixos/torrent.nix
@@ -22,6 +23,10 @@
   ];
 
   networking.hostName = "laptop";
+  local.wifi = {
+    preferFiveGhz = -72;
+    keepalive = "wlo1";
+  };
 
   local.gaming.enable = true;
   local.desktop.plasma.enable = false;
