@@ -1179,6 +1179,7 @@ pub struct Scope {
     pub uid: u32,
     pub tmp: String,
     pub offload: Option<String>,
+    pub measured: i64,
 }
 
 impl Scope {
@@ -1200,6 +1201,9 @@ impl Scope {
             }
             if busy.contains(path) {
                 return Some("in use by a process".into());
+            }
+            if sys::lstat(path).is_some_and(|info| info.ctime > self.measured) {
+                return Some("changed since measured".into());
             }
             let parent = dirname(path);
             let name = basename(path);
@@ -1412,6 +1416,7 @@ impl Model {
             uid: self.uid,
             tmp: self.tmp.clone(),
             offload: self.offload.clone(),
+            measured: self.now,
         }
     }
 

@@ -1102,4 +1102,53 @@ mod tests {
             ["a", "b", "c"].into_iter().map(str::to_string).collect()
         );
     }
+
+    fn nix_store(root: &str, args: &[&str]) -> std::process::Output {
+        std::process::Command::new("nix-store")
+            .arg("--store")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("nix-store runs")
+    }
+
+    #[test]
+    #[ignore]
+    fn temp_root_registered_mid_session_is_refused() {
+        let base = std::env::temp_dir().join(format!("ledger-gc-{}", std::process::id()));
+        let root = base.join("root").to_string_lossy().into_owned();
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let add = |name: &str, body: &str| {
+            let file = base.join(name);
+            std::fs::write(&file, body).unwrap();
+            let output = nix_store(&root, &["--add", file.to_str().unwrap()]);
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        let rooted = add("rooted", "one");
+        let free = add("free", "two");
+        let layout = Layout {
+            store: format!("{root}/nix/store"),
+            state: format!("{root}/nix/var/nix"),
+            links_index: None,
+        };
+        let _ = std::fs::remove_dir_all(format!("{root}/nix/var/nix/temproots"));
+        let mut session = Session::open(&layout, &[]).unwrap();
+        let client = nix_store(&root, &["--add", base.join("rooted").to_str().unwrap()]);
+        assert!(client.status.success(), "{}", String::from_utf8_lossy(&client.stderr));
+        let outcome = session.delete(&[rooted.clone(), free.clone()], &HashMap::new());
+        drop(session);
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.causes, vec![(rooted.clone(), "temp root of a nix client")]);
+        assert!(outcome.refused.contains(&rooted) && !outcome.refused.contains(&free));
+        assert!(std::path::Path::new(&format!("{root}{rooted}")).exists());
+        assert!(!std::path::Path::new(&format!("{root}{free}")).exists());
+        let valid = nix_store(&root, &["--check-validity", &free]);
+        assert!(!valid.status.success());
+        let kept = nix_store(&root, &["--check-validity", &rooted]);
+        assert!(kept.status.success());
+        let _ = std::process::Command::new("chmod").args(["-R", "u+w"]).arg(&base).status();
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

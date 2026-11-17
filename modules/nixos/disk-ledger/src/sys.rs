@@ -324,6 +324,7 @@ pub struct Entry {
     pub atime: i64,
     pub mtime: i64,
     pub mtime_nsec: i64,
+    pub ctime: i64,
     pub uid: u32,
     pub dev: u64,
 }
@@ -356,6 +357,7 @@ fn from_stat(name: Vec<u8>, info: &libc::stat) -> Entry {
         atime: info.st_atime as i64,
         mtime: info.st_mtime as i64,
         mtime_nsec: info.st_mtime_nsec as i64,
+        ctime: info.st_ctime as i64,
         uid: info.st_uid as u32,
         dev: info.st_dev as u64,
     }

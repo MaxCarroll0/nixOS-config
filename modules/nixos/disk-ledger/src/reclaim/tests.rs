@@ -175,6 +175,7 @@ fn tmp_entries_are_classified_and_rechecked() {
         .into_iter()
         .map(|item| (basename(&item.path).to_string(), item))
         .collect();
+    model.now = sys::now() as i64 + 60;
     let scope = model.scope();
     let mut failures = Vec::new();
     for (name, want) in &cases {
@@ -249,6 +250,7 @@ fn only_known_caches_are_reclaimable() {
         BuildTimes::new(None),
     );
     model.tmp = format!("{}/tmp", fx.base);
+    model.now = sys::now() as i64 + 60;
     let scope = model.scope();
     let mut failures = Vec::new();
     for (name, known) in [
@@ -495,6 +497,7 @@ fn games_use_last_play_or_install() {
     assert_eq!(iso_seconds("1970-01-02T00:00:01Z"), 86401);
     let mut model = Model::new(&home, &me(), None, BuildTimes::new(None));
     model.tmp = format!("{}/tmp", fx.base);
+    model.now = sys::now() as i64 + 60;
     let scope = model.scope();
     let work = |path: String| Work {
         kind: Kind::Game,
@@ -585,4 +588,32 @@ fn removal_takes_referrers_once_in_rank_order() {
     assert_eq!(first, vec![0, 1, 2]);
     assert!(removed_with(&store, &[0], &mut taken).is_empty());
     assert!(removed_with(&store, &[3], &mut taken).is_empty());
+}
+
+#[test]
+fn refuses_items_changed_since_measured() {
+    let fx = fixture("stale");
+    let home = format!("{}/home", fx.base);
+    let downloads = format!("{home}/Downloads");
+    fs::create_dir_all(&downloads).unwrap();
+    let path = format!("{downloads}/album.zip");
+    fs::write(&path, "z").unwrap();
+    let mut model = Model::new(&home, &me(), None, BuildTimes::new(None));
+    let work = Work {
+        kind: Kind::Download,
+        path: path.clone(),
+        links: Vec::new(),
+        files: vec![path.clone()],
+        freed: 1,
+        last_used: 0,
+        detail: Map::new(),
+        store: Vec::new(),
+    };
+    let refusal = |model: &Model| model.scope().refusal(&work, &HashSet::new(), &[], &process_starts());
+    model.now = sys::now() as i64 + 1;
+    assert_eq!(refusal(&model), None);
+    model.now = sys::now() as i64 - 2;
+    assert_eq!(refusal(&model).as_deref(), Some("changed since measured"));
+    fs::remove_file(&path).unwrap();
+    assert_eq!(refusal(&model), None);
 }
