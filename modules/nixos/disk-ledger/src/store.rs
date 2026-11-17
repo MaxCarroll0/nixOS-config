@@ -1450,3 +1450,38 @@ mod attribution_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod attribution_cost {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    #[ignore]
+    fn full_attribute_on_this_store() {
+        let mut store = Store::new(&std::env::var("STORE_INDEX_CACHE").unwrap());
+        store.load();
+        let alive: Vec<u32> = store.alive_slots().collect();
+        let started = Instant::now();
+        store.attribute();
+        let full = started.elapsed();
+        let mut detached = Duration::ZERO;
+        let mut sized = Duration::ZERO;
+        for slot in alive.iter().step_by(alive.len() / 20).take(20) {
+            let at = Instant::now();
+            store.detach(*slot);
+            detached += at.elapsed();
+            let at = Instant::now();
+            store.size(*slot);
+            sized += at.elapsed();
+        }
+        eprintln!(
+            "paths {} links {} full {:?} per item: detach {:?} reattribute {:?}",
+            alive.len(),
+            store.links.len(),
+            full,
+            detached / 20,
+            sized / 20
+        );
+    }
+}
