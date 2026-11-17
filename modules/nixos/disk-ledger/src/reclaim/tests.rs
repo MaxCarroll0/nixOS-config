@@ -417,6 +417,95 @@ fn clone_shrinks_and_restores() {
 }
 
 #[test]
+fn clone_with_submodule_shrinks_and_restores() {
+    let fixture = fixture("submodule");
+    let base = &fixture.base;
+    let user = user_name(unsafe { libc::getuid() }).unwrap();
+    let repo = format!("{base}/work");
+    let sub = format!("{repo}/lib");
+    let source = format!("{base}/lib-src");
+    let read = |path: &str| fs::read_to_string(path).unwrap();
+    let url = |name: &str| format!("https://example.invalid/{name}.git");
+    let alias = |dir: &str, name: &str| {
+        git(&[
+            "-C",
+            dir,
+            "config",
+            &format!("url.{base}/{name}.git.insteadOf"),
+            &url(name),
+        ])
+    };
+    for name in ["lib", "top"] {
+        git(&["init", "--bare", &format!("{base}/{name}.git")]);
+    }
+    git(&["init", &source]);
+    fs::write(format!("{source}/lib.txt"), "lib\n").unwrap();
+    git(&["-C", &source, "add", "."]);
+    git(&["-C", &source, "commit", "-m", "lib"]);
+    git(&["-C", &source, "push", &format!("{base}/lib.git"), "main"]);
+    git(&["init", &repo]);
+    alias(&repo, "top");
+    git(&["-C", &repo, "remote", "add", "origin", &url("top")]);
+    fs::write(format!("{repo}/top.txt"), "top\n").unwrap();
+    git(&[
+        "-c",
+        &format!("url.{base}/lib.git.insteadOf={}", url("lib")),
+        "-c",
+        "protocol.file.allow=always",
+        "-C",
+        &repo,
+        "submodule",
+        "add",
+        &url("lib"),
+        "lib",
+    ]);
+    alias(&sub, "lib");
+    git(&["-C", &repo, "add", "."]);
+    git(&["-C", &repo, "commit", "-m", "top"]);
+    git(&["-C", &repo, "push", "origin", "main"]);
+    fs::write(format!("{sub}/lib.txt"), "lib2\n").unwrap();
+    git(&["-C", &sub, "commit", "-qam", "lib2"]);
+    git(&["-C", &sub, "push", "origin", "main"]);
+    fs::write(format!("{sub}/notes.txt"), "untracked\n").unwrap();
+    let state = clone_state(&repo, &user).expect("clone state");
+    assert_eq!(state.submodules.len(), 1);
+    assert_eq!(state.submodules[0].0, sub);
+    assert_eq!(state.submodules[0].1.clean, vec!["lib.txt".to_string()]);
+    assert_eq!(state.unpushed, 0);
+    std::thread::sleep(Duration::from_secs(3));
+    let (uid, gid) = user_ids(&user).unwrap();
+    shrink_clone(&repo, &user, uid, gid).unwrap();
+    assert!(!lexists(&format!("{repo}/top.txt")));
+    assert!(!lexists(&format!("{sub}/lib.txt")));
+    assert!(lexists(&format!("{repo}/.git/modules/lib/ledger/restore")));
+    assert!(!lexists(&format!("{repo}/.git/modules/lib/packed-refs")));
+    assert_eq!(read(&format!("{sub}/notes.txt")), "untracked\n");
+    assert_eq!(clone_state(&repo, &user).err().unwrap(), "shrunk");
+    let restored = Command::new("bash")
+        .arg(format!("{repo}/.git/ledger/restore"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        restored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restored.stderr)
+    );
+    assert_eq!(read(&format!("{repo}/top.txt")), "top\n");
+    assert_eq!(read(&format!("{sub}/lib.txt")), "lib2\n");
+    let status = |dir: &str| {
+        let output = Command::new("git")
+            .args(["-C", dir, "status", "--porcelain"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    assert_eq!(status(&repo), " M lib\n");
+    assert_eq!(status(&sub), "?? notes.txt\n");
+    assert!(!lexists(&format!("{repo}/.git/modules/lib/ledger")));
+}
+
+#[test]
 fn clone_urls() {
     assert!(
         network_url("git@github.com:o/r.git")
@@ -609,11 +698,113 @@ fn refuses_items_changed_since_measured() {
         detail: Map::new(),
         store: Vec::new(),
     };
-    let refusal = |model: &Model| model.scope().refusal(&work, &HashSet::new(), &[], &process_starts());
+    let refusal = |model: &Model| {
+        model
+            .scope()
+            .refusal(&work, &HashSet::new(), &[], &process_starts())
+    };
     model.now = sys::now() as i64 + 1;
     assert_eq!(refusal(&model), None);
     model.now = sys::now() as i64 - 2;
     assert_eq!(refusal(&model).as_deref(), Some("changed since measured"));
     fs::remove_file(&path).unwrap();
     assert_eq!(refusal(&model), None);
+}
+
+#[test]
+fn linked_worktrees_remove_when_merged_and_shrink_when_not() {
+    let fixture = fixture("worktree");
+    let base = &fixture.base;
+    let repo = format!("{base}/main");
+    let merged = format!("{base}/merged");
+    let open = format!("{base}/open");
+    let user = me();
+    git(&["init", &repo]);
+    fs::create_dir_all(format!("{repo}/src/deep")).unwrap();
+    fs::write(format!("{repo}/src/deep/a.txt"), "a\n").unwrap();
+    fs::write(format!("{repo}/.gitignore"), "build/\n").unwrap();
+    git(&["-C", &repo, "add", "."]);
+    git(&["-C", &repo, "commit", "-qm", "one"]);
+    git(&["-C", &repo, "worktree", "add", "-q", "-b", "done", &merged]);
+    git(&["-C", &repo, "worktree", "add", "-q", "-b", "wip", &open]);
+    fs::write(format!("{open}/src/deep/a.txt"), "wip\n").unwrap();
+    git(&["-C", &open, "commit", "-qam", "wip"]);
+    fs::create_dir_all(format!("{open}/build")).unwrap();
+    fs::write(format!("{open}/build/out"), "derived\n").unwrap();
+    assert_eq!(linked_worktrees(&repo), vec![merged.clone(), open.clone()]);
+    assert_eq!(worktree_repo(&open).as_deref(), Some(repo.as_str()));
+    assert_eq!(worktree_repo(&repo), None);
+    let done = worktree_state(&repo, &merged, &user).unwrap();
+    assert!(done.merged && done.dirty == 0 && done.tracked == 0);
+    let wip = worktree_state(&repo, &open, &user).unwrap();
+    assert!(!wip.merged && wip.dirty == 0 && wip.tracked > 0);
+    std::thread::sleep(Duration::from_secs(3));
+    let (uid, gid) = user_ids(&user).unwrap();
+    assert!(shrink_worktree(&open, &user, uid, gid).unwrap() > 0);
+    assert!(!lexists(&format!("{open}/src")));
+    assert!(!lexists(&format!("{open}/.gitignore")));
+    assert_eq!(
+        fs::read_to_string(format!("{open}/build/out")).unwrap(),
+        "derived\n"
+    );
+    assert!(worktree_shrunk(&open));
+    assert_eq!(
+        shrink_worktree(&open, &user, uid, gid).err().unwrap(),
+        "shrunk"
+    );
+    let admin = worktree_admin(&open).unwrap();
+    let restored = Command::new("bash")
+        .arg(format!("{admin}/ledger/restore"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        restored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restored.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(format!("{open}/src/deep/a.txt")).unwrap(),
+        "wip\n"
+    );
+    assert!(!worktree_shrunk(&open));
+    let status = Command::new("git")
+        .args(["-C", &open, "status", "--porcelain"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&status.stdout), "");
+}
+
+#[test]
+fn emacs_backups_are_temp_items() {
+    let fixture = fixture("emacs");
+    let home = &fixture.base;
+    let backups = format!("{home}/.local/state/emacs/backups");
+    fs::create_dir_all(&backups).unwrap();
+    let file = format!("{backups}/!home!max!notes.org~");
+    fs::write(&file, "old\n").unwrap();
+    let mut model = Model::new(home, &me(), None, BuildTimes::new(None));
+    model.now = sys::now() as i64 + 1;
+    let items = model.emacs_items(&Walked);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].kind, Kind::Temp);
+    assert_eq!(items[0].path, file);
+    let work = temp_work(&file, items[0].detail.clone());
+    assert_eq!(
+        model
+            .scope()
+            .refusal(&work, &HashSet::new(), &[], &process_starts()),
+        None
+    );
+    let stray = format!("{home}/notes.org~");
+    fs::write(&stray, "x\n").unwrap();
+    assert!(model
+        .scope()
+        .refusal(
+            &temp_work(&stray, Map::new()),
+            &HashSet::new(),
+            &[],
+            &process_starts()
+        )
+        .is_some());
 }

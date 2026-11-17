@@ -73,6 +73,12 @@ in
       description = "User whose home, caches and runtime directory the disk units manage.";
     };
 
+    ledger.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Whether the disk ledger daemon and its continuous collector run on this host.";
+    };
+
     offload.enable = lib.mkOption {
       type = lib.types.bool;
       default = config.networking.hostName == "desktopnew";
@@ -107,7 +113,7 @@ in
     };
   };
 
-  config = {
+  config = lib.mkIf cfg.ledger.enable {
     nix.settings.keep-derivations = lib.mkIf pressure.enable false;
 
     environment.systemPackages = [ daemon ];

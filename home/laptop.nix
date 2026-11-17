@@ -3,7 +3,10 @@
 { ... }:
 
 {
-  imports = [ ./common.nix ];
+  imports = [
+    ./common.nix
+    ./interview.nix
+  ];
 
   local.nasAlerts.enable = true;
   local.wm.enable = true;

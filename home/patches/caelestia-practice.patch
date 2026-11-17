@@ -1,0 +1,74 @@
+diff --git a/modules/bar/Bar.qml b/modules/bar/Bar.qml
+index f07159f..d772b89 100644
+--- a/modules/bar/Bar.qml
++++ b/modules/bar/Bar.qml
+@@ -68,6 +68,10 @@ ColumnLayout {
+                 popouts.hasCurrent = false;
+                 tray.expanded = true;
+             }
++        } else if (id === "practice") {
++            popouts.currentName = "practice";
++            popouts.currentCenter = Qt.binding(() => (ch.item as Item).mapToItem(root, 0, (ch.item as Item).implicitHeight / 2).y);
++            popouts.hasCurrent = true;
+         } else if (id === "activeWindow" && Config.bar.popouts.activeWindow && Config.bar.activeWindow.showOnHover) {
+             popouts.currentName = id.toLowerCase();
+             popouts.currentCenter = (ch.item as Item).mapToItem(root, 0, (ch.item as Item).implicitHeight / 2).y ?? 0;
+@@ -155,6 +159,12 @@ ColumnLayout {
+                     }
+                 }
+             }
++            DelegateChoice {
++                roleValue: "practice"
++                delegate: EntryWrapper {
++                    PracticeClock {}
++                }
++            }
+             DelegateChoice {
+                 roleValue: "clock"
+                 delegate: EntryWrapper {
+diff --git a/modules/bar/popouts/Content.qml b/modules/bar/popouts/Content.qml
+index eb443e6..6573d11 100644
+--- a/modules/bar/popouts/Content.qml
++++ b/modules/bar/popouts/Content.qml
+@@ -95,6 +95,11 @@ Item {
+             }
+         }
+ 
++        Popout {
++            name: "practice"
++            sourceComponent: PracticePopout {}
++        }
++
+         Popout {
+             name: "vpn"
+             sourceComponent: VpnPopout {}
+diff --git a/modules/dashboard/Content.qml b/modules/dashboard/Content.qml
+index 29bd3f5..cfc23dd 100644
+--- a/modules/dashboard/Content.qml
++++ b/modules/dashboard/Content.qml
+@@ -58,6 +58,12 @@ Item {
+                 iconName: "storage",
+                 text: Tr.tr("Disk"),
+                 enabled: true
++            },
++            {
++                component: practiceComponent,
++                iconName: "school",
++                text: Tr.tr("Practice"),
++                enabled: true
+             }
+         ];
+         return allTabs.filter(tab => tab.enabled);
+@@ -222,6 +228,12 @@ Item {
+                 DiskLedgerTab {}
+             }
+ 
++            Component {
++                id: practiceComponent
++
++                PracticeTab {}
++            }
++
+             Behavior on contentX {
+                 Anim {}
+             }

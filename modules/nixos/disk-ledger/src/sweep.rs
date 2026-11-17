@@ -14,6 +14,18 @@ use std::time::Duration;
 
 const BUCKET: f64 = (1u64 << 30) as f64;
 const RATE: f64 = BUCKET / 1.5;
+const SAMPLE: f64 = 0.25;
+const STALL_LOW: f64 = 0.05;
+const STALL_HIGH: f64 = 0.2;
+
+fn io_stall() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/pressure/io").ok()?;
+    let line = text.lines().find(|line| line.starts_with("full"))?;
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix("total="))?
+        .parse()
+        .ok()
+}
 const IDLE: Duration = Duration::from_secs(2);
 const SNAPSHOT_SECONDS: f64 = 5.0;
 
@@ -65,6 +77,9 @@ struct Worker {
     snapshot: Option<Snapshot>,
     tokens: f64,
     refilled: f64,
+    rate: f64,
+    stall: Option<u64>,
+    sampled: f64,
     boot: bool,
     started: f64,
     items: u64,
@@ -103,8 +118,29 @@ impl Worker {
         task.round < self.round.load(Ordering::Acquire)
     }
 
+    fn adapt(&mut self) {
+        let now = sys::now();
+        if now - self.sampled < SAMPLE {
+            return;
+        }
+        let stall = io_stall();
+        if let (Some(stall), Some(before)) = (stall, self.stall) {
+            let fraction = stall.saturating_sub(before) as f64 / 1e6 / (now - self.sampled);
+            self.rate = if fraction > STALL_HIGH {
+                (self.rate / 2.0).max(RATE / 4.0)
+            } else if fraction < STALL_LOW {
+                (self.rate * 1.5).min(RATE * 16.0)
+            } else {
+                self.rate
+            };
+        }
+        self.stall = stall;
+        self.sampled = now;
+    }
+
     fn pace(&mut self, bytes: u64, level: f64) {
-        let rate = RATE / (1.0 - level).max(0.05);
+        self.adapt();
+        let rate = self.rate / (1.0 - level).max(0.05);
         let now = sys::now();
         self.tokens = (self.tokens + (now - self.refilled) * rate).min(BUCKET);
         self.refilled = now;
@@ -157,6 +193,14 @@ impl Worker {
             return match reclaim::user_ids(&scope.user) {
                 Some((uid, gid)) => {
                     reclaim::shrink_clone(&work.path, &scope.user, uid, gid).map(|_| None)
+                }
+                None => Err("unknown user".into()),
+            };
+        }
+        if reclaim::truthy(work.detail.get("compress").unwrap_or(&Value::Null)) {
+            return match reclaim::user_ids(&scope.user) {
+                Some((uid, gid)) => {
+                    reclaim::shrink_worktree(&work.path, &scope.user, uid, gid).map(|_| None)
                 }
                 None => Err("unknown user".into()),
             };
@@ -314,6 +358,7 @@ impl Worker {
             "refused": self.refusals.len(),
             "refusals": std::mem::take(&mut self.refusals).into_iter().take(50).collect::<Vec<_>>(),
             "seconds": round(sys::now() - self.started),
+            "rate": (self.rate / (1u64 << 20) as f64).round(),
             "collector": report,
         });
         self.items = 0;
@@ -331,6 +376,9 @@ pub fn run(commands: Receiver<Command>, events: Sender<Event>, wake: i32, round:
         snapshot: None,
         tokens: BUCKET,
         refilled: sys::now(),
+        rate: RATE,
+        stall: None,
+        sampled: 0.0,
         boot: false,
         started: 0.0,
         items: 0,

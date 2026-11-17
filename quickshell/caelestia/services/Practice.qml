@@ -1,0 +1,227 @@
+pragma Singleton
+
+import QtQuick
+import Quickshell
+import Quickshell.Io
+
+Singleton {
+    id: root
+
+    readonly property string stateDir: `${Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state"}/interview`
+    readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000"
+
+    property var current: null
+    property var lockdown: null
+    property var log: ({
+            today: "",
+            required_per_day: 2,
+            days: {}
+        })
+    property real now: Date.now() / 1000
+    property string testOutput: ""
+    property int testExit: -1
+    property string lastError: ""
+
+    readonly property string phase: current?.phase ?? "idle"
+    readonly property bool active: phase !== "idle"
+    readonly property real codingLeft: current ? Math.max(0, current.coding_budget - current.used_before - (current.running_since ? now - current.running_since : 0)) : 0
+    readonly property real reviewLeft: current?.review_started ? Math.max(0, current.review_budget - (now - current.review_started)) : 0
+    readonly property real left: phase === "review" ? reviewLeft : codingLeft
+    readonly property var today: log.days[log.today] ?? null
+    readonly property int completedToday: today?.completed ?? 0
+    readonly property int required: log.required_per_day ?? 2
+    readonly property real todaySeconds: today?.total ?? 0
+    readonly property bool testing: tests.running
+    readonly property bool locked: lockdown !== null
+
+    readonly property var langColours: ({
+            ocaml: "#ee7a37",
+            rust: "#b7410e",
+            c: "#5c8dbc",
+            csharp: "#9b4f96",
+            python: "#ffd343"
+        })
+    readonly property var langNames: ({
+            ocaml: "OCaml",
+            rust: "Rust",
+            c: "C",
+            csharp: "C#",
+            python: "Python"
+        })
+
+    function clock(seconds: real): string {
+        const s = Math.max(0, Math.round(seconds));
+        return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    }
+
+    function hours(seconds: real): string {
+        const m = Math.round(seconds / 60);
+        if (m < 60)
+            return `${m}m`;
+        return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+    }
+
+    function dateKey(d: date): string {
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+
+    function day(key: string): var {
+        return log.days[key] ?? null;
+    }
+
+    function streak(): int {
+        let count = 0;
+        const d = new Date();
+        if (!(day(dateKey(d))?.completed >= required))
+            d.setDate(d.getDate() - 1);
+        for (let i = 0; i < 400; i++) {
+            const weekend = d.getDay() === 0 || d.getDay() === 6;
+            const done = (day(dateKey(d))?.completed ?? 0) >= required;
+            if (done)
+                count++;
+            else if (!weekend)
+                break;
+            d.setDate(d.getDate() - 1);
+        }
+        return count;
+    }
+
+    function totals(): var {
+        const out = {};
+        for (const key of Object.keys(log.days)) {
+            for (const s of log.days[key].sessions) {
+                const t = out[s.lang] ?? (out[s.lang] = {
+                        lang: s.lang,
+                        coding: 0,
+                        learning: 0,
+                        review: 0,
+                        completed: 0
+                    });
+                t.coding += s.coding;
+                t.learning += s.learning;
+                t.review += s.review;
+                if (s.complete)
+                    t.completed++;
+            }
+        }
+        return Object.values(out).sort((a, b) => b.coding - a.coding);
+    }
+
+    function command(args: list<string>): void {
+        if (ctl.running)
+            return;
+        ctl.command = ["interview", ...args];
+        ctl.running = true;
+    }
+
+    function toggle(): void {
+        command(["toggle"]);
+    }
+
+    function finishEarly(): void {
+        command(["done"]);
+    }
+
+    function runTests(): void {
+        if (tests.running || !current)
+            return;
+        testOutput = "";
+        testExit = -1;
+        tests.running = true;
+    }
+
+    function refresh(): void {
+        if (!logProc.running)
+            logProc.running = true;
+    }
+
+    Process {
+        id: ctl
+
+        stderr: StdioCollector {
+            onStreamFinished: root.lastError = text.trim()
+        }
+        onExited: {
+            currentFile.reload();
+            root.refresh();
+        }
+    }
+
+    Process {
+        id: tests
+
+        command: ["interview", "run"]
+        stdout: StdioCollector {
+            onStreamFinished: root.testOutput = text
+        }
+        onExited: code => root.testExit = code
+    }
+
+    Process {
+        id: logProc
+
+        command: ["interview", "log", "--json", "--days", "400"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                try {
+                    root.log = JSON.parse(text);
+                } catch (e) {}
+            }
+        }
+    }
+
+    FileView {
+        id: currentFile
+
+        path: `${root.stateDir}/current.json`
+        printErrors: false
+        onLoaded: {
+            try {
+                const next = JSON.parse(text());
+                const changed = root.current?.phase !== next.phase || root.current?.id !== next.id;
+                root.current = next;
+                if (changed)
+                    root.refresh();
+            } catch (e) {}
+        }
+        onLoadFailed: {
+            if (root.current !== null) {
+                root.current = null;
+                root.refresh();
+            }
+        }
+    }
+
+    FileView {
+        id: lockdownFile
+
+        path: `${root.runtimeDir}/lockdown/active.json`
+        printErrors: false
+        onLoaded: {
+            try {
+                root.lockdown = JSON.parse(text());
+            } catch (e) {}
+        }
+        onLoadFailed: root.lockdown = null
+    }
+
+    Timer {
+        interval: 1000
+        running: true
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: {
+            root.now = Date.now() / 1000;
+            currentFile.reload();
+            lockdownFile.reload();
+        }
+    }
+
+    Timer {
+        interval: 60000
+        running: true
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: root.refresh()
+    }
+}

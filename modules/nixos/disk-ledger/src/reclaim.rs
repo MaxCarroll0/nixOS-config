@@ -28,7 +28,7 @@ pub fn weight_influence(age: f64) -> f64 {
 const TRUSTED_SPAN: i64 = 3600;
 const EMPTY_LOG: u64 = 64;
 const BUILD_LOGS: &str = "/nix/var/log/nix/drvs";
-pub const CACHES: [&str; 7] = [
+pub const CACHES: [&str; 18] = [
     ".cargo/registry/cache",
     ".cabal/packages",
     ".opam/download-cache",
@@ -36,7 +36,19 @@ pub const CACHES: [&str; 7] = [
     ".local/share/Steam/appcache/httpcache",
     ".local/share/Steam/appcache/librarycache",
     ".local/share/Steam/depotcache",
+    ".nuget/packages",
+    ".yarn/berry/cache",
+    ".yarn/berry/metadata",
+    ".bun/install/cache",
+    ".zoom/data/cefcache",
+    ".zoom/data/Emojis",
+    ".zoom/data/PresenterLayoutWallpaper",
+    ".zoom/data/PresenterLayoutWallpaper_Thumb",
+    ".zoom/data/ZoomAppResource",
+    ".zoom/data/ZoomAppIcon",
+    ".zoom/logs",
 ];
+pub const EMACS_TEMP: [&str; 2] = [".local/state/emacs/backups", ".local/state/emacs/auto-save"];
 const KNOWN_PROFILES: [&str; 4] = ["system", "home-manager", "profile", "default"];
 pub const ACTIVE_REASONS: [&str; 5] = [
     "in use by a process",
@@ -413,6 +425,11 @@ pub fn glob_worktrees(home: &str) -> Vec<String> {
             }
         }
     }
+    for repo in glob_repos(home) {
+        found.extend(linked_worktrees(&repo));
+    }
+    found.sort();
+    found.dedup();
     found
 }
 
@@ -872,6 +889,60 @@ pub struct WorktreeState {
     pub dirty: usize,
     pub merged: bool,
     pub into: Option<String>,
+    pub tracked: u64,
+}
+
+fn absolute(base: &str, path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        join(base, path)
+    }
+}
+
+pub fn worktree_admin(worktree: &str) -> Option<String> {
+    let link = join(worktree, ".git");
+    if is_symlink(&link) || is_dir(&link) {
+        return None;
+    }
+    let text = std::fs::read_to_string(&link).ok()?;
+    let admin = absolute(worktree, text.trim().strip_prefix("gitdir: ")?);
+    lexists(&join(&admin, "commondir")).then_some(admin)
+}
+
+pub fn worktree_repo(worktree: &str) -> Option<String> {
+    let admin = worktree_admin(worktree)?;
+    let common = std::fs::read_to_string(join(&admin, "commondir")).ok()?;
+    let common = std::fs::canonicalize(absolute(&admin, common.trim())).ok()?;
+    common.to_str()?.strip_suffix("/.git").map(String::from)
+}
+
+pub fn linked_worktrees(repo: &str) -> Vec<String> {
+    let admin = join(repo, ".git/worktrees");
+    list_sorted(&admin)
+        .into_iter()
+        .filter_map(|name| {
+            let text = std::fs::read_to_string(join(&join(&admin, &name), "gitdir")).ok()?;
+            let worktree = dirname(text.trim()).to_string();
+            (is_dir(&worktree) && worktree_repo(&worktree).as_deref() == Some(repo))
+                .then_some(worktree)
+        })
+        .collect()
+}
+
+pub fn worktree_shrunk(worktree: &str) -> bool {
+    worktree_admin(worktree).is_some_and(|admin| lexists(&join(&admin, "ledger")))
+}
+
+fn tracked_files(worktree: &str, user: &str) -> Option<Vec<String>> {
+    let listed = run_as(user, &["git", "-C", worktree, "ls-files", "-z"], None);
+    listed.status.success().then(|| {
+        stdout(&listed)
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(String::from)
+            .collect()
+    })
 }
 
 pub fn worktree_state(repo: &str, worktree: &str, user: &str) -> Option<WorktreeState> {
@@ -904,10 +975,22 @@ pub fn worktree_state(repo: &str, worktree: &str, user: &str) -> Option<Worktree
             .success()
         })
         .unwrap_or(false);
+    let dirty = stdout(&dirty).lines().count();
+    let tracked = if merged || dirty != 0 {
+        0
+    } else {
+        tracked_files(worktree, user)?
+            .iter()
+            .filter_map(|path| sys::lstat(&join(worktree, path)))
+            .filter(|info| sys::is_reg(info.mode) && info.nlink == 1)
+            .map(|info| info.blocks * 512)
+            .sum()
+    };
     Some(WorktreeState {
-        dirty: stdout(&dirty).lines().count(),
+        dirty,
         merged,
         into: branch,
+        tracked,
     })
 }
 
@@ -1233,6 +1316,11 @@ impl Scope {
                         }
                     }
                 }
+                Kind::Temp if EMACS_TEMP.iter().any(|dir| parent == join(&self.home, dir)) => {
+                    if name == ".." || is_symlink(path) {
+                        return Some("not a temp entry".into());
+                    }
+                }
                 Kind::Temp => {
                     if parent != self.tmp || runtime_temp().is_match(name) {
                         return Some("not a temp entry".into());
@@ -1265,16 +1353,20 @@ impl Scope {
                     }
                 }
                 Kind::Agent if entry.detail.get("worktree").map(truthy).unwrap_or(false) => {
-                    if !path.contains("/.claude/worktrees/") {
-                        return Some("not a worktree".into());
-                    }
                     let repo = entry
                         .detail
                         .get("repo")
                         .and_then(Value::as_str)
                         .unwrap_or("");
+                    if worktree_repo(path).as_deref() != Some(repo) || worktree_shrunk(path) {
+                        return Some("not a worktree".into());
+                    }
+                    let compress = entry.detail.get("compress").map(truthy).unwrap_or(false);
                     match worktree_state(repo, path, &self.user) {
-                        Some(state) if state.dirty == 0 => {}
+                        Some(state) if state.dirty == 0 && (compress || state.merged) => {}
+                        Some(state) if state.dirty == 0 => {
+                            return Some("no longer merged".into());
+                        }
                         _ => return Some("uncommitted changes".into()),
                     }
                 }
@@ -1598,6 +1690,7 @@ impl Model {
         found.extend(self.game_items());
         found.extend(self.trash_items());
         found.extend(self.download_items(files));
+        found.extend(self.emacs_items(files));
         found.extend(self.build_items(files));
         let mut containers = HashMap::new();
         for item in found {
@@ -1750,17 +1843,13 @@ impl Model {
         let mut out = Vec::new();
         let present: Vec<(&String, String, (f64, f64))> = worktrees
             .iter()
-            .filter(|worktree| is_dir(worktree))
-            .map(|worktree| {
-                (
+            .filter(|worktree| is_dir(worktree) && !worktree_shrunk(worktree))
+            .filter_map(|worktree| {
+                Some((
                     worktree,
-                    worktree
-                        .split("/.claude/worktrees/")
-                        .next()
-                        .unwrap_or("")
-                        .to_string(),
+                    worktree_repo(worktree)?,
                     (lstat_time(&join(worktree, ".git")), files.used(worktree)),
-                )
+                ))
             })
             .collect();
         let stale: Vec<&(&String, String, (f64, f64))> = present
@@ -1797,7 +1886,7 @@ impl Model {
                 self.protect(worktree, "uncommitted changes");
                 continue;
             }
-            let detail = json!({"owner": self.user, "repo": repo, "dirty": state.dirty, "merged": state.merged, "into": state.into, "worktree": true});
+            let detail = json!({"owner": self.user, "repo": repo, "dirty": state.dirty, "merged": state.merged, "into": state.into, "worktree": true, "agent": worktree.contains("/.claude/worktrees/"), "compress": !state.merged, "tracked_bytes": state.tracked});
             let mut item = Item::new(Kind::Agent, worktree.clone(), files.used(worktree))
                 .with_files(vec![worktree.clone()])
                 .with_detail(detail);
@@ -1879,9 +1968,17 @@ impl Model {
                         .partial
                         .as_ref()
                         .map(|partial| partial.worktrees.clone());
-                    let detail = json!({"owner": self.user, "clone": true, "dirty": state.dirty, "head": state.head, "remote": state.remote, "tracked_bytes": state.bytes, "clean_files": state.clean.len(), "unpushed": state.unpushed, "partial": state.partial.is_some(), "worktrees": worktrees.unwrap_or_default()});
+                    let detail = json!({"owner": self.user, "clone": true, "dirty": state.dirty, "head": state.head, "remote": state.remote, "tracked_bytes": state.bytes, "clean_files": state.clean.len(), "unpushed": state.unpushed, "partial": state.partial.is_some(), "worktrees": worktrees.unwrap_or_default(), "submodules": state.submodules.len()});
+                    let files = std::iter::once(join(&repo, ".git/objects"))
+                        .chain(
+                            state
+                                .submodules
+                                .iter()
+                                .map(|(_, sub)| join(&sub.git_dir, "objects")),
+                        )
+                        .collect();
                     let mut item = Item::new(Kind::Repo, repo.clone(), used)
-                        .with_files(vec![join(&repo, ".git/objects")])
+                        .with_files(files)
                         .with_detail(detail);
                     item.factor = if state.dirty == 0 {
                         1.0
@@ -2329,6 +2426,12 @@ impl Model {
                 } else {
                     estimate.max(total)
                 }
+            } else if item.flag("compress") {
+                item.detail
+                    .get("tracked_bytes")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    .min(total)
             } else {
                 total
             };
@@ -2449,6 +2552,8 @@ pub struct CloneState {
     pub unpushed: usize,
     pub bundle: String,
     pub partial: Option<Partial>,
+    pub git_dir: String,
+    pub submodules: Vec<(String, CloneState)>,
 }
 
 #[derive(Clone)]
@@ -2543,22 +2648,83 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
     if !is_dir(&dot) || is_symlink(&dot) {
         return Err("not a clone".into());
     }
+    let mut state = repo_state(repo, &dot, user)?;
+    for path in submodules(repo, user)? {
+        let name = path
+            .strip_prefix(repo)
+            .unwrap_or(&path)
+            .trim_start_matches('/')
+            .to_string();
+        let sub_dot = submodule_git_dir(&path).ok_or(format!("submodule {name}: no git dir"))?;
+        if lexists(&join(&sub_dot, "ledger")) {
+            continue;
+        }
+        let found = repo_state(&path, &sub_dot, user)
+            .map_err(|reason| format!("submodule {name}: {reason}"))?;
+        if found.partial.is_some() {
+            return Err(format!("submodule {name}: stash or linked worktrees"));
+        }
+        state.bytes += found.bytes;
+        state.unpushed += found.unpushed;
+        state.submodules.push((path, found));
+    }
+    Ok(state)
+}
+
+fn submodules(repo: &str, user: &str) -> Result<Vec<String>, String> {
+    if !lexists(&join(repo, ".gitmodules")) {
+        return Ok(Vec::new());
+    }
+    let listing = git(
+        user,
+        repo,
+        &[
+            "submodule",
+            "--quiet",
+            "foreach",
+            "--recursive",
+            "printf '%s\\0' \"$toplevel/$sm_path\"",
+        ],
+        None,
+    )
+    .ok_or("unreadable submodules")?;
+    Ok(listing
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn submodule_git_dir(path: &str) -> Option<String> {
+    let dot = join(path, ".git");
+    if is_symlink(&dot) {
+        return None;
+    }
+    if is_dir(&dot) {
+        return Some(dot);
+    }
+    let text = std::fs::read_to_string(&dot).ok()?;
+    let target = text.strip_prefix("gitdir: ")?.trim();
+    let resolved = if target.starts_with('/') {
+        target.to_string()
+    } else {
+        join(path, target)
+    };
+    is_dir(&resolved).then_some(resolved)
+}
+
+fn repo_state(repo: &str, dot: &str, user: &str) -> Result<CloneState, String> {
     if let Some(marker) = IN_PROGRESS
         .iter()
         .find(|marker| lexists(&join(&dot, marker)))
     {
         return Err(format!("{marker} in progress"));
     }
-    let linked = !list_dir(&join(&dot, "worktrees"))
+    let linked = !list_dir(&join(dot, "worktrees"))
         .unwrap_or_default()
         .is_empty();
-    for (name, reason) in [
-        (".git/modules", "has submodules"),
-        (".gitmodules", "has submodules"),
-        (".git/shallow", "shallow clone"),
-        (".git/lfs", "has lfs objects"),
-    ] {
-        if lexists(&join(repo, name)) {
+    for (name, reason) in [("shallow", "shallow clone"), ("lfs", "has lfs objects")] {
+        if lexists(&join(dot, name)) {
             return Err(reason.into());
         }
     }
@@ -2745,6 +2911,8 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
                 heads: tips,
                 present: present.iter().map(|sha| sha.to_string()).collect(),
             }),
+            git_dir: dot.to_string(),
+            submodules: Vec::new(),
         });
     }
     let mut clean = Vec::new();
@@ -2773,14 +2941,22 @@ pub fn clone_state(repo: &str, user: &str) -> Result<CloneState, String> {
         unpushed,
         bundle,
         partial: None,
+        git_dir: dot.to_string(),
+        submodules: Vec::new(),
     })
 }
 
 const RESTORE: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
-top=$(cd "$(dirname "$0")/../.." && pwd)
+gitdir=$(cd "$(dirname "$0")/.." && pwd)
+worktree=$(git --git-dir="$gitdir" config core.worktree || true)
+if [ -n "$worktree" ]; then
+  top=$(cd "$gitdir" && cd "$worktree" && pwd)
+else
+  top=$(cd "$gitdir/.." && pwd)
+fi
 cd "$top"
-state=.git/ledger
+state="$gitdir/ledger"
 for remote in $(git remote); do
   git fetch --tags "$remote" || true
 done
@@ -2805,7 +2981,7 @@ while read -r sha ref; do
     *) git update-ref "$ref" "$sha" ;;
   esac
 done < "$state/refs"
-cp "$state/HEAD" .git/HEAD
+cp "$state/HEAD" "$gitdir/HEAD"
 git read-tree HEAD
 while IFS= read -r -d '' path; do
   if [ ! -e "$path" ] && [ ! -L "$path" ]; then
@@ -2815,7 +2991,15 @@ done < "$state/deleted"
 if [ -s "$state/staged.patch" ]; then
   git apply --cached "$state/staged.patch"
 fi
-mv "$state" ".git/ledger-restored-$(date +%s)"
+mv "$state" "$gitdir/ledger-restored-$(date +%s)"
+if [ -d "$gitdir/modules" ]; then
+  mapfile -t nested < <(find "$gitdir/modules" -path '*/ledger/restore' -type f | sort)
+  for script in "${nested[@]}"; do
+    if [ -f "$script" ]; then
+      bash "$script" > /dev/null
+    fi
+  done
+fi
 git status --short | head -20
 "#;
 
@@ -2831,15 +3015,105 @@ fn write_as(user: &str, path: &str, content: &str) -> bool {
     .success()
 }
 
+const WORKTREE_RESTORE: &str = r#"#!/usr/bin/env bash
+set -euo pipefail
+admin=$(cd "$(dirname "$0")/.." && pwd)
+top=$(dirname "$(cat "$admin/gitdir")")
+cd "$top"
+git checkout -- .
+mv "$admin/ledger" "$admin/ledger-restored-$(date +%s)"
+git status --short | head -20
+"#;
+
+const WORKTREE_README: &str = "The disk ledger shrank this worktree: unmodified tracked files were deleted; untracked and ignored files were kept. Its commits stay in the main repository. Run ledger/restore here to check the files out again.\n";
+
+pub fn shrink_worktree(worktree: &str, user: &str, uid: u32, gid: u32) -> Result<u64, String> {
+    let started = sys::now();
+    let admin = worktree_admin(worktree).ok_or("not a worktree")?;
+    let keep = join(&admin, "ledger");
+    if lexists(&keep) {
+        return Err("shrunk".into());
+    }
+    let status = run_as(
+        user,
+        &["git", "-C", worktree, "status", "--porcelain"],
+        None,
+    );
+    if !status.status.success() || !stdout(&status).trim().is_empty() {
+        return Err("uncommitted changes".into());
+    }
+    let tracked = tracked_files(worktree, user).ok_or("unreadable index")?;
+    let restore = join(&keep, "restore");
+    let written = run_as(user, &["mkdir", "-p", &keep], None).status.success()
+        && write_as(user, &restore, WORKTREE_RESTORE)
+        && write_as(user, &join(&keep, "README"), WORKTREE_README)
+        && run_as(user, &["chmod", "+x", &restore], None)
+            .status
+            .success();
+    if !written {
+        return Err("could not write the restore state".into());
+    }
+    let mut freed = 0;
+    let mut targets = Vec::new();
+    let mut parents = HashSet::new();
+    for path in &tracked {
+        let full = join(worktree, path);
+        let Some(info) = sys::lstat(&full) else {
+            continue;
+        };
+        if (info.ctime as f64) >= started - 2.0 {
+            continue;
+        }
+        if sys::is_reg(info.mode) && info.nlink == 1 {
+            freed += info.blocks * 512;
+        }
+        let mut parent = dirname(path);
+        while !parent.is_empty() && parents.insert(parent.to_string()) {
+            parent = dirname(parent);
+        }
+        targets.push(full);
+    }
+    let outcome = crate::remove::remove_as(uid, gid, targets);
+    if let Some((path, code)) = outcome.failed.first() {
+        return Err(format!("remove failed: {path}: {code}"));
+    }
+    let mut emptied: Vec<String> = parents.into_iter().collect();
+    emptied.sort_by_key(|parent| std::cmp::Reverse(parent.len()));
+    for parent in emptied {
+        let _ = std::fs::remove_dir(join(worktree, &parent));
+    }
+    Ok(freed)
+}
+
 pub fn shrink_clone(repo: &str, user: &str, uid: u32, gid: u32) -> Result<u64, String> {
-    use std::os::unix::fs::MetadataExt;
     let started = sys::now();
     let state = clone_state(repo, user)?;
-    if let Some(partial) = &state.partial {
-        return partial_shrink(repo, user, uid, gid, partial).map(|_| state.bytes);
+    shrink_repo(repo, &state, user, uid, gid, started)?;
+    for (path, sub) in &state.submodules {
+        let name = path
+            .strip_prefix(repo)
+            .unwrap_or(path)
+            .trim_start_matches('/');
+        shrink_repo(path, sub, user, uid, gid, started)
+            .map_err(|reason| format!("submodule {name}: {reason}"))?;
     }
-    let dot = join(repo, ".git");
-    let keep = join(repo, SHRUNK);
+    Ok(state.bytes)
+}
+
+fn shrink_repo(
+    repo: &str,
+    state: &CloneState,
+    user: &str,
+    uid: u32,
+    gid: u32,
+    started: f64,
+) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    if let Some(partial) = &state.partial {
+        return partial_shrink(repo, user, uid, gid, partial);
+    }
+    let dot = state.git_dir.clone();
+    let keep = join(&dot, "ledger");
     let staged = join(&keep, "staged.patch");
     let uncommitted = join(&keep, "uncommitted.patch");
     let refs = git(
@@ -2959,7 +3233,7 @@ pub fn shrink_clone(repo: &str, user: &str, uid: u32, gid: u32) -> Result<u64, S
     if !rebuilt {
         return Err("could not recreate the empty object store".into());
     }
-    Ok(state.bytes)
+    Ok(())
 }
 
 const LOCAL_PACK: &str = "local";
@@ -3478,6 +3752,25 @@ impl Model {
                 Item::new(Kind::Trash, path.clone(), deleted)
                     .with_files(vec![path, record])
                     .with_detail(json!({"owner": self.user, "origin": origin}))
+            })
+            .collect()
+    }
+
+    fn emacs_items(&self, files: &dyn Files) -> Vec<Item> {
+        EMACS_TEMP
+            .iter()
+            .map(|dir| join(&self.home, dir))
+            .flat_map(|dir| {
+                list_sorted(&dir)
+                    .into_iter()
+                    .map(move |name| join(&dir, &name))
+            })
+            .filter(|path| !is_symlink(path))
+            .map(|path| {
+                let used = files.used(&path).max(lstat_time(&path));
+                Item::new(Kind::Temp, path.clone(), used)
+                    .with_files(vec![path])
+                    .with_detail(json!({"owner": self.user, "emacs": true}))
             })
             .collect()
     }

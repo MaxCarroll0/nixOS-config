@@ -813,6 +813,12 @@ impl Ledger {
             if !node.attached {
                 continue;
             }
+            if &*node.name == ".git" {
+                if self.tree.child(*id, "worktrees").is_some() {
+                    found.extend(reclaim::linked_worktrees(&self.tree.path(node.parent)));
+                }
+                continue;
+            }
             if &*node.name != ".claude" {
                 continue;
             }
@@ -827,6 +833,7 @@ impl Ledger {
             }
         }
         found.sort();
+        found.dedup();
         found
     }
 
@@ -1479,7 +1486,17 @@ impl Ledger {
                 } else {
                     String::new()
                 };
-                format!("agent worktree, {state}{dirty}")
+                let owner = if item.flag("agent") {
+                    "agent worktree".to_string()
+                } else {
+                    format!("worktree of {}", short(item.text("repo"), &self.home))
+                };
+                let action = if item.flag("compress") {
+                    ", tracked files shrunk in place"
+                } else {
+                    ""
+                };
+                format!("{owner}, {state}{dirty}{action}")
             }
             Kind::Build => {
                 if item.flag("project") {
@@ -3632,7 +3649,10 @@ impl Ledger {
 
     fn available(&self, item: &reclaim::Item) -> bool {
         if self.skipped.contains_key(&item.path)
-            || self.kinds.as_ref().is_some_and(|kinds| !kinds.contains(&item.kind))
+            || self
+                .kinds
+                .as_ref()
+                .is_some_and(|kinds| !kinds.contains(&item.kind))
         {
             return false;
         }

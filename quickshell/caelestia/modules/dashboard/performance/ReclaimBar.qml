@@ -341,6 +341,61 @@ Item {
         }
     }
 
+    property var redBoxes: []
+    property int ghostSerial: 0
+
+    onBoxesChanged: {
+        const red = root.boxes.filter(box => box.deleting || box.lagging);
+        const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w;
+        for (const box of root.redBoxes)
+            if (!red.some(now => now.key === box.key || overlaps(now, box)))
+                ghosts.append({
+                    serial: root.ghostSerial++,
+                    gx: box.x,
+                    gw: box.w
+                });
+        root.redBoxes = red.map(box => ({
+                    key: box.key,
+                    x: box.x,
+                    w: box.w
+                }));
+    }
+
+    ListModel {
+        id: ghosts
+    }
+
+    Repeater {
+        model: ghosts
+
+        delegate: Rectangle {
+            id: ghost
+
+            required property int serial
+            required property real gx
+            required property real gw
+
+            x: ghost.gx
+            width: Math.max(1, ghost.gw - 1)
+            height: root.barHeight
+            color: root.model.deletingColor
+
+            NumberAnimation on opacity {
+                from: 0.85
+                to: 0
+                duration: 1400
+                easing.type: Easing.OutCubic
+                onFinished: {
+                    for (let i = 0; i < ghosts.count; i++)
+                        if (ghosts.get(i).serial === ghost.serial) {
+                            ghosts.remove(i);
+                            break;
+                        }
+                }
+            }
+        }
+    }
+
     Pointers {
         y: -size - 4
         width: parent.width
