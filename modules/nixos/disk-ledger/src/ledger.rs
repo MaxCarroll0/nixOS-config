@@ -22,6 +22,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+const BEGUN_KEPT: usize = 256;
 const GIB: i64 = 1 << 30;
 const MIB: i64 = 1 << 20;
 const DAY: i64 = 86400;
@@ -36,7 +37,7 @@ const HISTORY_ITEMS: usize = 40;
 const PUSH_SECONDS: f64 = 0.1;
 const FILE_SECONDS: f64 = 5.0;
 const DB_SECONDS: f64 = 0.1;
-const FRAME: f64 = 0.016;
+const FRAME: f64 = 0.008;
 const LOOKAHEAD: usize = 32;
 const ROOTS_SECONDS: f64 = 300.0;
 const MODEL_SECONDS: f64 = 300.0;
@@ -55,6 +56,7 @@ const IDLE_FILES: f64 = 60.0;
 const VERIFY_PERIOD: f64 = 10.0;
 const LAGGING_SECONDS: f64 = 600.0;
 const RENDER_SECONDS: f64 = 5.0;
+const SPAN_SECONDS: f64 = 1.0;
 const IDLE_WRITE: f64 = 60.0;
 const TARGET_SECONDS: f64 = 1.0;
 const CATCH_UP: f64 = 0.25;
@@ -402,6 +404,7 @@ struct Client {
     watches: Vec<Watch>,
     sent: HashMap<String, u64>,
     events_upto: Option<u64>,
+    begun_upto: u64,
     frame: u64,
 }
 
@@ -450,6 +453,7 @@ pub struct Ledger {
     model: Model,
     model_version: u64,
     scheduled_cache: Option<(u64, i64, HashMap<&'static str, i64>, i64)>,
+    span_cache: HashMap<&'static str, (f64, u64, Value)>,
     spans_cache: std::cell::RefCell<Option<(f64, u64, Value)>>,
     settled: std::cell::RefCell<HashMap<String, i64>>,
     agent_titles: HashMap<String, (u64, String, String)>,
@@ -524,6 +528,8 @@ pub struct Ledger {
     next_rank: i64,
     planned: Vec<bool>,
     deleting: HashSet<String>,
+    begun: VecDeque<(u64, String, f64)>,
+    begun_seq: u64,
     pushed: f64,
     frame_due: bool,
     pushed_revision: u64,
@@ -685,6 +691,7 @@ impl Ledger {
             model,
             model_version: 0,
             scheduled_cache: None,
+            span_cache: HashMap::new(),
             spans_cache: std::cell::RefCell::new(None),
             settled: std::cell::RefCell::new(HashMap::new()),
             agent_titles: HashMap::new(),
@@ -759,6 +766,8 @@ impl Ledger {
             next_rank: -1,
             planned: Vec::new(),
             deleting: HashSet::new(),
+            begun: VecDeque::new(),
+            begun_seq: 0,
             pushed: 0.0,
             frame_due: false,
             pushed_revision: 0,
@@ -1391,8 +1400,8 @@ impl Ledger {
             }
         }
         let home = self.home_spans();
-        let generation = self.row_spans("generation");
-        let temp = self.row_spans("temp");
+        let generation = self.kind_spans("generation");
+        let temp = self.kind_spans("temp");
         let head_item = usize::try_from(self.next_rank)
             .ok()
             .and_then(|index| self.model.items.get(index));
@@ -2075,6 +2084,37 @@ impl Ledger {
         Some(entry)
     }
 
+    fn kind_spans(&mut self, key: &'static str) -> Value {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for index in self.kind_items.get(key).into_iter().flatten() {
+            let item = &self.model.items[*index];
+            (
+                index,
+                item.freed(),
+                self.is_planned(item.rank),
+                self.is_next(item.rank),
+                self.is_doomed(&item.path),
+                self.is_lagging(&item.path),
+            )
+                .hash(&mut hasher);
+        }
+        if key == "temp" {
+            self.tree
+                .find("/tmp")
+                .map(|id| self.tree.node(id).total)
+                .hash(&mut hasher);
+        }
+        let stamp = hasher.finish();
+        if let Some((at, seen, spans)) = self.span_cache.get(key) {
+            if *seen == stamp && clock() - at < SPAN_SECONDS {
+                return spans.clone();
+            }
+        }
+        let spans = self.row_spans(key);
+        self.span_cache.insert(key, (clock(), stamp, spans.clone()));
+        spans
+    }
+
     fn row_spans(&mut self, key: &str) -> Value {
         self.unlabelled = true;
         let mut rows = self.segment_rows(key);
@@ -2448,12 +2488,15 @@ impl Ledger {
                 .next()
                 .unwrap_or("")
                 .to_string();
-            if let Some(text) = probe::tmp_text(
-                &top,
-                &self.home,
-                clients.get_or_insert_with(probe::hypr_clients),
-            )
-            .filter(|_| !top.is_empty() && path == format!("/tmp/{top}"))
+            if let Some(text) = Some(())
+                .filter(|_| !self.unlabelled && !top.is_empty() && path == format!("/tmp/{top}"))
+                .and_then(|_| {
+                    probe::tmp_text(
+                        &top,
+                        &self.home,
+                        clients.get_or_insert_with(probe::hypr_clients),
+                    )
+                })
             {
                 entry.insert("label".into(), json!(text));
             }
@@ -3206,6 +3249,7 @@ impl Ledger {
                     watches: Vec::new(),
                     sent: HashMap::new(),
                     events_upto: None,
+                    begun_upto: self.begun_seq,
                     frame: 0,
                 },
             );
@@ -3328,14 +3372,31 @@ impl Ledger {
             sent.push((node_id, entry.1));
             messages.push(entry);
         }
-        if messages.is_empty() && events.is_none() {
-            return true;
-        }
         let Some(client) = self.clients.get_mut(&fd) else {
             return false;
         };
+        let begun: Vec<Value> = self
+            .begun
+            .iter()
+            .filter(|(seq, _, _)| *seq > client.begun_upto)
+            .map(|(_, path, at)| json!([path, at]))
+            .collect();
+        if messages.is_empty() && events.is_none() && begun.is_empty() {
+            return true;
+        }
         client.frame += 1;
-        let mut line = format!("{{\"frame\":{},\"messages\":[", client.frame).into_bytes();
+        client.begun_upto = self.begun_seq;
+        let mut line = if begun.is_empty() {
+            format!("{{\"frame\":{},\"messages\":[", client.frame)
+        } else {
+            format!(
+                "{{\"frame\":{},\"sent\":{},\"begun\":{},\"messages\":[",
+                client.frame,
+                sys::now(),
+                Value::Array(begun)
+            )
+        }
+        .into_bytes();
         for (index, text) in messages
             .iter()
             .map(|entry| entry.0.as_str())
@@ -3837,7 +3898,12 @@ impl Ledger {
         while let Ok(event) = self.sweep_events.try_recv() {
             self.batch += 1;
             match event {
-                sweep::Event::Begun(path) => {
+                sweep::Event::Begun(path, at) => {
+                    self.begun_seq += 1;
+                    self.begun.push_back((self.begun_seq, path.clone(), at));
+                    if self.begun.len() > BEGUN_KEPT {
+                        self.begun.pop_front();
+                    }
                     self.deleting.insert(path);
                 }
                 sweep::Event::Done(path, detail) => {
@@ -4295,11 +4361,11 @@ impl Ledger {
             }
             if self.frame_due && clock() - self.pushed >= FRAME {
                 self.frame_due = false;
+                self.pushed = clock();
                 let overview = self.build_overview();
                 if self.set_overview(overview) {
                     self.push_changes();
                 }
-                self.pushed = clock();
             }
             self.step();
         }

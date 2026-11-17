@@ -33,7 +33,7 @@ pub enum Command {
 }
 
 pub enum Event {
-    Begun(String),
+    Begun(String, f64),
     Done(String, Value),
     Refused(String, String),
     Closed(Value),
@@ -249,7 +249,7 @@ impl Worker {
         if let Err(reason) = self.files(&task) {
             return self.refuse(work, reason);
         }
-        self.send(Event::Begun(work.path.clone()));
+        self.send(Event::Begun(work.path.clone(), sys::now()));
         let started = sys::now();
         let files = match self.remove_files(&task) {
             Ok(released) => released,
