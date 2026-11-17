@@ -54,6 +54,8 @@ def minutes(hhmm: str) -> int:
 def scheduled(profile: dict, at: dt.datetime) -> bool:
     if at.isoweekday() not in profile["days"]:
         return False
+    if profile.get("from") and at.date().isoformat() < profile["from"]:
+        return False
     current = at.hour * 60 + at.minute
     return minutes(profile["start"]) <= current < minutes(profile.get("end", "24:00"))
 

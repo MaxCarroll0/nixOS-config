@@ -96,6 +96,11 @@ let
           type = lib.types.str;
           description = "Local HH:MM from which the profile engages.";
         };
+        from = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "ISO date of the first day the profile engages; null engages from now on.";
+        };
         end = lib.mkOption {
           type = lib.types.str;
           default = "24:00";
@@ -150,6 +155,7 @@ let
       actions
       days
       start
+      from
       end
       password
       message

@@ -160,8 +160,8 @@ in
 
   services.lockdown.profiles.interview = {
     workspace = "interview";
-    days = [ ];
     start = "05:00";
+    from = "2026-11-19";
     password = "c2fGUFHyYmUS3666DRKm347";
     message = "Weekday interviews: finish two of today's three to unlock.";
     releaseCheck = [
