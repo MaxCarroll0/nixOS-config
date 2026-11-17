@@ -3950,7 +3950,9 @@ impl Ledger {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         for (path, alive) in ready {
-            let name = path["/nix/store/".len()..].to_string();
+            let Some(name) = path.strip_prefix("/nix/store/").map(String::from) else {
+                continue;
+            };
             if alive {
                 registered.insert(name);
             } else {

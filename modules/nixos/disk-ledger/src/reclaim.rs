@@ -646,6 +646,19 @@ pub fn process_starts() -> HashMap<String, Vec<f64>> {
     starts
 }
 
+fn git_repository(path: &str) -> bool {
+    Path::new(&join(path, "HEAD")).is_file() && is_dir(&join(path, "objects"))
+}
+
+fn nix_running() -> Option<String> {
+    pids().into_iter().find_map(|pid| {
+        let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+        let name = name.trim();
+        (name == "nix" || (name.starts_with("nix-") && name != "nix-daemon"))
+            .then(|| format!("{name} is running"))
+    })
+}
+
 pub fn cache_known(path: &str) -> bool {
     if known_caches().is_match(basename(path)) {
         return true;
@@ -1206,6 +1219,11 @@ impl Scope {
                     {
                         return Some("not a known cache".into());
                     }
+                    if path.contains("/.cache/nix/") || path.ends_with("/.cache/nix") {
+                        if let Some(running) = nix_running() {
+                            return Some(running);
+                        }
+                    }
                 }
                 Kind::Temp => {
                     if parent != self.tmp || runtime_temp().is_match(name) {
@@ -1583,7 +1601,12 @@ impl Model {
 
     fn split_held(&mut self, path: &str, busy: &HashSet<String>, depth: u32) -> Vec<String> {
         let children = match list_dir(path) {
-            Some(children) if depth > 0 && children.len() <= 64 && Path::new(path).is_dir() => {
+            Some(children)
+                if depth > 0
+                    && children.len() <= 64
+                    && Path::new(path).is_dir()
+                    && !git_repository(path) =>
+            {
                 children
             }
             _ => {

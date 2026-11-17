@@ -46,6 +46,7 @@ pub struct Store {
     free_slots: Vec<u32>,
     index: HashTable<u32>,
     by_id: HashMap<i64, u32>,
+    slot_ids: HashMap<u32, i64>,
     links: Vec<Link>,
     link_of: HashTable<u32>,
     link_hash: RandomState,
@@ -345,6 +346,7 @@ impl Store {
             free_slots: Vec::new(),
             index: HashTable::new(),
             by_id: HashMap::new(),
+            slot_ids: HashMap::new(),
             links: Vec::new(),
             link_of: HashTable::new(),
             link_hash: RandomState::new(),
@@ -664,6 +666,7 @@ impl Store {
         let mut gone = Vec::new();
         for id in gone_ids {
             let slot = self.by_id.remove(&id).unwrap();
+            self.slot_ids.remove(&slot);
             let refs = std::mem::take(&mut self.paths[slot as usize].refs);
             let ups = std::mem::take(&mut self.paths[slot as usize].referrers);
             for other in refs {
@@ -738,6 +741,7 @@ impl Store {
             });
             self.index_insert(slot);
             self.by_id.insert(id, slot);
+            self.slot_ids.insert(slot, id);
             fresh.push(slot);
         }
         for (referrer, reference) in edges {
@@ -759,6 +763,9 @@ impl Store {
 
     fn release(&mut self, slot: u32) {
         self.detach(slot);
+        if let Some(id) = self.slot_ids.remove(&slot) {
+            self.by_id.remove(&id);
+        }
         let entry = &mut self.paths[slot as usize];
         if !entry.alive {
             return;
@@ -1053,6 +1060,7 @@ impl Store {
         self.index
             .shrink_to_fit(|slot| state.hash_one(paths[*slot as usize].path.as_str()));
         self.by_id.shrink_to_fit();
+        self.slot_ids.shrink_to_fit();
     }
 
     pub fn shared_files(&self) -> usize {
