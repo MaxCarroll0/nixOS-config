@@ -397,4 +397,11 @@ in
         "$_shortcuts"
     fi
   '';
+
+  home.activation.dolphinPrefs = lib.hm.dag.entryAfter [ "writeBoundary" ] /* bash */ ''
+    _kw=${pkgs.kdePackages.kconfig}/bin/kwriteconfig6
+    run $_kw --file kdeglobals --group General --key TerminalApplication kitty
+    run $_kw --file kdeglobals --group General --key TerminalService kitty.desktop
+    run $_kw --file dolphinrc --group Search --key Location FromHere
+  '';
 }
