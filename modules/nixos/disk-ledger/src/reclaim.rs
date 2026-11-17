@@ -2191,6 +2191,15 @@ impl Model {
                 item.build = self.build_seconds(store, &missing);
             }
         }
+        let mut taken = vec![false; store.paths.len()];
+        for item in items.iter_mut() {
+            let starts = if item.kind == Kind::Dead {
+                item.targets.clone()
+            } else {
+                std::mem::take(&mut item.store)
+            };
+            item.store = removed_with(store, &starts, &mut taken);
+        }
         for item in items.iter() {
             store.rank(
                 &item.store,
@@ -2338,6 +2347,25 @@ pub fn missing_closure(store: &Store, freed: &[u32], owner: &[u32], rank: u32) -
         }
     }
     seen.into_iter().collect()
+}
+
+pub fn removed_with(store: &Store, starts: &[u32], taken: &mut [bool]) -> Vec<u32> {
+    let mut found = Vec::new();
+    let mut stack: Vec<u32> = starts.to_vec();
+    while let Some(slot) = stack.pop() {
+        if !store.get(slot).alive || std::mem::replace(&mut taken[slot as usize], true) {
+            continue;
+        }
+        found.push(slot);
+        stack.extend(
+            store
+                .get(slot)
+                .referrers
+                .iter()
+                .filter(|up| !taken[**up as usize]),
+        );
+    }
+    found
 }
 
 pub fn claim(store: &Store, starts: &[u32], live: &mut [bool]) -> Vec<u32> {

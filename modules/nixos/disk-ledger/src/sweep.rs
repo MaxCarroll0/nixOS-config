@@ -137,7 +137,7 @@ impl Worker {
             .map_or(Ok(()), Err)
     }
 
-    fn remove_files(&self, task: &Task) -> Result<(), String> {
+    fn remove_files(&self, task: &Task) -> Result<Option<u64>, String> {
         let work = &task.work;
         let scope = &task.scope;
         for link in &work.links {
@@ -156,7 +156,7 @@ impl Worker {
         if work.kind == Kind::Repo {
             return match reclaim::user_ids(&scope.user) {
                 Some((uid, gid)) => {
-                    reclaim::shrink_clone(&work.path, &scope.user, uid, gid).map(|_| ())
+                    reclaim::shrink_clone(&work.path, &scope.user, uid, gid).map(|_| None)
                 }
                 None => Err("unknown user".into()),
             };
@@ -184,7 +184,7 @@ impl Worker {
             .cloned()
             .collect();
         if paths.is_empty() {
-            return Ok(());
+            return Ok(Some(0));
         }
         let ids = if owner == "root" {
             Some((0, 0))
@@ -194,12 +194,13 @@ impl Worker {
         let Some((uid, gid)) = ids else {
             return Err(format!("unknown user {owner}"));
         };
-        match remove::remove_as(uid, gid, paths).failed.first() {
+        let outcome = remove::remove_as(uid, gid, paths);
+        match outcome.failed.first() {
             Some((path, code)) => Err(format!(
                 "remove failed: {path}: {}",
                 std::io::Error::from_raw_os_error(*code)
             )),
-            None => Ok(()),
+            None => Ok(Some(outcome.released)),
         }
     }
 
@@ -219,7 +220,7 @@ impl Worker {
                 session.unroot(&task.work.links);
                 let outcome = session.delete(&task.ordered, &task.references);
                 let round = |seconds: f64| (seconds * 1e4).round() / 10.0;
-                let detail = json!({"native": true, "deleted": outcome.deleted, "entries": outcome.entries, "links": outcome.links, "causes": outcome.causes.iter().take(10).map(|(path, cause)| json!({"path": path, "cause": cause})).collect::<Vec<_>>(), "error": outcome.error, "ms": {"database": round(outcome.database), "unlink": round(outcome.unlinking)}});
+                let detail = json!({"native": true, "deleted": outcome.deleted, "entries": outcome.entries, "links": outcome.links, "released": outcome.released, "causes": outcome.causes.iter().take(10).map(|(path, cause)| json!({"path": path, "cause": cause})).collect::<Vec<_>>(), "error": outcome.error, "ms": {"database": round(outcome.database), "unlink": round(outcome.unlinking)}});
                 (outcome.refused, detail)
             }
             Some(Err(reason)) => {
@@ -250,10 +251,12 @@ impl Worker {
         }
         self.send(Event::Begun(work.path.clone()));
         let started = sys::now();
-        if let Err(reason) = self.remove_files(&task) {
-            return self.refuse(work, reason);
-        }
+        let files = match self.remove_files(&task) {
+            Ok(released) => released,
+            Err(reason) => return self.refuse(work, reason),
+        };
         let (refused, collector) = self.store(&task);
+        let released = files.map(|bytes| bytes + collector["released"].as_u64().unwrap_or(0));
         if !work.store.is_empty()
             && work.files.is_empty()
             && work.store.iter().all(|path| refused.contains(path))
@@ -270,7 +273,7 @@ impl Worker {
         let round = |value: f64| (value * 1e4).round() / 10.0;
         self.send(Event::Done(
             work.path.clone(),
-            json!({"path": work.path, "kind": work.kind.name(), "freed": work.freed, "last_used": work.last_used, "refused": refused.len(), "ms": round(sys::now() - started), "collector": collector}),
+            json!({"path": work.path, "kind": work.kind.name(), "freed": work.freed, "released": released, "last_used": work.last_used, "refused": refused.len(), "ms": round(sys::now() - started), "collector": collector}),
         ));
     }
 

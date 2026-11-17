@@ -440,12 +440,16 @@ impl Index {
     }
 }
 
-fn drop_orphan(dir: i32, name: &CString) -> u64 {
+fn drop_orphan(dir: i32, name: &CString) -> (u64, u64) {
     let mut info: libc::stat = unsafe { std::mem::zeroed() };
     let orphan = unsafe { libc::fstatat(dir, name.as_ptr(), &mut info, libc::AT_SYMLINK_NOFOLLOW) }
         == 0
         && info.st_nlink == 1;
-    u64::from(orphan && unsafe { libc::unlinkat(dir, name.as_ptr(), 0) } == 0)
+    if orphan && unsafe { libc::unlinkat(dir, name.as_ptr(), 0) } == 0 {
+        (1, info.st_blocks as u64 * 512)
+    } else {
+        (0, 0)
+    }
 }
 
 fn temp_roots(state: &str) -> Result<Vec<Key>, String> {
@@ -729,7 +733,7 @@ impl Collector {
         Ok(gone)
     }
 
-    fn drop_linked(&mut self, dir: i32, mut linked: Vec<u64>) -> u64 {
+    fn drop_linked(&mut self, dir: i32, mut linked: Vec<u64>) -> (u64, u64) {
         if self.index.origin.is_none() {
             let path = format!("{}/.links", self.store);
             let published = self
@@ -747,7 +751,7 @@ impl Collector {
             .into_iter()
             .filter_map(|ino| self.index.name(ino))
             .map(|name| drop_orphan(dir, &name))
-            .sum()
+            .fold((0, 0), |(links, bytes), (link, freed)| (links + link, bytes + freed))
     }
 }
 
@@ -756,6 +760,7 @@ pub struct Outcome {
     pub deleted: u64,
     pub entries: u64,
     pub links: u64,
+    pub released: u64,
     pub refused: HashSet<String>,
     pub causes: Vec<(String, &'static str)>,
     pub strays: Vec<(String, i32)>,
@@ -865,7 +870,7 @@ impl Session {
         session.links = sys::open_dir(&format!("{store}/.links")).unwrap_or(-1);
         for name in orphans.iter().filter(|name| !name.contains('/')) {
             if let (Ok(name), true) = (CString::new(name.as_bytes()), session.links >= 0) {
-                session.report.links += drop_orphan(session.links, &name);
+                session.report.links += drop_orphan(session.links, &name).0;
             }
         }
         Ok(session)
@@ -965,6 +970,7 @@ impl Session {
                 let mut removed = remove::Outcome::default();
                 remove::remove_tree_linked(&physical(path), &mut removed, &mut Some(&mut linked));
                 outcome.entries += removed.removed as u64;
+                outcome.released += removed.released;
                 if let Some((_, code)) = removed.failed.first() {
                     outcome.strays.push((path.to_string(), *code));
                 }
@@ -979,7 +985,9 @@ impl Session {
         }
         if self.links >= 0 && !linked.is_empty() {
             let links = self.links;
-            outcome.links = self.collector().drop_linked(links, linked);
+            let (dropped, released) = self.collector().drop_linked(links, linked);
+            outcome.links = dropped;
+            outcome.released += released;
         }
         outcome.unlinking = clock.elapsed().as_secs_f64();
         self.report.deleted += outcome.deleted;

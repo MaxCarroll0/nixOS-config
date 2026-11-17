@@ -433,6 +433,9 @@ pub struct Ledger {
     target_file: String,
     emergency: i64,
     collecting: bool,
+    kinds: Option<Vec<Kind>>,
+    swept_from: i64,
+    released: i64,
     planning: bool,
     skipped: HashMap<String, f64>,
     planned_at: f64,
@@ -663,6 +666,11 @@ impl Ledger {
             target_file: env("LEDGER_TARGET_FILE"),
             emergency: env("LEDGER_EMERGENCY_BYTES").parse().unwrap_or(5 * GIB),
             collecting: env("LEDGER_COLLECT") == "1",
+            swept_from: 0,
+            released: 0,
+            kinds: Some(env("LEDGER_KINDS"))
+                .filter(|names| !names.is_empty())
+                .map(|names| names.split(',').filter_map(Kind::from_name).collect()),
             planning: env("LEDGER_COLLECT") == "plan",
             skipped: HashMap::new(),
             planned_at: 0.0,
@@ -3559,7 +3567,9 @@ impl Ledger {
     }
 
     fn available(&self, item: &reclaim::Item) -> bool {
-        if self.skipped.contains_key(&item.path) {
+        if self.skipped.contains_key(&item.path)
+            || self.kinds.as_ref().is_some_and(|kinds| !kinds.contains(&item.kind))
+        {
             return false;
         }
         let slots = if item.kind == Kind::Dead {
@@ -3672,7 +3682,12 @@ impl Ledger {
     }
 
     fn collect(&mut self, now: f64) {
-        let free = statfs().free;
+        let measured = statfs().free;
+        if !self.session_open && self.handed.is_empty() {
+            self.swept_from = measured;
+            self.released = 0;
+        }
+        let free = measured.max(self.swept_from + self.released);
         let target = self.target() + MARGIN;
         let deficit = target - free;
         let base = probe::object(
@@ -3823,6 +3838,7 @@ impl Ledger {
                     self.deleting.insert(path);
                 }
                 sweep::Event::Done(path, detail) => {
+                    self.released += detail["released"].as_i64().unwrap_or(0);
                     self.note(detail);
                     self.deleting.remove(&path);
                     self.handed.retain(|other| *other != path);

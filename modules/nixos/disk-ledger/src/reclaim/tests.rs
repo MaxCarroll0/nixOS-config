@@ -560,3 +560,29 @@ fn partial_shrink_of_a_copied_clone() {
     assert!(before - after >= estimate / 2);
     assert!(matches!(clone_state(&repo, &user), Err(reason) if reason == "partial clone"));
 }
+
+#[test]
+fn removal_takes_referrers_once_in_rank_order() {
+    let mut store = crate::store::Store::new(":memory:");
+    let edges: [(&[u32], &[u32], bool); 4] = [
+        (&[1], &[], true),
+        (&[], &[0, 2, 3], true),
+        (&[1], &[], true),
+        (&[1], &[], false),
+    ];
+    for (index, (refs, referrers, alive)) in edges.iter().enumerate() {
+        store.paths.push(crate::store::Path {
+            path: format!("/nix/store/{index}"),
+            refs: refs.to_vec(),
+            referrers: referrers.to_vec(),
+            alive: *alive,
+            ..Default::default()
+        });
+    }
+    let mut taken = vec![false; 4];
+    let mut first = removed_with(&store, &[1], &mut taken);
+    first.sort_unstable();
+    assert_eq!(first, vec![0, 1, 2]);
+    assert!(removed_with(&store, &[0], &mut taken).is_empty());
+    assert!(removed_with(&store, &[3], &mut taken).is_empty());
+}

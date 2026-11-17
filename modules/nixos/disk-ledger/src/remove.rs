@@ -10,6 +10,7 @@ const RESOLVE_BENEATH: u64 = 0x08;
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct Outcome {
     pub removed: usize,
+    pub released: u64,
     pub failed: Vec<(String, i32)>,
 }
 
@@ -118,10 +119,13 @@ fn remove_entry(
 ) {
     let directory = if kind == libc::DT_DIR {
         true
-    } else if kind == libc::DT_UNKNOWN || linked.is_some() {
+    } else if kind != libc::DT_DIR {
         match stat_at(parent.0, name) {
             Ok(stat) => {
                 let directory = stat.st_mode & libc::S_IFMT == libc::S_IFDIR;
+                if !directory && stat.st_nlink == 1 {
+                    outcome.released += stat.st_blocks as u64 * 512;
+                }
                 if let (false, true, Some(found)) = (directory, stat.st_nlink > 1, linked.as_mut())
                 {
                     found.push(stat.st_ino);
@@ -145,7 +149,13 @@ fn remove_entry(
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
             RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
         ) {
-            Ok(child) => clear(&child, path, outcome, linked),
+            Ok(child) => {
+                clear(&child, path, outcome, linked);
+                let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+                if unsafe { libc::fstat(child.0, &mut stat) } == 0 {
+                    outcome.released += stat.st_blocks as u64 * 512;
+                }
+            }
             Err(libc::ENOENT) => return,
             Err(code) => {
                 return outcome
@@ -289,6 +299,7 @@ pub fn remove_as(uid: u32, gid: u32, paths: Vec<String>) -> Outcome {
     .join()
     .unwrap_or_else(|_| Outcome {
         removed: 0,
+        released: 0,
         failed: vec![(String::new(), libc::EIO)],
     })
 }
@@ -317,10 +328,15 @@ mod tests {
             std::os::unix::fs::PermissionsExt::from_mode(0o555),
         )
         .unwrap();
+        let blocks: u64 = ["", "a", "a/b", "a/b/c", "a/b/c/file", "top"]
+            .iter()
+            .map(|name| std::os::unix::fs::MetadataExt::blocks(&std::fs::symlink_metadata(tree.join(name)).unwrap()) * 512)
+            .sum();
         let mut outcome = Outcome::default();
         remove_tree(tree.to_str().unwrap(), &mut outcome);
         assert!(outcome.failed.is_empty(), "{:?}", outcome.failed);
         assert_eq!(outcome.removed, 6);
+        assert_eq!(outcome.released, blocks);
         assert!(!tree.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
