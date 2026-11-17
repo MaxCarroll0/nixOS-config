@@ -177,7 +177,15 @@ let
       verb="$1"
       case "$verb" in
         status) exec vpn-status ;;
-        repick) args=() ;;
+        repick)
+          args=()
+          current="$(cat ${serverFile} 2>/dev/null || true)"
+          current="''${current%%#*}"
+          current="''${current##*-}"
+          if [[ "$current" =~ ^[A-Z]{2}$ ]]; then
+            args=(--country "$current")
+          fi
+          ;;
         enable) args=(--enable) ;;
         disable) args=(--disable) ;;
         secure-core) args=(--secure-core) ;;
