@@ -56,7 +56,7 @@ in
         "port=${toString cfg.proxyPort}"
         "vers=3.1.1"
         "seal"
-        "cache=strict"
+        "cache=none"
         "rsize=262144"
         "wsize=262144"
         "uid=max"
