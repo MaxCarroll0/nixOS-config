@@ -173,7 +173,7 @@ diff --git a/modules/dashboard/Content.qml b/modules/dashboard/Content.qml
 index a10edce..5592758 100644
 --- a/modules/dashboard/Content.qml
 +++ b/modules/dashboard/Content.qml
-@@ -40,6 +40,24 @@ Item {
+@@ -40,6 +40,30 @@ Item {
                  iconName: "cloud",
                  text: Tr.tr("Weather"),
                  enabled: Config.dashboard.showWeather
@@ -195,10 +195,16 @@ index a10edce..5592758 100644
 +                iconName: "storage",
 +                text: Tr.tr("Disk"),
 +                enabled: true
++            },
++            {
++                component: fleetComponent,
++                iconName: "hub",
++                text: Tr.tr("Fleet"),
++                enabled: true
              }
          ];
          return allTabs.filter(tab => tab.enabled);
-@@ -181,6 +199,24 @@ Item {
+@@ -181,6 +205,30 @@ Item {
                  WeatherTab {}
              }
  
@@ -218,6 +224,12 @@ index a10edce..5592758 100644
 +                id: diskComponent
 +
 +                DiskLedgerTab {}
++            }
++
++            Component {
++                id: fleetComponent
++
++                FleetTab {}
 +            }
 +
              Behavior on contentX {
