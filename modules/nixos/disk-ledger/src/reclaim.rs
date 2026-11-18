@@ -637,6 +637,7 @@ pub fn busy_paths() -> HashSet<String> {
             }
         }
     }
+    found.extend(bound_sockets());
     let mut ancestors: HashSet<String> = HashSet::new();
     for path in found {
         let mut current = path.as_str();
@@ -646,6 +647,17 @@ pub fn busy_paths() -> HashSet<String> {
         }
     }
     ancestors
+}
+
+pub fn bound_sockets() -> Vec<String> {
+    std::fs::read_to_string("/proc/net/unix")
+        .unwrap_or_default()
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().nth(7))
+        .filter(|path| path.starts_with('/'))
+        .map(str::to_string)
+        .collect()
 }
 
 pub fn process_starts() -> HashMap<String, Vec<f64>> {
@@ -784,6 +796,8 @@ pub fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+const START_SLACK: f64 = 600.0;
+
 pub fn temp_activity(
     path: &str,
     used: f64,
@@ -806,7 +820,7 @@ pub fn temp_activity(
             .copied()
             .reduce(f64::min);
         if let Some(first) = running {
-            if used >= first {
+            if used >= first - START_SLACK {
                 return Some("chromium running");
             }
         }

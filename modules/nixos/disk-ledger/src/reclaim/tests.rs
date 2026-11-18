@@ -840,3 +840,16 @@ fn rebuild_penalty_spares_quick_builds() {
         assert!((rebuild_penalty(seconds) - penalty).abs() < 1e-9, "{seconds}s: {}", rebuild_penalty(seconds));
     }
 }
+
+#[test]
+fn a_bound_unix_socket_holds_its_temp_dir() {
+    let fixture = fixture("s");
+    let dir = join(&fixture.base, "org.chromium.Chromium.a");
+    fs::create_dir_all(&dir).unwrap();
+    let socket = join(&dir, "SingletonSocket");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    fs::remove_file(&socket).unwrap();
+    assert!(busy_paths().contains(&dir));
+    drop(listener);
+    assert!(!busy_paths().contains(&dir));
+}
