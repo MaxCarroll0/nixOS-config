@@ -346,6 +346,10 @@ let
     "systemd:failed_units" = ''sum by (instance) (node_systemd_unit_state{state="failed"})'';
     "host:boot_time_seconds" = "node_boot_time_seconds";
     "host:awake_since_seconds" = "node_awake_since_seconds";
+    "nix:builds_total" = "nix_derivation_builds_total";
+    "fleet:system_info" = "fleet_system_info";
+    "fleet:activated_seconds" = "fleet_system_activated_seconds";
+    "fleet:deploy_seconds" = "fleet_deploy_seconds";
   };
 
   # Installed hardware, not a workload signal: evaluated on its own slow group.
@@ -840,6 +844,22 @@ let
         "avg"
         "max"
       ];
+    };
+    nix_builds_total = {
+      source = "nix:builds_total";
+      aggs = [ "max" ];
+    };
+    fleet_system_info = {
+      source = "fleet:system_info";
+      aggs = [ "max" ];
+    };
+    fleet_activated_seconds = {
+      source = "fleet:activated_seconds";
+      aggs = [ "max" ];
+    };
+    fleet_deploy_seconds = {
+      source = "fleet:deploy_seconds";
+      aggs = [ "max" ];
     };
     ts_peer_online = {
       source = "ts:peer_online";

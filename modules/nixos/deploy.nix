@@ -30,6 +30,7 @@ let
       pkgs.util-linux
       pkgs.openssh
       pkgs.gawk
+      pkgs.curl
     ];
     text = builtins.readFile ./deploy/claim.sh + builtins.readFile ./deploy/rebuild.sh;
   };

@@ -421,6 +421,52 @@ let
             '
       '';
 
+  derivationBuildMetrics =
+    writeCollector "nix-derivations"
+      [
+        pkgs.systemd
+        pkgs.jq
+      ]
+      ''
+        state=${textfileDir}/nix-derivations.json
+        [ -s "$state" ] \
+          || journalctl -t nix-observer -n 1 -o json --no-pager 2>/dev/null \
+          | jq -s '{cursor: (.[0].__CURSOR // null), counts: {}}' > "$state"
+        cursor=$(jq -r '.cursor // empty' "$state")
+        window=(--since now)
+        [ -z "$cursor" ] || window=(--after-cursor "$cursor")
+        host=$(cat /proc/sys/kernel/hostname)
+
+        journalctl -t nix-observer "''${window[@]}" -o json --no-pager 2>/dev/null \
+          | jq -s --arg host "$host" --slurpfile previous "$state" '
+              def builder:
+                if . == $host or . == "" then "local"
+                else sub("^[a-z-]+://"; "") | sub("^[^@]*@"; "") | sub("[?:/ ].*$"; "") | sub("-builder$"; "")
+                end;
+              reduce .[] as $entry ($previous[0];
+                .cursor = $entry.__CURSOR
+                | ($entry.MESSAGE | fromjson? // {}) as $event
+                | if $event.event == "nix_derivation" then
+                    .counts[($event.builder // "" | builder) + "\u001f" + ($event.status // "success")] += 1
+                  else . end)
+            ' > "$state.new" && mv "$state.new" "$state"
+
+        echo '# HELP nix_derivation_builds_total Derivations this host built, by the machine that ran them.'
+        echo '# TYPE nix_derivation_builds_total counter'
+        jq -r '.counts | to_entries[] | (.key | split("\u001f")) as [$builder, $status]
+               | "nix_derivation_builds_total{builder=\"\($builder)\",status=\"\($status)\"} \(.value)"' "$state"
+      '';
+
+  fleetSystemMetrics = writeCollector "fleet-system" [ ] ''
+    echo '# HELP fleet_system_info Configuration revision of the running system.'
+    echo '# TYPE fleet_system_info gauge'
+    echo '# HELP fleet_system_activated_seconds Unix time the system profile last switched.'
+    echo '# TYPE fleet_system_activated_seconds gauge'
+    rev=$(/run/current-system/sw/bin/nixos-version --configuration-revision 2>/dev/null || true)
+    printf 'fleet_system_info{rev="%s"} 1\n' "''${rev:-unknown}"
+    printf 'fleet_system_activated_seconds %s\n' "$(stat -c %Y /nix/var/nix/profiles/system)"
+  '';
+
   memoryByUnit = writeCollector "memory-by-unit" [ pkgs.findutils ] ''
     echo '# HELP node_unit_memory_bytes Memory currently charged to a systemd unit cgroup.'
     echo '# TYPE node_unit_memory_bytes gauge'
@@ -623,6 +669,20 @@ in
         ];
 
         systemd.timers.textfile-nix-builds = collectorTimer "60s";
+
+        systemd.services.textfile-nix-derivations = lib.mkMerge [
+          (collectorService derivationBuildMetrics)
+          { description = "Count derivations built per builder from the observer journal"; }
+        ];
+
+        systemd.timers.textfile-nix-derivations = collectorTimer "30s";
+
+        systemd.services.textfile-fleet-system = lib.mkMerge [
+          (collectorService fleetSystemMetrics)
+          { description = "Publish the running configuration revision"; }
+        ];
+
+        systemd.timers.textfile-fleet-system = collectorTimer "30s";
       }
       {
         systemd.services = cadenceOverrideServices;
