@@ -9,7 +9,23 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
 
-pub const REBUILD_SCALE: f64 = 300.0;
+const REBUILD_PENALTY: [(f64, f64); 4] = [(60.0, 1.0), (120.0, 1.25), (300.0, 2.0), (600.0, 4.0)];
+
+pub fn rebuild_penalty(seconds: f64) -> f64 {
+    let (last, top) = REBUILD_PENALTY[REBUILD_PENALTY.len() - 1];
+    if seconds >= last {
+        return top * seconds / last;
+    }
+    let mut previous = (0.0, 1.0);
+    for point in REBUILD_PENALTY {
+        if seconds < point.0 {
+            let share = (seconds - previous.0) / (point.0 - previous.0);
+            return previous.1 + share * (point.1 - previous.1);
+        }
+        previous = point;
+    }
+    top
+}
 pub const UNKNOWN_TEMP_FACTOR: f64 = 1.0 / 4.0;
 pub const UNMERGED_AGENT_FACTOR: f64 = 1.0 / 4.0;
 pub const DIRTY_CLONE_FACTOR: f64 = 1.0 / 4.0;
@@ -263,7 +279,7 @@ impl Item {
 
     pub fn score(&self, now: i64) -> f64 {
         let age = (now - self.last_used).max(0) as f64;
-        age * self.weight().powf(weight_influence(age)) / (1.0 + self.build as f64 / REBUILD_SCALE)
+        age * self.weight().powf(weight_influence(age)) / rebuild_penalty(self.build as f64)
     }
 
     pub fn flag(&self, key: &str) -> bool {
@@ -2764,6 +2780,9 @@ fn repo_state(repo: &str, dot: &str, user: &str) -> Result<CloneState, String> {
     )
     .is_some();
     let partial = linked || stashed;
+    if partial && lexists(&join(repo, "flake.nix")) {
+        return Err("flake repo: nix rejects extensions.partialclone".into());
+    }
     let head = git(user, repo, &["rev-parse", "--verify", "HEAD"], None)
         .ok_or("no commits")?
         .trim()

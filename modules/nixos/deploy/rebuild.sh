@@ -125,6 +125,18 @@ recordDeployed() {
   if ! git -C "$flake" push -q --force origin "$rev:$deployRef" 2>/dev/null; then
     echo "warning: could not push $deployRef to origin; other machines cannot inspect this deploy" >&2
   fi
+  publishDeploy
+}
+
+publishDeploy() {
+  local branch snapshot=0
+  branch=$(git -C "$flake" symbolic-ref --short -q HEAD || echo detached)
+  [ "$rev" = "$headRev" ] || snapshot=1
+  printf 'fleet_deploy_seconds{rev="%s",branch="%s",snapshot="%s",action="%s"} %s\n' \
+    "$rev" "$branch" "$snapshot" "$action" "$(date +%s)" \
+    | curl -fsS -m 5 --data-binary @- \
+      "http://${FLEET_PUSHGATEWAY:-pi:9093}/metrics/job/fleet_deploy/instance/$rebuildTarget" >/dev/null \
+    || echo "warning: could not publish the deploy record to the pushgateway" >&2
 }
 
 repo_git() { git -C "$flake" "$@"; }

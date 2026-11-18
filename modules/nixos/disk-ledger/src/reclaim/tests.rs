@@ -816,3 +816,27 @@ fn run_as_streams_input_larger_than_a_pipe() {
     assert!(output.status.success());
     assert_eq!(output.stdout.len(), input.len());
 }
+
+#[test]
+fn flake_repos_are_never_made_partial_clones() {
+    let fixture = fixture("flake");
+    let repo = format!("{}/repo", fixture.base);
+    git(&["init", "-q", &repo]);
+    fs::write(format!("{repo}/flake.nix"), "{ outputs = _: { }; }\n").unwrap();
+    git(&["-C", &repo, "add", "."]);
+    git(&["-C", &repo, "commit", "-qm", "one"]);
+    git(&["-C", &repo, "remote", "add", "origin", "https://example.invalid/repo.git"]);
+    fs::write(format!("{repo}/flake.nix"), "{ outputs = _: { x = 1; }; }\n").unwrap();
+    git(&["-C", &repo, "stash", "-q"]);
+    assert_eq!(
+        clone_state(&repo, &me()).err().as_deref(),
+        Some("flake repo: nix rejects extensions.partialclone")
+    );
+}
+
+#[test]
+fn rebuild_penalty_spares_quick_builds() {
+    for (seconds, penalty) in [(0.0, 1.0), (30.0, 1.0), (60.0, 1.0), (90.0, 1.125), (120.0, 1.25), (300.0, 2.0), (600.0, 4.0), (1200.0, 8.0)] {
+        assert!((rebuild_penalty(seconds) - penalty).abs() < 1e-9, "{seconds}s: {}", rebuild_penalty(seconds));
+    }
+}
