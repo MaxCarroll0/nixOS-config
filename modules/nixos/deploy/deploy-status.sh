@@ -54,6 +54,8 @@ describe() {
     return
   fi
   case "$subject" in
+    upgrade:*)
+      echo "UPGRADE ${rev:0:7} ${subject#upgrade: } on $(describe "$(git -C "$flake" rev-parse "$rev^")")" ;;
     snapshot:*)
       local files
       files=$(git -C "$flake" diff --name-only "$main...$rev" | paste -sd, | cut -c1-80)
@@ -86,8 +88,17 @@ flakeSyncState=/var/lib/flake-sync
 if [ -s "$flakeSyncState/lag" ]; then echo "flake-sync: $(cat "$flakeSyncState/lag")"; fi
 held=$(jq -r 'keys | join(", ")' "$flakeSyncState/held.json" 2>/dev/null || true)
 if [ -n "$held" ]; then echo "held back on $self: $held"; fi
+upgradeHeld=$(paste -sd' ' /var/lib/nixos-upgrade/held 2>/dev/null || true)
+if [ -n "${upgradeHeld// /}" ]; then echo "auto-upgrade holds back on $self: $upgradeHeld"; fi
 for ref in $(git -C "$flake" for-each-ref --format='%(refname:short)' refs/deploys/ 2>/dev/null); do
   r=$(git -C "$flake" rev-parse "$ref")
+  [[ "$ref" == *.pending ]] && continue
   git -C "$flake" merge-base --is-ancestor "$r" "$main" && continue
   echo "  $ref: ${r:0:7} $(git -C "$flake" log -1 --format=%s "$r") [$(git -C "$flake" log -1 --format=%cr "$r")]"
 done
+if [ "$fetch" = 1 ]; then
+  timeout 15 git -C "$flake" ls-remote origin 'refs/deploying/*' 2>/dev/null | while read -r claim ref; do
+    git -C "$flake" fetch -q origin "+$ref:refs/remotes/deploying/${ref#refs/deploying/}" 2>/dev/null || continue
+    echo "  in progress: $(git -C "$flake" log -1 --format='%s [%cr]' "$claim")"
+  done
+fi

@@ -14,83 +14,6 @@ let
 
   selfName = config.networking.hostName;
 
-  pinsFile = ../../hosts + "/${selfName}/pins.nix";
-  pinsBaked = if builtins.pathExists pinsFile then builtins.hashFile "sha256" pinsFile else "none";
-  pins = import ../../lib/pins.nix {
-    root = ../..;
-    host = selfName;
-  };
-
-  upgradeAllowed = pkgs.writeShellApplication {
-    name = "nixos-upgrade-allowed";
-    runtimeInputs = [
-      pkgs.git
-      pkgs.gnugrep
-      pkgs.jq
-      pkgs.util-linux
-      pkgs.coreutils
-      config.nix.package
-    ];
-    text = ''
-      metrics=/var/lib/node-exporter-textfile/autoupgrade.prom
-
-      verdict() {
-        if [ -d "$(dirname "$metrics")" ]; then
-          {
-            printf 'node_autoupgrade_blocked{reason="%s"} %s\n' "$2" "$1" > "$metrics.tmp" \
-              && mv "$metrics.tmp" "$metrics"
-          } || echo "could not record the upgrade verdict as a metric" >&2
-        fi
-        [ "$1" = 0 ] || echo "skipping upgrade: $3" >&2
-        exit "$1"
-      }
-
-      [ -d ${flakePath}/.git ] || verdict 0 none "no clone to guard"
-
-      git config --global --get-all safe.directory | grep -qxF ${flakePath} \
-        || git config --global --add safe.directory ${flakePath}
-      runuser -u max -- git -C ${flakePath} fetch -q origin || verdict 1 fetch-failed "cannot reach origin"
-
-      pinsAt() {
-        if git -C ${flakePath} cat-file -e "origin/HEAD:hosts/${selfName}/pins.nix" 2>/dev/null; then
-          git -C ${flakePath} show "origin/HEAD:hosts/${selfName}/pins.nix" | sha256sum | cut -d' ' -f1
-        else
-          echo none
-        fi
-      }
-
-      pinsOnOrigin=$(pinsAt)
-      [ "$pinsOnOrigin" = ${pinsBaked} ] \
-        || verdict 1 pins-changed "hosts/${selfName}/pins.nix differs on origin from the copy this system was built with"
-
-      if held=$(jq -r 'keys | join(", ")' /var/lib/flake-sync/held.json 2>/dev/null) && [ -n "$held" ]; then
-        verdict 1 held "this host holds back $held until the shared lock builds here again"
-      fi
-
-      stamp="$(git -C ${flakePath} rev-parse origin/HEAD) $pinsOnOrigin"
-      if [ "$(cat /var/lib/nixos-upgrade/last 2>/dev/null)" = "$stamp" ]; then
-        verdict 1 unchanged "origin/main and its pins are the state last upgraded to"
-      fi
-
-      running=$(nixos-version --configuration-revision 2>/dev/null || true)
-
-      case "$running" in
-        "")
-          verdict 1 unknown-running "the running system records no revision, so nothing can be shown to supersede it"
-          ;;
-        *-dirty)
-          verdict 1 dirty-running "the running system was built from an uncommitted tree, so no commit supersedes it"
-          ;;
-      esac
-
-      if ! git -C ${flakePath} merge-base --is-ancestor "$running" origin/HEAD; then
-        verdict 1 unpushed-running "the running revision $running is not an ancestor of origin, so upgrading would revert it"
-      fi
-
-      printf '%s\n' "$stamp" > /var/lib/nixos-upgrade/pending
-      verdict 0 none "forward from $running"
-    '';
-  };
   onTailnet = lib.filterAttrs (_: f: f ? tailscale) facts;
   tailnetNames = lib.mapAttrs (_: f: f.tailscale or f.tailnetAddress) (
     lib.filterAttrs (_: f: f ? tailscale || f ? tailnetAddress) facts
@@ -123,6 +46,7 @@ in
     ./deploy.nix
     ./dev-build.nix
     ./flake-sync.nix
+    ./upgrade.nix
     ./peer-transport.nix
     ./nix-observer.nix
     ./unclean-boot.nix
@@ -277,29 +201,6 @@ in
 
     # !include, not readFile: readFile which needs--impure
     nix.extraOptions = "!include ${config.sops.templates."conf-access-tokens".path}";
-
-    # An upgrade must never move a host backwards. ExecCondition, not preStart:
-    # a non-zero condition skips the unit cleanly instead of marking it failed.
-    systemd.services.nixos-upgrade.serviceConfig = {
-      ExecCondition = lib.getExe upgradeAllowed;
-      ExecStartPost = "-${lib.getExe' pkgs.coreutils "mv"} -f /var/lib/nixos-upgrade/pending /var/lib/nixos-upgrade/last";
-      StateDirectory = "nixos-upgrade";
-      MemoryHigh = "3G";
-      CPUWeight = "idle";
-    };
-
-    system.autoUpgrade = {
-      enable = lib.mkDefault false;
-      allowReboot = true;
-      flake = "git+file://${flakePath}?ref=refs/remotes/origin/main#${config.networking.hostName}";
-      flags = [ "-L" ] ++ pins.argv;
-      dates = "daily";
-      randomizedDelaySec = "45min";
-      rebootWindow = {
-        lower = "03:00";
-        upper = "05:00";
-      };
-    };
 
     security.pki.certificates = [ (builtins.readFile ../../keys/home-ca.crt) ];
 

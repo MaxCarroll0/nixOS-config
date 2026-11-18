@@ -151,6 +151,7 @@
   local.browserSync.server = true;
 
   system.autoUpgrade.enable = true;
+  local.upgrade.rebootWhenNeeded = "Sun *-*-* 05:00:00";
 
   local.build.client = {
     enable = true;

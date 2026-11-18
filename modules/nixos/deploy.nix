@@ -31,7 +31,7 @@ let
       pkgs.openssh
       pkgs.gawk
     ];
-    text = builtins.readFile ./deploy/rebuild.sh;
+    text = builtins.readFile ./deploy/claim.sh + builtins.readFile ./deploy/rebuild.sh;
   };
 
   deployStatus = pkgs.writeShellApplication {

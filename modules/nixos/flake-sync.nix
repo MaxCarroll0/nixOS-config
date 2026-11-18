@@ -101,8 +101,20 @@ let
         done
       }
 
+      uncached_kernels() {
+        nix build --dry-run --no-write-lock-file --reference-lock-file "$1" \
+          "''${ovr[@]}" "''${targets[@]}" 2>&1 \
+          | grep -oE '/nix/store/[a-z0-9]{32}-linux(_[^/" ]*)?-[0-9][^/" ]*\.drv' \
+          | grep -vE -- '-modules(-shrunk)?\.drv$'
+      }
+
       build() {
         rm -f "$state"/result*
+        local kernels
+        if kernels=$(uncached_kernels "$1"); then
+          echo "<4>not in any cache, so not compiled here: $kernels"
+          return 1
+        fi
         nix build --no-write-lock-file --reference-lock-file "$1" -o "$state/result" \
           "''${ovr[@]}" "''${targets[@]}"
       }

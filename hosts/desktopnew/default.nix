@@ -2,9 +2,7 @@
 
 {
   config,
-  lib,
   pkgs,
-  pkgs-unstable,
   facts,
   ...
 }:
@@ -69,22 +67,18 @@ in
 
   environment.systemPackages = [
     caseTemp
-    # cec-ctl queries the HDMI panel's power state.
-    pkgs.v4l-utils
   ];
   # arctic_fan_controller drives the 10-port USB fan controller; it needs kernel 7.2.
-  boot.kernelPackages = pkgs-unstable.linuxPackages_testing;
+  boot.kernelPackages = pkgs.linuxPackages_latest;
 
-  # CEC is the only channel that reports the panel's power state; /dev/cec* needs MEDIA_CEC_SUPPORT.
-  boot.kernelPatches = [
-    {
-      name = "media-cec-support";
-      patch = null;
-      structuredExtraConfig.MEDIA_CEC_SUPPORT = lib.kernel.yes;
-    }
+  # Linux 7.3 no longer pulls asm/cpuid/api.h in through linux/pci.h.
+  boot.extraModulePackages = [
+    (config.boot.kernelPackages.zenpower.overrideAttrs (old: {
+      postPatch = (old.postPatch or "") + ''
+        sed -i 's|^#include <linux/pci.h>$|&\n#include <asm/cpuid/api.h>|' zenpower.c
+      '';
+    }))
   ];
-
-  boot.extraModulePackages = [ config.boot.kernelPackages.zenpower ];
   boot.kernelModules = [ "zenpower" ];
 
   boot.extraModprobeConfig = "options it87 force_id=0x8733";

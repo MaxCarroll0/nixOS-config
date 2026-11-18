@@ -10,6 +10,7 @@ rebuildAction=switch
 logRebuildCompletion() {
   rebuildExit=$?
   trap - EXIT
+  release_deploy
   if [ "$rebuildExit" -eq 0 ]; then
     rebuildStatus=success
   else
@@ -115,9 +116,8 @@ else
 fi
 
 recordDeployed() {
-  [ "$rev" != "$headRev" ] || return 0
   git -C "$flake" update-ref "$deployRef" "$rev"
-  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+  if [ "$rev" != "$headRev" ] && [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
     sessions="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/claude-deploy-sessions"
     mkdir -p "$sessions"
     echo "$rebuildTarget" >>"$sessions/$CLAUDE_CODE_SESSION_ID.hosts"
@@ -125,6 +125,33 @@ recordDeployed() {
   if ! git -C "$flake" push -q --force origin "$rev:$deployRef" 2>/dev/null; then
     echo "warning: could not push $deployRef to origin; other machines cannot inspect this deploy" >&2
   fi
+}
+
+repo_git() { git -C "$flake" "$@"; }
+
+check_running() {
+  local node=$1 running=${2%-dirty} base
+  [ -n "$running" ] && [ "$running" != "$rev" ] || return 0
+  if ! repo_git cat-file -e "$running^{commit}" 2>/dev/null; then
+    echo "warning: $node runs $running, a commit this clone does not have; deploying over it blind" >&2
+    return 0
+  fi
+  base=$(upgrade_base "$running")
+  if [ "$base" != "$running" ] && ! repo_git diff --quiet "$running" "$rev" -- flake.lock; then
+    echo "note: $node runs the auto-upgrade ${running:0:7}; ${rev:0:7} replaces its inputs with its own flake.lock" >&2
+  fi
+  repo_git merge-base --is-ancestor "$base" "$rev" && return 0
+  [ "$running" = "$previouslyDeployed" ] && return 0
+  [ "$supersede" = 1 ] && return 0
+  echo "error: $node runs ${running:0:7} ($(repo_git log -1 --format=%s "$running")), which ${rev:0:7} does not descend from." >&2
+  echo "  It was deployed from elsewhere. Pass --supersede to replace it, or land it first." >&2
+  exit 3
+}
+
+claim_or_exit() {
+  claim_deploy "$1" "$rev" "deploying ${rev:0:7} to $1 from $host${CLAUDE_CODE_SESSION_ID:+ (claude $CLAUDE_CODE_SESSION_ID)}" "$supersede" && return 0
+  echo "  Wait for it, or pass --supersede to deploy over it." >&2
+  exit 75
 }
 
 if [ -n "$target" ]; then
@@ -146,20 +173,9 @@ if [ -n "$target" ]; then
   printf 'pid %s since %s\n' $$ "$(date -Is)" > "$stateDir/$target.lock"
 
   if activating; then
+    claim_or_exit "$target"
     git -C "$flake" fetch -q origin '+refs/deploys/*:refs/remotes/deploys/*' 2>/dev/null || true
-    running=$(timeout 20 ssh -o BatchMode=yes "$target" nixos-version --configuration-revision 2>/dev/null || true)
-    running=${running%-dirty}
-    if [ -n "$running" ] && [ "$running" != "$rev" ]; then
-      if ! git -C "$flake" cat-file -e "$running^{commit}" 2>/dev/null; then
-        echo "warning: $target runs $running, a commit this clone does not have; deploying over it blind" >&2
-      elif ! git -C "$flake" merge-base --is-ancestor "$running" "$rev" \
-          && [ "$running" != "$previouslyDeployed" ] \
-          && [ "$supersede" = 0 ]; then
-        echo "error: $target runs ${running:0:7} ($(git -C "$flake" log -1 --format=%s "$running")), which ${rev:0:7} does not descend from." >&2
-        echo "  It was deployed from elsewhere. Pass --supersede to replace it, or land it first." >&2
-        exit 3
-      fi
-    fi
+    check_running "$target" "$(timeout 20 ssh -o BatchMode=yes "$target" nixos-version --configuration-revision 2>/dev/null || true)"
   fi
 
   export NIX_CONFIG="accept-flake-config = true
@@ -248,10 +264,15 @@ case "$action" in
   build|dry-build|repl)
     nixos-rebuild "$action" --flake "$source#$host" "${opts[@]}" "$@" ;;
   switch|boot|test|dry-activate)
+    if activating; then
+      claim_or_exit "$host"
+      git -C "$flake" fetch -q origin '+refs/deploys/*:refs/remotes/deploys/*' 2>/dev/null || true
+      check_running "$host" "$(nixos-version --configuration-revision 2>/dev/null || true)"
+    fi
     nixos-rebuild build --flake "$source#$host" "${opts[@]}" "$@"
     sudo nixos-rebuild "$action" --flake "$source#$host" "${opts[@]}" "$@"
+    activating && recordDeployed
     if activating && [ "$rev" != "$headRev" ]; then
-      recordDeployed
       echo "activated snapshot ${rev:0:7}; uncommitted: $(git -C "$flake" diff --shortstat HEAD "$rev")"
     fi ;;
   *)
