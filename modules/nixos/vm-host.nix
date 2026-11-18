@@ -1,4 +1,4 @@
-# Libvirt host for damien-fedora, a Fedora guest isolated from the LAN and tailnet.
+# Libvirt host for mc-server, a Fedora guest isolated from the LAN and tailnet.
 
 {
   config,
@@ -12,7 +12,7 @@
 let
   nixvirt = inputs.NixVirt;
 
-  domainName = "damien-fedora";
+  domainName = "mc-server";
   guestMac = "52:54:00:f1:3d:01";
   guestAddress = "192.168.122.108";
   bridgeAddress = "192.168.122.1";
@@ -36,7 +36,7 @@ let
   };
 
   metaData = pkgs.writeText "${domainName}-meta-data" ''
-    instance-id: ${domainName}-root
+    instance-id: damien-fedora-root
     local-hostname: ${domainName}
   '';
 

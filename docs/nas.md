@@ -2283,7 +2283,7 @@ that directory, so history and the index both pick it up.
 ## 25. Continuous streams and the time view
 
 **Requirement.** Pick any file or directory and any instant, and see it as it was, to the
-millisecond, wherever the rules (4.6) retained it. The Minecraft server in `damien-fedora` on desktopnew
+millisecond, wherever the rules (4.6) retained it. The Minecraft server in `mc-server` on desktopnew
 is the first stream, captured every 60 s.
 
 **Any instant is already on disk.** NILFS2 writes a log per sync, and every log is a checkpoint;
@@ -2303,7 +2303,7 @@ was applied.
 **The Minecraft stream.**
 
 ```
-guest damien-fedora: minecraft-backup.timer (1 min)          pi
+guest mc-server: minecraft-backup.timer (1 min)          pi
 flock -s /run/keep-running.lock
 console save-off; save-all flush
 rsync --inplace --block-size=4096 ---------------------> rsyncd module (under the write lock)

@@ -26,7 +26,7 @@
     tailscale = "100.96.208.89";
   };
 
-  damien-fedora = {
+  mc-server = {
     tailnetAddress = "100.113.63.17";
   };
 }
