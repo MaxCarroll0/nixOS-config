@@ -190,11 +190,14 @@ Item {
     }
 
     readonly property var nextMark: root.boxes.find(box => box.next) ?? null
+    readonly property real headroom: arrowLabel.implicitHeight + 12
 
     StyledText {
-        visible: root.nextMark !== null && root.model.head !== null
+        id: arrowLabel
+
+        visible: root.model.collecting && root.nextMark !== null && root.model.head !== null
         anchors.bottom: parent.top
-        anchors.bottomMargin: 10
+        anchors.bottomMargin: 11
         x: root.nextMark ? Math.max(0, Math.min(root.nextMark.x + root.nextMark.w / 2 - implicitWidth / 2, parent.width - implicitWidth)) : 0
         text: root.model.head ? `${root.model.head.label} ${root.model.gib(root.model.head.size)}` : ""
         font: Tokens.font.body.small

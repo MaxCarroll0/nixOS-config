@@ -28,6 +28,7 @@ const MIB: i64 = 1 << 20;
 const DAY: i64 = 86400;
 const PROBE_SECONDS: f64 = 10.0;
 const MARGIN: i64 = 512 * MIB;
+const FIT_SLACK: i64 = 1024 * MIB;
 const RAMP: i64 = 4 * GIB;
 const HISTORY_SECONDS: i64 = 900;
 const HISTORY_LATE_SECONDS: i64 = 120;
@@ -415,6 +416,10 @@ struct Statfs {
     used: i64,
     free: i64,
     reserved: i64,
+}
+
+fn fits(size: i64, remaining: i64) -> bool {
+    size <= remaining.max(0) + FIT_SLACK
 }
 
 fn statfs() -> Statfs {
@@ -1321,9 +1326,11 @@ impl Ledger {
 
     fn cut(&self, deficit: i64) -> (i64, Vec<bool>) {
         let mut planned = vec![false; self.model.items.len()];
-        let (mut last, mut cumulative) = (-1i64, 0i64);
+        let mut last = -1i64;
+        let mut remaining = deficit;
+        let mut deferred = Vec::new();
         for (index, item) in self.model.items.iter().enumerate() {
-            if cumulative >= deficit {
+            if remaining <= 0 {
                 break;
             }
             if item.freed() == 0
@@ -1334,9 +1341,22 @@ impl Ledger {
             {
                 continue;
             }
+            let size = item.freed() as i64;
+            if !fits(size, remaining) && !self.deleting.contains(&item.path) && !self.handed.contains(&item.path) {
+                deferred.push(index);
+                continue;
+            }
             planned[index] = true;
-            cumulative += item.freed() as i64;
-            last = index as i64;
+            remaining -= size;
+            last = last.max(index as i64);
+        }
+        for index in deferred {
+            if remaining <= 0 {
+                break;
+            }
+            planned[index] = true;
+            remaining -= self.model.items[index].freed() as i64;
+            last = last.max(index as i64);
         }
         (last, planned)
     }
@@ -3701,17 +3721,24 @@ impl Ledger {
         item.freed() > 0 && !self.handled(&item.path) && self.available(item)
     }
 
-    fn next_item(&mut self) -> Option<usize> {
+    fn next_item(&mut self, remaining: i64) -> Option<usize> {
         if self.cursor.0 != self.ranking {
             self.cursor = (self.ranking, 0);
         }
-        while self.cursor.1 < self.model.items.len() {
-            if self.eligible(self.cursor.1) {
-                return Some(self.cursor.1);
-            }
+        while self.cursor.1 < self.model.items.len() && !self.eligible(self.cursor.1) {
             self.cursor.1 += 1;
         }
-        None
+        let first = self.cursor.1;
+        if first >= self.model.items.len() {
+            return None;
+        }
+        (first..self.model.items.len())
+            .find(|index| fits(self.model.items[*index].freed() as i64, remaining) && self.eligible(*index))
+            .or(Some(first))
+    }
+
+    fn remaining(&mut self) -> i64 {
+        self.target() + MARGIN - self.disk().free - self.handed_bytes()
     }
 
     fn arrow(&mut self) -> i64 {
@@ -3720,9 +3747,11 @@ impl Ledger {
             .iter()
             .find(|path| !self.deleting.contains(*path))
             .and_then(|path| self.by_path.get(path).copied());
-        waiting
-            .or_else(|| self.next_item())
-            .map_or(-1, |index| index as i64)
+        if let Some(index) = waiting {
+            return index as i64;
+        }
+        let remaining = self.remaining();
+        self.next_item(remaining).map_or(-1, |index| index as i64)
     }
 
     fn handed_bytes(&self) -> i64 {
@@ -3834,7 +3863,7 @@ impl Ledger {
             if deficit - self.handed_bytes() <= 0 {
                 break;
             }
-            let Some(index) = self.next_item() else {
+            let Some(index) = self.next_item(deficit - self.handed_bytes()) else {
                 break;
             };
             self.level = self.urgency(deficit, free);

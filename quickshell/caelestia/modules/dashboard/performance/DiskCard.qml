@@ -99,7 +99,7 @@ StyledRect {
 
             Layout.fillWidth: true
             Layout.preferredHeight: 22
-            Layout.topMargin: 18
+            Layout.topMargin: bar.headroom
             Layout.bottomMargin: 12
             model: ledger
         }
