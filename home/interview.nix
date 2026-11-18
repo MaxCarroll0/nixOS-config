@@ -9,6 +9,7 @@
 
 let
   repo = "${config.home.homeDirectory}/Jobs/general";
+  firstDay = "2026-11-19";
 
   interview = pkgs.writers.writePython3Bin "interview" {
     flakeIgnore = [ "E501" ];
@@ -23,7 +24,6 @@ let
           config.services.lockdown.package
           interview
           pkgs.jq
-          pkgs.libnotify
           pkgs.util-linux
         ];
         runtimeEnv = {
@@ -115,6 +115,9 @@ in
       ];
       start = "05:00";
       break_minutes = 5;
+      snooze_minutes = 15;
+      from = firstDay;
+      notify = lib.getExe' pkgs.libnotify "notify-send";
       inherit lockdown;
       lockdown_profile = "interview";
     };
@@ -161,7 +164,7 @@ in
   services.lockdown.profiles.interview = {
     workspace = "interview";
     start = "05:00";
-    from = "2026-11-19";
+    from = firstDay;
     password = "c2fGUFHyYmUS3666DRKm347";
     message = "Weekday interviews: finish two of today's three to unlock.";
     releaseCheck = [

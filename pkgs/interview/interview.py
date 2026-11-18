@@ -28,6 +28,7 @@ CURRENT = STATE / "current.json"
 EVENTS = STATE / "events.jsonl"
 LOG = STATE / "log.jsonl"
 LOCK = STATE / "lock"
+SNOOZE = STATE / "snooze"
 
 BUILD_DIRS = {"_build", "target", "bin", "obj", "__pycache__", ".pytest_cache", "build", "improved"}
 REVIEW_FILES = {"review.md", "SOLUTIONS.md", ".interview.json"}
@@ -58,7 +59,7 @@ def config() -> dict:
         "on_resume": None,
         "on_complete": None,
         "on_start": None,
-        "auto": {"enabled": False, "days": ["Mon", "Tue", "Wed", "Thu", "Fri"], "start": "05:00", "break_minutes": 5},
+        "auto": {"enabled": False, "days": ["Mon", "Tue", "Wed", "Thu", "Fri"], "start": "05:00", "break_minutes": 5, "snooze_minutes": 15},
     }
     with contextlib.suppress(FileNotFoundError):
         cfg.update(json.loads(CONFIG_PATH.read_text()))
@@ -528,6 +529,8 @@ def auto_due(at: float) -> str | None:
     moment = dt.datetime.fromtimestamp(at)
     if not auto.get("enabled"):
         return "automatic start is off"
+    if auto.get("from") and moment.date().isoformat() < auto["from"]:
+        return f"interviews begin on {auto['from']}"
     if moment.strftime("%a") not in auto["days"]:
         return f"no interviews on {moment.strftime('%A')}"
     if moment.strftime("%H:%M") < auto["start"]:
@@ -547,20 +550,49 @@ def auto_due(at: float) -> str | None:
     return None
 
 
+def snoozed(at: float) -> bool:
+    try:
+        return at < float(SNOOZE.read_text())
+    except (FileNotFoundError, ValueError):
+        return False
+
+
+def ask(cfg: dict, lang: str, problem: str) -> bool:
+    command = [cfg["auto"].get("notify", "notify-send"), "--app-name=interview", "--urgency=critical", "--wait",
+               "--action=start=Start", "--action=later=Later",
+               "Interview due", f"{lang} {problem}: start the {cfg['coding_minutes']}-minute clock?"]
+    try:
+        answer = subprocess.run(command, capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return False
+    return answer == "start"
+
+
 def cmd_auto(args) -> int:
+    cfg = config()
     at = now()
     with locked():
         reason = auto_due(at)
-        if reason is None:
-            started = begin(at, None, None)
-            reason = started if isinstance(started, str) else None
-    if reason is not None:
+    if reason is None and snoozed(at):
+        reason = "prompt snoozed"
+    chosen = pick(at, None) if reason is None else reason
+    if isinstance(chosen, str):
         if args.verbose:
-            print(f"not starting: {reason}")
+            print(f"not starting: {chosen}")
         return 0
+    lang, problem = chosen
+    if not ask(cfg, lang, problem):
+        SNOOZE.write_text(str(now() + cfg["auto"]["snooze_minutes"] * 60))
+        print(f"declined; asking again in {cfg['auto']['snooze_minutes']} minutes")
+        return 0
+    with locked():
+        started = begin(now(), lang, problem)
+    if isinstance(started, str):
+        print(started, file=sys.stderr)
+        return 1
     cur, dest = started
     print(f"started {cur['id']}: {dest}")
-    hook = config()["on_start"]
+    hook = cfg["on_start"]
     if hook:
         run_hook([*hook, str(dest / "PROMPT.md"), str(dest / MAIN_FILE[cur["lang"]])])
     return 0
@@ -991,7 +1023,7 @@ def main() -> int:
     p.add_argument("dir")
     p.set_defaults(fn=cmd_revisit)
 
-    p = sub.add_parser("auto", help="start the next scheduled interview if one is due now; run by the shell while the candidate is at the keyboard")
+    p = sub.add_parser("auto", help="if an interview is due, ask with a notification and start it only on Start; run by the shell while the candidate is at the keyboard")
     p.add_argument("--verbose", action="store_true")
     p.set_defaults(fn=cmd_auto)
 
