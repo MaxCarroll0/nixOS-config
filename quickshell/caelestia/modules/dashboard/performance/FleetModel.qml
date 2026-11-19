@@ -37,6 +37,9 @@ Item {
         property real now: Date.now() / 1000
     }
 
+    property bool ticking: false
+    property real rowsFetchedAt: 0
+
     Timer {
         interval: 5000
         repeat: true
@@ -47,9 +50,13 @@ Item {
             clock.now = Date.now() / 1000;
             if (root.following)
                 root.fetchSlice();
-            if (root.range[1] >= previous - 30)
-                root.range = [root.range[0] + clock.now - previous, clock.now];
-            else if (!root.rows.length)
+            const [from, to] = root.range;
+            if (to >= previous - 30) {
+                root.ticking = true;
+                root.range = [from + clock.now - previous, clock.now];
+                root.ticking = false;
+            }
+            if (!root.rows.length || clock.now - root.rowsFetchedAt >= Math.max(60, (to - from) / 288))
                 root.fetchRows();
         }
     }
@@ -79,7 +86,8 @@ Item {
         sliceDebounce.restart();
     }
     onSmoothingChanged: sliceDebounce.restart()
-    onRangeChanged: rowsDebounce.restart()
+    onRangeChanged: if (!ticking)
+        rowsDebounce.restart()
 
     function archived(from: real): bool {
         return from < root.now - root.liveRetention;
@@ -164,12 +172,14 @@ Item {
     property int rowsGeneration: 0
 
     function fetchRows(): void {
-        const [from, to] = root.range;
-        const archive = root.archived(from);
-        const step = Math.max(archive ? 3600 : 1, (to - from) / 288);
-        const window = root.duration(step);
+        const [start, to] = root.range;
+        const archive = root.archived(start);
+        const step = Math.max(archive ? 3600 : 1, Math.round((to - start) / 288));
+        const from = Math.floor(start / step) * step;
+        const window = root.duration(2 * step);
         const s = name => root.series(name, archive);
         const generation = ++root.rowsGeneration;
+        root.rowsFetchedAt = root.now;
         const span = (expr, done) => root.ranged(archive, expr, from, to, step, done);
         root.gather({
             up: done => span(`avg_over_time(${s("host:up")}[${window}])`, done),
@@ -400,6 +410,10 @@ Item {
             psi: psi,
             deploys: deploys
         };
+    }
+
+    function displayName(name: string): string {
+        return name.replace(/\s*\([^)]*$/, "");
     }
 
     function deployUrl(deploy: var): string {

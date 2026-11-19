@@ -24,7 +24,7 @@ Item {
         out.pi = Qt.point(cx, cy);
         hosts.forEach((name, index) => {
             const angle = Math.PI + index * Math.PI / Math.max(1, hosts.length - 1);
-            out[name] = Qt.point(cx + Math.cos(angle) * width * 0.3, cy + Math.sin(angle) * height * 0.05);
+            out[name] = Qt.point(cx + Math.cos(angle) * width * 0.29, cy + Math.sin(angle) * height * 0.05);
         });
         const peers = slice.nodes.filter(node => !node.host).sort((a, b) => (a.os + a.name).localeCompare(b.os + b.name));
         peers.forEach((node, index) => {
@@ -65,7 +65,10 @@ Item {
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const length = Math.max(1, Math.hypot(dx, dy));
-        const bend = Math.min(40, length * 0.12);
+        const midX = (a.x + b.x) / 2;
+        const midY = (a.y + b.y) / 2;
+        const crowded = Object.keys(root.positions).some(name => name !== edge.a && name !== edge.b && Math.hypot(root.positions[name].x - midX, root.positions[name].y - midY) < 60);
+        const bend = crowded ? Math.min(140, length * 0.2) : Math.min(40, length * 0.12);
         return {
             a: a,
             b: b,
@@ -103,7 +106,7 @@ Item {
 
     onSliceChanged: canvas.requestPaint()
     onPositionsChanged: canvas.requestPaint()
-    onPhaseChanged: canvas.requestPaint()
+    onPhaseChanged: flow.requestPaint()
     onHoverEdgeChanged: canvas.requestPaint()
 
     Timer {
@@ -150,25 +153,6 @@ Item {
                 ctx.textBaseline = "middle";
                 ctx.fillText(edge.relay, mid.x, mid.y);
             }
-            canvas.drawParticles(ctx, shape, edge.ab, 1, root.hueOf(edge.a));
-            canvas.drawParticles(ctx, shape, edge.ba, -1, root.hueOf(edge.b));
-        }
-
-        function drawParticles(ctx: var, shape: var, rate: real, direction: int, tint: color): void {
-            if (!(rate > 50))
-                return;
-            const count = Math.min(14, Math.ceil(2 * Math.log10(1 + rate / 100)));
-            const speed = 0.6 + Math.log10(1 + rate / 1000) * 0.4;
-            ctx.fillStyle = tint;
-            for (let i = 0; i < count; i++) {
-                const progress = (root.phase * speed + i / count) % 1;
-                const point = root.along(shape, direction > 0 ? progress : 1 - progress, 3 * direction);
-                ctx.globalAlpha = Math.sin(progress * Math.PI);
-                ctx.beginPath();
-                ctx.arc(point.x, point.y, 1.8, 0, Math.PI * 2);
-                ctx.fill();
-            }
-            ctx.globalAlpha = 1;
         }
 
         function drawBloom(ctx: var, name: string, centre: var): void {
@@ -203,16 +187,19 @@ Item {
             const samples = (root.slice.pressure[name] ?? []).filter(sample => isFinite(sample.value));
             if (samples.length >= 2) {
                 const [from, to] = [root.slice.from, root.slice.to];
-                ctx.beginPath();
-                samples.forEach((sample, index) => {
+                const points = samples.map(sample => {
                     const angle = -Math.PI / 2 + 2 * Math.PI * (sample.at - from) / Math.max(1, to - from);
                     const radius = r0 + root.pressureScale * Math.min(2.2, sample.value);
-                    const x = centre.x + Math.cos(angle) * radius;
-                    const y = centre.y + Math.sin(angle) * radius;
-                    if (index === 0)
-                        ctx.moveTo(x, y);
-                    else
-                        ctx.lineTo(x, y);
+                    return Qt.point(centre.x + Math.cos(angle) * radius, centre.y + Math.sin(angle) * radius);
+                });
+                const mid = (a, b) => Qt.point((a.x + b.x) / 2, (a.y + b.y) / 2);
+                const n = points.length;
+                ctx.beginPath();
+                const start = mid(points[n - 1], points[0]);
+                ctx.moveTo(start.x, start.y);
+                points.forEach((point, index) => {
+                    const next = mid(point, points[(index + 1) % n]);
+                    ctx.quadraticCurveTo(point.x, point.y, next.x, next.y);
                 });
                 ctx.closePath();
                 ctx.fillStyle = Qt.alpha(tint, 0.18);
@@ -251,8 +238,8 @@ Item {
                 if (!shape)
                     return;
                 const forward = edge.a === build.origin;
-                at = root.along(shape, 0.5, forward ? 16 : -16);
-                const ahead = root.along(shape, forward ? 0.56 : 0.44, forward ? 16 : -16);
+                at = root.along(shape, 0.5, 0);
+                const ahead = root.along(shape, forward ? 0.57 : 0.43, 0);
                 const angle = Math.atan2(ahead.y - at.y, ahead.x - at.x);
                 ctx.save();
                 ctx.translate(ahead.x, ahead.y);
@@ -287,6 +274,42 @@ Item {
                 canvas.drawNode(ctx, node);
             for (const build of root.slice.builds)
                 canvas.drawBuild(ctx, build);
+        }
+    }
+
+    Canvas {
+        id: flow
+
+        anchors.fill: parent
+        renderStrategy: Canvas.Cooperative
+
+        function drawParticles(ctx: var, shape: var, rate: real, direction: int, tint: color): void {
+            if (!(rate > 50))
+                return;
+            const count = Math.min(14, Math.ceil(2 * Math.log10(1 + rate / 100)));
+            const speed = 0.6 + Math.log10(1 + rate / 1000) * 0.4;
+            ctx.fillStyle = tint;
+            for (let i = 0; i < count; i++) {
+                const progress = (root.phase * speed + i / count) % 1;
+                const point = root.along(shape, direction > 0 ? progress : 1 - progress, 3 * direction);
+                ctx.globalAlpha = Math.sin(progress * Math.PI);
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, 1.8, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        }
+
+        onPaint: {
+            const ctx = getContext("2d");
+            ctx.reset();
+            for (const edge of root.slice.edges) {
+                const shape = root.curve(edge);
+                if (!shape)
+                    continue;
+                flow.drawParticles(ctx, shape, edge.ab, 1, root.hueOf(edge.a));
+                flow.drawParticles(ctx, shape, edge.ba, -1, root.hueOf(edge.b));
+            }
         }
     }
 
@@ -346,7 +369,7 @@ Item {
 
             StyledText {
                 Layout.alignment: Qt.AlignHCenter
-                text: label.modelData.name
+                text: root.fleet.displayName(label.modelData.name)
                 font: label.modelData.host ? Tokens.font.title.small : Tokens.font.body.small
                 color: label.modelData.up > 0 ? Colours.palette.m3onSurface : Colours.palette.m3outline
             }

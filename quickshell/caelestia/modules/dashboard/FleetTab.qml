@@ -198,21 +198,27 @@ Item {
 
         FleetMap {
             Layout.fillWidth: true
-            Layout.preferredHeight: 400
+            Layout.preferredHeight: 360
             fleet: fleetData
+
+            FleetLegend {
+                rows: 12
+                entries: [["", "load"], ["outline", "per core"], ["ring", "saturation"], ["cpu", "cpu stall"], ["io", "io stall"], ["memory", "memory stall"], ["", "links"], ["direct", "direct"], ["relayed", "relayed"], ["down", "offline"], ["traffic", "traffic"], ["builds", "builds"]]
+            }
         }
 
         RowLayout {
             Layout.fillWidth: true
             spacing: Tokens.spacing.small
 
-            StyledText {
+            FleetLegend {
+                rows: 1
+                flow: Grid.LeftToRight
+                entries: [["barDirect", "direct"], ["barRelayed", "relayed"], ["barDown", "offline"], ["line", "traffic"]]
+            }
+
+            Item {
                 Layout.fillWidth: true
-                Layout.minimumWidth: 0
-                text: "outline: load pressure · ring: 1.0 · lobes: cpu, io, memory stall · click bars to anchor, drag window edges, wheel to zoom"
-                elide: Text.ElideRight
-                font: Tokens.font.label.small
-                color: Colours.palette.m3onSurfaceVariant
             }
 
             TimeField {

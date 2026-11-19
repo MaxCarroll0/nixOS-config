@@ -99,15 +99,18 @@ Item {
                 const top = index * root.rowHeight;
                 ctx.fillStyle = row.host ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant;
                 ctx.textAlign = "right";
-                ctx.fillText(row.name, root.labelWidth - 8, top + root.rowHeight / 2);
+                ctx.fillText(root.fleet.displayName(row.name), root.labelWidth - 8, top + root.rowHeight / 2);
                 const count = row.online.length;
-                const cell = root.plotWidth / Math.max(1, count);
                 for (let i = 0; i < count; i++) {
                     const colour = canvas.stateColour(row.online[i], row.direct[i]);
                     if (!colour)
                         continue;
                     ctx.fillStyle = colour;
-                    ctx.fillRect(root.xOf(row.from + i * row.step) - cell / 2, top + 2, cell + 0.5, root.rowHeight - 4);
+                    const at = row.from + i * row.step;
+                    const left = Math.max(root.plotLeft, Math.round(root.xOf(at - row.step / 2)));
+                    const right = Math.min(root.plotLeft + root.plotWidth, Math.round(root.xOf(at + row.step / 2)));
+                    if (right > left)
+                        ctx.fillRect(left, top + 2, right - left, root.rowHeight - 4);
                 }
                 const traffic = row.traffic.map(value => isFinite(value) ? Math.log10(1 + value / 100) : NaN);
                 const peak = Math.max(1, ...traffic.filter(isFinite));
