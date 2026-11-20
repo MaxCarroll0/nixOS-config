@@ -35,7 +35,7 @@ local function key_of(s)
     local ids, addresses = {}, {}
     for id in pairs(s.workspaces) do ids[#ids + 1] = id end
     for address in pairs(s.windows) do addresses[#addresses + 1] = address end
-    table.sort(ids)
+    table.sort(ids, function(a, b) return tostring(a) < tostring(b) end)
     table.sort(addresses)
     local parts = {}
     for _, id in ipairs(ids) do parts[#parts + 1] = id .. "=" .. model.key(s.workspaces[id]) end
@@ -47,11 +47,11 @@ local function key_of(s)
 end
 
 function M.snapshot()
-    local s = { workspaces = {}, windows = {}, active = hl.get_active_workspace().id }
+    local s = { workspaces = {}, windows = {}, active = model.ref(hl.get_active_workspace()) }
     local focused = hl.get_active_window()
     s.focus = focused and focused.address
     for address, window in pairs(windows_by_address()) do
-        local ws = window.workspace.id
+        local ws = model.ref(window.workspace)
         s.windows[address] = { ws = ws, floating = window.floating, class = window.class, command = command_of(window) }
         if not s.workspaces[ws] then s.workspaces[ws] = model.read(ws) end
     end
@@ -95,7 +95,7 @@ local function restore(s, backend)
     for address, info in pairs(s.windows) do
         local window = live[address]
         if window then
-            if window.workspace.id ~= info.ws then
+            if model.ref(window.workspace) ~= info.ws then
                 hl.dispatch(hl.dsp.window.move({ workspace = info.ws, follow = false, window = window }))
             end
             if window.floating ~= info.floating then
@@ -144,7 +144,7 @@ function M.claim(window, backend)
             hl.timer(function()
                 local live = windows_by_address()[address]
                 if not live then return end
-                if live.workspace.id ~= p.ws then
+                if model.ref(live.workspace) ~= p.ws then
                     hl.dispatch(hl.dsp.window.move({ workspace = p.ws, follow = false, window = live }))
                 end
                 backend.apply(p.ws, p.snapshot.workspaces[p.ws] or { columns = {} })

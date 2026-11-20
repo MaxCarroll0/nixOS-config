@@ -2,6 +2,10 @@
 
 local M = {}
 
+function M.ref(workspace)
+    return workspace.id or ("name:" .. workspace.name)
+end
+
 local function tiled(window)
     return window.mapped and not window.floating and type(window.layout) == "table" and window.layout.column
 end

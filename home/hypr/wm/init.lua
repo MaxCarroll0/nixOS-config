@@ -16,7 +16,7 @@ local wm = {
 _G.wm = wm
 
 local function workspace()
-    return hl.get_active_workspace().id
+    return model.ref(hl.get_active_workspace())
 end
 
 local function set_of(list)
@@ -201,7 +201,7 @@ local function paste(replace)
     for _, b in ipairs(clip.block) do
         for _, address in ipairs(b.windows) do
             local window = hl.get_window("address:" .. address)
-            if window and window.workspace and window.workspace.id ~= ws then
+            if window and window.workspace and model.ref(window.workspace) ~= ws then
                 hl.dispatch(hl.dsp.window.move({ workspace = ws, follow = false, window = window }))
             end
         end
@@ -690,7 +690,7 @@ local function ace_targets()
     local emacs = false
     for _, monitor in ipairs(hl.get_monitors()) do
         if monitor.active_workspace then
-            for _, window in ipairs(hl.get_workspace_windows(monitor.active_workspace.id)) do
+            for _, window in ipairs(hl.get_workspace_windows(model.ref(monitor.active_workspace))) do
                 if on_screen(window, monitor) then
                     windows[#windows + 1] = window
                     monitors[window.address] = monitor
@@ -916,7 +916,7 @@ local function refocus_after_close(window)
         for _, address in ipairs(after) do
             local candidate = hl.get_window("address:" .. address)
             if candidate and candidate.workspace and window.workspace
-                and candidate.workspace.id == window.workspace.id then
+                and model.ref(candidate.workspace) == model.ref(window.workspace) then
                 focus(candidate)
                 return
             end
