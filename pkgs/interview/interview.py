@@ -277,7 +277,8 @@ def finish(cur: dict, at: float, reason: str) -> None:
     log("complete", cur, cur["started"], at,
         coding=round(cur["used_before"]), pauses=round(cur["pause_seconds"]),
         review=round(at - cur["review_started"]), early=cur.get("early", False),
-        hidden_tests=cur.get("hidden_tests"), dir=cur["dir"])
+        hidden_tests=cur.get("hidden_tests"), dir=cur["dir"],
+        worked=edited(cur["problem"], cur["lang"], cur["dir"]))
     meta = {k: v for k, v in cur.items() if k not in ("running_since",)}
     meta["finished"] = iso(at)
     with contextlib.suppress(OSError):
@@ -313,8 +314,24 @@ def tick(at: float) -> None:
             finish(cur, at, "review time up")
 
 
+def edited(problem: str, lang: str, session: str) -> bool:
+    main = MAIN_FILE.get(lang)
+    if not main:
+        return True
+    try:
+        return Path(session, main).read_bytes() != (problem_dir(problem) / "templates" / lang / main).read_bytes()
+    except OSError:
+        return False
+
+
+def worked(e: dict) -> bool:
+    if "worked" in e:
+        return e["worked"]
+    return edited(e["problem"], e["lang"], e.get("dir", ""))
+
+
 def completed_on(date: str) -> list[dict]:
-    return [e for e in read_jsonl(LOG) if e["kind"] == "complete" and e["date"] == date]
+    return [e for e in read_jsonl(LOG) if e["kind"] == "complete" and e["date"] == date and worked(e)]
 
 
 def schedule() -> dict:
@@ -850,7 +867,7 @@ def problems_list() -> list[dict]:
         pid = d.parent.name
         meta["id"] = pid
         meta["langs"] = sorted(p.name for p in (d.parent / "templates").glob("*") if p.is_dir())
-        meta["attempted"] = sorted({e["lang"] for e in attempts if e["kind"] == "complete" and e["problem"] == pid})
+        meta["attempted"] = sorted({e["lang"] for e in attempts if e["kind"] == "complete" and e["problem"] == pid and worked(e)})
         out.append(meta)
     return out
 
@@ -893,7 +910,7 @@ def cmd_log(args) -> int:
         s = d["sessions"].setdefault(e["session"], {"session": e["session"], "lang": e["lang"], "track": e["track"], "problem": e["problem"], "coding": 0, "learning": 0, "review": 0, "complete": False})
         if e["kind"] in ("coding", "learning", "review"):
             s[e["kind"]] += e["seconds"]
-        if e["kind"] == "complete":
+        if e["kind"] == "complete" and worked(e):
             s.update(complete=True, early=e.get("early"), hidden_tests=e.get("hidden_tests"), dir=e.get("dir"), review_md=str(Path(e.get("dir", ""), "review.md")))
             d["completed"] += 1
         if e.get("live"):

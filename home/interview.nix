@@ -9,7 +9,7 @@
 
 let
   repo = "${config.home.homeDirectory}/Jobs/general";
-  firstDay = "2026-11-19";
+  firstDay = "2026-11-23";
 
   interview = pkgs.writers.writePython3Bin "interview" {
     flakeIgnore = [ "E501" ];
@@ -109,7 +109,6 @@ in
       days = [
         "Mon"
         "Tue"
-        "Wed"
         "Thu"
         "Fri"
       ];
@@ -165,6 +164,12 @@ in
     workspace = "interview";
     start = "05:00";
     from = firstDay;
+    days = [
+      1
+      2
+      4
+      5
+    ];
     password = "c2fGUFHyYmUS3666DRKm347";
     message = "Weekday interviews: finish two of today's three to unlock.";
     releaseCheck = [

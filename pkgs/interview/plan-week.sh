@@ -1,7 +1,7 @@
 # interview week planner: has Claude plan the coming week's missing weekdays, as the configured account.
 monday=$(date -d "next monday" +%F)
 missing=()
-for offset in 0 1 2 3 4; do
+for offset in 0 1 3 4; do
   day=$(date -d "$monday + $offset days" +%F)
   grep -qF "[\"$day\"]" "$INTERVIEW_REPO/schedule.toml" 2>/dev/null || missing+=("$day")
 done
