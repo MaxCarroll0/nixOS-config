@@ -4,7 +4,7 @@ on_workspace() {
     'any(.[]; .class == $class and .workspace.name == $ws)' >/dev/null
 }
 if ! on_workspace emacs; then
-  emacsclient -c -n || true
+  timeout 10 emacsclient -c -n || true
 fi
 if [ "$(interview status --json | jq -r .phase)" != idle ] && ! on_workspace interview-claude; then
   systemd-run --user --collect --quiet --unit="interview-claude-$(date +%s)" \

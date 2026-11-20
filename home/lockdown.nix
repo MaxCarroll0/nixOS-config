@@ -122,7 +122,7 @@ let
         binds = lib.mkOption {
           type = lib.types.listOf bindType;
           default = [ ];
-          description = "Keys available inside the lockdown submap while this profile is engaged.";
+          description = "Global keys for this profile, such as pausing the clock while engaged.";
         };
         onEngage = lib.mkOption {
           type = lib.types.nullOr (lib.types.listOf lib.types.str);
@@ -172,22 +172,10 @@ let
   exec = cmd: "hl.dsp.exec_cmd(${luaStr cmd})";
 
   submapLua = ''
-    hl.define_submap("lockdown", function()
     ${lib.concatMapStringsSep "\n" (
-      b: "  hl.bind(${luaStr b.key}, ${exec b.command}, { description = ${luaStr b.description} })"
+      b: "hl.bind(${luaStr b.key}, ${exec b.command}, { description = ${luaStr b.description} })"
     ) allBinds}
-      hl.bind("SUPER+F1", ${exec "kitty --class ${promptClass} -e ${lib.getExe lockdown} prompt"}, { description = "unlock with password" })
-      hl.bind("SUPER+h", hl.dsp.focus({ direction = "l" }), { description = "focus left" })
-      hl.bind("SUPER+l", hl.dsp.focus({ direction = "r" }), { description = "focus right" })
-      hl.bind("SUPER+k", hl.dsp.focus({ direction = "u" }), { description = "focus up" })
-      hl.bind("SUPER+j", hl.dsp.focus({ direction = "d" }), { description = "focus down" })
-      hl.bind("SUPER+SHIFT+f", hl.dsp.window.fullscreen({ mode = "fullscreen" }), { description = "toggle fullscreen" })
-      hl.bind("XF86AudioRaiseVolume", ${exec "wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+"}, { repeating = true })
-      hl.bind("XF86AudioLowerVolume", ${exec "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"}, { repeating = true })
-      hl.bind("XF86AudioMute", ${exec "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"})
-      hl.bind("XF86MonBrightnessUp", ${exec "brightnessctl set 5%+"}, { repeating = true })
-      hl.bind("XF86MonBrightnessDown", ${exec "brightnessctl set 5%-"}, { repeating = true })
-    end)
+    hl.bind("SUPER+F1", ${exec "kitty --class ${promptClass} -e ${lib.getExe lockdown} prompt"}, { description = "unlock with password" })
     hl.window_rule({ match = { class = "^${promptClass}$" }, float = true, center = true, pin = true, stay_focused = true, size = "640 220" })
     dofile("${config.xdg.configHome}/hypr/lockdown.lua")
   '';
@@ -244,6 +232,7 @@ in
       Service = {
         Type = "oneshot";
         ExecStart = "${lib.getExe lockdown} check";
+        TimeoutStartSec = "60s";
       };
       Install.WantedBy = [ "graphical-session.target" ];
     };

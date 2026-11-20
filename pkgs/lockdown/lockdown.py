@@ -127,12 +127,13 @@ def publish(active: dict | None) -> None:
 
 def run_hook(command: list[str] | None) -> None:
     if command:
-        subprocess.run(command, check=False)
+        subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def apply(at: dt.datetime) -> dict:
     report = {}
     engaged = None
+    hooks = []
     for name, profile in sorted(profiles().items()):
         on, why = evaluate(name, profile, at)
         state = load_state(name)
@@ -142,7 +143,7 @@ def apply(at: dt.datetime) -> dict:
             if on:
                 state["substate"] = "active"
             save_state(name, state)
-            run_hook(profile.get("on_engage") if on else profile.get("on_release"))
+            hooks.append(profile.get("on_engage") if on else profile.get("on_release"))
         report[name] = {"engaged": on, "reason": why, "substate": state.get("substate", "active")}
         if on and engaged is None:
             substate = state.get("substate", "active")
@@ -157,6 +158,8 @@ def apply(at: dt.datetime) -> dict:
                 "reason": why,
             }
     publish(engaged)
+    for hook in hooks:
+        run_hook(hook)
     return report
 
 

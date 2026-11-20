@@ -47,14 +47,34 @@ local function maximise(window)
     end
 end
 
-local function free_workspace()
+local function free_workspace(taken)
     local used = {}
     for _, window in ipairs(hl.get_windows()) do
         if window.workspace and window.workspace.id then used[window.workspace.id] = true end
     end
     local id = 1
-    while used[id] do id = id + 1 end
+    while used[id] or taken[id] do id = id + 1 end
+    taken[id] = true
     return id
+end
+
+local function stranded(window)
+    local ws = window.workspace
+    return window.mapped and ws ~= nil and (ws.name == stash or (ws.id == nil and not ws.special))
+end
+
+local function rehome()
+    local targets, taken = {}, {}
+    local current = hl.get_active_workspace()
+    for _, window in ipairs(hl.get_windows()) do
+        if stranded(window) then
+            local from = window.workspace.name
+            targets[from] = targets[from] or free_workspace(taken)
+            move(window, targets[from])
+        end
+    end
+    local landing = current and targets[current.name]
+    if landing then hl.dispatch(hl.dsp.focus({ workspace = landing })) end
 end
 
 local function settle(window)
@@ -85,7 +105,6 @@ local function enforce()
     if not (current and current.name == M.active.workspace) then
         hl.dispatch(hl.dsp.focus({ workspace = home() }))
     end
-    if hl.get_current_submap() ~= "lockdown" then hl.dispatch(hl.dsp.submap("lockdown")) end
 end
 
 local function engage()
@@ -98,13 +117,7 @@ local function engage()
 end
 
 local function release()
-    local target = nil
-    for _, window in ipairs(hl.get_windows()) do
-        if on(window, stash) then
-            target = target or free_workspace()
-            move(window, target)
-        end
-    end
+    rehome()
     M.opened = {}
     if M.kb_options ~= nil then
         hl.config({ ["input.kb_options"] = M.kb_options })
@@ -127,23 +140,32 @@ end
 
 hl.on("window.open", function(window)
     if not M.active then return end
+    if not allowed(window) then
+        hl.dispatch(hl.dsp.window.close({ window = "address:" .. window.address }))
+        return
+    end
     M.opened[window.address] = true
     hl.timer(function() settle(window) end, { timeout = 50, type = "oneshot" })
+end)
+
+hl.on("workspace.active", function()
+    if not M.active then return end
+    local current = hl.get_active_workspace()
+    if current and current.name ~= M.active.workspace then
+        hl.timer(function()
+            if M.active then hl.dispatch(hl.dsp.focus({ workspace = home() })) end
+        end, { timeout = 10, type = "oneshot" })
+    end
 end)
 
 hl.on("window.close", function(window)
     M.opened[window.address] = nil
 end)
 
-hl.on("keybinds.submap", function()
-    if M.active and hl.get_current_submap() ~= "lockdown" then
-        hl.timer(function()
-            if M.active and hl.get_current_submap() ~= "lockdown" then hl.dispatch(hl.dsp.submap("lockdown")) end
-        end, { timeout = 10, type = "oneshot" })
-    end
-end)
-
 hl.timer(poll, { timeout = 1000, type = "repeat" })
-hl.on("hyprland.start", poll)
+hl.on("hyprland.start", function()
+    poll()
+    if not M.active then rehome() end
+end)
 
 return M
