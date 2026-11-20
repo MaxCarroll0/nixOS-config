@@ -33,8 +33,14 @@
       device = "/swapfile";
       size = 32 * 1024;
       randomEncryption.enable = true;
+      options = [
+        "nofail"
+        "x-systemd.device-timeout=10s"
+      ];
     }
   ];
+
+  systemd.services.mkswap-swapfile.serviceConfig.ExecStartPost = "${pkgs.systemd}/bin/udevadm trigger --action=change --settle /dev/mapper/swapfile";
 
   users.users.max.linger = true;
 
