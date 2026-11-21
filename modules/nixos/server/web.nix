@@ -57,8 +57,6 @@ in
       };
     };
 
-    local.vpn.bypassUnits = [ "cloudflared-tunnel-${cfg.tunnelId}.service" ];
-
     services.nginx = {
       enable = true;
       recommendedOptimisation = true;

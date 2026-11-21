@@ -8,7 +8,6 @@
     ../modules/nixos/roles/member.nix
     ../modules/nixos/desktop-env.nix
     ../modules/nixos/gaming.nix
-    ../modules/nixos/vpn.nix
     ../modules/nixos/wake.nix
     ../modules/nixos/power.nix
     ../modules/nixos/fancontrol.nix
@@ -18,11 +17,6 @@
     ../modules/nixos/server/web.nix
     ../modules/nixos/pam-ssh-agent-sudo.nix
   ];
-
-  local.vpn.selection = {
-    countries = [ "UK" ];
-    rotateEvery = "6h";
-  };
 
   boot.loader.timeout = lib.mkDefault 0;
 

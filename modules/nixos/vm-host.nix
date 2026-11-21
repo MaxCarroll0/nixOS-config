@@ -253,86 +253,6 @@ let
         (builtins.readFile ./vm-host-lag.sh);
   };
 
-  vpnInterface = "proton-mc";
-  vpnTable = 51821;
-  vpnFwmark = "0xca6c";
-  vpnLocalAddress = "10.2.0.3";
-  vpnBootstrapConf = "/run/${domainName}-vpn/${vpnInterface}.conf";
-  vpnStatus = "/run/${domainName}-vpn.json";
-  vpnStateDir = "/var/lib/${domainName}-vpn";
-  vpnSwitchUnit = "${domainName}-vpn-switch.service";
-
-  vpnSwitch = pkgs.writeShellApplication {
-    name = "${domainName}-vpn-switch";
-    runtimeInputs = with pkgs; [
-      (import ./protonvpn-wg-confgen.nix { inherit pkgs; })
-      wireguard-tools
-      util-linux
-      coreutils
-      gawk
-      gnused
-      gnugrep
-      iputils
-      jq
-    ];
-    text =
-      builtins.replaceStrings
-        [
-          "@bypassResolvConf@"
-          "@usernameFile@"
-          "@passwordFile@"
-          "@novpnGid@"
-          "@interface@"
-          "@stateDir@"
-          "@statusFile@"
-          "@country@"
-          "@city@"
-          "@pool@"
-          "@maxAttempts@"
-          "@fwmark@"
-          "@healthProbe@"
-          "@localAddress@"
-        ]
-        [
-          "${pkgs.writeText "${vpnInterface}-resolv.conf" "nameserver ${config.local.vpn.bypassResolver}\n"}"
-          config.sops.secrets.${config.local.vpn.usernameSecret}.path
-          config.sops.secrets.${config.local.vpn.passwordSecret}.path
-          (toString config.users.groups.novpn.gid)
-          vpnInterface
-          vpnStateDir
-          vpnStatus
-          "UK"
-          "London"
-          "12"
-          "6"
-          vpnFwmark
-          config.local.vpn.healthProbe
-          vpnLocalAddress
-        ]
-        (builtins.readFile ./vm-host-vpn-switch.sh);
-  };
-
-  vpnRoute = pkgs.writeShellApplication {
-    name = "${domainName}-vpn-route";
-    runtimeInputs = [ pkgs.iproute2 ];
-    text = ''
-      case "$1" in
-        up)
-          ip route replace default dev ${vpnInterface} table ${toString vpnTable}
-          ip rule del priority 5200 2>/dev/null || true
-          ip rule del priority 5201 2>/dev/null || true
-          ip rule add iif ${bridge} to 100.64.0.0/10 lookup 52 priority 5200
-          ip rule add iif ${bridge} lookup ${toString vpnTable} priority 5201
-          ;;
-        down)
-          ip rule del priority 5200 2>/dev/null || true
-          ip rule del priority 5201 2>/dev/null || true
-          ip route flush table ${toString vpnTable} 2>/dev/null || true
-          ;;
-      esac
-    '';
-  };
-
   idleShutdownMinutes = 10;
   shutdownGraceMinutes = 6;
   idleCountdown = "${domainName}-idle-shutdown";
@@ -440,8 +360,6 @@ let
           "@idleStatus@"
           "@resume@"
           "@lagStatus@"
-          "@vpnStatus@"
-          "@vpnSwitchUnit@"
         ]
         [
           "${virsh}"
@@ -449,8 +367,6 @@ let
           "${idleStatus}"
           "${lib.getExe resume}"
           lagStatus
-          vpnStatus
-          vpnSwitchUnit
         ]
         (builtins.readFile ./vm-host-control.sh);
   };
@@ -528,7 +444,6 @@ in
         iifname "${bridge}" ip saddr ${guestAddress} ip daddr ${facts.pi.tailscale} oifname "tailscale0" tcp dport ${toString nasStreamPort} accept
         iifname "${bridge}" meta nfproto ipv6 counter drop
         iifname "${bridge}" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 } counter drop
-        iifname "${bridge}" oifname != "${vpnInterface}" counter drop
       }
     '';
   };
@@ -638,96 +553,4 @@ in
   };
 
   networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ statusPort ];
-
-  local.vpn.allowInterfaces = [ vpnInterface ];
-  networking.networkmanager.unmanaged = [ "interface-name:${vpnInterface}" ];
-
-  networking.wg-quick.interfaces.${vpnInterface} = {
-    configFile = vpnBootstrapConf;
-    autostart = true;
-  };
-
-  networking.nftables.tables.${vpnInterface} = {
-    family = "ip";
-    content = ''
-      chain prerouting {
-        type filter hook prerouting priority raw - 10; policy accept;
-        iifname "${vpnInterface}" ip daddr 10.2.0.2 ip daddr set ${vpnLocalAddress}
-      }
-
-      chain postrouting {
-        type filter hook postrouting priority srcnat + 10; policy accept;
-        oifname "${vpnInterface}" ip saddr ${vpnLocalAddress} ip saddr set 10.2.0.2
-      }
-    '';
-  };
-
-  systemd.services."${domainName}-vpn-bootstrap" = {
-    description = "Generate the initial London Proton config for ${vpnInterface}";
-    before = [ "wg-quick-${vpnInterface}.service" ];
-    wantedBy = [ "wg-quick-${vpnInterface}.service" ];
-    after = [
-      "sops-install-secrets.service"
-      "network-online.target"
-      "wg-quick-${config.local.vpn.interface}.service"
-    ];
-    wants = [ "network-online.target" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      Group = "novpn";
-      StateDirectory = "${domainName}-vpn";
-      ExecStart = "${lib.getExe vpnSwitch} --bootstrap ${vpnBootstrapConf}";
-      Restart = "on-failure";
-      RestartSec = 5;
-      StartLimitIntervalSec = 60;
-      StartLimitBurst = 8;
-    };
-  };
-
-  systemd.services."wg-quick-${vpnInterface}".serviceConfig = {
-    Restart = "on-failure";
-    RestartSec = 5;
-    StartLimitIntervalSec = 60;
-    StartLimitBurst = 8;
-  };
-
-  systemd.services."${domainName}-vpn-route" = {
-    description = "Route ${bridge} through ${vpnInterface}";
-    after = [ "wg-quick-${vpnInterface}.service" ];
-    bindsTo = [ "wg-quick-${vpnInterface}.service" ];
-    wantedBy = [ "wg-quick-${vpnInterface}.service" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      ExecStart = "${lib.getExe vpnRoute} up";
-      ExecStop = "${lib.getExe vpnRoute} down";
-    };
-  };
-
-  systemd.services.${lib.removeSuffix ".service" vpnSwitchUnit} = {
-    description = "Move ${vpnInterface} to another London Proton server";
-    after = [ "wg-quick-${vpnInterface}.service" ];
-    requisite = [ "wg-quick-${vpnInterface}.service" ];
-    startLimitIntervalSec = 600;
-    startLimitBurst = 3;
-    serviceConfig = {
-      Type = "oneshot";
-      Group = "novpn";
-      StateDirectory = "${domainName}-vpn";
-      ExecStart = lib.getExe vpnSwitch;
-      TimeoutStartSec = "3min";
-    };
-  };
-
-  security.polkit.extraConfig = ''
-    polkit.addRule(function (action, subject) {
-      if (action.id == "org.freedesktop.systemd1.manage-units"
-          && action.lookup("unit") == "${vpnSwitchUnit}"
-          && action.lookup("verb") == "start"
-          && (subject.user == "${remoteUser}" || subject.user == "max")) {
-        return polkit.Result.YES;
-      }
-    });
-  '';
 }
