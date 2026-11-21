@@ -115,11 +115,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1794934232,
-        "narHash": "sha256-u7xat6+qwwy3BaBOnrhLtpcJHXDG1LAgAO98tNGvEz0=",
+        "lastModified": 1795037345,
+        "narHash": "sha256-g3pn0bs9f7a32tHGc9rZwGa03A6MN9xaLl0WTodx9SU=",
         "ref": "main",
-        "rev": "e59c89cf3ecb87a4a9a5a1523d502a2a3ccd0f05",
-        "revCount": 211,
+        "rev": "abdae105d17ee245dd7ce2f3d9913c3594d03a07",
+        "revCount": 214,
         "type": "git",
         "url": "ssh://git@github.com/MaxCarroll0/bookshelf"
       },
@@ -718,6 +718,27 @@
         "type": "github"
       }
     },
+    "jobs": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1795051887,
+        "narHash": "sha256-SA2tNNzVSWUBSDyUsrW5itAiL/WszRkRATZQa2NVq7M=",
+        "ref": "main",
+        "rev": "5518c7ed0c9951331a525d1ed5dfd79b06c7387e",
+        "revCount": 11,
+        "type": "git",
+        "url": "ssh://git@github.com/MaxCarroll0/jobs-scout"
+      },
+      "original": {
+        "ref": "main",
+        "type": "git",
+        "url": "ssh://git@github.com/MaxCarroll0/jobs-scout"
+      }
+    },
     "m3shapes": {
       "inputs": {
         "nixpkgs": [
@@ -974,6 +995,7 @@
         "emacs-overlay": "emacs-overlay",
         "home-manager": "home-manager",
         "hyprland": "hyprland",
+        "jobs": "jobs",
         "nixos-raspberrypi": "nixos-raspberrypi",
         "nixpkgs": "nixpkgs_3",
         "nixpkgs-unstable": "nixpkgs-unstable",

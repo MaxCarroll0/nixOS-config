@@ -244,8 +244,8 @@ let
     runtimeInputs = [ pkgs.coreutils ];
     text = ''
       busy() {
-        local check
-        for check in ${lib.escapeShellArgs selection.deferWhile}; do
+        local checks=(${lib.escapeShellArgs selection.deferWhile}) check
+        for check in "''${checks[@]}"; do
           if "$check"; then
             echo "deferred: $check"
             return 0

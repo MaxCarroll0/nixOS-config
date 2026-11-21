@@ -173,6 +173,24 @@ def cmd_check(args) -> int:
     return 0
 
 
+def due(name: str, profile: dict, at: dt.datetime) -> bool:
+    state = load_state(name)
+    today = at.date().isoformat()
+    if state.get("forced") != today:
+        if not scheduled(profile, at):
+            return False
+        if today in (state.get("override"), state.get("released")):
+            return False
+    return not goal_met(profile)
+
+
+def cmd_engaged(args) -> int:
+    at = now()
+    names = [name for name, profile in sorted(profiles().items()) if due(name, profile, at)]
+    print("\n".join(names))
+    return 0 if names else 1
+
+
 def cmd_status(args) -> int:
     at = now()
     report = {}
@@ -258,6 +276,8 @@ def main() -> int:
     p = sub.add_parser("check")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_check)
+    p = sub.add_parser("engaged")
+    p.set_defaults(fn=cmd_engaged)
     p = sub.add_parser("status")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_status)

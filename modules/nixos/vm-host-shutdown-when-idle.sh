@@ -15,6 +15,10 @@ case "$(@virsh@ domstate @domainName@)" in
     locks=$(count @guestLockCount@)
     logins=$(count @guestLoginCount@)
     readyAt=$(count @guestServerReadyAt@)
+    @lagUpdate@ || true
+    ;;
+  *)
+    rm -f @lagStatus@ @lagState@
     ;;
 esac
 

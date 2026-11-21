@@ -37,6 +37,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    jobs = {
+      url = "git+ssh://git@github.com/MaxCarroll0/jobs-scout?ref=main";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     satisfactory = {
       url = "git+ssh://git@github.com/MaxCarroll0/SatisfactoryServer?ref=main";
       inputs.nixpkgs.follows = "nixpkgs";

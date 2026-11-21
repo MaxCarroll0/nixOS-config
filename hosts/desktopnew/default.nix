@@ -47,6 +47,19 @@ in
 
   networking.hostName = "desktopnew";
 
+  services.ollama = {
+    enable = true;
+    package = pkgs.ollama-vulkan;
+    loadModels = [ "qwen3-embedding:0.6b" ];
+  };
+
+  sops.secrets.jobs-worker-env = {
+    sopsFile = ../../secrets/jobs-worker.env;
+    format = "dotenv";
+    owner = "max";
+    mode = "0400";
+  };
+
   fileSystems."/boot".options = [
     "nofail"
     "x-systemd.automount"

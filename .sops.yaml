@@ -30,6 +30,12 @@ creation_rules:
       - *laptop
       - *desktopnew
       - *pi
+  - path_regex: secrets/jobs-worker\.env$
+    key_groups:
+    - age:
+      - *primary
+      - *laptop
+      - *desktopnew
   - path_regex: secrets/claude-swap.json$
     key_groups:
     - age:

@@ -1,11 +1,19 @@
 state() { @virsh@ domstate @domainName@ 2>/dev/null || echo unknown; }
 status_json() {
-  local current idle='{}'
+  local current idle='{}' lag=null vpn=null
   current=$(state)
   if [ "$current" = running ] && [ -r @idleStatus@ ]; then
     idle=$(cat @idleStatus@)
   fi
-  jq -cn --arg state "$current" --argjson idle "$idle" '{state:$state} + $idle'
+  if [ "$current" = running ] && [ -r @lagStatus@ ]; then
+    lag=$(cat @lagStatus@)
+  fi
+  if [ -r @vpnStatus@ ]; then
+    vpn=$(cat @vpnStatus@)
+  fi
+  jq -cn --arg state "$current" --argjson idle "$idle" --argjson lag "$lag" --argjson vpn "$vpn" \
+    --argjson now "$(date +%s)" \
+    '{state:$state} + $idle + {lag:(if $lag != null and $now - $lag.updated < 180 then $lag else null end), vpn:$vpn}'
 }
 
 case "${1:-}" in
@@ -22,9 +30,13 @@ case "${1:-}" in
         @virsh@ shutdown @domainName@ >&2
         echo '{"ok":true}'
         ;;
+      vpn)
+        systemctl start @vpnSwitchUnit@ >&2
+        echo '{"ok":true}'
+        ;;
       status) status_json ;;
       *)
-        echo "usage: start | stop | status" >&2
+        echo "usage: start | stop | vpn | status" >&2
         exit 2
         ;;
     esac
