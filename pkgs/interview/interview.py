@@ -5,6 +5,7 @@ import contextlib
 import datetime as dt
 import fcntl
 import hashlib
+import hmac
 import re
 import json
 import os
@@ -29,10 +30,21 @@ EVENTS = STATE / "events.jsonl"
 LOG = STATE / "log.jsonl"
 LOCK = STATE / "lock"
 SNOOZE = STATE / "snooze"
+SETTINGS = STATE / "settings.json"
+LOCKDOWN_PROFILES = Path(os.environ.get("LOCKDOWN_CONFIG") or env_dir("XDG_CONFIG_HOME", ".config") / "lockdown/profiles.json")
+
+WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+DIFFICULTIES = ["easy", "easy-medium", "medium", "medium-hard", "hard"]
+RULES = [
+    "A short statement with examples and constraints, solvable within the coding time at the track's difficulty.",
+    "Solved as one function or a small API in the track's language, checked by visible and hidden unit tests.",
+    "Workable without an agent: the prompt, HOWTO and hint ladder are enough to make progress.",
+    "Has a straightforward first approach and a better one worth discussing in review.",
+]
 
 BUILD_DIRS = {"_build", "target", "bin", "obj", "__pycache__", ".pytest_cache", "build", "improved"}
 REVIEW_FILES = {"review.md", "SOLUTIONS.md", ".interview.json"}
-MAIN_FILE = {"ocaml": "solution.ml", "rust": "src/lib.rs", "c": "solution.c", "csharp": "Solution.cs", "python": "solution.py"}
+LEGACY_MAIN = {"ocaml": "solution.ml", "rust": "src/lib.rs", "c": "solution.c", "csharp": "Solution.cs", "python": "solution.py"}
 
 EVENT_GUIDE = {
     "STARTED": "Interview clock started. Present the problem, then interview.",
@@ -48,12 +60,32 @@ EVENT_GUIDE = {
 }
 
 
-def config() -> dict:
+def track_entry(name: str, langs: list[str], context: str = "", difficulty: str = "easy-medium",
+                enabled: bool = True, coding_minutes: int | None = None, review_minutes: int | None = None, **_) -> dict:
+    return {"name": name, "langs": list(langs), "context": context, "difficulty": difficulty, "enabled": enabled,
+            "coding_minutes": coding_minutes, "review_minutes": review_minutes}
+
+
+def track_minutes(cfg: dict, track: str | None, key: str) -> int:
+    entry = next((t for t in cfg["tracks"] if t["name"] == track), {})
+    value = entry.get(key)
+    return cfg[key] if value is None else value
+
+
+def normal_tracks(tracks) -> list[dict]:
+    if isinstance(tracks, dict):
+        return [track_entry(name, langs) for name, langs in tracks.items()]
+    return [track_entry(**t) for t in tracks]
+
+
+def base_config() -> dict:
     cfg = {
         "repo": str(Path.home() / "Jobs/general"),
         "coding_minutes": 45,
         "review_minutes": 15,
         "required_per_day": 2,
+        "context": "",
+        "lockdown": True,
         "tracks": {"ocaml": ["ocaml"], "systems": ["rust", "c"], "managed": ["csharp", "python"]},
         "on_pause": None,
         "on_resume": None,
@@ -63,7 +95,88 @@ def config() -> dict:
     }
     with contextlib.suppress(FileNotFoundError):
         cfg.update(json.loads(CONFIG_PATH.read_text()))
+    cfg["tracks"] = normal_tracks(cfg["tracks"])
     return cfg
+
+
+def editable(cfg: dict) -> dict:
+    auto = cfg["auto"]
+    return {
+        "days": [d for d in WEEKDAYS if d in auto["days"]],
+        "start": auto["start"],
+        "from": auto.get("from") or "",
+        "auto_start": bool(auto.get("enabled")),
+        "lockdown": bool(cfg.get("lockdown", True)),
+        "coding_minutes": cfg["coding_minutes"],
+        "review_minutes": cfg["review_minutes"],
+        "break_minutes": auto["break_minutes"],
+        "snooze_minutes": auto["snooze_minutes"],
+        "required_per_day": cfg["required_per_day"],
+        "context": cfg.get("context", ""),
+        "tracks": cfg["tracks"],
+    }
+
+
+def overlay(cfg: dict, settings: dict) -> dict:
+    auto = cfg["auto"]
+    for key, target in (("days", "days"), ("start", "start"), ("from", "from"), ("auto_start", "enabled"),
+                        ("break_minutes", "break_minutes"), ("snooze_minutes", "snooze_minutes")):
+        if key in settings:
+            auto[target] = settings[key]
+    for key in ("lockdown", "coding_minutes", "review_minutes", "required_per_day", "context"):
+        if key in settings:
+            cfg[key] = settings[key]
+    if "tracks" in settings:
+        cfg["tracks"] = normal_tracks(settings["tracks"])
+    return cfg
+
+
+def lockdown_password(cfg: dict) -> str | None:
+    try:
+        return json.loads(LOCKDOWN_PROFILES.read_text())[cfg["auto"]["lockdown_profile"]]["password"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def sign(password: str, settings: dict) -> str:
+    return hmac.new(password.encode(), json.dumps(settings, sort_keys=True).encode(), hashlib.sha256).hexdigest()
+
+
+def stored_settings(cfg: dict) -> dict:
+    try:
+        doc = json.loads(SETTINGS.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    password = lockdown_password(cfg)
+    if not password or not isinstance(doc, dict) or not hmac.compare_digest(str(doc.get("signature", "")), sign(password, doc.get("settings", {}))):
+        return {}
+    return doc["settings"]
+
+
+def config() -> dict:
+    cfg = base_config()
+    return overlay(cfg, stored_settings(cfg))
+
+
+def languages(repo: str | None = None) -> dict[str, dict]:
+    root = Path(repo or base_config()["repo"], "langs")
+    out = {}
+    for path in sorted(root.glob("*/lang.toml")):
+        with contextlib.suppress(OSError, tomllib.TOMLDecodeError):
+            meta = tomllib.loads(path.read_text())
+            out[path.parent.name] = {"id": path.parent.name, "name": meta.get("name", path.parent.name),
+                                     "colour": meta.get("colour", ""), "main": meta["main"], "scaffold": meta.get("scaffold", False)}
+    for lang, main in LEGACY_MAIN.items():
+        out.setdefault(lang, {"id": lang, "name": lang, "colour": "", "main": main, "scaffold": True})
+    return out
+
+
+def main_file(lang: str) -> str:
+    return languages()[lang]["main"]
+
+
+def active_tracks(cfg: dict) -> list[dict]:
+    return [t for t in cfg["tracks"] if t.get("enabled", True)]
 
 
 def now() -> float:
@@ -77,13 +190,6 @@ def iso(t: float) -> str:
 
 def day_of(t: float) -> str:
     return dt.datetime.fromtimestamp(t).date().isoformat()
-
-
-def track_of(lang: str) -> str:
-    for track, langs in config()["tracks"].items():
-        if lang in langs:
-            return track
-    raise SystemExit(f"unknown language {lang}")
 
 
 @contextlib.contextmanager
@@ -315,7 +421,7 @@ def tick(at: float) -> None:
 
 
 def edited(problem: str, lang: str, session: str) -> bool:
-    main = MAIN_FILE.get(lang)
+    main = languages().get(lang, {}).get("main")
     if not main:
         return True
     try:
@@ -341,37 +447,53 @@ def schedule() -> dict:
         return {}
 
 
+def interview_day(at: float) -> bool:
+    auto = config()["auto"]
+    moment = dt.datetime.fromtimestamp(at)
+    if auto.get("from") and moment.date().isoformat() < auto["from"]:
+        return False
+    return moment.strftime("%a") in auto["days"]
+
+
 def plan_today(at: float) -> list[dict]:
     cfg = config()
     today = day_of(at)
+    due = "pending" if interview_day(at) else "off"
     done = {e["track"]: e for e in completed_on(today)}
     history = [e for e in read_jsonl(LOG) if e["kind"] == "complete"]
     planned = schedule().get(today, {})
     cur = load_current()
     out = []
-    for track, langs in cfg["tracks"].items():
+    claimed = set()
+    for entry in active_tracks(cfg):
+        track, langs = entry["name"], entry["langs"]
         if track in done:
             out.append({"track": track, "lang": done[track]["lang"], "status": "done", "problem": done[track]["problem"]})
             continue
         if cur and cur["track"] == track:
             out.append({"track": track, "lang": cur["lang"], "status": cur["phase"], "problem": cur["problem"]})
             continue
-        lang = next((lang for lang in langs if lang in planned), None)
+        slot = planned.get(track)
+        if isinstance(slot, dict) and slot.get("problem"):
+            out.append({"track": track, "lang": slot.get("lang", langs[0]), "status": due, "problem": slot["problem"]})
+            continue
+        lang = next((lang for lang in langs if isinstance(planned.get(lang), str) and lang not in claimed), None)
         if lang:
-            out.append({"track": track, "lang": lang, "status": "pending", "problem": planned[lang]})
+            claimed.add(lang)
+            out.append({"track": track, "lang": lang, "status": due, "problem": planned[lang]})
             continue
         count = sum(1 for e in history if e["track"] == track)
-        out.append({"track": track, "lang": langs[count % len(langs)], "status": "pending", "problem": None})
+        out.append({"track": track, "lang": langs[count % len(langs)], "status": due, "problem": None})
     return out
 
 
-def pick(at: float, choice: str | None) -> tuple[str, str] | str:
+def pick(at: float, choice: str | None) -> tuple[str, str, str] | str:
     plan = [p for p in plan_today(at) if p["status"] == "pending"]
     if choice:
         plan = [p for p in plan if choice in (p["track"], p["lang"])]
     for p in plan:
         if p["problem"]:
-            return p["lang"], p["problem"]
+            return p["track"], p["lang"], p["problem"]
     if not plan:
         return f"nothing pending today{' for ' + choice if choice else ''}; see `interview today`"
     return f"no problem scheduled today for {plan[0]['lang']}; add one to schedule.toml or pass LANG PROBLEM"
@@ -387,6 +509,7 @@ def status_dict(at: float) -> dict:
         "completed_today": len({e["track"] for e in completed_on(today)}),
         "required_per_day": cfg["required_per_day"],
         "phase": "idle",
+        "interview_day": interview_day(at),
     }
     if cur:
         out.update({
@@ -420,6 +543,8 @@ def status_dict(at: float) -> dict:
 def status_line(s: dict) -> str:
     head = f"[interview clock {s['now']}] today {s['completed_today']}/{s['required_per_day']} required interviews done."
     if s["phase"] == "idle":
+        if not s["interview_day"]:
+            return f"[interview clock {s['now']}] No interviews today; nothing is due."
         return head + " No interview running."
     where = f"{s['lang']} {s['problem']} ({s['dir']})"
     if s["phase"] == "coding":
@@ -459,25 +584,26 @@ SOLUTIONS.md, fill in review.md, then `interview close`.
 
 def open_files(dest: Path, lang: str) -> None:
     with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-        subprocess.run(["emacsclient", "-n", str(dest / "PROMPT.md"), str(dest / MAIN_FILE[lang])],
+        subprocess.run(["emacsclient", "-n", str(dest / "PROMPT.md"), str(dest / main_file(lang))],
                        capture_output=True, timeout=5)
 
 
 def begin(at: float, lang: str | None, problem: str | None, minutes: int | None = None,
-          review_minutes: int | None = None, again: bool = False) -> tuple[dict, Path] | str:
+          review_minutes: int | None = None, again: bool = False, track: str | None = None) -> tuple[dict, Path] | str:
     cfg = config()
+    known = languages(cfg["repo"])
     if load_current():
         return "an interview is already running; see `interview status`"
     if not problem:
-        if lang not in cfg["tracks"] and lang not in MAIN_FILE and lang is not None:
+        if lang is not None and lang not in known and lang not in {t["name"] for t in cfg["tracks"]}:
             return f"unknown track or language {lang}"
-        chosen = pick(at, lang)
+        chosen = pick(at, track or lang)
         if isinstance(chosen, str):
             return chosen
-        lang, problem = chosen
-    if lang not in MAIN_FILE:
-        return f"unknown language {lang}"
-    track = track_of(lang)
+        track, lang, problem = chosen
+    if lang not in known:
+        return f"unknown language {lang}; languages live in {Path(cfg['repo'], 'langs')}"
+    track = track or next((t["name"] for t in active_tracks(cfg) if lang in t["langs"]), "extra")
     if track in {e["track"] for e in completed_on(day_of(at))} and not again:
         return f"{track} is already done today; pass --again to repeat it"
     template = problem_dir(problem) / "templates" / lang
@@ -488,11 +614,11 @@ def begin(at: float, lang: str | None, problem: str | None, minutes: int | None 
     if dest.exists():
         return f"{dest} exists; this problem was already attempted in {lang} today"
     shutil.copytree(template, dest)
-    budget = (minutes or cfg["coding_minutes"]) * 60
+    budget = (minutes or track_minutes(cfg, track, "coding_minutes")) * 60
     prompt = problem_dir(problem) / "PROMPT.md"
     if prompt.exists():
         shutil.copyfile(prompt, dest / "PROMPT.md")
-    (dest / "HOWTO.md").write_text(HOWTO.format(lang=lang, problem=problem, minutes=budget // 60, main=MAIN_FILE[lang]))
+    (dest / "HOWTO.md").write_text(HOWTO.format(lang=lang, problem=problem, minutes=budget // 60, main=known[lang]["main"]))
     repo = Path(cfg["repo"])
     git(repo, "add", "--", str(dest))
     git(repo, "commit", "-q", "-m", f"interview: start {sid}", "--", str(dest))
@@ -505,7 +631,7 @@ def begin(at: float, lang: str | None, problem: str | None, minutes: int | None 
         "phase": "coding",
         "started": at,
         "coding_budget": budget,
-        "review_budget": (review_minutes or cfg["review_minutes"]) * 60,
+        "review_budget": (review_minutes if review_minutes is not None else track_minutes(cfg, track, "review_minutes")) * 60,
         "used_before": 0,
         "running_since": at,
         "pause_seconds": 0,
@@ -518,12 +644,12 @@ def begin(at: float, lang: str | None, problem: str | None, minutes: int | None 
 
 def cmd_start(args) -> int:
     with locked():
-        started = begin(now(), args.lang, args.problem, args.minutes, args.review_minutes, args.again)
+        started = begin(now(), args.lang, args.problem, args.minutes, args.review_minutes, args.again, args.track)
     if isinstance(started, str):
         print(started, file=sys.stderr)
         return 1
     cur, dest = started
-    print(f"started {cur['id']}: {dest}\nread {dest / 'PROMPT.md'}, edit {dest / MAIN_FILE[cur['lang']]}; {dest / 'HOWTO.md'} lists the commands")
+    print(f"started {cur['id']}: {dest}\nread {dest / 'PROMPT.md'}, edit {dest / main_file(cur['lang'])}; {dest / 'HOWTO.md'} lists the commands")
     if args.open:
         open_files(dest, cur["lang"])
     return 0
@@ -574,10 +700,10 @@ def snoozed(at: float) -> bool:
         return False
 
 
-def ask(cfg: dict, lang: str, problem: str) -> bool:
+def ask(cfg: dict, track: str, lang: str, problem: str) -> bool:
     command = [cfg["auto"].get("notify", "notify-send"), "--app-name=interview", "--urgency=critical", "--wait",
                "--action=start=Start", "--action=later=Later",
-               "Interview due", f"{lang} {problem}: start the {cfg['coding_minutes']}-minute clock?"]
+               "Interview due", f"{lang} {problem}: start the {track_minutes(cfg, track, 'coding_minutes')}-minute clock?"]
     try:
         answer = subprocess.run(command, capture_output=True, text=True).stdout.strip()
     except OSError:
@@ -597,13 +723,13 @@ def cmd_auto(args) -> int:
         if args.verbose:
             print(f"not starting: {chosen}")
         return 0
-    lang, problem = chosen
-    if not ask(cfg, lang, problem):
+    track, lang, problem = chosen
+    if not ask(cfg, track, lang, problem):
         SNOOZE.write_text(str(now() + cfg["auto"]["snooze_minutes"] * 60))
         print(f"declined; asking again in {cfg['auto']['snooze_minutes']} minutes")
         return 0
     with locked():
-        started = begin(now(), lang, problem)
+        started = begin(now(), lang, problem, track=track)
     if isinstance(started, str):
         print(started, file=sys.stderr)
         return 1
@@ -611,7 +737,7 @@ def cmd_auto(args) -> int:
     print(f"started {cur['id']}: {dest}")
     hook = cfg["on_start"]
     if hook:
-        run_hook([*hook, str(dest / "PROMPT.md"), str(dest / MAIN_FILE[cur["lang"]])])
+        run_hook([*hook, str(dest / "PROMPT.md"), str(dest / main_file(cur["lang"]))])
     return 0
 
 
@@ -695,10 +821,24 @@ def do_close(cur: dict, at: float):
     return "interview complete"
 
 
-def nix_run(repo: Path, cwd: Path, command: list[str]) -> int:
-    if shutil.which("nix") and (repo / "flake.nix").exists():
-        command = ["nix", "develop", str(repo), "--command", "bash", "-c", shlex.join(command), "interview"]
-    return subprocess.run(command, cwd=cwd).returncode
+def in_shell(repo: Path, lang: str | None, command: list[str]) -> list[str]:
+    if not (shutil.which("nix") and (repo / "flake.nix").exists()):
+        return command
+    ref = f"{repo}#{lang}" if lang and (repo / "langs" / lang / "shell.nix").exists() else str(repo)
+    return ["nix", "develop", ref, "--command", "bash", "-c", shlex.join(command), "interview"]
+
+
+def nix_run(repo: Path, cwd: Path, command: list[str], lang: str | None = None) -> int:
+    return subprocess.run(in_shell(repo, lang, command), cwd=cwd).returncode
+
+
+def session_lang(session: Path) -> str | None:
+    cur = load_current()
+    if cur and Path(cur["dir"]) == session:
+        return cur["lang"]
+    name = session.parent.name if session.name == "improved" else session.name
+    lang = name.split("-", 1)[0]
+    return lang if lang in languages() else None
 
 
 def session_dir(arg: str | None) -> Path:
@@ -711,7 +851,8 @@ def session_dir(arg: str | None) -> Path:
 
 
 def cmd_run(args) -> int:
-    return nix_run(Path(config()["repo"]), session_dir(args.dir), ["just", "test"])
+    session = session_dir(args.dir)
+    return nix_run(Path(config()["repo"]), session, ["just", "test"], session_lang(session))
 
 
 def test_counts(output: str) -> str:
@@ -749,12 +890,11 @@ def cmd_submit_tests(args) -> int:
     state = digest(session)
     if secret:
         repo = Path(config()["repo"])
-        command = ["nix", "develop", str(repo), "--command", "bash", "-c", "just test", "interview"] if shutil.which("nix") and (repo / "flake.nix").exists() else ["just", "test"]
-        result = subprocess.run(command, cwd=scratch, capture_output=True, text=True)
+        result = subprocess.run(in_shell(repo, lang, ["just", "test"]), cwd=scratch, capture_output=True, text=True)
         code = result.returncode
         summary = test_counts(result.stdout + result.stderr)
     else:
-        code = nix_run(Path(config()["repo"]), scratch, ["just", "test"])
+        code = nix_run(Path(config()["repo"]), scratch, ["just", "test"], lang)
         summary = ""
     shutil.rmtree(scratch, ignore_errors=True)
     if meta:
@@ -846,8 +986,13 @@ def cmd_today(args) -> int:
     if args.json:
         print(json.dumps(plan))
         return 0
+    if not interview_day(at) and not any(p["status"] != "off" for p in plan):
+        print(f"no interviews on {dt.datetime.fromtimestamp(at).strftime('%A')}")
+        return 0
+    tw = max([5] + [len(p["track"]) for p in plan])
+    lw = max([4] + [len(p["lang"]) for p in plan])
     for p in plan:
-        print(f"{p['track']:8} {p['lang']:7} {p['status']:8} {p['problem'] or ''}")
+        print(f"{p['track']:{tw}} {p['lang']:{lw}} {p['status']:8} {p['problem'] or ''}")
     done = sum(1 for p in plan if p["status"] == "done")
     print(f"{done}/{config()['required_per_day']} required done")
     return 0
@@ -927,6 +1072,157 @@ def cmd_log(args) -> int:
     return 0
 
 
+def check_settings(raw: dict, known: dict) -> tuple[dict, list[str]]:
+    errors = []
+    out = {}
+
+    def need(ok: bool, message: str) -> bool:
+        if not ok:
+            errors.append(message)
+        return ok
+
+    days = raw.get("days")
+    if need(isinstance(days, list) and all(d in WEEKDAYS for d in days), "days: a list of Mon, Tue, Wed, Thu, Fri, Sat, Sun"):
+        out["days"] = [d for d in WEEKDAYS if d in days]
+    start = raw.get("start")
+    if need(isinstance(start, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", start) is not None, "start: HH:MM, 24-hour"):
+        out["start"] = start
+    first = raw.get("from", "")
+    valid_first = isinstance(first, str)
+    if valid_first and first:
+        try:
+            dt.date.fromisoformat(first)
+        except ValueError:
+            valid_first = False
+    if need(valid_first, "from: empty or an ISO date such as 2026-11-23"):
+        out["from"] = first
+    for key in ("auto_start", "lockdown"):
+        if need(isinstance(raw.get(key), bool), f"{key}: true or false"):
+            out[key] = raw[key]
+    for key, low, high in (("coding_minutes", 5, 240), ("review_minutes", 0, 60), ("break_minutes", 0, 240), ("snooze_minutes", 1, 240)):
+        value = raw.get(key)
+        if need(isinstance(value, int) and not isinstance(value, bool) and low <= value <= high, f"{key}: a whole number from {low} to {high}"):
+            out[key] = value
+    context = raw.get("context", "")
+    if need(isinstance(context, str) and len(context) <= 4000, "context: text of at most 4000 characters"):
+        out["context"] = context.strip()
+    tracks = raw.get("tracks")
+    names = set()
+    cleaned = []
+    if need(isinstance(tracks, list) and 1 <= len(tracks) <= 12, "tracks: between 1 and 12"):
+        for i, t in enumerate(tracks):
+            label = f"track {i + 1}"
+            if not need(isinstance(t, dict), f"{label}: an object"):
+                continue
+            name = t.get("name")
+            if need(isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,23}", name or "") is not None, f"{label}: name of lowercase letters, digits and dashes, starting with a letter"):
+                need(name not in names, f"{label}: name {name} is used twice")
+                names.add(name)
+                label = f"track {name}"
+            langs = t.get("langs")
+            good_langs = need(isinstance(langs, list) and len(langs) > 0 and all(isinstance(lang, str) for lang in langs), f"{label}: at least one language")
+            if good_langs:
+                unknown = [lang for lang in langs if lang not in known]
+                need(not unknown, f"{label}: unknown languages {', '.join(unknown)}")
+            track_context = t.get("context", "")
+            need(isinstance(track_context, str) and len(track_context) <= 2000, f"{label}: context of at most 2000 characters")
+            need(t.get("difficulty", "easy-medium") in DIFFICULTIES, f"{label}: difficulty one of {', '.join(DIFFICULTIES)}")
+            need(isinstance(t.get("enabled", True), bool), f"{label}: enabled true or false")
+            lengths = {}
+            for key, low, high in (("coding_minutes", 5, 240), ("review_minutes", 0, 60)):
+                value = t.get(key)
+                if need(value is None or (isinstance(value, int) and not isinstance(value, bool) and low <= value <= high),
+                        f"{label}: {key} empty for the default, or a whole number from {low} to {high}"):
+                    lengths[key] = value
+            if good_langs and isinstance(name, str) and isinstance(track_context, str):
+                cleaned.append(track_entry(name, list(dict.fromkeys(langs)), context=track_context.strip(),
+                                           difficulty=t.get("difficulty", "easy-medium"), enabled=t.get("enabled", True), **lengths))
+        enabled = [t for t in cleaned if t["enabled"]]
+        need(len(enabled) > 0, "tracks: at least one enabled")
+        out["tracks"] = cleaned
+        required = raw.get("required_per_day")
+        if need(isinstance(required, int) and not isinstance(required, bool) and 1 <= required <= max(1, len(enabled)),
+                f"required_per_day: from 1 to the number of enabled tracks ({len(enabled)})"):
+            out["required_per_day"] = required
+    return out, errors
+
+
+def read_password() -> str:
+    if sys.stdin.isatty():
+        import getpass
+        return getpass.getpass("password: ")
+    return sys.stdin.readline().rstrip("\n")
+
+
+def cmd_settings(args) -> int:
+    base = base_config()
+    if args.action == "show":
+        cfg = overlay(base_config(), stored_settings(base))
+        doc = {
+            "settings": editable(cfg),
+            "defaults": editable(base),
+            "customised": bool(stored_settings(base)),
+            "languages": sorted(languages(cfg["repo"]).values(), key=lambda m: m["name"].lower()),
+            "weekdays": WEEKDAYS,
+            "difficulties": DIFFICULTIES,
+            "rules": RULES,
+        }
+        if args.json:
+            print(json.dumps(doc))
+        else:
+            s = doc["settings"]
+            print(f"days {' '.join(s['days']) or 'none'} from {s['start']}{', starting ' + s['from'] if s['from'] else ''}; auto start {'on' if s['auto_start'] else 'off'}; lockdown {'on' if s['lockdown'] else 'off'}")
+            print(f"{s['coding_minutes']} min coding, {s['review_minutes']} min review, {s['break_minutes']} min break; {s['required_per_day']} of {len([t for t in s['tracks'] if t['enabled']])} questions required")
+            print("always: " + " ".join(doc["rules"]))
+            print(f"style: {s['context'] or '(none)'}")
+            for t in s["tracks"]:
+                lengths = "".join(f"; {t[k]} min {k.split('_')[0]}" for k in ("coding_minutes", "review_minutes") if t[k] is not None)
+                print(f"track {t['name']}{'' if t['enabled'] else ' (off)'}: {', '.join(t['langs'])}; {t['difficulty']}{lengths}; {t['context'] or '(no extra context)'}")
+            print("settings: " + ("customised in the desktop UI" if doc["customised"] else "nix defaults"))
+        return 0
+    password = lockdown_password(base)
+    if not password:
+        print("no lockdown password is configured, so settings cannot be changed", file=sys.stderr)
+        return 1
+    attempt = read_password()
+    if not hmac.compare_digest(attempt, password):
+        print("wrong password", file=sys.stderr)
+        return 1
+    if args.action == "verify":
+        print("password accepted")
+        return 0
+    if args.action == "reset":
+        SETTINGS.unlink(missing_ok=True)
+        print("settings reset to the nix defaults")
+        return 0
+    try:
+        raw = json.loads(sys.stdin.read())
+    except json.JSONDecodeError as error:
+        print(f"settings are not valid JSON: {error}", file=sys.stderr)
+        return 2
+    merged = {**editable(base), **(raw if isinstance(raw, dict) else {})}
+    settings, errors = check_settings(merged, languages(base["repo"]))
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return 2
+    STATE.mkdir(parents=True, exist_ok=True)
+    tmp = SETTINGS.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"settings": settings, "signature": sign(password, settings)}, indent=2))
+    tmp.replace(SETTINGS)
+    print("settings saved")
+    return 0
+
+
+def cmd_langs(args) -> int:
+    items = sorted(languages().values(), key=lambda m: m["name"].lower())
+    if args.json:
+        print(json.dumps(items))
+        return 0
+    for m in items:
+        print(f"{m['id']:12} {m['name']:12} {m['main']:16} {'scaffold' if m['scaffold'] else 'hand-written'}")
+    return 0
+
+
 def cmd_tutor(args) -> int:
     at = now()
     marker = STATE / "tutor-open.json"
@@ -983,7 +1279,17 @@ def main() -> int:
     p.add_argument("--minutes", type=int)
     p.add_argument("--review-minutes", type=int)
     p.add_argument("--again", action="store_true")
+    p.add_argument("--track", help="count the interview toward this track")
     p.set_defaults(fn=cmd_start)
+
+    p = sub.add_parser("settings", help="show the schedule, tracks and context; changing them needs the lockdown password on the first stdin line")
+    p.add_argument("action", nargs="?", default="show", choices=["show", "verify", "set", "reset"])
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_settings)
+
+    p = sub.add_parser("langs", help="languages with a dev shell and example template in langs/")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_langs)
 
     for name, fn in (("pause", do_pause), ("resume", do_resume), ("toggle", do_toggle), ("done", do_done), ("close", do_close)):
         p = sub.add_parser(name)

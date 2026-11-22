@@ -39,6 +39,7 @@ let
     runtimeInputs = [
       pkgs.coreutils
       pkgs.gnugrep
+      pkgs.jq
       interview
     ];
     runtimeEnv = {
@@ -81,17 +82,34 @@ in
     coding_minutes = 45;
     review_minutes = 15;
     required_per_day = 2;
-    tracks = {
-      ocaml = [ "ocaml" ];
-      systems = [
-        "rust"
-        "c"
-      ];
-      managed = [
-        "csharp"
-        "python"
-      ];
-    };
+    lockdown = true;
+    context = "LeetCode-style: well-known algorithm and data-structure classics, climbing the curriculum topic ladder from arrays and hashing to dynamic programming.";
+    tracks = [
+      {
+        name = "ocaml";
+        langs = [ "ocaml" ];
+        difficulty = "easy-medium";
+        context = "Functional style: immutable data (lists, Map, Set, folds, recursion). At most a quarter of OCaml problems may need mutation.";
+      }
+      {
+        name = "systems";
+        langs = [
+          "rust"
+          "c"
+        ];
+        difficulty = "easy";
+        context = "Beginner in Rust and C: keep problems small and teach the language as it comes up, with beginner notes on ownership and borrowing in Rust and on pointers, lengths and memory in C.";
+      }
+      {
+        name = "managed";
+        langs = [
+          "csharp"
+          "python"
+        ];
+        difficulty = "easy-medium";
+        context = "Idiomatic standard library use: LINQ and collections in C#, built-ins and comprehensions in Python.";
+      }
+    ];
     on_pause = [ (hook "on-pause") ];
     on_resume = [
       lockdown
@@ -217,5 +235,6 @@ in
       }
     ];
     onEngage = [ (hook "on-engage") ];
+    settingsFile = "${config.xdg.stateHome}/interview/settings.json";
   };
 }

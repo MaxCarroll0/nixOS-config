@@ -3,6 +3,8 @@
 import argparse
 import datetime as dt
 import getpass
+import hashlib
+import hmac
 import json
 import os
 import subprocess
@@ -24,8 +26,37 @@ def now() -> dt.datetime:
     return dt.datetime.fromisoformat(forced) if forced else dt.datetime.now()
 
 
+WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def with_settings(profile: dict) -> dict:
+    path = profile.get("settings_file")
+    if not path:
+        return profile
+    try:
+        doc = json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError):
+        return profile
+    settings = doc.get("settings") if isinstance(doc, dict) else None
+    if not isinstance(settings, dict):
+        return profile
+    expected = hmac.new(profile["password"].encode(), json.dumps(settings, sort_keys=True).encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(str(doc.get("signature", "")), expected):
+        return profile
+    out = dict(profile)
+    if isinstance(settings.get("days"), list):
+        out["days"] = [WEEKDAYS.index(d) + 1 for d in settings["days"] if d in WEEKDAYS]
+    if isinstance(settings.get("start"), str):
+        out["start"] = settings["start"]
+    if "from" in settings:
+        out["from"] = settings["from"] or None
+    if settings.get("lockdown") is False:
+        out["days"] = []
+    return out
+
+
 def profiles() -> dict:
-    return json.loads(CONFIG.read_text())
+    return {name: with_settings(profile) for name, profile in json.loads(CONFIG.read_text()).items()}
 
 
 def state_path(name: str) -> Path:
@@ -173,6 +204,24 @@ def cmd_check(args) -> int:
     return 0
 
 
+def due(name: str, profile: dict, at: dt.datetime) -> bool:
+    state = load_state(name)
+    today = at.date().isoformat()
+    if state.get("forced") != today:
+        if not scheduled(profile, at):
+            return False
+        if today in (state.get("override"), state.get("released")):
+            return False
+    return not goal_met(profile)
+
+
+def cmd_engaged(args) -> int:
+    at = now()
+    names = [name for name, profile in sorted(profiles().items()) if due(name, profile, at)]
+    print("\n".join(names))
+    return 0 if names else 1
+
+
 def cmd_status(args) -> int:
     at = now()
     report = {}
@@ -258,6 +307,8 @@ def main() -> int:
     p = sub.add_parser("check")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_check)
+    p = sub.add_parser("engaged")
+    p.set_defaults(fn=cmd_engaged)
     p = sub.add_parser("status")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_status)

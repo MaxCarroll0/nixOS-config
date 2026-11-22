@@ -15,6 +15,7 @@ Item {
         const d = new Date();
         return new Date(d.getFullYear(), d.getMonth(), 1);
     }
+    property bool editing
     property string selected: Practice.log.today || Practice.dateKey(new Date())
     readonly property var selectedDay: Practice.day(selected)
     readonly property var cells: {
@@ -28,7 +29,7 @@ Item {
                 key: Practice.dateKey(d),
                 date: d.getDate(),
                 inMonth: d.getMonth() === month.getMonth(),
-                weekend: d.getDay() === 0 || d.getDay() === 6
+                offDay: !Practice.isInterviewDay(d)
             });
         }
         return out;
@@ -54,7 +55,7 @@ Item {
     readonly property real maxLang: Math.max(1, ...langTotals.map(t => t.coding + t.learning + t.review))
 
     implicitWidth: 1000
-    implicitHeight: layout.implicitHeight
+    implicitHeight: editing ? settingsLoader.implicitHeight : layout.implicitHeight
 
     Component.onCompleted: Practice.refresh()
 
@@ -72,9 +73,22 @@ Item {
         id: opener
     }
 
+    Loader {
+        id: settingsLoader
+
+        anchors.fill: parent
+        active: root.editing
+        visible: active
+
+        sourceComponent: PracticeSettings {
+            onDone: root.editing = false
+        }
+    }
+
     RowLayout {
         id: layout
 
+        visible: !root.editing
         anchors.left: parent.left
         anchors.right: parent.right
         spacing: Tokens.spacing.large
@@ -104,6 +118,12 @@ Item {
                     icon: "chevron_right"
                     type: IconButton.Text
                     onClicked: root.shiftMonth(1)
+                }
+
+                IconButton {
+                    icon: "tune"
+                    type: IconButton.Text
+                    onClicked: root.editing = true
                 }
             }
 
@@ -177,7 +197,7 @@ Item {
                             anchors.top: parent.top
                             anchors.margins: Tokens.padding.small
                             text: cell.modelData.date
-                            color: cell.modelData.weekend ? Colours.palette.m3outline : Colours.palette.m3onSurface
+                            color: cell.modelData.offDay ? Colours.palette.m3outline : Colours.palette.m3onSurface
                             font: Tokens.font.body.small
                         }
 

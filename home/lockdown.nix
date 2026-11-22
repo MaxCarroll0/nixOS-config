@@ -139,6 +139,11 @@ let
           default = "";
           description = "Text shown on the unlock prompt.";
         };
+        settingsFile = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "JSON file signed with the password whose days, start, from and lockdown switch override the profile's own.";
+        };
       };
     }
   );
@@ -163,6 +168,7 @@ let
     release_check = p.releaseCheck;
     on_engage = p.onEngage;
     on_release = p.onRelease;
+    settings_file = p.settingsFile;
     allow = lib.mapAttrs (_: map stripRule) p.allow;
     allow_always = [ { class = "^${promptClass}$"; } ];
   }) enabled;

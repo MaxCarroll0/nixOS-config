@@ -22,6 +22,10 @@ Singleton {
     property string testOutput: ""
     property int testExit: -1
     property string lastError: ""
+    property var settingsDoc: null
+    property string settingsMessage: ""
+    property bool settingsFailed: false
+    property int settingsSaved: 0
 
     readonly property string phase: current?.phase ?? "idle"
     readonly property bool active: phase !== "idle"
@@ -36,20 +40,23 @@ Singleton {
     readonly property bool locked: lockdown !== null
     readonly property bool finishApproved: (phase === "coding" || phase === "paused") && (!!current?.finish_approved || current?.hidden_tests === "pass")
 
-    readonly property var langColours: ({
-            ocaml: "#ee7a37",
-            rust: "#b7410e",
-            c: "#5c8dbc",
-            csharp: "#9b4f96",
-            python: "#ffd343"
-        })
-    readonly property var langNames: ({
-            ocaml: "OCaml",
-            rust: "Rust",
-            c: "C",
-            csharp: "C#",
-            python: "Python"
-        })
+    readonly property var settings: settingsDoc?.settings ?? null
+    readonly property var languages: settingsDoc?.languages ?? []
+    readonly property var interviewDays: settings?.days ?? ["Mon", "Tue", "Thu", "Fri"]
+    readonly property bool settingsBusy: settingsProc.running
+    readonly property var langColours: {
+        const out = {};
+        for (const l of languages)
+            if (l.colour)
+                out[l.id] = l.colour;
+        return out;
+    }
+    readonly property var langNames: {
+        const out = {};
+        for (const l of languages)
+            out[l.id] = l.name;
+        return out;
+    }
 
     function clock(seconds: real): string {
         const s = Math.max(0, Math.round(seconds));
@@ -71,17 +78,22 @@ Singleton {
         return log.days[key] ?? null;
     }
 
+    function isInterviewDay(d: date): bool {
+        const name = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+        const from = settings?.from ?? "";
+        return interviewDays.includes(name) && (!from || dateKey(d) >= from);
+    }
+
     function streak(): int {
         let count = 0;
         const d = new Date();
         if (!(day(dateKey(d))?.completed >= required))
             d.setDate(d.getDate() - 1);
         for (let i = 0; i < 400; i++) {
-            const weekend = d.getDay() === 0 || d.getDay() === 6;
             const done = (day(dateKey(d))?.completed ?? 0) >= required;
             if (done)
                 count++;
-            else if (!weekend)
+            else if (isInterviewDay(d))
                 break;
             d.setDate(d.getDate() - 1);
         }
@@ -139,6 +151,65 @@ Singleton {
     function refresh(): void {
         if (!logProc.running)
             logProc.running = true;
+        if (!settingsShow.running)
+            settingsShow.running = true;
+    }
+
+    function saveSettings(password: string, next: var): void {
+        settingsCall(["set"], `${password}\n${JSON.stringify(next)}`);
+    }
+
+    function resetSettings(password: string): void {
+        settingsCall(["reset"], `${password}\n`);
+    }
+
+    function settingsCall(action: list<string>, input: string): void {
+        if (settingsProc.running)
+            return;
+        settingsMessage = "";
+        settingsFailed = false;
+        settingsProc.input = input;
+        settingsProc.command = ["interview", "settings", ...action];
+        settingsProc.running = true;
+    }
+
+    Process {
+        id: settingsShow
+
+        command: ["interview", "settings", "show", "--json"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                try {
+                    root.settingsDoc = JSON.parse(text);
+                } catch (e) {}
+            }
+        }
+    }
+
+    Process {
+        id: settingsProc
+
+        property string input
+
+        stdinEnabled: true
+        stdout: StdioCollector {
+            id: settingsOut
+        }
+        stderr: StdioCollector {
+            id: settingsErr
+        }
+        onStarted: {
+            write(input);
+            stdinEnabled = false;
+        }
+        onExited: code => {
+            stdinEnabled = true;
+            root.settingsFailed = code !== 0;
+            root.settingsMessage = (code === 0 ? settingsOut.text : settingsErr.text || settingsOut.text).trim();
+            if (code === 0)
+                root.settingsSaved++;
+            root.refresh();
+        }
     }
 
     Process {
