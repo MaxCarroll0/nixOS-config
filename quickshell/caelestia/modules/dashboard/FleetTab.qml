@@ -83,6 +83,13 @@ Item {
         return NaN;
     }
 
+    function hoverAt(x: real, y: real): void {
+        const onMap = map.mapFromItem(root, x, y);
+        const onTimeline = timeline.mapFromItem(root, x, y);
+        map.pointer = map.contains(onMap) ? onMap : null;
+        timeline.pointer = timeline.contains(onTimeline) ? onTimeline : null;
+    }
+
     function setRange(from: real, to: real): void {
         if (isNaN(from) || isNaN(to))
             return;
@@ -197,13 +204,16 @@ Item {
         }
 
         FleetMap {
+            id: map
+
             Layout.fillWidth: true
             Layout.preferredHeight: 360
             fleet: fleetData
 
             FleetLegend {
-                rows: 12
-                entries: [["", "load"], ["outline", "per core"], ["ring", "saturation"], ["cpu", "cpu stall"], ["io", "io stall"], ["memory", "memory stall"], ["", "links"], ["direct", "direct"], ["relayed", "relayed"], ["down", "offline"], ["traffic", "traffic"], ["builds", "builds"]]
+                rows: 15
+                colours: fleetData.colours
+                entries: [["", "load"], ["outline", "load per core"], ["ring", "1 per core"], ["cpu", "cpu stall"], ["io", "io stall"], ["memory", "memory stall"], ["", "links"], ["direct", "direct"], ["relayed", "relayed"], ["down", "unreachable"], ["", "traffic"], ["lane:1000", "1 KB/s"], ["lane:100000", "100 KB/s"], ["lane:10000000", "10 MB/s"], ["builds", "builds"]]
             }
         }
 
@@ -214,7 +224,8 @@ Item {
             FleetLegend {
                 rows: 1
                 flow: Grid.LeftToRight
-                entries: [["barDirect", "direct"], ["barRelayed", "relayed"], ["barDown", "offline"], ["line", "traffic"]]
+                colours: fleetData.colours
+                entries: [["barDirect", "direct"], ["barRelayed", "relayed"], ["barDown", "offline"], ["line", "traffic (log)"]]
             }
 
             Item {

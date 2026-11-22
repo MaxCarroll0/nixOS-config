@@ -11,25 +11,36 @@ Item {
 
     required property FleetModel fleet
     readonly property var slice: fleet.slice
-    readonly property real bloomRadius: 16
-    readonly property real pressureScale: 26
-    property real phase: 0
-    property var hoverEdge: null
+    readonly property var colours: fleet.colours
+    readonly property real legendWidth: 160
+    readonly property real coreRadius: 14
+    readonly property real pressureScale: 22
+    readonly property real pressureClamp: 2
+    readonly property real bloomExtent: coreRadius + pressureScale * pressureClamp
+    readonly property real hostRow: 124
+    readonly property real peerRow: height - 50
+    readonly property real dotSpacing: 26
+    readonly property real dotSpeed: 36
+    property real clock: 0
+    property var pointer: null
+    property var lanes: []
+    property var badges: []
+    readonly property var hovered: pointer ? hit(pointer) : null
 
     readonly property var positions: {
         const out = {};
-        const cx = width / 2;
-        const cy = height * 0.34;
-        const hosts = fleet.hosts.filter(name => name !== "pi");
-        out.pi = Qt.point(cx, cy);
-        hosts.forEach((name, index) => {
-            const angle = Math.PI + index * Math.PI / Math.max(1, hosts.length - 1);
-            out[name] = Qt.point(cx + Math.cos(angle) * width * 0.29, cy + Math.sin(angle) * height * 0.05);
+        const left = root.legendWidth;
+        const span = width - left;
+        const cx = left + span / 2;
+        out.pi = Qt.point(cx, root.hostRow);
+        fleet.hosts.filter(name => name !== "pi").forEach((name, index) => {
+            const side = index % 2 === 0 ? -1 : 1;
+            out[name] = Qt.point(cx + side * (Math.floor(index / 2) + 1) * span * 0.34, root.hostRow);
         });
         const peers = slice.nodes.filter(node => !node.host).sort((a, b) => (a.os + a.name).localeCompare(b.os + b.name));
         peers.forEach((node, index) => {
             const spread = peers.length === 1 ? 0.5 : index / (peers.length - 1);
-            out[node.name] = Qt.point(width * (0.18 + 0.64 * spread), height * (0.86 - 0.06 * Math.sin(Math.PI * spread)));
+            out[node.name] = Qt.point(left + span * (0.24 + 0.52 * spread), root.peerRow);
         });
         return out;
     }
@@ -41,20 +52,27 @@ Item {
         return out;
     }
 
-    function hueOf(name: string): color {
-        const psi = slice.psi[name];
-        if (!psi)
-            return Colours.palette.m3outline;
-        const dominant = psi.memory >= psi.io && psi.memory >= psi.cpu ? "memory" : psi.io >= psi.cpu ? "io" : "cpu";
-        return ({
-                cpu: Colours.palette.m3primary,
-                io: Colours.palette.m3tertiary,
-                memory: Colours.palette.m3error
-            })[dominant];
+    function laneWidth(rate: real): real {
+        return Math.max(1, Math.min(8, 1 + 1.5 * Math.log10(rate / 1000)));
     }
 
-    function strokeFor(rate: real): real {
-        return rate > 0 ? 1 + 1.6 * Math.log10(1 + rate / 1000) : 1;
+    function edgeState(edge: var): string {
+        if (!((root.nodeByName[edge.a]?.up ?? 0) > 0 && (root.nodeByName[edge.b]?.up ?? 0) > 0))
+            return "hidden";
+        if ((edge.online ?? 1) <= 0)
+            return "offline";
+        return isFinite(edge.direct) && edge.direct < 0.5 ? "relayed" : "direct";
+    }
+
+    function clearance(name: string): real {
+        return root.nodeByName[name]?.host ? root.bloomExtent : 16;
+    }
+
+    function segmentDistance(p: var, a: var, b: var): real {
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / Math.max(1, dx * dx + dy * dy)));
+        return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
     }
 
     function curve(edge: var): var {
@@ -65,55 +83,214 @@ Item {
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const length = Math.max(1, Math.hypot(dx, dy));
-        const midX = (a.x + b.x) / 2;
-        const midY = (a.y + b.y) / 2;
-        const crowded = Object.keys(root.positions).some(name => name !== edge.a && name !== edge.b && Math.hypot(root.positions[name].x - midX, root.positions[name].y - midY) < 60);
-        const bend = crowded ? Math.min(140, length * 0.2) : Math.min(40, length * 0.12);
+        let nx = -dy / length;
+        let ny = dx / length;
+        if (ny > 0 || (ny === 0 && nx > 0)) {
+            nx = -nx;
+            ny = -ny;
+        }
+        const blocked = Object.keys(root.positions).some(name => name !== edge.a && name !== edge.b && root.segmentDistance(root.positions[name], a, b) < root.clearance(name));
+        const bend = blocked ? 2 * (root.bloomExtent + 20) : Math.min(30, length * 0.08);
         return {
             a: a,
             b: b,
-            nx: -dy / length,
-            ny: dx / length,
-            control: Qt.point((a.x + b.x) / 2 - dy / length * bend, (a.y + b.y) / 2 + dx / length * bend)
+            c: Qt.point((a.x + b.x) / 2 + nx * bend, (a.y + b.y) / 2 + ny * bend)
         };
     }
 
     function along(shape: var, u: real, side: real): var {
         const v = 1 - u;
-        const x = v * v * shape.a.x + 2 * v * u * shape.control.x + u * u * shape.b.x;
-        const y = v * v * shape.a.y + 2 * v * u * shape.control.y + u * u * shape.b.y;
-        return Qt.point(x + shape.nx * side, y + shape.ny * side);
+        const x = v * v * shape.a.x + 2 * v * u * shape.c.x + u * u * shape.b.x;
+        const y = v * v * shape.a.y + 2 * v * u * shape.c.y + u * u * shape.b.y;
+        if (!side)
+            return Qt.point(x, y);
+        const tx = 2 * v * (shape.c.x - shape.a.x) + 2 * u * (shape.b.x - shape.c.x);
+        const ty = 2 * v * (shape.c.y - shape.a.y) + 2 * u * (shape.b.y - shape.c.y);
+        const length = Math.max(1e-6, Math.hypot(tx, ty));
+        return Qt.point(x - ty / length * side, y + tx / length * side);
     }
 
-    function edgeAt(px: real, py: real): var {
-        let best = null;
-        let bestDistance = 10;
-        for (const edge of slice.edges) {
+    function rebuild(): void {
+        const lanes = [];
+        const badges = [];
+        for (const edge of root.slice.edges) {
             const shape = root.curve(edge);
+            if (!shape || root.edgeState(edge) === "hidden" || root.edgeState(edge) === "offline")
+                continue;
+            for (const [rate, forward] of [[edge.ab, true], [edge.ba, false]]) {
+                if (!(rate >= 100))
+                    continue;
+                const width = root.laneWidth(rate);
+                const side = (forward ? 1 : -1) * (1.5 + width / 2);
+                const clipA = root.nodeByName[edge.a]?.host ? root.coreRadius + 2 : 7;
+                const clipB = root.nodeByName[edge.b]?.host ? root.coreRadius + 2 : 7;
+                let points = [];
+                for (let i = 0; i <= 64; i++) {
+                    const point = root.along(shape, i / 64, side);
+                    if (Math.hypot(point.x - shape.a.x, point.y - shape.a.y) > clipA && Math.hypot(point.x - shape.b.x, point.y - shape.b.y) > clipB)
+                        points.push(point);
+                }
+                if (!forward)
+                    points = points.reverse();
+                const cum = [0];
+                for (let i = 1; i < points.length; i++)
+                    cum.push(cum[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y));
+                const u = forward ? 0.3 : 0.7;
+                const base = root.along(shape, u, side);
+                const out = root.along(shape, u, side + Math.sign(side) * (width / 2 + 6));
+                lanes.push({
+                    edge: edge,
+                    forward: forward,
+                    rate: rate,
+                    width: width,
+                    points: points,
+                    cum: cum,
+                    length: cum[cum.length - 1] ?? 0,
+                    label: out,
+                    normal: Qt.point(out.x - base.x, out.y - base.y)
+                });
+            }
+        }
+        for (const build of root.slice.builds) {
+            const origin = root.positions[build.origin];
+            if (!origin)
+                continue;
+            const local = build.origin === build.builder;
+            const text = `⚙ ${build.count}`;
+            const width = text.length * 6.5 + 12;
+            if (local) {
+                const reach = root.bloomExtent * 0.78;
+                badges.push({
+                    build: build,
+                    text: text,
+                    width: width,
+                    at: Qt.point(origin.x + reach, origin.y - reach)
+                });
+                continue;
+            }
+            const edge = root.slice.edges.find(item => (item.a === build.origin && item.b === build.builder) || (item.b === build.origin && item.a === build.builder));
+            const shape = edge ? root.curve(edge) : null;
             if (!shape)
                 continue;
-            for (let u = 0.1; u <= 0.9; u += 0.05) {
+            const forward = edge.a === build.origin;
+            const at = root.along(shape, 0.5, 0);
+            const ahead = root.along(shape, forward ? 0.5 + 0.06 : 0.5 - 0.06, 0);
+            badges.push({
+                build: build,
+                text: text,
+                width: width,
+                at: at,
+                angle: Math.atan2(ahead.y - at.y, ahead.x - at.x)
+            });
+        }
+        root.lanes = lanes;
+        root.badges = badges;
+    }
+
+    function hit(p: var): var {
+        for (const badge of root.badges)
+            if (Math.abs(p.x - badge.at.x) <= badge.width / 2 + 2 && Math.abs(p.y - badge.at.y) <= 10)
+                return {
+                    kind: "build",
+                    item: badge.build
+                };
+        for (const node of root.slice.nodes) {
+            const centre = root.positions[node.name];
+            if (centre && Math.hypot(p.x - centre.x, p.y - centre.y) <= (node.host ? root.coreRadius + 12 : 10))
+                return {
+                    kind: "node",
+                    item: node
+                };
+        }
+        let best = null;
+        let bestDistance = 9;
+        for (const edge of root.slice.edges) {
+            const shape = root.curve(edge);
+            if (!shape || root.edgeState(edge) === "hidden")
+                continue;
+            for (let u = 0.04; u <= 0.96; u += 0.02) {
                 const point = root.along(shape, u, 0);
-                const distance = Math.hypot(point.x - px, point.y - py);
+                const distance = Math.hypot(point.x - p.x, point.y - p.y);
                 if (distance < bestDistance) {
                     bestDistance = distance;
                     best = edge;
                 }
             }
         }
-        return best;
+        return best ? {
+            kind: "edge",
+            item: best
+        } : null;
     }
 
-    onSliceChanged: canvas.requestPaint()
-    onPositionsChanged: canvas.requestPaint()
-    onPhaseChanged: flow.requestPaint()
-    onHoverEdgeChanged: canvas.requestPaint()
+    function describe(hovered: var): var {
+        if (!hovered)
+            return [];
+        const fleet = root.fleet;
+        const window = `last ${fleet.span(fleet.smoothing)}`;
+        const item = hovered.item;
+        if (hovered.kind === "build")
+            return item.origin === item.builder ? [[`${item.origin}: ${item.count} local builds`, ""], [window, ""]] : [[`${item.origin} → ${item.builder}`, ""], [`${item.count} builds sent to ${item.builder}`, ""], [window, ""]];
+        if (hovered.kind === "edge") {
+            const state = root.edgeState(item);
+            const path = state === "offline" ? "unreachable" : state === "relayed" ? `relayed via DERP ${item.relay || "?"}` : "direct";
+            return [[`${fleet.displayName(item.a)} ⇄ ${fleet.displayName(item.b)}`, ""], [path, root.colours[state]], [`${fleet.displayName(item.a)} → ${fleet.displayName(item.b)}  ${fleet.rate(item.ab)}`, ""], [`${fleet.displayName(item.b)} → ${fleet.displayName(item.a)}  ${fleet.rate(item.ba)}`, ""], [window, ""]];
+        }
+        const name = item.name;
+        let sent = 0;
+        let received = 0;
+        for (const edge of root.slice.edges) {
+            if (edge.a === name) {
+                sent += edge.ab;
+                received += edge.ba;
+            } else if (edge.b === name) {
+                sent += edge.ba;
+                received += edge.ab;
+            }
+        }
+        const lines = [[fleet.displayName(name), ""]];
+        if (!item.host && item.os)
+            lines.push([item.os, ""]);
+        lines.push([item.up > 0 ? `online ${fleet.percent(item.up)} of ${window}` : `offline for ${window}`, item.up > 0 ? "" : root.colours.offline]);
+        if (item.host) {
+            const values = (root.slice.pressure[name] ?? []).map(sample => sample.value).filter(isFinite);
+            if (values.length) {
+                const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+                lines.push([`load per core  avg ${mean.toFixed(2)}, peak ${Math.max(...values).toFixed(2)}`, ""]);
+            }
+            const psi = root.slice.psi[name];
+            if (psi) {
+                lines.push([`cpu stall ${fleet.percent(psi.cpu)}`, root.colours.cpu]);
+                lines.push([`io stall ${fleet.percent(psi.io)}`, root.colours.io]);
+                lines.push([`memory stall ${fleet.percent(psi.memory)}`, root.colours.memory]);
+            }
+        }
+        lines.push([`sends ${fleet.rate(sent)}, receives ${fleet.rate(received)}`, ""]);
+        return lines;
+    }
+
+    onSliceChanged: Qt.callLater(rebuild)
+    onPositionsChanged: Qt.callLater(rebuild)
+    onLanesChanged: {
+        canvas.requestPaint();
+        flow.requestPaint();
+    }
+    onClockChanged: flow.requestPaint()
+    onHoveredChanged: canvas.requestPaint()
+
+    Connections {
+        target: Colours
+        function onPaletteChanged(): void {
+            canvas.requestPaint();
+            flow.requestPaint();
+        }
+    }
 
     Timer {
         interval: 33
         repeat: true
-        running: root.visible && root.slice.edges.some(edge => edge.ab > 0 || edge.ba > 0)
-        onTriggered: root.phase = (root.phase + 0.006) % 1
+        running: root.visible && root.lanes.length > 0
+        onTriggered: root.clock += interval / 1000
     }
 
     Canvas {
@@ -123,73 +300,71 @@ Item {
         renderStrategy: Canvas.Cooperative
 
         function drawEdge(ctx: var, edge: var): void {
+            const state = root.edgeState(edge);
             const shape = root.curve(edge);
-            if (!shape)
+            if (!shape || state === "hidden")
                 return;
-            const online = (edge.online ?? 1) > 0 && (root.nodeByName[edge.a]?.up ?? 0) > 0 && (root.nodeByName[edge.b]?.up ?? 0) > 0;
-            const relayed = isFinite(edge.direct) && edge.direct < 0.5;
-            const hovered = root.hoverEdge === edge;
+            const hovered = root.hovered?.kind === "edge" && root.hovered.item === edge;
             ctx.save();
             ctx.beginPath();
             ctx.moveTo(shape.a.x, shape.a.y);
-            ctx.quadraticCurveTo(shape.control.x, shape.control.y, shape.b.x, shape.b.y);
-            ctx.lineWidth = root.strokeFor(Math.max(edge.ab, edge.ba));
-            ctx.strokeStyle = online ? Qt.alpha(Colours.palette.m3onSurfaceVariant, hovered ? 0.8 : 0.45) : Qt.alpha(Colours.palette.m3outline, 0.25);
-            ctx.setLineDash(!online ? [1, 5] : relayed ? [6, 4] : []);
+            ctx.quadraticCurveTo(shape.c.x, shape.c.y, shape.b.x, shape.b.y);
+            ctx.lineWidth = hovered ? 3 : 1.5;
+            ctx.lineCap = "round";
+            ctx.strokeStyle = root.colours[state];
+            ctx.setLineDash(state === "offline" ? [0.5, 4] : state === "relayed" ? [6, 4] : []);
             ctx.stroke();
             ctx.restore();
-            if (relayed && online && edge.relay) {
-                const mid = root.along(shape, 0.5, 0);
-                ctx.fillStyle = Colours.palette.m3surfaceContainerHigh;
-                ctx.strokeStyle = Colours.palette.m3outline;
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                ctx.arc(mid.x, mid.y, 9, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                ctx.fillStyle = Colours.palette.m3onSurfaceVariant;
-                ctx.font = "8px sans-serif";
-                ctx.textAlign = "center";
+        }
+
+        function drawLane(ctx: var, lane: var): void {
+            if (lane.points.length < 2)
+                return;
+            const hovered = root.hovered?.kind === "edge" && root.hovered.item === lane.edge;
+            ctx.beginPath();
+            ctx.moveTo(lane.points[0].x, lane.points[0].y);
+            for (const point of lane.points.slice(1))
+                ctx.lineTo(point.x, point.y);
+            ctx.lineWidth = lane.width;
+            ctx.lineCap = "butt";
+            ctx.strokeStyle = Qt.alpha(Colours.palette.m3onSurfaceVariant, hovered ? 0.6 : 0.38);
+            ctx.stroke();
+        }
+
+        function drawRate(ctx: var, lane: var): void {
+            if (lane.rate < 1000)
+                return;
+            const n = lane.normal;
+            const length = Math.max(1e-6, Math.hypot(n.x, n.y));
+            ctx.font = "10px sans-serif";
+            if (Math.abs(n.x / length) > 0.6) {
+                ctx.textAlign = n.x > 0 ? "left" : "right";
                 ctx.textBaseline = "middle";
-                ctx.fillText(edge.relay, mid.x, mid.y);
+            } else {
+                ctx.textAlign = "center";
+                ctx.textBaseline = n.y > 0 ? "top" : "bottom";
             }
+            const text = root.fleet.rate(lane.rate);
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = Colours.palette.m3surfaceContainer;
+            ctx.strokeText(text, lane.label.x, lane.label.y);
+            ctx.fillStyle = Colours.palette.m3onSurfaceVariant;
+            ctx.fillText(text, lane.label.x, lane.label.y);
         }
 
         function drawBloom(ctx: var, name: string, centre: var): void {
-            const r0 = root.bloomRadius;
-            const tint = root.hueOf(name);
+            const r0 = root.coreRadius;
             const psi = root.slice.psi[name] ?? {
                 cpu: 0,
                 io: 0,
                 memory: 0
             };
-            const lobes = [["cpu", -Math.PI / 2, Colours.palette.m3primary], ["io", Math.PI / 6, Colours.palette.m3tertiary], ["memory", 5 * Math.PI / 6, Colours.palette.m3error]];
-            for (const [key, angle, colour] of lobes) {
-                const length = r0 + 46 * Math.sqrt(Math.min(1, psi[key] ?? 0));
-                const spread = 0.42;
-                ctx.beginPath();
-                ctx.moveTo(centre.x, centre.y);
-                ctx.quadraticCurveTo(centre.x + Math.cos(angle - spread) * length * 1.15, centre.y + Math.sin(angle - spread) * length * 1.15, centre.x + Math.cos(angle) * length, centre.y + Math.sin(angle) * length);
-                ctx.quadraticCurveTo(centre.x + Math.cos(angle + spread) * length * 1.15, centre.y + Math.sin(angle + spread) * length * 1.15, centre.x, centre.y);
-                ctx.fillStyle = Qt.alpha(colour, 0.22);
-                ctx.fill();
-            }
-
-            ctx.save();
-            ctx.setLineDash([2, 3]);
-            ctx.strokeStyle = Qt.alpha(Colours.palette.m3outline, 0.6);
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.arc(centre.x, centre.y, r0 + root.pressureScale, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.restore();
-
             const samples = (root.slice.pressure[name] ?? []).filter(sample => isFinite(sample.value));
             if (samples.length >= 2) {
                 const [from, to] = [root.slice.from, root.slice.to];
                 const points = samples.map(sample => {
                     const angle = -Math.PI / 2 + 2 * Math.PI * (sample.at - from) / Math.max(1, to - from);
-                    const radius = r0 + root.pressureScale * Math.min(2.2, sample.value);
+                    const radius = r0 + root.pressureScale * Math.min(root.pressureClamp, sample.value);
                     return Qt.point(centre.x + Math.cos(angle) * radius, centre.y + Math.sin(angle) * radius);
                 });
                 const mid = (a, b) => Qt.point((a.x + b.x) / 2, (a.y + b.y) / 2);
@@ -202,11 +377,34 @@ Item {
                     ctx.quadraticCurveTo(point.x, point.y, next.x, next.y);
                 });
                 ctx.closePath();
-                ctx.fillStyle = Qt.alpha(tint, 0.18);
+                ctx.fillStyle = Qt.alpha(Colours.palette.m3onSurface, 0.07);
                 ctx.fill();
-                ctx.strokeStyle = tint;
+                ctx.strokeStyle = Qt.alpha(Colours.palette.m3onSurface, 0.75);
                 ctx.lineWidth = 1.5;
                 ctx.stroke();
+            }
+
+            ctx.save();
+            ctx.setLineDash([2, 3]);
+            ctx.strokeStyle = Qt.alpha(Colours.palette.m3onSurfaceVariant, 0.6);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(centre.x, centre.y, r0 + root.pressureScale, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+
+            for (const [key, angle] of [["cpu", -Math.PI / 2], ["io", Math.PI / 6], ["memory", 5 * Math.PI / 6]]) {
+                const ratio = psi[key] ?? 0;
+                if (!(ratio > 0.001))
+                    continue;
+                const length = r0 + 40 * Math.sqrt(Math.min(1, ratio));
+                const spread = 0.4;
+                ctx.beginPath();
+                ctx.moveTo(centre.x, centre.y);
+                ctx.quadraticCurveTo(centre.x + Math.cos(angle - spread) * length * 1.15, centre.y + Math.sin(angle - spread) * length * 1.15, centre.x + Math.cos(angle) * length, centre.y + Math.sin(angle) * length);
+                ctx.quadraticCurveTo(centre.x + Math.cos(angle + spread) * length * 1.15, centre.y + Math.sin(angle + spread) * length * 1.15, centre.x, centre.y);
+                ctx.fillStyle = Qt.alpha(root.colours[key], 0.7);
+                ctx.fill();
             }
         }
 
@@ -216,64 +414,69 @@ Item {
                 return;
             if (node.host)
                 canvas.drawBloom(ctx, node.name, centre);
-            const radius = node.host ? 7 : 5;
+            const radius = node.host ? 5.5 : 4.5;
             ctx.beginPath();
             ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2);
-            ctx.fillStyle = node.up > 0 ? (node.host ? Colours.palette.m3onSurface : Colours.palette.m3secondary) : Colours.palette.m3surfaceContainerHigh;
-            ctx.fill();
-            ctx.strokeStyle = node.up > 0 && node.up < 0.99 ? Colours.palette.m3error : Colours.palette.m3outline;
-            ctx.lineWidth = node.up > 0 && node.up < 0.99 ? 2 : 1;
+            if (node.up > 0) {
+                ctx.fillStyle = node.host ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant;
+                ctx.fill();
+            }
+            const partial = node.up > 0 && node.up < 0.99;
+            ctx.strokeStyle = node.up > 0 && !partial ? Colours.palette.m3surfaceContainer : root.colours.offline;
+            ctx.lineWidth = partial || node.up <= 0 ? 2 : 1.5;
             ctx.stroke();
+            if (root.hovered?.kind === "node" && root.hovered.item === node) {
+                ctx.beginPath();
+                ctx.arc(centre.x, centre.y, radius + 4, 0, Math.PI * 2);
+                ctx.strokeStyle = Colours.palette.m3onSurface;
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+            }
         }
 
-        function drawBuild(ctx: var, build: var): void {
-            const origin = root.positions[build.origin];
-            if (!origin)
-                return;
-            const text = build.origin === build.builder ? `⚙ ${build.count} local` : `⚙ ${build.count}`;
-            let at = Qt.point(origin.x, origin.y - root.bloomRadius - root.pressureScale - 12);
-            if (build.origin !== build.builder) {
-                const edge = root.slice.edges.find(item => (item.a === build.origin && item.b === build.builder) || (item.b === build.origin && item.a === build.builder));
-                const shape = edge ? root.curve(edge) : null;
-                if (!shape)
-                    return;
-                const forward = edge.a === build.origin;
-                at = root.along(shape, 0.5, 0);
-                const ahead = root.along(shape, forward ? 0.57 : 0.43, 0);
-                const angle = Math.atan2(ahead.y - at.y, ahead.x - at.x);
+        function drawBadge(ctx: var, badge: var): void {
+            const at = badge.at;
+            const hovered = root.hovered?.kind === "build" && root.hovered.item === badge.build;
+            if (badge.angle !== undefined) {
                 ctx.save();
-                ctx.translate(ahead.x, ahead.y);
-                ctx.rotate(angle);
-                ctx.fillStyle = Colours.palette.m3tertiary;
+                ctx.translate(at.x + Math.cos(badge.angle) * (badge.width / 2 + 7), at.y + Math.sin(badge.angle) * (badge.width / 2 + 7));
+                ctx.rotate(badge.angle);
+                ctx.fillStyle = Colours.palette.m3onSurface;
                 ctx.beginPath();
                 ctx.moveTo(5, 0);
-                ctx.lineTo(-3, -4);
-                ctx.lineTo(-3, 4);
+                ctx.lineTo(-3, -4.5);
+                ctx.lineTo(-3, 4.5);
                 ctx.closePath();
                 ctx.fill();
                 ctx.restore();
             }
-            ctx.font = "bold 10px sans-serif";
-            const width = ctx.measureText(text).width + 10;
-            ctx.fillStyle = Colours.palette.m3tertiaryContainer;
+            ctx.fillStyle = Colours.palette.m3surfaceContainerHighest;
+            ctx.strokeStyle = hovered ? Colours.palette.m3onSurface : Colours.palette.m3outline;
+            ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.roundedRect(at.x - width / 2, at.y - 8, width, 16, 8, 8);
+            ctx.roundedRect(at.x - badge.width / 2, at.y - 8, badge.width, 16, 8, 8);
             ctx.fill();
-            ctx.fillStyle = Colours.palette.m3onTertiaryContainer;
+            ctx.stroke();
+            ctx.font = "bold 10px sans-serif";
+            ctx.fillStyle = Colours.palette.m3onSurface;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
-            ctx.fillText(text, at.x, at.y);
+            ctx.fillText(badge.text, at.x, at.y);
         }
 
         onPaint: {
             const ctx = getContext("2d");
             ctx.reset();
+            for (const lane of root.lanes)
+                canvas.drawLane(ctx, lane);
             for (const edge of root.slice.edges)
                 canvas.drawEdge(ctx, edge);
             for (const node of root.slice.nodes)
                 canvas.drawNode(ctx, node);
-            for (const build of root.slice.builds)
-                canvas.drawBuild(ctx, build);
+            for (const lane of root.lanes)
+                canvas.drawRate(ctx, lane);
+            for (const badge of root.badges)
+                canvas.drawBadge(ctx, badge);
         }
     }
 
@@ -283,32 +486,32 @@ Item {
         anchors.fill: parent
         renderStrategy: Canvas.Cooperative
 
-        function drawParticles(ctx: var, shape: var, rate: real, direction: int, tint: color): void {
-            if (!(rate > 50))
-                return;
-            const count = Math.min(14, Math.ceil(2 * Math.log10(1 + rate / 100)));
-            const speed = 0.6 + Math.log10(1 + rate / 1000) * 0.4;
-            ctx.fillStyle = tint;
-            for (let i = 0; i < count; i++) {
-                const progress = (root.phase * speed + i / count) % 1;
-                const point = root.along(shape, direction > 0 ? progress : 1 - progress, 3 * direction);
-                ctx.globalAlpha = Math.sin(progress * Math.PI);
-                ctx.beginPath();
-                ctx.arc(point.x, point.y, 1.8, 0, Math.PI * 2);
-                ctx.fill();
-            }
-            ctx.globalAlpha = 1;
+        function pointAt(lane: var, s: real): var {
+            let i = 1;
+            while (i < lane.cum.length - 1 && lane.cum[i] < s)
+                i++;
+            const span = Math.max(1e-6, lane.cum[i] - lane.cum[i - 1]);
+            const t = Math.max(0, Math.min(1, (s - lane.cum[i - 1]) / span));
+            const a = lane.points[i - 1];
+            const b = lane.points[i];
+            return Qt.point(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
         }
 
         onPaint: {
             const ctx = getContext("2d");
             ctx.reset();
-            for (const edge of root.slice.edges) {
-                const shape = root.curve(edge);
-                if (!shape)
+            ctx.fillStyle = Colours.palette.m3onSurface;
+            const offset = (root.clock * root.dotSpeed) % root.dotSpacing;
+            for (const lane of root.lanes) {
+                if (lane.points.length < 2)
                     continue;
-                flow.drawParticles(ctx, shape, edge.ab, 1, root.hueOf(edge.a));
-                flow.drawParticles(ctx, shape, edge.ba, -1, root.hueOf(edge.b));
+                const radius = Math.max(1.6, lane.width / 2 + 0.4);
+                for (let s = offset; s < lane.length; s += root.dotSpacing) {
+                    const point = flow.pointAt(lane, s);
+                    ctx.beginPath();
+                    ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                }
             }
         }
     }
@@ -317,8 +520,8 @@ Item {
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.NoButton
-        onPositionChanged: mouse => root.hoverEdge = root.edgeAt(mouse.x, mouse.y)
-        onExited: root.hoverEdge = null
+        onPositionChanged: mouse => root.pointer = Qt.point(mouse.x, mouse.y)
+        onExited: root.pointer = null
         onWheel: wheel => {
             const steps = [60, 300, 600, 1800, 3600, 3 * 3600, 6 * 3600];
             const index = steps.findIndex(step => step >= root.fleet.smoothing);
@@ -327,85 +530,78 @@ Item {
         }
     }
 
-    StyledRect {
-        visible: root.hoverEdge !== null
-        readonly property var mid: root.hoverEdge && root.curve(root.hoverEdge) ? root.along(root.curve(root.hoverEdge), 0.5, 0) : Qt.point(0, 0)
-        x: Math.min(root.width - width, mid.x + 12)
-        y: mid.y + 12
-        implicitWidth: edgeText.implicitWidth + Tokens.padding.medium * 2
-        implicitHeight: edgeText.implicitHeight + Tokens.padding.small * 2
-        radius: Tokens.rounding.small
-        color: Colours.palette.m3surfaceContainerHighest
-
-        StyledText {
-            id: edgeText
-
-            anchors.centerIn: parent
-            font: Tokens.font.body.small
-            text: {
-                const edge = root.hoverEdge;
-                if (!edge)
-                    return "";
-                const path = !isFinite(edge.direct) ? "" : edge.direct >= 0.5 ? "direct" : `relayed via ${edge.relay || "DERP"}`;
-                return `${edge.a} → ${edge.b}  ${root.fleet.rate(edge.ab)}\n${edge.b} → ${edge.a}  ${root.fleet.rate(edge.ba)}${path ? "\n" + path : ""}`;
-            }
-        }
-    }
-
     Repeater {
         model: root.slice.nodes
 
-        delegate: ColumnLayout {
+        delegate: Rectangle {
             id: label
 
             required property var modelData
             readonly property var centre: root.positions[modelData.name] ?? Qt.point(-1000, -1000)
             readonly property var deploy: root.slice.deploys[modelData.name] ?? null
-            readonly property real offset: modelData.host ? root.bloomRadius + root.pressureScale + 4 : 10
 
             x: centre.x - width / 2
-            y: modelData.name === "pi" ? centre.y + offset : modelData.host ? centre.y + offset : centre.y + 8
-            spacing: 0
+            y: modelData.host ? centre.y + root.bloomExtent + 2 : centre.y + 8
+            implicitWidth: column.implicitWidth + 12
+            implicitHeight: column.implicitHeight + 4
+            radius: 6
+            color: Qt.alpha(Colours.palette.m3surfaceContainer, 0.9)
 
-            StyledText {
-                Layout.alignment: Qt.AlignHCenter
-                text: root.fleet.displayName(label.modelData.name)
-                font: label.modelData.host ? Tokens.font.title.small : Tokens.font.body.small
-                color: label.modelData.up > 0 ? Colours.palette.m3onSurface : Colours.palette.m3outline
-            }
+            ColumnLayout {
+                id: column
 
-            StyledText {
-                Layout.alignment: Qt.AlignHCenter
-                visible: label.deploy !== null
-                readonly property string url: root.fleet.deployUrl(label.deploy)
-                text: {
-                    const deploy = label.deploy;
-                    if (!deploy)
-                        return "";
-                    const rev = deploy.rev.slice(0, 7);
-                    if (!deploy.recorded)
-                        return rev;
-                    return deploy.snapshot ? `snapshot ${rev} on ${deploy.branch}` : `${deploy.branch} ${rev}`;
+                anchors.centerIn: parent
+                spacing: 0
+
+                StyledText {
+                    Layout.alignment: Qt.AlignHCenter
+                    text: root.fleet.displayName(label.modelData.name)
+                    font: label.modelData.host ? Tokens.font.title.small : Tokens.font.body.small
+                    color: label.modelData.up > 0 ? Colours.palette.m3onSurface : Colours.palette.m3outline
                 }
-                font: Tokens.font.body.small
-                color: url ? Colours.palette.m3primary : Colours.palette.m3onSurfaceVariant
 
-                MouseArea {
-                    anchors.fill: parent
-                    enabled: parent.url !== ""
-                    cursorShape: Qt.PointingHandCursor
-                    hoverEnabled: true
-                    onClicked: Qt.openUrlExternally(parent.url)
+                StyledText {
+                    Layout.alignment: Qt.AlignHCenter
+                    visible: label.deploy !== null
+                    readonly property string url: root.fleet.deployUrl(label.deploy)
+                    text: {
+                        const deploy = label.deploy;
+                        if (!deploy)
+                            return "";
+                        const rev = deploy.rev.slice(0, 7);
+                        if (!deploy.recorded)
+                            return rev;
+                        return deploy.snapshot ? `snapshot ${rev} on ${deploy.branch}` : `${deploy.branch} ${rev}`;
+                    }
+                    font: Tokens.font.body.small
+                    color: url ? Colours.palette.m3primary : Colours.palette.m3onSurfaceVariant
+
+                    MouseArea {
+                        id: linkArea
+
+                        anchors.fill: parent
+                        enabled: parent.url !== ""
+                        cursorShape: Qt.PointingHandCursor
+                        hoverEnabled: true
+                        onClicked: Qt.openUrlExternally(parent.url)
+                    }
                 }
-            }
 
-            StyledText {
-                Layout.alignment: Qt.AlignHCenter
-                visible: label.deploy !== null && isFinite(label.deploy.at)
-                text: label.deploy ? `deployed ${root.fleet.when(label.deploy.at)}` : ""
-                font: Tokens.font.label.small
-                color: Colours.palette.m3onSurfaceVariant
+                StyledText {
+                    Layout.alignment: Qt.AlignHCenter
+                    visible: label.deploy !== null && isFinite(label.deploy.at)
+                    text: label.deploy ? `deployed ${root.fleet.when(label.deploy.at)}` : ""
+                    font: Tokens.font.label.small
+                    color: Colours.palette.m3onSurfaceVariant
+                }
             }
         }
+    }
+
+    FleetTooltip {
+        at: root.pointer ?? Qt.point(0, 0)
+        boundsWidth: root.width
+        boundsHeight: root.height
+        lines: root.describe(root.hovered)
     }
 }

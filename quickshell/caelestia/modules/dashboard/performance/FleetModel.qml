@@ -1,4 +1,5 @@
 import QtQuick
+import qs.services
 
 Item {
     id: root
@@ -8,6 +9,14 @@ Item {
     property string repo: "https://github.com/MaxCarroll0/nixOS-config"
     readonly property real liveRetention: 7 * 86400 - 3600
     readonly property var hosts: ["pi", "laptop", "desktopnew"]
+    readonly property var colours: ({
+            direct: "#199e70",
+            relayed: "#9085e9",
+            offline: "#e66767",
+            cpu: Colours.light ? "#2a78d6" : "#3987e5",
+            io: "#d55181",
+            memory: "#c98500"
+        })
 
     property var range: [Date.now() / 1000 - 86400, Date.now() / 1000]
     property var anchor: null
@@ -202,10 +211,19 @@ Item {
         return out;
     }
 
+    function canonical(name: string): string {
+        return /@github-/.test(name ?? "") ? "github runners" : name;
+    }
+
+    function merge(into: var, values: var, combine: var): var {
+        return into.map((value, index) => !isFinite(value) ? values[index] : !isFinite(values[index]) ? value : combine(value, values[index]));
+    }
+
     function shapeRows(results: var, from: real, to: real, step: real): var {
         const count = Math.floor((to - from) / step) + 1;
         const byName = {};
-        const row = (name, os) => {
+        const row = (raw, os) => {
+            const name = root.canonical(raw);
             if (!byName[name])
                 byName[name] = {
                     name: name,
@@ -220,17 +238,18 @@ Item {
         for (const result of results.up.filter(result => root.hosts.includes(result.metric.instance)))
             row(result.metric.instance, "linux").online = root.valuesOf(result, from, step, count);
         for (const result of results.online) {
-            const name = result.metric.peer;
-            const existing = byName[name];
-            const values = root.valuesOf(result, from, step, count);
-            const target = row(name, result.metric.peer_os ?? "");
-            if (!existing || !existing.host)
-                target.online = values;
+            const target = row(result.metric.peer, result.metric.peer_os ?? "");
+            if (!target.host)
+                target.online = root.merge(target.online, root.valuesOf(result, from, step, count), Math.max);
         }
-        for (const result of results.direct)
-            row(result.metric.peer, "").direct = root.valuesOf(result, from, step, count);
-        for (const result of results.traffic)
-            row(result.metric.peer, "").traffic = root.valuesOf(result, from, step, count);
+        for (const result of results.direct) {
+            const target = row(result.metric.peer, "");
+            target.direct = root.merge(target.direct, root.valuesOf(result, from, step, count), Math.max);
+        }
+        for (const result of results.traffic) {
+            const target = row(result.metric.peer, "");
+            target.traffic = root.merge(target.traffic, root.valuesOf(result, from, step, count), (a, b) => a + b);
+        }
         const order = name => {
             const host = root.hosts.indexOf(name);
             return host >= 0 ? `0${host}` : `1${byName[name].os}${name}`;
@@ -278,7 +297,8 @@ Item {
 
     function shapeSlice(results: var, from: real, to: real): var {
         const nodes = {};
-        const node = (name, os) => {
+        const node = (raw, os) => {
+            const name = root.canonical(raw);
             if (!nodes[name])
                 nodes[name] = {
                     name: name,
@@ -301,8 +321,8 @@ Item {
         }
 
         const edges = {};
-        const edge = (a, b) => {
-            const key = [a, b].sort().join("\u001f");
+        const edge = (rawA, rawB) => {
+            const key = [root.canonical(rawA), root.canonical(rawB)].sort().join("\u001f");
             if (!edges[key]) {
                 const [first, second] = key.split("\u001f");
                 edges[key] = {
@@ -320,7 +340,7 @@ Item {
             if (!isFinite(rate))
                 return;
             const item = edge(from, to);
-            if (item.a === from)
+            if (item.a === root.canonical(from))
                 item.ab = Math.max(item.ab, rate);
             else
                 item.ba = Math.max(item.ba, rate);
@@ -456,6 +476,21 @@ Item {
             unit++;
         }
         return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+    }
+
+    function span(seconds: real): string {
+        if (seconds >= 86400)
+            return `${+(seconds / 86400).toFixed(1)}d`;
+        if (seconds >= 3600)
+            return `${+(seconds / 3600).toFixed(1)}h`;
+        return `${Math.round(seconds / 60)}m`;
+    }
+
+    function percent(ratio: real): string {
+        if (!isFinite(ratio))
+            return "no data";
+        const value = ratio * 100;
+        return `${value < 10 ? value.toFixed(1) : Math.round(value)}%`;
     }
 
     function axisLabel(seconds: real, span: real): string {

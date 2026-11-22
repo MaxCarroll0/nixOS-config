@@ -18,7 +18,43 @@ Item {
     readonly property real windowFrom: fleet.at - fleet.smoothing
     readonly property real windowTo: fleet.at
 
+    property var pointer: null
+    readonly property var hovered: {
+        if (!pointer || pointer.x < plotLeft || pointer.x > plotLeft + plotWidth)
+            return null;
+        const row = fleet.rows[Math.floor(pointer.y / rowHeight)];
+        if (!row)
+            return null;
+        const at = atOf(pointer.x);
+        const index = Math.round((at - row.from) / row.step);
+        return {
+            row: row,
+            at: row.from + index * row.step,
+            online: row.online[index] ?? NaN,
+            direct: row.direct[index] ?? NaN,
+            traffic: row.traffic[index] ?? NaN
+        };
+    }
+
     implicitHeight: Math.max(1, fleet.rows.length) * rowHeight + axisHeight
+
+    function describe(hovered: var): var {
+        if (!hovered)
+            return [];
+        const fleet = root.fleet;
+        const lines = [[fleet.displayName(hovered.row.name), ""], [`${fleet.stamp(hovered.at)}, ${fleet.span(hovered.row.step)} bin`, ""]];
+        if (!isFinite(hovered.online))
+            lines.push(["no data", ""]);
+        else if (hovered.online < 0.05)
+            lines.push(["offline", fleet.colours.offline]);
+        else {
+            const relayed = isFinite(hovered.direct) && hovered.direct < 0.5;
+            lines.push([`${relayed ? "relayed" : "direct"}, online ${fleet.percent(hovered.online)}`, relayed ? fleet.colours.relayed : fleet.colours.direct]);
+        }
+        if (isFinite(hovered.traffic))
+            lines.push([`traffic ${fleet.rate(hovered.traffic)}`, ""]);
+        return lines;
+    }
 
     function xOf(at: real): real {
         const [from, to] = root.span;
@@ -80,13 +116,10 @@ Item {
         onSelectToChanged: requestPaint()
 
         function stateColour(online: real, direct: real): var {
-            if (!isFinite(online))
-                return null;
+            const colours = root.fleet.colours;
             if (online < 0.05)
-                return Qt.alpha(Colours.palette.m3error, 0.55);
-            if (isFinite(direct) && direct < 0.5)
-                return Qt.alpha(Colours.palette.m3tertiary, 0.35 + 0.5 * online);
-            return Qt.alpha(Colours.palette.m3primary, 0.25 + 0.5 * online);
+                return colours.offline;
+            return Qt.alpha(isFinite(direct) && direct < 0.5 ? colours.relayed : colours.direct, 0.45 + 0.55 * online);
         }
 
         onPaint: {
@@ -99,17 +132,24 @@ Item {
                 const top = index * root.rowHeight;
                 ctx.fillStyle = row.host ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant;
                 ctx.textAlign = "right";
-                ctx.fillText(root.fleet.displayName(row.name), root.labelWidth - 8, top + root.rowHeight / 2);
+                let name = root.fleet.displayName(row.name);
+                while (name.length > 4 && ctx.measureText(name).width > root.labelWidth - 12)
+                    name = name.slice(0, -2) + "…";
+                ctx.fillText(name.replace(/…+/, "…"), root.labelWidth - 8, top + root.rowHeight / 2);
                 const count = row.online.length;
                 for (let i = 0; i < count; i++) {
-                    const colour = canvas.stateColour(row.online[i], row.direct[i]);
-                    if (!colour)
+                    const online = row.online[i];
+                    if (!isFinite(online))
                         continue;
-                    ctx.fillStyle = colour;
+                    ctx.fillStyle = canvas.stateColour(online, row.direct[i]);
                     const at = row.from + i * row.step;
                     const left = Math.max(root.plotLeft, Math.round(root.xOf(at - row.step / 2)));
                     const right = Math.min(root.plotLeft + root.plotWidth, Math.round(root.xOf(at + row.step / 2)));
-                    if (right > left)
+                    if (right <= left)
+                        continue;
+                    if (online < 0.05)
+                        ctx.fillRect(left, top + root.rowHeight / 2 - 2, right - left, 4);
+                    else
                         ctx.fillRect(left, top + 2, right - left, root.rowHeight - 4);
                 }
                 const traffic = row.traffic.map(value => isFinite(value) ? Math.log10(1 + value / 100) : NaN);
@@ -148,14 +188,14 @@ Item {
 
             const left = Math.max(root.plotLeft, root.xOf(root.windowFrom));
             const right = Math.max(left + 2, root.xOf(root.windowTo));
-            ctx.fillStyle = Qt.alpha(Colours.palette.m3secondary, 0.22);
+            ctx.fillStyle = Qt.alpha(Colours.palette.m3onSurface, 0.14);
             ctx.fillRect(left, 0, right - left, axisTop);
-            ctx.fillStyle = Colours.palette.m3secondary;
+            ctx.fillStyle = Colours.palette.m3onSurface;
             ctx.fillRect(left, 0, 2, axisTop);
             ctx.fillRect(right - 2, 0, 2, axisTop);
 
             if (canvas.selectFrom >= 0 && canvas.selectTo >= 0) {
-                ctx.fillStyle = Qt.alpha(Colours.palette.m3primary, 0.18);
+                ctx.fillStyle = Qt.alpha(Colours.palette.m3onSurface, 0.18);
                 ctx.fillRect(Math.min(canvas.selectFrom, canvas.selectTo), 0, Math.abs(canvas.selectTo - canvas.selectFrom), axisTop);
             }
         }
@@ -204,7 +244,9 @@ Item {
                 mouse.mode = "click";
         }
 
+        onExited: root.pointer = null
         onPositionChanged: event => {
+            root.pointer = Qt.point(event.x, event.y);
             if (!pressed)
                 return;
             const at = root.atOf(event.x);
@@ -250,5 +292,21 @@ Item {
             else if (dy !== 0)
                 root.zoomAround(root.atOf(wheel.x), dy > 0 ? 0.8 : 1.25);
         }
+    }
+
+    Rectangle {
+        visible: root.hovered !== null
+        x: root.pointer ? Math.round(root.pointer.x) : 0
+        y: 0
+        width: 1
+        height: root.fleet.rows.length * root.rowHeight
+        color: Colours.palette.m3onSurface
+    }
+
+    FleetTooltip {
+        at: root.pointer ?? Qt.point(0, 0)
+        boundsWidth: root.width
+        boundsHeight: root.height
+        lines: root.describe(root.hovered)
     }
 }

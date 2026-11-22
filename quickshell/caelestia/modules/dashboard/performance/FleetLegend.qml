@@ -9,6 +9,7 @@ Grid {
     id: root
 
     property var entries: []
+    required property var colours
 
     columnSpacing: Tokens.spacing.medium
     rowSpacing: 2
@@ -19,6 +20,7 @@ Grid {
         id: glyph
 
         required property string kind
+        required property var colours
 
         implicitWidth: 22
         implicitHeight: 12
@@ -29,6 +31,7 @@ Grid {
             const w = width;
             const h = height;
             const p = Colours.palette;
+            const c = glyph.colours;
             const line = (dash, colour, width) => {
                 ctx.setLineDash(dash);
                 ctx.strokeStyle = colour;
@@ -39,7 +42,7 @@ Grid {
                 ctx.stroke();
             };
             const petal = colour => {
-                ctx.fillStyle = Qt.alpha(colour, 0.55);
+                ctx.fillStyle = Qt.alpha(colour, 0.7);
                 ctx.beginPath();
                 ctx.moveTo(4, h / 2);
                 ctx.quadraticCurveTo(w / 2, -2, w - 3, h / 2);
@@ -50,10 +53,19 @@ Grid {
                 ctx.fillStyle = colour;
                 ctx.fillRect(1, 2, w - 2, h - 4);
             };
+            if (glyph.kind.startsWith("lane:")) {
+                const width = Math.max(1, Math.min(8, 1 + 1.5 * Math.log10(+glyph.kind.slice(5) / 1000)));
+                line([], Qt.alpha(p.m3onSurfaceVariant, 0.38), width);
+                ctx.fillStyle = p.m3onSurface;
+                ctx.beginPath();
+                ctx.arc(w / 2, h / 2, Math.max(1.6, width / 2 + 0.4), 0, Math.PI * 2);
+                ctx.fill();
+                return;
+            }
             switch (glyph.kind) {
             case "outline":
-                ctx.strokeStyle = p.m3onSurfaceVariant;
-                ctx.fillStyle = Qt.alpha(p.m3onSurfaceVariant, 0.18);
+                ctx.strokeStyle = Qt.alpha(p.m3onSurface, 0.75);
+                ctx.fillStyle = Qt.alpha(p.m3onSurface, 0.07);
                 ctx.lineWidth = 1.5;
                 ctx.beginPath();
                 ctx.moveTo(1, h - 2);
@@ -66,54 +78,48 @@ Grid {
                 ctx.stroke();
                 break;
             case "ring":
-                line([2, 3], Qt.alpha(p.m3outline, 0.9), 1);
+                line([2, 3], Qt.alpha(p.m3onSurfaceVariant, 0.6), 1);
                 break;
             case "cpu":
-                petal(p.m3primary);
+                petal(c.cpu);
                 break;
             case "io":
-                petal(p.m3tertiary);
+                petal(c.io);
                 break;
             case "memory":
-                petal(p.m3error);
+                petal(c.memory);
                 break;
             case "direct":
-                line([], Qt.alpha(p.m3onSurfaceVariant, 0.8), 2);
+                line([], c.direct, 1.5);
                 break;
             case "relayed":
-                line([4, 3], Qt.alpha(p.m3onSurfaceVariant, 0.8), 2);
+                line([5, 3], c.relayed, 1.5);
                 break;
             case "down":
-                line([1, 4], Qt.alpha(p.m3outline, 0.8), 1.5);
-                break;
-            case "traffic":
-                ctx.fillStyle = p.m3onSurfaceVariant;
-                [4, 11, 18].forEach((x, i) => {
-                    ctx.globalAlpha = 0.4 + 0.3 * i;
-                    ctx.beginPath();
-                    ctx.arc(x, h / 2, 2, 0, Math.PI * 2);
-                    ctx.fill();
-                });
+                line([0.5, 3.5], c.offline, 2);
                 break;
             case "builds":
-                ctx.fillStyle = p.m3tertiaryContainer;
+                ctx.fillStyle = p.m3surfaceContainerHighest;
+                ctx.strokeStyle = p.m3outline;
                 ctx.beginPath();
                 ctx.roundedRect(1, 1, w - 2, h - 2, 5, 5);
                 ctx.fill();
-                ctx.fillStyle = p.m3onTertiaryContainer;
+                ctx.stroke();
+                ctx.fillStyle = p.m3onSurface;
                 ctx.font = "bold 8px sans-serif";
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
                 ctx.fillText("⚙", w / 2, h / 2);
                 break;
             case "barDirect":
-                bar(Qt.alpha(p.m3primary, 0.6));
+                bar(c.direct);
                 break;
             case "barRelayed":
-                bar(Qt.alpha(p.m3tertiary, 0.7));
+                bar(c.relayed);
                 break;
             case "barDown":
-                bar(Qt.alpha(p.m3error, 0.55));
+                ctx.fillStyle = c.offline;
+                ctx.fillRect(1, h / 2 - 2, w - 2, 4);
                 break;
             case "line":
                 ctx.strokeStyle = Qt.alpha(p.m3onSurface, 0.7);
@@ -147,6 +153,7 @@ Grid {
             Glyph {
                 anchors.verticalCenter: parent.verticalCenter
                 kind: entry.modelData[0]
+                colours: root.colours
                 visible: kind !== ""
             }
 
