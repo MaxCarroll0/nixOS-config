@@ -1,4 +1,4 @@
-# Deploy tooling: rebuild (snapshot deploys with deploy-rs), deploy-status, activate-detached.
+# Deploy tooling: rebuild (snapshot deploys with deploy-rs), deploy-status, land, activate-detached.
 
 {
   config,
@@ -48,6 +48,17 @@ let
     text = builtins.readFile ./deploy/deploy-status.sh;
   };
 
+  land = pkgs.writeShellApplication {
+    name = "land";
+    inherit runtimeEnv;
+    runtimeInputs = [
+      pkgs.git
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = builtins.readFile ./deploy/land.sh;
+  };
+
   activateDetached = pkgs.writeShellApplication {
     name = "activate-detached";
     runtimeInputs = [
@@ -85,6 +96,7 @@ in
   environment.systemPackages = [
     rebuild
     deployStatus
+    land
     activateDetached
   ];
 }

@@ -102,3 +102,10 @@ if [ "$fetch" = 1 ]; then
     echo "  in progress: $(git -C "$flake" log -1 --format='%s [%cr]' "$claim")"
   done
 fi
+sessions=$(git -C "$flake" for-each-ref --format='%(refname)' refs/sessions/ 2>/dev/null | cut -d/ -f3 | sort -u)
+for s in $sessions; do
+  open=$(land --status "$s" 2>/dev/null || true)
+  [ -n "$open" ] || continue
+  echo "  session ${s:0:8}:"
+  printf '    %s\n' "${open//$'\n'/$'\n'    }"
+done

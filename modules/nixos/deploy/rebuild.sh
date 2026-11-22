@@ -190,10 +190,8 @@ opts+=("${pinArgs[@]}")
 
 recordDeployed() {
   git -C "$flake" update-ref "$deployRef" "$rev"
-  if [ "$rev" != "$headRev" ] && [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
-    sessions="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/claude-deploy-sessions"
-    mkdir -p "$sessions"
-    echo "$rebuildTarget" >>"$sessions/$CLAUDE_CODE_SESSION_ID.hosts"
+  if [ "$rev" != "$base" ] && [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+    git -C "$flake" update-ref "refs/sessions/$CLAUDE_CODE_SESSION_ID/$rebuildTarget" "$rev"
   fi
   if ! git -C "$flake" push -q --force origin "$rev:$deployRef" 2>/dev/null; then
     echo "warning: could not push $deployRef to origin; other machines cannot inspect this deploy" >&2
