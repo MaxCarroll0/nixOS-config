@@ -115,23 +115,30 @@ done
 for attempt in 1 2 3; do
   g fetch -q origin main
   unpushed=$(g cherry origin/main HEAD | grep '^+' || true)
+  moved=0
   if [ -n "$unpushed" ]; then
-    echo "error: main has commits origin lacks; push or drop them first:" >&2
-    g log --oneline --no-walk "$(cut -c3- <<<"$unpushed")" >&2
-    exit 1
-  fi
-
-  indexFile=$(g rev-parse --path-format=absolute --git-path index)
-  cp "$indexFile" "$indexFile.land"
-  while IFS= read -r -d '' p; do
-    [ "$(blobOf "$p")" = "$(g rev-parse -q --verify "origin/main:$p" 2>/dev/null || true)" ] && g add -A -- "$p"
-  done < <(g diff --name-only -z HEAD; g ls-files -z --others --exclude-standard)
-  if g merge-base --is-ancestor HEAD origin/main; then
-    g merge -q --ff-only origin/main 2>/dev/null && moved=1 || moved=0
+    mapfile -t unpushedCommits < <(cut -c3- <<<"$unpushed")
+    mapfile -t touched < <(for c in "${unpushedCommits[@]}"; do g diff-tree --no-commit-id --name-only -r "$c" -- "${paths[@]}"; done)
+    if [ "${#touched[@]}" -gt 0 ]; then
+      echo "error: commits on main that origin lacks change ${touched[*]}; push or drop them first:" >&2
+      g log --oneline --no-walk "${unpushedCommits[@]}" >&2
+      exit 1
+    fi
+    echo "main has commits origin lacks; landing on origin without moving this clone:"
+    g log --oneline --no-walk "${unpushedCommits[@]}"
   else
-    g reset -q --keep origin/main 2>/dev/null && moved=1 || moved=0
+    indexFile=$(g rev-parse --path-format=absolute --git-path index)
+    cp "$indexFile" "$indexFile.land"
+    while IFS= read -r -d '' p; do
+      [ "$(blobOf "$p")" = "$(g rev-parse -q --verify "origin/main:$p" 2>/dev/null || true)" ] && g add -A -- "$p"
+    done < <(g diff --name-only -z HEAD; g ls-files -z --others --exclude-standard)
+    if g merge-base --is-ancestor HEAD origin/main; then
+      g merge -q --ff-only origin/main 2>/dev/null && moved=1
+    else
+      g reset -q --keep origin/main 2>/dev/null && moved=1
+    fi
+    if [ "$moved" = 1 ]; then rm -f "$indexFile.land"; else mv "$indexFile.land" "$indexFile"; fi
   fi
-  if [ "$moved" = 1 ]; then rm -f "$indexFile.land"; else mv "$indexFile.land" "$indexFile"; fi
 
   commit=$(commitOnto origin/main) || exit 1
   if [ "$commit" = "$(g rev-parse origin/main)" ]; then
@@ -148,7 +155,7 @@ for attempt in 1 2 3; do
   else
     recordLanded "$commit" "${paths[@]}"
     echo "landed $(g log -1 --format='%h %s' "$commit") on origin; this clone stays on ${branch} $(g rev-parse --short HEAD)"
-    echo "  because origin changed files that have uncommitted work here; refs/worktree/base records what landed"
+    echo "  refs/worktree/base records what landed until the clone catches up"
   fi
   mapfile -t nodes < <(printf '%s\n' "${nodes[@]}" | sort -u | grep -v '^$' || true)
   if [ "${#nodes[@]}" -gt 0 ]; then

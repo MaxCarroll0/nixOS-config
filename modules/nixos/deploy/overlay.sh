@@ -1,13 +1,38 @@
 worktreeBase() {
-  local vb head
+  local vb head old index path mode blob kept=0
   head=$(git -C "$flake" rev-parse HEAD)
   vb=$(git -C "$flake" rev-parse -q --verify refs/worktree/base 2>/dev/null || true)
-  if [ -n "$vb" ] && [ "$(git -C "$flake" rev-parse "$vb^")" = "$head" ]; then
+  if [ -z "$vb" ]; then
+    echo "$head"
+    return
+  fi
+  old=$(git -C "$flake" rev-parse "$vb^")
+  if [ "$old" = "$head" ]; then
     echo "$vb"
     return
   fi
-  [ -z "$vb" ] || git -C "$flake" update-ref -d refs/worktree/base
-  echo "$head"
+  index=$(mktemp)
+  GIT_INDEX_FILE=$index git -C "$flake" read-tree "$head"
+  while IFS= read -r -d '' path; do
+    [ "$(git -C "$flake" rev-parse -q --verify "$old:$path" 2>/dev/null || true)" = "$(git -C "$flake" rev-parse -q --verify "$head:$path" 2>/dev/null || true)" ] || continue
+    read -r mode _ blob _ < <(git -C "$flake" ls-tree "$vb" -- "$path")
+    if [ -n "${blob:-}" ]; then
+      GIT_INDEX_FILE=$index git -C "$flake" update-index --add --cacheinfo "$mode,$blob,$path"
+    else
+      GIT_INDEX_FILE=$index git -C "$flake" update-index --force-remove -- "$path"
+    fi
+    blob=""
+    kept=1
+  done < <(git -C "$flake" diff --name-only -z "$old" "$vb")
+  if [ "$kept" = 1 ]; then
+    vb=$(git -C "$flake" commit-tree "$(GIT_INDEX_FILE=$index git -C "$flake" write-tree)" -p "$head" -m "worktree base: HEAD plus landed paths")
+    git -C "$flake" update-ref refs/worktree/base "$vb"
+    echo "$vb"
+  else
+    git -C "$flake" update-ref -d refs/worktree/base
+    echo "$head"
+  fi
+  rm -f "$index"
 }
 
 recordLanded() {
