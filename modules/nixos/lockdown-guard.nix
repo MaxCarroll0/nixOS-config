@@ -17,7 +17,7 @@ let
   flag = "/run/lockdown-guard/engaged";
 
   home = config.users.users.${cfg.user}.home;
-  uid = toString config.users.users.${cfg.user}.uid;
+  uid = toString cfg.uid;
 
   guard = pkgs.writeShellApplication {
     name = "lockdown-guard";
@@ -41,6 +41,7 @@ let
         exit 0
       fi
       touch ${flag}
+      apps=" ${lib.concatStringsSep " " cfg.apps} "
       for proc in /proc/[0-9]*; do
         [ "$(stat -c %u "$proc" 2>/dev/null)" = ${uid} ] || continue
         comm=$(cat "$proc/comm" 2>/dev/null) || continue
@@ -48,7 +49,7 @@ let
         for name in "$comm" "$(basename -- "''${argv0:-x}")"; do
           name=''${name#.}
           name=''${name%%-wrap*}
-          case " ${lib.concatStringsSep " " cfg.apps} " in
+          case "$apps" in
             *" $name "*)
               kill -KILL "''${proc#/proc/}" 2>/dev/null || true
               echo "killed $name (''${proc#/proc/})"
@@ -87,6 +88,11 @@ in
       type = lib.types.str;
       default = "max";
       description = "User whose lockdown profiles decide when root is denied.";
+    };
+    uid = lib.mkOption {
+      type = lib.types.int;
+      default = 1000;
+      description = "Numeric id of that user, for its runtime directory and process ownership.";
     };
     apps = lib.mkOption {
       type = lib.types.listOf lib.types.str;
