@@ -144,7 +144,15 @@ asmax nix build -o "$work/result" "${pins[@]}" \
 system=$(readlink -f "$work/result")
 
 action=switch
-[ "${UPGRADE_SESSION_SAFE:-0}" = 1 ] && action=boot
+if [ "${UPGRADE_SESSION_SAFE:-0}" = 1 ]; then
+  for part in systemd etc/systemd/user; do
+    if [ "$(readlink -f "/run/current-system/$part")" != "$(readlink -f "$system/$part")" ]; then
+      echo "the new system changes $part, which restarts the graphical session; staging it for the next lock, sleep or logout"
+      action=boot
+      break
+    fi
+  done
+fi
 
 if [ "${1:-}" = --dry-run ]; then
   repo_git update-ref -d "refs/deploys/$host.pending"
@@ -152,6 +160,7 @@ if [ "${1:-}" = --dry-run ]; then
   exit 0
 fi
 
+if [ "$action" = boot ]; then echo "$system" > "$state/staged"; else rm -f "$state/staged"; fi
 nix-env -p /nix/var/nix/profiles/system --set "$system"
 "$system/bin/switch-to-configuration" "$action"
 

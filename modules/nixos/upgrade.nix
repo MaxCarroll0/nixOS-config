@@ -60,7 +60,7 @@ in
     sessionSafe = lib.mkOption {
       type = lib.types.bool;
       default = config.services.displayManager.sddm.enable;
-      description = "Whether upgrades are staged for the next boot or logout instead of switched live.";
+      description = "Whether upgrades that restart systemd or user units are staged for the next lock, sleep or logout instead of switched live.";
     };
     rebootWhenNeeded = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -102,6 +102,41 @@ in
         };
       };
 
+      systemd.services.apply-staged-on-lock = {
+        description = "Switch to a staged upgrade while the screen is locked";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${lib.getExe applyStaged} --now locked";
+        };
+      };
+
+      systemd.services.apply-staged-before-sleep = {
+        description = "Switch to a staged upgrade before sleeping";
+        wantedBy = [ "sleep.target" ];
+        before = [ "sleep.target" ];
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${lib.getExe applyStaged} --now sleeping";
+          TimeoutStartSec = "3min";
+        };
+      };
+
+      systemd.user.paths.apply-staged-on-lock = {
+        description = "Watch the screen lock flag";
+        wantedBy = [ "graphical-session.target" ];
+        partOf = [ "graphical-session.target" ];
+        pathConfig.PathChanged = "%t/caelestia-locked";
+      };
+
+      systemd.user.services.apply-staged-on-lock = {
+        description = "Apply a staged upgrade when the screen locks";
+        unitConfig.ConditionPathExists = "%t/caelestia-locked";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${pkgs.systemd}/bin/systemctl start --no-block apply-staged-on-lock.service";
+        };
+      };
+
       systemd.user.services.apply-staged-at-logout = {
         description = "Apply a staged system when the graphical session ends";
         wantedBy = [ "graphical-session.target" ];
@@ -117,7 +152,8 @@ in
       security.polkit.extraConfig = ''
         polkit.addRule(function(action, subject) {
           if (action.id == "org.freedesktop.systemd1.manage-units"
-              && action.lookup("unit") == "apply-staged-system.service"
+              && (action.lookup("unit") == "apply-staged-system.service"
+                  || action.lookup("unit") == "apply-staged-on-lock.service")
               && action.lookup("verb") == "start"
               && subject.user == "max") {
             return polkit.Result.YES;
