@@ -60,7 +60,7 @@ in
     sessionSafe = lib.mkOption {
       type = lib.types.bool;
       default = config.services.displayManager.sddm.enable;
-      description = "Whether upgrades that would restart systemd or user units are staged for the next logout or boot instead of switched live.";
+      description = "Whether upgrades are staged for the next boot or logout instead of switched live.";
     };
     rebootWhenNeeded = lib.mkOption {
       type = lib.types.nullOr lib.types.str;

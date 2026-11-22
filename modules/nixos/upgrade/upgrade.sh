@@ -144,15 +144,7 @@ asmax nix build -o "$work/result" "${pins[@]}" \
 system=$(readlink -f "$work/result")
 
 action=switch
-if [ "${UPGRADE_SESSION_SAFE:-0}" = 1 ]; then
-  for part in systemd etc/systemd/user; do
-    if [ "$(readlink -f "/run/current-system/$part")" != "$(readlink -f "$system/$part")" ]; then
-      echo "the new system changes $part, which tears down the graphical session; staging it for logout or boot"
-      action=boot
-      break
-    fi
-  done
-fi
+[ "${UPGRADE_SESSION_SAFE:-0}" = 1 ] && action=boot
 
 if [ "${1:-}" = --dry-run ]; then
   repo_git update-ref -d "refs/deploys/$host.pending"

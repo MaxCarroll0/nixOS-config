@@ -25,12 +25,15 @@ trap logRebuildCompletion EXIT
 usage() {
   cat <<'EOF'
 usage: rebuild [--local|--mixed] [--host NODE] [--profile system|home]
-               [--note TEXT] [--supersede] [--log PATH] [ACTION] [nixos-rebuild args]
+               [--note TEXT] [--supersede] [--log PATH] [--only PATH]... [--base REV]
+               [ACTION] [nixos-rebuild args]
 
 ACTION defaults to switch. Local: switch boot test dry-activate build dry-build repl home.
 Remote (--host): switch boot test dry-activate.
 
-A dirty tree is deployed as a snapshot commit on refs/deploys/NODE, pushed to origin, so the
+Without --only, rebuild builds HEAD exactly; uncommitted work is listed and left out.
+With --only, it builds the revision the target runs (or --base REV) plus the uncommitted
+changes under each PATH, as a snapshot commit on refs/deploys/NODE pushed to origin, so the
 target's configuration revision is always a real commit. --note labels that snapshot.
 --supersede deploys over a revision deployed from another machine.
 EOF
@@ -41,6 +44,8 @@ profile=""
 note=""
 supersede=0
 logPath=""
+onlyPaths=()
+baseArg=""
 while true; do
   case "${1:-}" in
     --local) opts+=(--option builders ""); shift ;;
@@ -49,6 +54,8 @@ while true; do
     --profile) profile="${2:?--profile needs system or home}"; shift 2 ;;
     --note) note="${2:?--note needs text}"; shift 2 ;;
     --supersede) supersede=1; shift ;;
+    --only) onlyPaths+=("${2:?--only needs a path}"); shift 2 ;;
+    --base) baseArg="${2:?--base needs a revision}"; shift 2 ;;
     --log) logPath="${2:?--log needs a path}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) break ;;
@@ -62,11 +69,6 @@ export NIX_OBSERVER_KIND=rebuild
 export NIX_OBSERVER_TARGET="${target:-$host}"
 rebuildTarget="$NIX_OBSERVER_TARGET"
 rebuildAction="$action"
-
-pinArgs=()
-pinOut=$(nix eval --raw --impure --expr "let p = import \"$flake/lib/pins.nix\" { root = \"$flake\"; host = \"$rebuildTarget\"; }; in builtins.concatStringsSep \"\\n\" p.argv") || exit 1
-[ -n "$pinOut" ] && mapfile -t pinArgs <<< "$pinOut"
-opts+=("${pinArgs[@]}")
 
 mkdir -p "$stateDir"
 if [ ! -t 1 ]; then
@@ -82,30 +84,95 @@ activating() {
   case "$action" in switch|boot|test) return 0 ;; *) return 1 ;; esac
 }
 
+runningRevision() {
+  local running
+  if [ "$profile" = home ] || [ "$action" = home ]; then
+    return
+  fi
+  if [ -z "$target" ]; then
+    running=$(nixos-version --configuration-revision 2>/dev/null || true)
+  else
+    git -C "$flake" fetch -q origin "+refs/deploys/$rebuildTarget:refs/remotes/deploys/$rebuildTarget" 2>/dev/null || true
+    running=$(git -C "$flake" rev-parse -q --verify "refs/remotes/deploys/$rebuildTarget" 2>/dev/null \
+      || git -C "$flake" rev-parse -q --verify "refs/deploys/$rebuildTarget" 2>/dev/null || true)
+  fi
+  running=${running%-dirty}
+  [ -n "$running" ] && git -C "$flake" cat-file -e "$running^{commit}" 2>/dev/null && echo "$running"
+}
+
 snapshotRevision() {
-  local index tree head subject
-  head=$(git -C "$flake" rev-parse HEAD)
+  local index tree subject patch
   index=$(mktemp)
-  trap 'rm -f "$index"' RETURN
+  patch=$(mktemp)
+  trap 'rm -f "$index" "$patch"' RETURN
   GIT_INDEX_FILE=$index git -C "$flake" read-tree HEAD
-  GIT_INDEX_FILE=$index git -C "$flake" -c advice.addIgnoredFile=false add -A >/dev/null
+  GIT_INDEX_FILE=$index git -C "$flake" -c advice.addIgnoredFile=false add -A -- "${onlyPaths[@]}" >/dev/null || return 1
+  GIT_INDEX_FILE=$index git -C "$flake" diff --cached --binary HEAD > "$patch"
+  GIT_INDEX_FILE=$index git -C "$flake" read-tree "$base"
+  if [ -s "$patch" ] && ! GIT_INDEX_FILE=$index git -C "$flake" apply --cached --3way "$patch" >&2; then
+    echo "error: the changes under ${onlyPaths[*]} do not apply onto ${base:0:7}; pass --base HEAD to build on HEAD instead" >&2
+    return 1
+  fi
   tree=$(GIT_INDEX_FILE=$index git -C "$flake" write-tree)
-  if [ "$tree" = "$(git -C "$flake" rev-parse 'HEAD^{tree}')" ]; then
-    echo "$head"
+  if [ "$tree" = "$(git -C "$flake" rev-parse "$base^{tree}")" ]; then
+    echo "$base"
     return
   fi
   subject="snapshot: $rebuildTarget $action${note:+ ($note)}"
-  GIT_INDEX_FILE=$index git -C "$flake" commit-tree "$tree" -p "$head" -m "$subject" \
-    -m "$(GIT_INDEX_FILE=$index git -C "$flake" diff --cached --stat HEAD)"
+  GIT_INDEX_FILE=$index git -C "$flake" commit-tree "$tree" -p "$base" -m "$subject" \
+    -m "$(GIT_INDEX_FILE=$index git -C "$flake" diff --cached --stat "$base")"
 }
 
-rev=$(snapshotRevision)
+dirtyPaths() {
+  git -C "$flake" status --porcelain=v1 -uall --no-renames "$@" | cut -c4-
+}
+
 headRev=$(git -C "$flake" rev-parse HEAD)
+running=$(runningRevision || true)
+carried=()
+if [ -n "$running" ] && ! git -C "$flake" merge-base --is-ancestor "$running" "$headRev"; then
+  mapfile -t carried < <(git -C "$flake" diff --name-only "$(git -C "$flake" merge-base "$running" "$headRev")" "$running")
+fi
+if [ "${#onlyPaths[@]}" -eq 0 ]; then
+  base=$headRev
+  rev=$headRev
+  echo "building HEAD ${headRev:0:7} ($(git -C "$flake" log -1 --format=%s HEAD))"
+  if [ "${#carried[@]}" -gt 0 ]; then
+    echo "warning: $rebuildTarget runs ${running:0:7}, whose snapshots carry work not on HEAD; deploying HEAD drops it:" >&2
+    printf '  %s\n' "${carried[@]}" >&2
+  fi
+else
+  if [ -n "$baseArg" ]; then
+    base=$(git -C "$flake" rev-parse --verify "$baseArg^{commit}") || exit 2
+  else
+    base=$running
+    if [ "${#carried[@]}" -gt 0 ]; then
+      echo "note: ${running:0:7} carries other snapshots' work not on HEAD; this build includes it:"
+      printf '  %s\n' "${carried[@]}"
+    fi
+    if [ -z "$base" ]; then
+      echo "warning: the revision $rebuildTarget runs is unknown here; building on HEAD" >&2
+      base=$headRev
+    fi
+  fi
+  echo "building on ${base:0:7} ($(git -C "$flake" log -1 --format=%s "$base"))"
+  rev=$(snapshotRevision) || exit 1
+fi
+mapfile -t included < <([ "${#onlyPaths[@]}" -gt 0 ] && dirtyPaths -- "${onlyPaths[@]}")
+mapfile -t leftOut < <(dirtyPaths | grep -vxF -f <(printf '%s\n' "${included[@]}" "") || true)
+if [ "${#included[@]}" -gt 0 ]; then
+  echo "uncommitted work included:"
+  printf '  %s\n' "${included[@]}"
+fi
+if [ "${#leftOut[@]}" -gt 0 ]; then
+  echo "uncommitted work left out (add it with --only PATH):"
+  printf '  %s\n' "${leftOut[@]}"
+fi
 deployRef="refs/deploys/$rebuildTarget"
 previouslyDeployed=$(git -C "$flake" rev-parse -q --verify "$deployRef" 2>/dev/null || true)
-if [ "$rev" != "$headRev" ]; then
-  echo "snapshot ${rev:0:7} (tree differs from HEAD ${headRev:0:7}):"
-  git -C "$flake" diff --stat HEAD "$rev" | sed 's/^/  /'
+if [ "$rev" != "$base" ]; then
+  echo "snapshot ${rev:0:7} on ${base:0:7}:"
+  git -C "$flake" diff --stat "$base" "$rev" | sed 's/^/  /'
 fi
 if [ "$rev" = "$headRev" ]; then
   source="git+file://$flake?rev=$rev"
@@ -114,6 +181,12 @@ else
   git -C "$flake" update-ref "$snapshotRef" "$rev"
   source="git+file://$flake?ref=$snapshotRef&rev=$rev"
 fi
+
+srcPath=$(nix eval --impure --raw --expr "(builtins.fetchGit { url = \"$flake\"; rev = \"$rev\"; allRefs = true; }).outPath") || exit 1
+pinArgs=()
+pinOut=$(nix eval --raw --impure --expr "let p = import \"$srcPath/lib/pins.nix\" { root = \"$srcPath\"; host = \"$rebuildTarget\"; }; in builtins.concatStringsSep \"\\n\" p.argv") || exit 1
+[ -n "$pinOut" ] && mapfile -t pinArgs <<< "$pinOut"
+opts+=("${pinArgs[@]}")
 
 recordDeployed() {
   git -C "$flake" update-ref "$deployRef" "$rev"
@@ -253,7 +326,7 @@ eval-cache = false"
     boot) recordDeployed; echo "STAGED: ${rev:0:7} becomes current on the next boot of $target" ;;
   esac
   if activating && [ "$rev" != "$headRev" ]; then
-    echo "deployed snapshot ${rev:0:7} to $target; uncommitted: $(git -C "$flake" diff --shortstat HEAD "$rev")"
+    echo "deployed snapshot ${rev:0:7} to $target; uncommitted: $(git -C "$flake" diff --shortstat "$base" "$rev")"
     echo "  commit it as one change when verified, or leave it: deploy-status reports it."
   fi
   exit 0
@@ -285,7 +358,7 @@ case "$action" in
     sudo nixos-rebuild "$action" --flake "$source#$host" "${opts[@]}" "$@"
     activating && recordDeployed
     if activating && [ "$rev" != "$headRev" ]; then
-      echo "activated snapshot ${rev:0:7}; uncommitted: $(git -C "$flake" diff --shortstat HEAD "$rev")"
+      echo "activated snapshot ${rev:0:7}; uncommitted: $(git -C "$flake" diff --shortstat "$base" "$rev")"
     fi ;;
   *)
     sudo nixos-rebuild "$action" --flake "$source#$host" "${opts[@]}" "$@" ;;
