@@ -52,20 +52,21 @@ blobOf() {
 }
 
 commitOnto() {
-  local parent=$1 index patch
+  local parent=$1 index
   index=$(mktemp)
-  patch=$(mktemp)
-  GIT_INDEX_FILE=$index g read-tree HEAD
-  GIT_INDEX_FILE=$index g add -A -- "${paths[@]}"
-  GIT_INDEX_FILE=$index g diff --cached --binary HEAD > "$patch"
-  GIT_INDEX_FILE=$index g read-tree "$parent"
-  if [ -s "$patch" ] && ! GIT_INDEX_FILE=$index g apply --cached --3way "$patch" >&2; then
-    rm -f "$index" "$patch"
+  if ! overlayOnto "$parent" "$index" "${paths[@]}"; then
+    rm -f "$index"
     echo "error: ${paths[*]} do not apply onto ${parent:0:7}; origin changed them too" >&2
     return 1
   fi
-  g commit-tree "$(GIT_INDEX_FILE=$index g write-tree)" -p "$parent" -m "$subject"
-  rm -f "$index" "$patch"
+  local tree
+  tree=$(GIT_INDEX_FILE=$index g write-tree)
+  if [ "$tree" = "$(g rev-parse "$parent^{tree}")" ]; then
+    g rev-parse "$parent"
+  else
+    g commit-tree "$tree" -p "$parent" -m "$subject"
+  fi
+  rm -f "$index"
 }
 
 subject=""
@@ -120,14 +121,22 @@ for attempt in 1 2 3; do
     exit 1
   fi
 
+  indexFile=$(g rev-parse --path-format=absolute --git-path index)
+  cp "$indexFile" "$indexFile.land"
+  while IFS= read -r -d '' p; do
+    [ "$(blobOf "$p")" = "$(g rev-parse -q --verify "origin/main:$p" 2>/dev/null || true)" ] && g add -A -- "$p"
+  done < <(g diff --name-only -z HEAD; g ls-files -z --others --exclude-standard)
   if g merge-base --is-ancestor HEAD origin/main; then
     g merge -q --ff-only origin/main 2>/dev/null && moved=1 || moved=0
   else
     g reset -q --keep origin/main 2>/dev/null && moved=1 || moved=0
   fi
+  if [ "$moved" = 1 ]; then rm -f "$indexFile.land"; else mv "$indexFile.land" "$indexFile"; fi
 
   commit=$(commitOnto origin/main) || exit 1
-  if ! g push -q origin "$commit:refs/heads/main"; then
+  if [ "$commit" = "$(g rev-parse origin/main)" ]; then
+    echo "${paths[*]} already match origin/main; nothing to land"
+  elif ! g push -q origin "$commit:refs/heads/main"; then
     echo "origin moved during attempt $attempt; landing again on it" >&2
     continue
   fi
@@ -137,12 +146,13 @@ for attempt in 1 2 3; do
     g reset -q -- "${paths[@]}"
     echo "landed $(g log -1 --format='%h %s' "$commit"); main is at it"
   else
+    recordLanded "$commit" "${paths[@]}"
     echo "landed $(g log -1 --format='%h %s' "$commit") on origin; this clone stays on ${branch} $(g rev-parse --short HEAD)"
-    echo "  because origin changed files that have uncommitted work here; pull once that work lands"
+    echo "  because origin changed files that have uncommitted work here; refs/worktree/base records what landed"
   fi
   mapfile -t nodes < <(printf '%s\n' "${nodes[@]}" | sort -u | grep -v '^$' || true)
   if [ "${#nodes[@]}" -gt 0 ]; then
-    echo "now put each host on HEAD (no --only): ${nodes[*]}"
+    echo "now rebuild each host with no --only, which builds origin/main: ${nodes[*]}"
   fi
   exit 0
 done

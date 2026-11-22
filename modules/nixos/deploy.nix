@@ -32,7 +32,10 @@ let
       pkgs.gawk
       pkgs.curl
     ];
-    text = builtins.readFile ./deploy/claim.sh + builtins.readFile ./deploy/rebuild.sh;
+    text =
+      builtins.readFile ./deploy/claim.sh
+      + builtins.readFile ./deploy/overlay.sh
+      + builtins.readFile ./deploy/rebuild.sh;
   };
 
   deployStatus = pkgs.writeShellApplication {
@@ -56,7 +59,7 @@ let
       pkgs.coreutils
       pkgs.gnugrep
     ];
-    text = builtins.readFile ./deploy/land.sh;
+    text = builtins.readFile ./deploy/overlay.sh + builtins.readFile ./deploy/land.sh;
   };
 
   activateDetached = pkgs.writeShellApplication {

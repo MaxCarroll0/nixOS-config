@@ -31,7 +31,9 @@ usage: rebuild [--local|--mixed] [--host NODE] [--profile system|home]
 ACTION defaults to switch. Local: switch boot test dry-activate build dry-build repl home.
 Remote (--host): switch boot test dry-activate.
 
-Without --only, rebuild builds HEAD exactly; uncommitted work is listed and left out.
+Without --only, rebuild builds HEAD exactly, or origin/main when this clone is behind it, or
+--base REV; it refuses a commit that lacks anything landed on origin/main. Uncommitted work is
+listed and left out.
 With --only, it builds the revision the target runs (or --base REV) plus the uncommitted
 changes under each PATH, as a snapshot commit on refs/deploys/NODE pushed to origin, so the
 target's configuration revision is always a real commit. --note labels that snapshot.
@@ -101,15 +103,10 @@ runningRevision() {
 }
 
 snapshotRevision() {
-  local index tree subject patch
+  local index tree subject
   index=$(mktemp)
-  patch=$(mktemp)
-  trap 'rm -f "$index" "$patch"' RETURN
-  GIT_INDEX_FILE=$index git -C "$flake" read-tree HEAD
-  GIT_INDEX_FILE=$index git -C "$flake" -c advice.addIgnoredFile=false add -A -- "${onlyPaths[@]}" >/dev/null || return 1
-  GIT_INDEX_FILE=$index git -C "$flake" diff --cached --binary HEAD > "$patch"
-  GIT_INDEX_FILE=$index git -C "$flake" read-tree "$base"
-  if [ -s "$patch" ] && ! GIT_INDEX_FILE=$index git -C "$flake" apply --cached --3way "$patch" >&2; then
+  trap 'rm -f "$index"' RETURN
+  if ! overlayOnto "$base" "$index" "${onlyPaths[@]}"; then
     echo "error: the changes under ${onlyPaths[*]} do not apply onto ${base:0:7}; pass --base HEAD to build on HEAD instead" >&2
     return 1
   fi
@@ -128,17 +125,33 @@ dirtyPaths() {
 }
 
 headRev=$(git -C "$flake" rev-parse HEAD)
+final=$headRev
+if [ "${#onlyPaths[@]}" -eq 0 ]; then
+  timeout 15 git -C "$flake" fetch -q origin main 2>/dev/null || true
+  mainRev=$(git -C "$flake" rev-parse -q --verify origin/main 2>/dev/null || true)
+  if [ -n "$baseArg" ]; then
+    final=$(git -C "$flake" rev-parse --verify "$baseArg^{commit}") || exit 2
+  elif [ -n "$mainRev" ] && [ "$mainRev" != "$headRev" ] && git -C "$flake" merge-base --is-ancestor "$headRev" "$mainRev"; then
+    echo "note: HEAD ${headRev:0:7} is behind origin/main, which has landed commits this clone has not pulled; building origin/main"
+    final=$mainRev
+  fi
+  if [ -n "$mainRev" ] && ! git -C "$flake" merge-base --is-ancestor "$mainRev" "$final"; then
+    echo "error: ${final:0:7} lacks commits landed on origin/main ${mainRev:0:7}; deploying it would drop them" >&2
+    echo "  land or rebase local commits first, or deploy origin/main with --base origin/main" >&2
+    exit 2
+  fi
+fi
 running=$(runningRevision || true)
 carried=()
-if [ -n "$running" ] && ! git -C "$flake" merge-base --is-ancestor "$running" "$headRev"; then
-  mapfile -t carried < <(git -C "$flake" diff --name-only "$(git -C "$flake" merge-base "$running" "$headRev")" "$running")
+if [ -n "$running" ] && ! git -C "$flake" merge-base --is-ancestor "$running" "$final"; then
+  mapfile -t carried < <(git -C "$flake" diff --name-only "$(git -C "$flake" merge-base "$running" "$final")" "$running")
 fi
 if [ "${#onlyPaths[@]}" -eq 0 ]; then
-  base=$headRev
-  rev=$headRev
-  echo "building HEAD ${headRev:0:7} ($(git -C "$flake" log -1 --format=%s HEAD))"
+  base=$final
+  rev=$final
+  echo "building ${final:0:7} ($(git -C "$flake" log -1 --format=%s "$final"))"
   if [ "${#carried[@]}" -gt 0 ]; then
-    echo "warning: $rebuildTarget runs ${running:0:7}, whose snapshots carry work not on HEAD; deploying HEAD drops it:" >&2
+    echo "warning: $rebuildTarget runs ${running:0:7}, whose snapshots carry work not on ${final:0:7}; deploying it drops it:" >&2
     printf '  %s\n' "${carried[@]}" >&2
   fi
 else
@@ -202,7 +215,7 @@ recordDeployed() {
 publishDeploy() {
   local branch snapshot=0
   branch=$(git -C "$flake" symbolic-ref --short -q HEAD || echo detached)
-  [ "$rev" = "$headRev" ] || snapshot=1
+  [ "$rev" = "$base" ] || snapshot=1
   printf 'fleet_deploy_seconds{rev="%s",branch="%s",snapshot="%s",action="%s"} %s\n' \
     "$rev" "$branch" "$snapshot" "$action" "$(date +%s)" \
     | curl -fsS -m 5 --data-binary @- \
@@ -323,7 +336,7 @@ eval-cache = false"
       fi ;;
     boot) recordDeployed; echo "STAGED: ${rev:0:7} becomes current on the next boot of $target" ;;
   esac
-  if activating && [ "$rev" != "$headRev" ]; then
+  if activating && [ "$rev" != "$base" ]; then
     echo "deployed snapshot ${rev:0:7} to $target; uncommitted: $(git -C "$flake" diff --shortstat "$base" "$rev")"
     echo "  commit it as one change when verified, or leave it: deploy-status reports it."
   fi
@@ -355,7 +368,7 @@ case "$action" in
     nixos-rebuild build --flake "$source#$host" "${opts[@]}" "$@"
     sudo nixos-rebuild "$action" --flake "$source#$host" "${opts[@]}" "$@"
     activating && recordDeployed
-    if activating && [ "$rev" != "$headRev" ]; then
+    if activating && [ "$rev" != "$base" ]; then
       echo "activated snapshot ${rev:0:7}; uncommitted: $(git -C "$flake" diff --shortstat "$base" "$rev")"
     fi ;;
   *)
