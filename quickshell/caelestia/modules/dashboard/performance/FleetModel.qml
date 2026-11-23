@@ -396,28 +396,46 @@ Item {
         for (const result of results.psiMemory)
             psiOf(result.metric.instance).memory = root.value(result);
 
-        const deploys = {};
+        const reported = {};
         for (const result of results.rev)
-            deploys[result.metric.instance] = {
+            reported[result.metric.instance] = {
                 rev: (result.metric.rev ?? "unknown").replace(/-dirty$/, ""),
                 dirty: (result.metric.rev ?? "").endsWith("-dirty"),
-                at: NaN,
-                branch: "",
-                snapshot: false,
-                recorded: false
+                activated: NaN
             };
         for (const result of results.activated)
-            if (deploys[result.metric.instance])
-                deploys[result.metric.instance].at = root.value(result);
-        for (const result of results.deploy) {
-            const deploy = deploys[result.metric.instance];
-            if (deploy && deploy.rev === result.metric.rev)
-                Object.assign(deploy, {
-                    at: root.value(result),
-                    branch: result.metric.branch,
-                    snapshot: result.metric.snapshot === "1",
-                    recorded: true
-                });
+            if (reported[result.metric.instance])
+                reported[result.metric.instance].activated = root.value(result);
+        const records = {};
+        for (const result of results.deploy)
+            (records[result.metric.instance] = records[result.metric.instance] ?? []).push({
+                rev: result.metric.rev,
+                at: root.value(result),
+                action: result.metric.action,
+                branch: result.metric.branch,
+                snapshot: result.metric.snapshot === "1"
+            });
+        for (const list of Object.values(records))
+            list.sort((a, b) => b.at - a.at);
+
+        const deploys = {};
+        for (const instance of new Set([...Object.keys(reported), ...Object.keys(records)])) {
+            const list = records[instance] ?? [];
+            const system = reported[instance];
+            const stale = !system || (list.length > 0 && list[0].at > system.activated + 60);
+            const rev = stale ? (list.find(record => record.action !== "boot")?.rev ?? "unknown") : system.rev;
+            const running = list.find(record => record.rev === rev);
+            const staged = list.find(record => record.action === "boot" && (!running || record.at > running.at) && record.rev !== rev);
+            deploys[instance] = {
+                rev: rev,
+                dirty: !stale && system.dirty,
+                at: running?.at ?? system?.activated ?? NaN,
+                branch: running?.branch ?? "",
+                snapshot: running?.snapshot ?? false,
+                recorded: running !== undefined,
+                staged: staged?.rev ?? "",
+                stagedAt: staged?.at ?? NaN
+            };
         }
 
         return {

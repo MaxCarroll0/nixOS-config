@@ -594,6 +594,14 @@ Item {
                     font: Tokens.font.label.small
                     color: Colours.palette.m3onSurfaceVariant
                 }
+
+                StyledText {
+                    Layout.alignment: Qt.AlignHCenter
+                    visible: label.deploy !== null && label.deploy.staged !== ""
+                    text: label.deploy ? `${label.deploy.staged.slice(0, 7)} staged for boot ${root.fleet.when(label.deploy.stagedAt)}` : ""
+                    font: Tokens.font.label.small
+                    color: Colours.palette.m3tertiary
+                }
             }
         }
     }
