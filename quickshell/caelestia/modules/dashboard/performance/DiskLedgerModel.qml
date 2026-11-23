@@ -142,6 +142,7 @@ Item {
             system_files: grey(0.5),
             swap: grey(0.44),
             held: grey(0.38),
+            unaccounted: grey(0.2),
             filesystem: grey(0.33),
             reserved: grey(0.58)
         })

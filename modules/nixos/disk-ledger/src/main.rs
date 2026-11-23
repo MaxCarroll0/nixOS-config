@@ -233,15 +233,19 @@ fn main() {
                 state: args[3].clone(),
                 links_index: std::env::var("LEDGER_LINKS_INDEX").ok(),
             };
-            let orphans: Vec<String> = std::env::var("LEDGER_ORPHANS")
-                .map(|names| {
-                    names
-                        .split(' ')
-                        .filter(|name| !name.is_empty())
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
+            let names = |variable: &str| -> Vec<String> {
+                std::env::var(variable)
+                    .map(|names| {
+                        names
+                            .split(' ')
+                            .filter(|name| !name.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let orphans = names("LEDGER_ORPHANS");
+            let invalid = names("LEDGER_INVALID");
             let mut code = 0;
             let mut paths: Vec<String> = Vec::new();
             let mut lines = std::io::stdin()
@@ -253,11 +257,11 @@ fn main() {
                     paths.push(line);
                     continue;
                 }
-                if paths.is_empty() {
+                if paths.is_empty() && invalid.is_empty() {
                     continue;
                 }
                 match gc::plan(&layout, &paths).and_then(|(ordered, references)| {
-                    let mut session = gc::Session::open(&layout, &orphans)?;
+                    let mut session = gc::Session::open(&layout, &orphans, &invalid)?;
                     let outcome = session.delete(&ordered, &references);
                     Ok((outcome, session.report.milliseconds()))
                 }) {
