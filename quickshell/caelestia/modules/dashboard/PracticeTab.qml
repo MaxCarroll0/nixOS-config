@@ -69,10 +69,6 @@ Item {
         return Qt.alpha(Colours.palette.m3primary, Math.min(1, 0.2 + seconds / 9000));
     }
 
-    Process {
-        id: opener
-    }
-
     Loader {
         id: settingsLoader
 
@@ -314,70 +310,75 @@ Item {
                     required property var modelData
 
                     Layout.fillWidth: true
-                    implicitHeight: sessionRow.implicitHeight + Tokens.padding.medium * 2
+                    implicitHeight: sessionBox.implicitHeight + Tokens.padding.medium * 2
                     radius: Tokens.rounding.medium
-                    color: hover.containsMouse && modelData.complete ? Colours.palette.m3surfaceContainerHighest : Colours.palette.m3surfaceContainerHigh
+                    color: Colours.palette.m3surfaceContainerHigh
 
-                    RowLayout {
-                        id: sessionRow
+                    ColumnLayout {
+                        id: sessionBox
 
                         anchors.fill: parent
                         anchors.margins: Tokens.padding.medium
-                        spacing: Tokens.spacing.medium
+                        spacing: Tokens.spacing.small
 
-                        StyledRect {
-                            implicitWidth: langLabel.implicitWidth + Tokens.padding.medium * 2
-                            implicitHeight: langLabel.implicitHeight + Tokens.padding.extraSmall * 2
-                            radius: Tokens.rounding.full
-                            color: Practice.langColours[session.modelData.lang] ?? Colours.palette.m3primary
-
-                            StyledText {
-                                id: langLabel
-
-                                anchors.centerIn: parent
-                                text: Practice.langNames[session.modelData.lang] ?? session.modelData.lang
-                                color: "#111111"
-                                font: Tokens.font.body.builders.small.weight(Font.Medium).build()
-                            }
-                        }
-
-                        ColumnLayout {
+                        RowLayout {
                             Layout.fillWidth: true
-                            spacing: 0
+                            spacing: Tokens.spacing.medium
 
-                            StyledText {
+                            StyledRect {
+                                implicitWidth: langLabel.implicitWidth + Tokens.padding.medium * 2
+                                implicitHeight: langLabel.implicitHeight + Tokens.padding.extraSmall * 2
+                                radius: Tokens.rounding.full
+                                color: Practice.langColours[session.modelData.lang] ?? Colours.palette.m3primary
+
+                                StyledText {
+                                    id: langLabel
+
+                                    anchors.centerIn: parent
+                                    text: Practice.langNames[session.modelData.lang] ?? session.modelData.lang
+                                    color: "#111111"
+                                    font: Tokens.font.body.builders.small.weight(Font.Medium).build()
+                                }
+                            }
+
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                                text: session.modelData.problem
-                                elide: Text.ElideRight
+                                spacing: 0
+
+                                StyledText {
+                                    Layout.fillWidth: true
+                                    text: session.modelData.problem
+                                    elide: Text.ElideRight
+                                }
+
+                                StyledText {
+                                    text: `coding ${Practice.hours(session.modelData.coding)} · review ${Practice.hours(session.modelData.review)}`
+                                    color: Colours.palette.m3onSurfaceVariant
+                                    font: Tokens.font.body.small
+                                }
                             }
 
-                            StyledText {
-                                text: `coding ${Practice.hours(session.modelData.coding)} · review ${Practice.hours(session.modelData.review)}`
-                                color: Colours.palette.m3onSurfaceVariant
-                                font: Tokens.font.body.small
+                            MaterialIcon {
+                                text: session.modelData.live ? "radio_button_checked" : !session.modelData.complete ? "pending" : session.modelData.hidden_tests === "pass" ? "verified" : session.modelData.hidden_tests === "fail" ? "bug_report" : "task_alt"
+                                color: session.modelData.hidden_tests === "fail" ? Colours.palette.m3error : Colours.palette.m3primary
                             }
                         }
 
-                        MaterialIcon {
-                            text: session.modelData.live ? "radio_button_checked" : !session.modelData.complete ? "pending" : session.modelData.hidden_tests === "pass" ? "verified" : session.modelData.hidden_tests === "fail" ? "bug_report" : "task_alt"
-                            color: session.modelData.hidden_tests === "fail" ? Colours.palette.m3error : Colours.palette.m3primary
-                        }
-                    }
-
-                    MouseArea {
-                        id: hover
-
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: session.modelData.complete ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: {
-                            if (!session.modelData.complete)
-                                return;
-                            opener.command = ["emacsclient", "-c", "-n", session.modelData.review_md];
-                            opener.running = true;
+                        PracticeSessionActions {
+                            Layout.fillWidth: true
+                            session: session.modelData
                         }
                     }
                 }
+            }
+
+            StyledText {
+                Layout.fillWidth: true
+                visible: Practice.openError !== ""
+                text: Practice.openError
+                color: Colours.palette.m3error
+                font: Tokens.font.body.small
+                wrapMode: Text.WordWrap
             }
 
             StyledText {

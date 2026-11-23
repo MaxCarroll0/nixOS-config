@@ -22,6 +22,7 @@ Singleton {
     property string testOutput: ""
     property int testExit: -1
     property string lastError: ""
+    property string openError: ""
     property var settingsDoc: null
     property string settingsMessage: ""
     property bool settingsFailed: false
@@ -138,6 +139,14 @@ Singleton {
         command(["done"]);
     }
 
+    function openSession(dir: string, what: string): void {
+        if (opener.running)
+            return;
+        openError = "";
+        opener.command = ["interview", "open", dir, what];
+        opener.running = true;
+    }
+
     function runTests(): void {
         if (tests.running || !current)
             return;
@@ -220,6 +229,15 @@ Singleton {
             currentFile.reload();
             root.refresh();
         }
+    }
+
+    Process {
+        id: opener
+
+        stderr: StdioCollector {
+            onStreamFinished: root.openError = text.trim()
+        }
+        onExited: root.refresh()
     }
 
     Process {

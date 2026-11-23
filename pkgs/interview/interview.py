@@ -606,13 +606,17 @@ SOLUTIONS.md, fill in review.md, then `interview close`.
 """
 
 
-def open_files(dest: Path, lang: str) -> None:
+def emacs_open(*paths: Path) -> bool:
     with contextlib.suppress(OSError, subprocess.TimeoutExpired):
         frames = subprocess.run(["emacsclient", "--eval", "(seq-some (lambda (f) (and (window-system f) (frame-visible-p f))) (frame-list))"],
                                 capture_output=True, text=True, timeout=5)
         create = ["-c"] if frames.stdout.strip() in ("", "nil") else []
-        subprocess.run(["emacsclient", *create, "-n", str(dest / "PROMPT.md"), str(dest / main_file(lang))],
-                       capture_output=True, timeout=10)
+        return subprocess.run(["emacsclient", *create, "-n", *map(str, paths)], capture_output=True, timeout=10).returncode == 0
+    return False
+
+
+def open_files(dest: Path, lang: str) -> None:
+    emacs_open(dest / "PROMPT.md", dest / main_file(lang))
 
 
 def begin(at: float, lang: str | None, problem: str | None, minutes: int | None = None,
@@ -1413,19 +1417,46 @@ def cmd_tutor(args) -> int:
     return 0
 
 
-def cmd_revisit(args) -> int:
-    if load_current():
-        print("finish the running interview first", file=sys.stderr)
-        return 1
-    session = Path(args.dir).resolve()
+def revisit(session: Path) -> Path:
     dest = session / "improved"
     if dest.exists():
         print(f"{dest} already exists")
-        return 0
+        return dest
     shutil.copytree(session, dest, ignore=shutil.ignore_patterns(*BUILD_DIRS, *REVIEW_FILES))
     for path in dest.rglob("*"):
         path.chmod(path.stat().st_mode | stat.S_IWUSR)
     print(f"writable copy at {dest}")
+    return dest
+
+
+def cmd_revisit(args) -> int:
+    if load_current():
+        print("finish the running interview first", file=sys.stderr)
+        return 1
+    revisit(Path(args.dir).resolve())
+    return 0
+
+
+def cmd_open(args) -> int:
+    session = Path(args.dir).resolve()
+    cur = load_current()
+    if cur and Path(cur["dir"]).resolve() != session:
+        print("past sessions open once the running interview is over", file=sys.stderr)
+        return 1
+    meta = json.loads((session / ".interview.json").read_text())
+    if args.what == "revisit":
+        if cur:
+            print("finish the running interview first", file=sys.stderr)
+            return 1
+        target = revisit(session) / main_file(meta["lang"])
+    else:
+        target = session / {"prompt": "PROMPT.md", "code": main_file(meta["lang"]), "review": "review.md"}[args.what]
+    if not target.exists():
+        print(f"{target} does not exist", file=sys.stderr)
+        return 1
+    if not emacs_open(target):
+        print("emacsclient could not open it; is the Emacs server running?", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -1521,6 +1552,11 @@ def main() -> int:
     p = sub.add_parser("revisit")
     p.add_argument("dir")
     p.set_defaults(fn=cmd_revisit)
+
+    p = sub.add_parser("open", help="open a past session's prompt, code or review in Emacs, or revisit it as a writable improved/ copy")
+    p.add_argument("dir")
+    p.add_argument("what", choices=["prompt", "code", "review", "revisit"])
+    p.set_defaults(fn=cmd_open)
 
     p = sub.add_parser("auto", help="if an interview is due, ask with a notification and start it only on Start; run by the shell while the candidate is at the keyboard")
     p.add_argument("--verbose", action="store_true")

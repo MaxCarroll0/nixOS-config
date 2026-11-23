@@ -182,6 +182,41 @@ ColumnLayout {
         }
     }
 
+    Repeater {
+        model: (Practice.today?.sessions ?? []).filter(s => s.complete)
+
+        ColumnLayout {
+            id: todaySession
+
+            required property var modelData
+
+            Layout.fillWidth: true
+            Layout.topMargin: Tokens.spacing.small
+            spacing: Tokens.spacing.extraSmall
+
+            StyledText {
+                Layout.fillWidth: true
+                text: `${Practice.langNames[todaySession.modelData.lang] ?? todaySession.modelData.lang} · ${todaySession.modelData.problem}`
+                elide: Text.ElideRight
+                font: Tokens.font.body.small
+            }
+
+            PracticeSessionActions {
+                Layout.fillWidth: true
+                session: todaySession.modelData
+            }
+        }
+    }
+
+    StyledText {
+        Layout.fillWidth: true
+        visible: Practice.openError !== ""
+        text: Practice.openError
+        color: Colours.palette.m3error
+        font: Tokens.font.body.small
+        wrapMode: Text.WordWrap
+    }
+
     StyledText {
         Layout.topMargin: Tokens.spacing.medium
         text: `Last six weeks · streak ${Practice.streak()} days`
