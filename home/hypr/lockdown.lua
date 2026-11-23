@@ -1,6 +1,17 @@
--- Lockdown enforcement: pins focus to the engaged profile's own workspace and keeps only allowlisted windows on it.
+-- Lockdown enforcement: pins focus to the engaged profile's own workspace, keeps only allowlisted windows on it and holds the profile's submap.
 
-local M = { source = nil, active = nil, kb_options = nil, opened = {} }
+local M = {
+    source = nil,
+    active = nil,
+    kb_options = nil,
+    opened = {},
+    before = {},
+    submaps = {},
+    keep = {},
+    spare = {},
+    stray_check_ms = 1500,
+    stray_kill_ms = 3000,
+}
 
 local runtime = (os.getenv("XDG_RUNTIME_DIR") or "/run/user/1000") .. "/lockdown/active.lua"
 local stash = "special:lockdown"
@@ -22,11 +33,36 @@ local function matches(rule, window)
     return rule.class ~= nil or rule.title ~= nil
 end
 
-local function allowed(window)
-    for _, rule in ipairs(M.active.allow) do
+local function any_match(rules, window)
+    for _, rule in ipairs(rules or {}) do
         if matches(rule, window) then return true end
     end
     return false
+end
+
+local function allowed(window)
+    return any_match(M.active.allow, window)
+end
+
+local function submap_name()
+    local names = M.submaps[M.active.profile] or {}
+    return names[M.active.substate] or "lockdown"
+end
+
+local function is_lockdown_submap(name)
+    if name == "lockdown" then return true end
+    for _, names in pairs(M.submaps) do
+        for _, n in pairs(names) do
+            if n == name then return true end
+        end
+    end
+    return false
+end
+
+local function enter_submap()
+    if not M.active then return end
+    local want = submap_name()
+    if hl.get_current_submap() ~= want then hl.dispatch(hl.dsp.submap(want)) end
 end
 
 local function home()
@@ -44,6 +80,35 @@ end
 local function maximise(window)
     if window.fullscreen == 0 then
         hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 1, client = 0, window = "address:" .. window.address }))
+    end
+end
+
+local function find_window(address)
+    for _, window in ipairs(hl.get_windows()) do
+        if window.address == address then return window end
+    end
+    return nil
+end
+
+local function kept(window)
+    return any_match(M.keep[M.active.profile], window) or any_match(M.spare, window)
+end
+
+local function protected(window)
+    if kept(window) or not window.pid or window.pid <= 1 then return true end
+    for _, other in ipairs(hl.get_windows()) do
+        if other.pid == window.pid and (M.before[other.address] or kept(other)) then return true end
+    end
+    return false
+end
+
+local function reap(address, signal, next_signal)
+    if not M.active then return end
+    local window = find_window(address)
+    if not window or protected(window) then return end
+    hl.dispatch(hl.dsp.exec_cmd(string.format("kill -%s %d", signal, window.pid)))
+    if next_signal then
+        hl.timer(function() reap(address, next_signal, nil) end, { timeout = M.stray_kill_ms, type = "oneshot" })
     end
 end
 
@@ -105,9 +170,12 @@ local function enforce()
     if not (current and current.name == M.active.workspace) then
         hl.dispatch(hl.dsp.focus({ workspace = home() }))
     end
+    enter_submap()
 end
 
 local function engage()
+    M.before = {}
+    for _, window in ipairs(hl.get_windows()) do M.before[window.address] = true end
     if M.kb_options == nil then
         M.kb_options = hl.get_config("input.kb_options") or ""
         local opts = M.kb_options == "" and "srvrkeys:none" or (M.kb_options .. ",srvrkeys:none")
@@ -119,11 +187,12 @@ end
 local function release()
     rehome()
     M.opened = {}
+    M.before = {}
     if M.kb_options ~= nil then
         hl.config({ ["input.kb_options"] = M.kb_options })
         M.kb_options = nil
     end
-    if hl.get_current_submap() == "lockdown" then hl.dispatch(hl.dsp.submap("reset")) end
+    if is_lockdown_submap(hl.get_current_submap()) then hl.dispatch(hl.dsp.submap("reset")) end
 end
 
 local function poll()
@@ -135,13 +204,21 @@ local function poll()
     M.source = source
     local was = M.active
     M.active = active
-    if active then engage() elseif was then release() end
+    if active and was then
+        enforce()
+    elseif active then
+        engage()
+    elseif was then
+        release()
+    end
 end
 
 hl.on("window.open", function(window)
     if not M.active then return end
     if not allowed(window) then
-        hl.dispatch(hl.dsp.window.close({ window = "address:" .. window.address }))
+        local address = window.address
+        hl.dispatch(hl.dsp.window.close({ window = "address:" .. address }))
+        hl.timer(function() reap(address, "TERM", "KILL") end, { timeout = M.stray_check_ms, type = "oneshot" })
         return
     end
     M.opened[window.address] = true
@@ -156,6 +233,11 @@ hl.on("workspace.active", function()
             if M.active then hl.dispatch(hl.dsp.focus({ workspace = home() })) end
         end, { timeout = 10, type = "oneshot" })
     end
+end)
+
+hl.on("keybinds.submap", function(name)
+    if not M.active or name == submap_name() then return end
+    hl.timer(enter_submap, { timeout = 10, type = "oneshot" })
 end)
 
 hl.on("window.close", function(window)

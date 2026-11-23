@@ -1,4 +1,4 @@
-# Scheduled Hyprland lockdown profiles: an allowlist of windows until a goal is met or a password is entered for the day.
+# Scheduled Hyprland lockdown profiles: an allowlist of windows and a submap per substate until a goal is met or a password is entered for the day.
 
 {
   config,
@@ -45,6 +45,16 @@ let
         type = lib.types.str;
         default = "";
         description = "Text shown in the keybind reference.";
+      };
+      substates = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = "Substates whose submap holds this key; empty holds it in every substate.";
+      };
+      global = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Whether the key is also bound outside the lockdown submaps.";
       };
     };
   };
@@ -122,7 +132,7 @@ let
         binds = lib.mkOption {
           type = lib.types.listOf bindType;
           default = [ ];
-          description = "Global keys for this profile, such as pausing the clock while engaged.";
+          description = "Keys held in the profile's submaps while engaged.";
         };
         onEngage = lib.mkOption {
           type = lib.types.nullOr (lib.types.listOf lib.types.str);
@@ -152,6 +162,10 @@ let
 
   promptClass = "lockdown-prompt";
 
+  promptRule = {
+    class = "^lockdown%-prompt$";
+  };
+
   enabled = lib.filterAttrs (_: p: p.enable) cfg.profiles;
 
   profilesJson = lib.mapAttrs (_: p: {
@@ -170,21 +184,128 @@ let
     on_release = p.onRelease;
     settings_file = p.settingsFile;
     allow = lib.mapAttrs (_: map stripRule) p.allow;
-    allow_always = [ { class = "^${promptClass}$"; } ];
+    allow_always = [ promptRule ];
   }) enabled;
-
-  allBinds = lib.concatLists (lib.mapAttrsToList (_: p: p.binds) enabled);
 
   exec = cmd: "hl.dsp.exec_cmd(${luaStr cmd})";
 
-  submapLua = ''
-    ${lib.concatMapStringsSep "\n" (
-      b: "hl.bind(${luaStr b.key}, ${exec b.command}, { description = ${luaStr b.description} })"
-    ) allBinds}
-    hl.bind("SUPER+F1", ${exec "kitty --class ${promptClass} -e ${lib.getExe lockdown} prompt"}, { description = "unlock with password" })
-    hl.window_rule({ match = { class = "^${promptClass}$" }, float = true, center = true, pin = true, stay_focused = true, size = "640 220" })
-    dofile("${config.xdg.configHome}/hypr/lockdown.lua")
+  entry = key: lua: description: { inherit key lua description; };
+
+  heldIn = s: b: b.substates == [ ] || lib.elem s b.substates;
+
+  submapOf = name: s: if s == "active" then name else "${name}-${s}";
+
+  promptEntry =
+    entry "SUPER+F1" (exec "kitty --class ${promptClass} -e ${lib.getExe lockdown} prompt")
+      "unlock with password";
+
+  baseEntries = [
+    promptEntry
+    (entry "ALT+Tab" "hl.dsp.window.cycle_next()" "next allowed window")
+    (entry "SUPER+Tab" "hl.dsp.window.cycle_next()" "next allowed window, as ALT+Tab")
+  ];
+
+  entriesFor =
+    p: s:
+    map (b: entry b.key (exec b.command) b.description) (lib.filter (heldIn s) p.binds) ++ baseEntries;
+
+  submaps = lib.concatLists (
+    lib.mapAttrsToList (
+      name: p:
+      map (s: {
+        inherit name s;
+        submap = submapOf name s;
+        entries = entriesFor p s;
+      }) (lib.attrNames p.allow)
+    ) enabled
+  );
+
+  globalEntries =
+    lib.concatLists (
+      lib.mapAttrsToList (
+        _: p: map (b: entry b.key (exec b.command) b.description) (lib.filter (b: b.global) p.binds)
+      ) enabled
+    )
+    ++ [ promptEntry ];
+
+  bindLua = e: "hl.bind(${luaStr e.key}, ${e.lua}, { description = ${luaStr e.description} })";
+
+  lockedLua = config.local.wm.lockedBindsLua or "";
+
+  submapBlock = name: entries: ''
+    hl.define_submap(${luaStr name}, function()
+    ${lib.concatMapStringsSep "\n" bindLua entries}
+    ${lockedLua}
+    end)
   '';
+
+  luaRule =
+    r:
+    "{ ${lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k} = ${luaStr v}") (stripRule r))} }";
+  luaRules = rs: "{ ${lib.concatMapStringsSep ", " luaRule rs} }";
+
+  submapLua = ''
+    ${lib.concatMapStringsSep "\n" bindLua globalEntries}
+    hl.window_rule({ match = { class = "^${promptClass}$" }, float = true, center = true, pin = true, stay_focused = true, size = "640 220" })
+    ${submapBlock "lockdown" baseEntries}
+    ${lib.concatMapStringsSep "\n" (m: submapBlock m.submap m.entries) submaps}
+    wm_app_submaps = wm_app_submaps or {}
+    ${lib.concatMapStringsSep "\n" (n: "wm_app_submaps[${luaStr n}] = true") (
+      [ "lockdown" ] ++ map (m: m.submap) submaps
+    )}
+    local lockdown = dofile("${config.xdg.configHome}/hypr/lockdown.lua")
+    lockdown.submaps = { ${
+      lib.concatStringsSep ", " (
+        lib.mapAttrsToList (
+          name: p:
+          "[${luaStr name}] = { ${
+            lib.concatMapStringsSep ", " (s: "[${luaStr s}] = ${luaStr (submapOf name s)}") (
+              lib.attrNames p.allow
+            )
+          } }"
+        ) enabled
+      )
+    } }
+    lockdown.keep = { ${
+      lib.concatStringsSep ", " (
+        lib.mapAttrsToList (
+          name: p:
+          "[${luaStr name}] = ${luaRules (lib.concatLists (lib.attrValues p.allow) ++ [ promptRule ])}"
+        ) enabled
+      )
+    } }
+    lockdown.spare = ${luaRules cfg.spare}
+  '';
+
+  keyParts = spec: lib.splitString "+" spec;
+
+  helpEntries =
+    lib.mapAttrsToList
+      (
+        _: group:
+        let
+          e = (lib.head group).e;
+          parts = keyParts e.key;
+        in
+        {
+          mods = lib.concatStringsSep " " (lib.init parts);
+          key = lib.last parts;
+          desc = "${e.description} (${lib.concatMapStringsSep ", " (g: g.submap) group})";
+          group = "lockdown";
+          owner = "hyprland";
+        }
+      )
+      (
+        lib.groupBy (x: "${x.e.key}|${x.e.description}") (
+          lib.concatMap (
+            m:
+            map (e: {
+              inherit e;
+              inherit (m) submap;
+            }) m.entries
+          ) submaps
+        )
+      );
 
   calendar =
     p:
@@ -217,6 +338,14 @@ in
       default = { };
       description = "Lockdown profiles by name; at most one is enforced at a time, the first by name.";
     };
+    spare = lib.mkOption {
+      type = lib.types.listOf ruleType;
+      default = [
+        { class = "[Cc]hrom"; }
+        { class = "[Ff]irefox"; }
+      ];
+      description = "Windows whose process is never killed as a stray during a lockdown.";
+    };
   };
 
   config = lib.mkIf (enabled != { }) {
@@ -227,6 +356,7 @@ in
 
     xdg.configFile."lockdown/profiles.json".text = builtins.toJSON profilesJson;
     xdg.configFile."hypr/lockdown.lua".source = ./hypr/lockdown.lua;
+    local.wm.lockdownHelp = helpEntries;
 
     wayland.windowManager.hyprland.extraConfig = lib.mkAfter submapLua;
 

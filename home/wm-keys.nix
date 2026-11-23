@@ -302,7 +302,7 @@ let
     end
 
     local function in_apps(name)
-      return name == nil or name == "" or name == "default" or name == "reset"
+      return name == nil or name == "" or name == "default" or name == "reset" or (wm_app_submaps or {})[name] == true
     end
 
     hl.on("keybinds.submap", function(name)
@@ -645,7 +645,9 @@ let
     else
       throw "toElisp: unsupported value";
 
-  helpJson = pkgs.writeText "wm-help.json" (builtins.toJSON helpData);
+  helpJson = pkgs.writeText "wm-help.json" (
+    builtins.toJSON (helpData // { lockdown = cfg.lockdownHelp; })
+  );
 
   keysEl = pkgs.writeText "wm-keys.el" ''
     ;;; wm-keys.el --- generated from local.wm.keys -*- lexical-binding: t; -*-
@@ -769,6 +771,18 @@ in
       readOnly = true;
       description = "Generated Lua bind fragment, loaded with dofile.";
     };
+
+    lockedBindsLua = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      description = "Lua bind lines for the root bindings flagged locked, for submaps that keep media and brightness keys.";
+    };
+
+    lockdownHelp = lib.mkOption {
+      type = lib.types.listOf (lib.types.attrsOf lib.types.str);
+      default = [ ];
+      description = "Lockdown submap keys listed in the keybind reference under group lockdown.";
+    };
   };
 
   config = {
@@ -807,6 +821,9 @@ in
     ];
 
     local.wm.bindsFile = bindsLua;
+    local.wm.lockedBindsLua = lib.concatMapStringsSep "\n" bindLine (
+      lib.filter (b: lib.elem "locked" b.flags) (named cfg.keys)
+    );
     local.wm.panicCommand = "${wmPanic}/bin/wm-panic";
     home.packages = lib.mkIf cfg.enable [
       emacsCall

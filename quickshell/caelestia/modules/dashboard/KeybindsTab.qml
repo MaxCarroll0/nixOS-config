@@ -45,7 +45,7 @@ Item {
         return out;
     }
 
-    readonly property var groupOrder: ["focus", "move", "size", "edit", "select", "launch", "shell", "session", "escape"]
+    readonly property var groupOrder: ["focus", "move", "size", "edit", "select", "launch", "shell", "session", "escape", "lockdown"]
     readonly property real maxHeight: Screen.height - 160
     readonly property real maxWidth: Screen.width - 220
     readonly property real fit: Math.min(1, maxHeight / Math.max(1, layout.implicitHeight), maxWidth / Math.max(1, layout.implicitWidth))
@@ -67,6 +67,7 @@ Item {
             all.push(...entries(map.keys ?? {}, lead));
         }
         all.push(...entries(keymap.keypad ?? {}, keypad));
+        all.push(...entries(keymap.lockdown ?? [], ""));
         const seen = new Set();
         const groups = {};
         for (const row of all) {
