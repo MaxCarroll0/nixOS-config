@@ -900,12 +900,32 @@ def do_end(cur: dict, at: float):
     return "interview complete and counted; the interviewer writes the records, then `interview close` closes its window"
 
 
+def missing_bench(meta: dict) -> str | None:
+    session, lang, problem = Path(meta["dir"]), meta["lang"], meta["problem"]
+    if not (problem_dir(problem) / "bench" / lang).is_dir():
+        return None
+    store = session / "benchmarks.json"
+    if not store.exists():
+        return f"no {store}"
+    main = session / main_file(lang)
+    reviewed = main.exists() and "Generated after review" in main.read_text(errors="replace")
+    names = [v["name"] for v in json.loads(store.read_text()).get("versions", [])]
+    if reviewed and names == ["submitted"]:
+        return f"{store} has only the submission, but {main.name} has reviewed versions"
+    return None
+
+
 def cmd_close(args) -> int:
     at = now()
     with locked():
         cur = load_current()
         if cur and cur["phase"] != "review":
             print(f"cannot close during {cur['phase']}; finish coding first with `interview done`", file=sys.stderr)
+            return 1
+        meta = cur or last_ended()
+        gap = meta and not args.force and missing_bench(meta)
+        if gap:
+            print(f"not closed: {gap}; run `timeout 900 interview bench {meta['dir']} NAME=EXPR ...` for every reviewed version first (`--force` closes anyway)", file=sys.stderr)
             return 1
         if cur:
             cur["review_ended"] = at
@@ -2114,7 +2134,8 @@ def main() -> int:
     p.add_argument("--show", action="store_true", help="print the full output even while coding")
     p.set_defaults(fn=cmd_submit_tests)
 
-    p = sub.add_parser("close", help="close the interviewer window and the session's Emacs buffers; during review it ends the interview first")
+    p = sub.add_parser("close", help="close the interviewer window and the session's Emacs buffers; during review it ends the interview first; refuses while DIR/benchmarks.json is missing")
+    p.add_argument("--force", action="store_true", help="close without the benchmark record")
     p.set_defaults(fn=cmd_close)
 
     p = sub.add_parser("submit", help="run the hidden tests and, if they pass, finish coding and start the review; the benchmark is optional")

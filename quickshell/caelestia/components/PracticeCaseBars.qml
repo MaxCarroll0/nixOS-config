@@ -10,11 +10,11 @@ ColumnLayout {
 
     required property var session
     property bool expanded: false
-    property int index: -1
+    property int index: 0
 
     readonly property var cases: session.bench_cases ?? []
     readonly property var versions: (session.versions ?? []).filter(v => (v.cases ?? []).length > 0)
-    readonly property var current: index < 0 ? null : cases[Math.min(index, cases.length - 1)] ?? null
+    readonly property var current: cases[Math.min(index, cases.length - 1)] ?? null
     readonly property var labels: {
         const l = {};
         for (const c of cases)
@@ -73,7 +73,7 @@ ColumnLayout {
 
         StyledText {
             Layout.fillWidth: true
-            text: !root.expanded ? `Per-case times (${root.cases.length} cases)` : root.current ? `case ${root.current.case} · ${root.current.label} · limit ${root.current.limit}s` : `Tails: slowdown vs fastest, 1x to ${root.ratio(root.ratioTop)}`
+            text: !root.expanded ? `Tails: slowdown vs fastest per case, 1x to ${root.ratio(root.ratioTop)}` : root.current ? `case ${root.current.case} · ${root.current.label} · limit ${root.current.limit}s` : ""
             elide: Text.ElideRight
             color: Colours.palette.m3onSurfaceVariant
             font: Tokens.font.body.small
@@ -83,8 +83,8 @@ ColumnLayout {
             visible: root.expanded
             type: IconButton.Text
             icon: "chevron_left"
-            disabled: root.index < 0
-            onClicked: root.index = Math.max(-1, root.index - 1)
+            disabled: root.index <= 0
+            onClicked: root.index = Math.max(0, root.index - 1)
         }
 
         IconButton {
@@ -97,7 +97,7 @@ ColumnLayout {
     }
 
     Repeater {
-        model: root.expanded && !root.current ? root.versions : []
+        model: root.expanded ? [] : root.versions
 
         RowLayout {
             id: tailRow
@@ -170,7 +170,7 @@ ColumnLayout {
     }
 
     StyledText {
-        visible: root.expanded && !root.current
+        visible: !root.expanded
         Layout.fillWidth: true
         text: {
             const seen = [];
