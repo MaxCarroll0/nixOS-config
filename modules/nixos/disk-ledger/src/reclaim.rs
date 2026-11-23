@@ -289,8 +289,6 @@ pub fn truthy(value: &Value) -> bool {
 pub fn protected_class(link: &str, reason: &str) -> &'static str {
     let name = basename(link);
     if link == "/run/current-system"
-        || link == "/run/booted-system"
-        || reason == "booted generation"
         || (reason == "current generation" && name.starts_with("system-"))
     {
         return "running_system";
@@ -303,7 +301,11 @@ pub fn protected_class(link: &str, reason: &str) -> &'static str {
     if reason == "current generation" {
         return "profiles";
     }
-    if reason == "previous generation" || name == "previous-successful-boot" {
+    if reason == "previous generation"
+        || reason == "previous successful boot"
+        || link == "/run/booted-system"
+        || name == "previous-successful-boot"
+    {
         return "previous";
     }
     if reason.starts_with("live shell") {
@@ -1522,15 +1524,15 @@ impl Model {
                 .into_iter()
                 .map(|name| join("/nix/var/nix/profiles/per-user", &name)),
         );
-        let running: Vec<(String, &str)> = [
-            ("/run/booted-system", "booted generation"),
+        let pinned: Vec<(String, &str)> = [
+            ("/nix/var/nix/gcroots/previous-successful-boot", "previous successful boot"),
             ("/run/current-system", "current generation"),
         ]
         .iter()
         .map(|(path, reason)| (realpath(path), *reason))
         .collect();
-        let running_reason = |target: &str| {
-            running
+        let pinned_reason = |target: &str| {
+            pinned
                 .iter()
                 .rev()
                 .find(|(path, _)| path == target)
@@ -1564,7 +1566,7 @@ impl Model {
                         );
                         continue;
                     }
-                    if let Some(reason) = running_reason(&realpath(link)) {
+                    if let Some(reason) = pinned_reason(&realpath(link)) {
                         self.protect(link, reason);
                         continue;
                     }
@@ -2280,7 +2282,11 @@ impl Model {
             }
             live = protected_live.clone();
             for item in items.iter_mut().rev() {
-                item.store = claim(store, &item.targets, &mut live);
+                item.store = if item.kind == Kind::Dead {
+                    claim_targets(store, &item.targets, &mut live)
+                } else {
+                    claim(store, &item.targets, &mut live)
+                };
             }
             let mut owner = vec![u32::MAX; live.len()];
             for item in items.iter() {
@@ -2474,6 +2480,14 @@ pub fn removed_with(store: &Store, starts: &[u32], taken: &mut [bool]) -> Vec<u3
         );
     }
     found
+}
+
+fn claim_targets(store: &Store, targets: &[u32], live: &mut [bool]) -> Vec<u32> {
+    targets
+        .iter()
+        .copied()
+        .filter(|slot| store.get(*slot).alive && !std::mem::replace(&mut live[*slot as usize], true))
+        .collect()
 }
 
 pub fn claim(store: &Store, starts: &[u32], live: &mut [bool]) -> Vec<u32> {
