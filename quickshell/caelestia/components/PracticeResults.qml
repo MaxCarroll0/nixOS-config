@@ -140,7 +140,7 @@ ColumnLayout {
             Layout.fillWidth: true
             spacing: Tokens.spacing.small
 
-            StyledText {
+            ElidedText {
                 Layout.preferredWidth: 76
                 text: row.modelData.name
                 elide: Text.ElideRight
@@ -263,7 +263,7 @@ ColumnLayout {
                 }
             }
 
-            StyledText {
+            ElidedText {
                 Layout.preferredWidth: 40
                 horizontalAlignment: Text.AlignRight
                 text: !root.picking ? root.summary(row.modelData) : row.selected >= 0 ? `#${row.selected}` : ""
@@ -278,7 +278,7 @@ ColumnLayout {
                 font: Tokens.font.mono.small
             }
 
-            StyledText {
+            ElidedText {
                 Layout.preferredWidth: 56
                 horizontalAlignment: Text.AlignRight
                 text: !root.picking ? root.meanText(row.modelData) : row.selected >= 0 ? root.caseText(row.selectedResult) : ""

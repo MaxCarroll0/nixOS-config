@@ -66,7 +66,7 @@ ColumnLayout {
             RowLayout {
                 Layout.fillWidth: true
 
-                StyledText {
+                ElidedText {
                     Layout.fillWidth: true
                     text: root.cur ? `${Practice.langNames[root.cur.lang] ?? root.cur.lang} · ${root.cur.problem}` : ""
                     elide: Text.ElideRight
@@ -212,7 +212,7 @@ ColumnLayout {
                     onTapped: todaySession.open = !todaySession.open
                 }
 
-                StyledText {
+                ElidedText {
                     Layout.fillWidth: true
                     text: `${Practice.langNames[todaySession.modelData.lang] ?? todaySession.modelData.lang} · ${todaySession.modelData.problem}`
                     elide: Text.ElideRight

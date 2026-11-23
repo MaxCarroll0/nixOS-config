@@ -351,7 +351,7 @@ Item {
                                 Layout.fillWidth: true
                                 spacing: 0
 
-                                StyledText {
+                                ElidedText {
                                     Layout.fillWidth: true
                                     text: session.modelData.problem
                                     elide: Text.ElideRight
