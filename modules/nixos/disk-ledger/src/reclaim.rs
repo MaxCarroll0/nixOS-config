@@ -1043,8 +1043,10 @@ pub fn ignored(root: &str, lines: &[String], user: &str) -> Vec<String> {
         .collect()
 }
 
-fn guards_source_only(reason: &str) -> bool {
-    reason.starts_with("git clone: ") || reason == "uncommitted changes"
+fn guards_source_only(path: &str, reason: &str) -> bool {
+    reason.starts_with("git clone: ")
+        || reason == "uncommitted changes"
+        || (reason == "in use by a process" && lexists(&join(path, ".git")))
 }
 
 pub fn project_for(root: &str) -> Option<String> {
@@ -2130,7 +2132,7 @@ impl Model {
             if self
                 .protected
                 .get(path)
-                .is_some_and(|reason| !guards_source_only(reason))
+                .is_some_and(|reason| !guards_source_only(path, reason))
             {
                 return None;
             }
