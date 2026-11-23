@@ -2310,7 +2310,11 @@ impl Model {
             }
             live = protected_live.clone();
             for item in items.iter_mut().rev() {
-                item.store = claim(store, &item.targets, &mut live);
+                item.store = if item.kind == Kind::Dead {
+                    claim_targets(store, &item.targets, &mut live)
+                } else {
+                    claim(store, &item.targets, &mut live)
+                };
             }
             let mut owner = vec![u32::MAX; live.len()];
             for item in items.iter() {
@@ -2504,6 +2508,14 @@ pub fn removed_with(store: &Store, starts: &[u32], taken: &mut [bool]) -> Vec<u3
         );
     }
     found
+}
+
+fn claim_targets(store: &Store, targets: &[u32], live: &mut [bool]) -> Vec<u32> {
+    targets
+        .iter()
+        .copied()
+        .filter(|slot| store.get(*slot).alive && !std::mem::replace(&mut live[*slot as usize], true))
+        .collect()
 }
 
 pub fn claim(store: &Store, starts: &[u32], live: &mut [bool]) -> Vec<u32> {

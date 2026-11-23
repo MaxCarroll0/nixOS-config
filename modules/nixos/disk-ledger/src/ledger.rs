@@ -27,6 +27,7 @@ const GIB: i64 = 1 << 30;
 const MIB: i64 = 1 << 20;
 const DAY: i64 = 86400;
 const PROBE_SECONDS: f64 = 10.0;
+const SETTLE_SECONDS: f64 = 60.0;
 const MARGIN: i64 = 512 * MIB;
 const FIT_SLACK: i64 = 1024 * MIB;
 const RAMP: i64 = 4 * GIB;
@@ -522,6 +523,7 @@ pub struct Ledger {
     unaccounted: i64,
     dirty_target: &'static str,
     settled_residual: i64,
+    settled_at: f64,
     internals: Vec<(String, u64)>,
     internals_at: f64,
     xattr: HashMap<String, u64>,
@@ -763,6 +765,7 @@ impl Ledger {
             unaccounted: 0,
             dirty_target: "system_files",
             settled_residual: 0,
+            settled_at: 0.0,
             internals,
             internals_at: clock(),
             xattr: HashMap::new(),
@@ -1276,8 +1279,9 @@ impl Ledger {
         }
         segments.insert("held", self.held.iter().map(|row| row.size as i64).sum());
         let mut residual = disk.used - segments.values().sum::<i64>();
-        if self.tree.dirty.is_empty() {
+        if self.tree.dirty.is_empty() || clock() - self.settled_at >= SETTLE_SECONDS {
             self.settled_residual = residual;
+            self.settled_at = clock();
         } else if residual != self.settled_residual {
             let target = self.dirty_segment();
             let current = segments.get(target).copied().unwrap_or(0);
