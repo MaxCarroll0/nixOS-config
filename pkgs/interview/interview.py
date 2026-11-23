@@ -1044,10 +1044,10 @@ def bench_summary(result: dict | None) -> str:
         parts.append(f"{over} finished over the limit")
     for c in cases:
         if c["status"] == "killed":
-            parts.append(f"case {c['case']} stopped after {c['seconds']:.1f}s")
+            parts.append(f"case {c['case']} too slow")
     skipped = sum(1 for c in cases if c["status"] == "not run")
     if skipped:
-        parts.append(f"{skipped} not run after the stop")
+        parts.append(f"{skipped} not run after that")
     return f"not met: too slow (performance: {'; '.join(parts)})"
 
 
@@ -1066,8 +1066,8 @@ def bench_case_line(c: dict) -> str:
     if c["status"] == "not run":
         return f"  case {c['case']}: not run (limit {c['limit']:g}s)"
     if c["status"] == "killed":
-        return f"  case {c['case']}: stopped after {c['seconds']:.1f}s (limit {c['limit']:g}s)"
-    return f"  case {c['case']}: {c['status']} in {c['seconds']:.3f}s (limit {c['limit']:g}s)"
+        return f"  case {c['case']}: too slow (limit {c['limit']:g}s)"
+    return f"  case {c['case']}: {c['status']} in {short_time(c['seconds'])} (limit {c['limit']:g}s)"
 
 
 def cmd_submit_tests(args) -> int:
@@ -1232,8 +1232,46 @@ def bench_cases(problem: str, versions: list[dict]) -> list[dict]:
             for k in sorted(limits)]
 
 
-BAR_FLOOR = 1e-4
+BAR_FLOOR = 1e-6
+RATIO_FLOOR = 1e-5
 BAR_WIDTH = 32
+TIMED_STATUSES = ("ok", "unchecked", "killed")
+
+
+def short_time(seconds: float) -> str:
+    if seconds < 1e-6:
+        return "<1µs"
+    if seconds < 1e-3:
+        return f"{seconds * 1e6:.0f}µs"
+    if seconds < 1:
+        return f"{seconds * 1e3:.{1 if seconds < 0.01 else 0}f}ms"
+    return f"{seconds:.2f}s"
+
+
+def short_ratio(ratio: float) -> str:
+    return f"{ratio:.1f}x" if ratio < 10 else f"{ratio:.0f}x"
+
+
+def with_ratios(versions: list[dict]) -> list[dict]:
+    best: dict[int, float] = {}
+    for v in versions:
+        for c in v.get("cases", []):
+            if c["status"] in ("ok", "unchecked"):
+                best[c["case"]] = min(best.get(c["case"], math.inf), max(c["seconds"], RATIO_FLOOR))
+    out = []
+    for v in versions:
+        cases = []
+        for c in v.get("cases", []):
+            timed = c["status"] in TIMED_STATUSES and c["case"] in best
+            cases.append(c | {"ratio": max(c["seconds"], RATIO_FLOOR) / best[c["case"]] if timed else None})
+        ratios = sorted(c["ratio"] for c in cases if c["ratio"] is not None)
+        worst = max((c for c in cases if c["ratio"] is not None), key=lambda c: c["ratio"], default=None)
+        tail = None
+        if ratios:
+            tail = {"median": ratios[len(ratios) // 2], "worst": worst["ratio"], "worst_case": worst["case"],
+                    "over2": sum(r > 2 for r in ratios), "measured": len(ratios)}
+        out.append(v | {"cases": cases, "tail": tail})
+    return out
 
 
 def bar_scale(cases: list[dict], versions: list[dict]) -> float:
@@ -1241,47 +1279,69 @@ def bar_scale(cases: list[dict], versions: list[dict]) -> float:
     return max([longest] + [4 * c["limit"] for c in cases] + [BAR_FLOOR * 10])
 
 
-def bar_position(seconds: float, top: float) -> float:
-    return math.log(max(seconds, BAR_FLOOR) / BAR_FLOOR) / math.log(top / BAR_FLOOR)
+def ratio_scale(versions: list[dict]) -> float:
+    return max([10.0] + [v["tail"]["worst"] for v in versions if v["tail"]])
+
+
+def log_position(value: float, low: float, high: float) -> float:
+    return min(1.0, math.log(max(value, low) / low) / math.log(high / low))
 
 
 def bar_text(seconds: float | None, limit: float, top: float) -> str:
-    filled = 0 if seconds is None else round(bar_position(seconds, top) * BAR_WIDTH * 8)
-    cells = []
-    for i in range(BAR_WIDTH):
-        part = max(0, min(8, filled - 8 * i))
-        cells.append(" ▏▎▍▌▋▊▉█"[part])
-    tick = min(BAR_WIDTH - 1, int(bar_position(limit, top) * BAR_WIDTH))
+    filled = 0 if seconds is None else max(1, round(log_position(seconds, BAR_FLOOR, top) * BAR_WIDTH * 8))
+    cells = [" ▏▎▍▌▋▊▉█"[max(0, min(8, filled - 8 * i))] for i in range(BAR_WIDTH)]
+    tick = min(BAR_WIDTH - 1, int(log_position(limit, BAR_FLOOR, top) * BAR_WIDTH))
     if cells[tick] == " ":
         cells[tick] = "┊"
     return "".join(cells)
 
 
+def strip_text(ratios: list[float], top: float) -> str:
+    counts = [0] * BAR_WIDTH
+    for r in ratios:
+        counts[min(BAR_WIDTH - 1, int(log_position(r, 1.0, top) * BAR_WIDTH))] += 1
+    return "".join(" ·:⁝⁞"[min(n, 4)] for n in counts)
+
+
 def case_status(c: dict) -> str:
     if c["status"] == "killed":
-        return f"stopped at {c['seconds']:.1f}s"
+        return "too slow"
     if c["status"] == "not run":
         return "not run"
     if c["status"] in WRONG_STATUSES:
         return c["status"].upper()
-    return f"{c['seconds']:.3f}s{'' if c['met'] else ' over'}"
+    return f"{short_time(c['seconds'])}{'' if c['met'] else ' over'}"
 
 
 def print_bench_chart(problem: str, record: dict) -> None:
-    versions = [v for v in record["versions"] if v.get("cases")]
+    versions = with_ratios([v for v in record["versions"] if v.get("cases")])
     if not versions:
         return
     cases = bench_cases(problem, versions)
-    top = bar_scale(cases, versions)
+    labels = {c["case"]: c["label"] for c in cases}
     width = max(len(v["name"]) for v in versions)
-    print(f"\nper case (log scale {BAR_FLOOR:g}s to {top:g}s, ┊ marks the limit)")
+    rtop = ratio_scale(versions)
+    print(f"\ntails: each case's slowdown against the fastest version on it (log scale 1x to {short_ratio(rtop)}; · one case, : two, ⁝ three, ⁞ more)")
+    for v in versions:
+        tail = v["tail"]
+        if not tail:
+            print(f"  {v['name']:<{width}} {' ' * BAR_WIDTH} no timed cases")
+            continue
+        strip = strip_text([c["ratio"] for c in v["cases"] if c["ratio"] is not None], rtop)
+        missing = len(v["cases"]) - tail["measured"]
+        print(f"  {v['name']:<{width}} {strip} median {short_ratio(tail['median'])}, worst {short_ratio(tail['worst'])} "
+              f"(case {tail['worst_case']}: {labels.get(tail['worst_case'], '')}), {tail['over2']} over 2x"
+              f"{f', {missing} not timed' if missing else ''}")
+    top = bar_scale(cases, versions)
+    print(f"\nper case (log scale 1µs to {short_time(top)}, ┊ marks the limit, Nx is the slowdown against the fastest)")
     for case in cases:
         print(f"case {case['case']}: {case['label']} (limit {case['limit']:g}s)")
         for v in versions:
             c = next((c for c in v["cases"] if c["case"] == case["case"]), None)
             if c is None:
                 continue
-            print(f"  {v['name']:<{width}} {bar_text(c['seconds'] if c['status'] != 'not run' else None, case['limit'], top)} {case_status(c)}")
+            ratio = f" {'>' if c['status'] == 'killed' else ''}{short_ratio(c['ratio'])}" if c["ratio"] is not None and c["ratio"] >= 1.05 else ""
+            print(f"  {v['name']:<{width}} {bar_text(c['seconds'] if c['status'] != 'not run' else None, case['limit'], top)} {case_status(c)}{ratio}")
 
 
 def cmd_bench(args) -> int:
@@ -1498,14 +1558,14 @@ def cmd_log(args) -> int:
             store = sdir / "benchmarks.json"
             versions, cases = [], []
             with contextlib.suppress(OSError, ValueError, KeyError):
-                stored = json.loads(store.read_text())["versions"]
+                stored = with_ratios(json.loads(store.read_text())["versions"])
                 cases = bench_cases(e["problem"], stored)
                 for v in stored:
                     time_sum = round(sum(c.get("seconds") or 0 for c in v.get("cases", [])), 6)
                     correctness, performance = classify(v.get("hidden", "none"), v.get("cases", []), v.get("hidden_wrong", 0))
                     entry = {k: v.get(k) for k in ("name", "hidden", "benchmark", "met", "total", "slowest")}
                     entry.update(time=time_sum, correctness=correctness, performance=performance,
-                                 cases=[{"seconds": c.get("seconds"), "status": c["status"], "met": c["met"]} for c in v.get("cases", [])])
+                                 tail=v["tail"], cases=[{k: c.get(k) for k in ("seconds", "status", "met", "ratio")} for c in v["cases"]])
                     versions.append(entry)
             s.update(complete=True, early=e.get("early"), hidden_tests=e.get("hidden_tests"), benchmark=e.get("benchmark"), dir=e.get("dir"),
                      review_md=str(review) if review.exists() else None, versions=versions, bench_cases=cases)

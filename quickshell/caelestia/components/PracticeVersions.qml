@@ -10,7 +10,11 @@ GridLayout {
     required property var session
 
     function seconds(s: real): string {
-        return s < 1 ? `${Math.round(s * 1000)}ms` : `${s.toFixed(2)}s`;
+        if (s < 1e-6)
+            return "<1µs";
+        if (s < 1e-3)
+            return `${Math.round(s * 1e6)}µs`;
+        return s < 1 ? `${(s * 1000).toFixed(s < 0.01 ? 1 : 0)}ms` : `${s.toFixed(2)}s`;
     }
 
     visible: (session.versions ?? []).length > 0
@@ -41,7 +45,7 @@ GridLayout {
                     mono: true,
                     fill: false
                 }, {
-                    text: benched && performance !== "unknown" ? root.seconds(v.time ?? v.slowest ?? 0) : "",
+                    text: !benched || performance === "unknown" ? "" : (v.cases ?? []).some(c => c.status === "killed") ? "too slow" : root.seconds(v.time ?? v.slowest ?? 0),
                     tone: "",
                     mono: true,
                     fill: false
