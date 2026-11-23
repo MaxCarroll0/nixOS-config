@@ -680,6 +680,41 @@ fn removal_takes_referrers_once_in_rank_order() {
 }
 
 #[test]
+fn a_dead_item_leaves_its_live_dependencies_to_their_owner() {
+    let mut store = crate::store::Store::new(":memory:");
+    let edges: [(&[u32], &[u32]); 3] = [(&[1], &[]), (&[], &[0, 2]), (&[1], &[])];
+    for (index, (refs, referrers)) in edges.iter().enumerate() {
+        store.paths.push(crate::store::Path {
+            path: format!("/nix/store/{index}"),
+            refs: refs.to_vec(),
+            referrers: referrers.to_vec(),
+            alive: true,
+            ..Default::default()
+        });
+    }
+    let mut live = vec![false; 3];
+    assert_eq!(claim_targets(&store, &[0], &mut live), vec![0]);
+    let mut generation = claim(&store, &[2], &mut live);
+    generation.sort_unstable();
+    assert_eq!(generation, vec![1, 2]);
+    let mut taken = vec![false; 3];
+    let mut removed = removed_with(&store, &[0], &mut taken);
+    removed.extend(removed_with(&store, &generation, &mut taken));
+    removed.sort_unstable();
+    assert_eq!(removed, vec![0, 1, 2]);
+}
+
+#[test]
+fn only_the_current_generation_is_running() {
+    assert_eq!(protected_class("/run/current-system", "root"), "running_system");
+    assert_eq!(protected_class("/nix/var/nix/profiles/system-348-link", "current generation"), "running_system");
+    assert_eq!(protected_class("/nix/var/nix/profiles/system-347-link", "previous generation"), "previous");
+    assert_eq!(protected_class("/nix/var/nix/profiles/system-342-link", "previous successful boot"), "previous");
+    assert_eq!(protected_class("/nix/var/nix/gcroots/previous-successful-boot", "root"), "previous");
+    assert_eq!(protected_class("/run/booted-system", "root"), "previous");
+}
+
+#[test]
 fn refuses_items_changed_since_measured() {
     let fx = fixture("stale");
     let home = format!("{}/home", fx.base);

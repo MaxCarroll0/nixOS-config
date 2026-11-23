@@ -470,22 +470,52 @@ pub fn read_dir_where(
 }
 
 pub fn walk_tree(path: &str, mut visit: impl FnMut(&Entry)) -> bool {
-    let Some(root) = open_walk(libc::AT_FDCWD, &cstr(path)) else {
-        return false;
-    };
-    let mut stack = vec![root];
-    while let Some(fd) = stack.pop() {
-        read_dir_fd(fd, |entry| {
+    let mut stack = vec![cstr(path)];
+    let mut complete = true;
+    while let Some(directory) = stack.pop() {
+        let Some(fd) = open_walk(libc::AT_FDCWD, &directory) else {
+            complete = false;
+            continue;
+        };
+        complete &= read_dir_fd(fd, |entry| {
             visit(&entry);
             if is_dir(entry.mode) {
-                if let Ok(name) = CString::new(entry.name.clone()) {
-                    if let Some(child) = open_walk(fd, &name) {
-                        stack.push(child);
-                    }
+                let mut child = directory.as_bytes().to_vec();
+                child.push(b'/');
+                child.extend_from_slice(&entry.name);
+                if let Ok(child) = CString::new(child) {
+                    stack.push(child);
                 }
             }
         });
         close(fd);
     }
-    true
+    complete
+}
+
+#[cfg(test)]
+mod walk_tests {
+    #[test]
+    fn walks_directories_wider_than_the_fd_limit() {
+        let wide = 300;
+        let base = std::env::temp_dir().join(format!("walk-wide-{}", std::process::id()));
+        for index in 0..wide {
+            std::fs::create_dir_all(base.join(index.to_string()).join("leaf")).unwrap();
+        }
+        let path = base.to_str().unwrap().to_string();
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            let limit = libc::rlimit { rlim_cur: 64, rlim_max: 64 };
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) };
+            let mut directories = 0;
+            let complete = super::walk_tree(&path, |entry| {
+                directories += usize::from(super::is_dir(entry.mode));
+            });
+            unsafe { libc::_exit(i32::from(!(complete && directories == 2 * wide))) };
+        }
+        let mut status = 0;
+        unsafe { libc::waitpid(child, &mut status, 0) };
+        std::fs::remove_dir_all(&base).unwrap();
+        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0, "status {status}");
+    }
 }
