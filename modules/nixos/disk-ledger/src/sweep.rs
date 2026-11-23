@@ -34,6 +34,7 @@ pub struct Task {
     pub ordered: Vec<String>,
     pub references: HashMap<String, Vec<String>>,
     pub orphans: Vec<String>,
+    pub invalid: Vec<String>,
     pub scope: Scope,
     pub level: f64,
     pub round: u64,
@@ -306,7 +307,7 @@ impl Worker {
             self.session = Some(if std::env::var("LEDGER_NATIVE_GC").as_deref() == Ok("0") {
                 Err("disabled".into())
             } else {
-                gc::Session::open(&gc::Layout::system(), &task.orphans)
+                gc::Session::open(&gc::Layout::system(), &task.orphans, &task.invalid)
             });
         }
         match self.session.as_mut() {

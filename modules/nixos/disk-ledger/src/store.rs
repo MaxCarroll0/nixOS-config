@@ -69,6 +69,8 @@ pub struct Store {
     pub orphan_bytes: u64,
     pub orphan_count: u64,
     pub orphans: Vec<String>,
+    pub invalid_bytes: u64,
+    pub invalid: Vec<String>,
     pub stale_links: u64,
     pub links_blocks: u64,
     pub walked: u64,
@@ -369,6 +371,8 @@ impl Store {
             orphan_bytes: 0,
             orphan_count: 0,
             orphans: Vec::new(),
+            invalid_bytes: 0,
+            invalid: Vec::new(),
             stale_links: 0,
             links_blocks: 0,
             walked: 0,
@@ -993,7 +997,9 @@ impl Store {
     }
 
     pub fn scan_links(&mut self) {
-        self.apply_links(&gc::scan_links(LINKS));
+        let mut scan = gc::scan_links(LINKS);
+        scan.invalid = gc::scan_invalid("/nix/store", "/nix/var/nix");
+        self.apply_links(&scan);
     }
 
     pub fn apply_links(&mut self, scan: &gc::LinkScan) {
@@ -1035,6 +1041,8 @@ impl Store {
         self.orphan_bytes = orphan_bytes;
         self.orphan_count = orphans.len() as u64;
         self.orphans = orphans;
+        self.invalid_bytes = scan.invalid.iter().map(|entry| entry.1).sum();
+        self.invalid = scan.invalid.iter().map(|entry| entry.0.clone()).collect();
         self.stale_links = stale;
     }
 
