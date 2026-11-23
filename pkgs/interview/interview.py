@@ -9,7 +9,9 @@ import hmac
 import re
 import json
 import os
+import select
 import shlex
+import signal
 import shutil
 import stat
 import subprocess
@@ -320,6 +322,7 @@ Fill this in during the review phase. Compare against SOLUTIONS.md beside it.
 
 - finished: {how} after {minutes} active minutes
 - hidden tests: {hidden} (rerun with `interview submit-tests`; full output is shown during review)
+- benchmark, the ideal complexity: {benchmark}
 - hints used: {hints}
 - extended: {extended}
 
@@ -371,7 +374,7 @@ def open_review(cur: dict, early: bool) -> None:
             review.write_text(REVIEW_TEMPLATE.format(
                 lang=cur["lang"], problem=cur["problem"], dir=cur["dir"],
                 how="early" if early else "at time", minutes=round(cur["used_before"] / 60),
-                hidden=cur.get("hidden_tests") or "not run", hints=len(cur.get("hints", [])),
+                hidden=cur.get("hidden_tests") or "not run", benchmark=cur.get("benchmark") or "not run", hints=len(cur.get("hints", [])),
                 extended=extensions_line(cur)))
 
 
@@ -383,7 +386,7 @@ def end_coding(cur: dict, at: float, early: bool) -> dict:
         log("paused", cur, cur["pause_started"], at)
         cur["pause_seconds"] += at - cur["pause_started"]
         run_hook(config()["on_resume"])
-    log("coding", cur, cur["started"], at, active=round(cur["used_before"]), early=early)
+    log("coding", cur, cur["started"], at, seconds=round(cur["used_before"]), active=round(cur["used_before"]), early=early)
     freeze(cur)
     open_review(cur, early)
     cur["phase"] = "review"
@@ -398,7 +401,7 @@ def finish(cur: dict, at: float, reason: str) -> None:
     log("complete", cur, cur["started"], at,
         coding=round(cur["used_before"]), pauses=round(cur["pause_seconds"]),
         review=round(at - cur["review_started"]), early=cur.get("early", False),
-        hidden_tests=cur.get("hidden_tests"), dir=cur["dir"],
+        hidden_tests=cur.get("hidden_tests"), benchmark=cur.get("benchmark"), dir=cur["dir"],
         worked=edited(cur["problem"], cur["lang"], cur["dir"]))
     meta = {k: v for k, v in cur.items() if k not in ("running_since",)}
     meta["finished"] = iso(at)
@@ -543,6 +546,7 @@ def status_dict(at: float) -> dict:
             "finish_approved": cur.get("finish_approved"),
             "extended_minutes": extended_minutes(cur),
             "hidden_tests": cur.get("hidden_tests"),
+            "benchmark": cur.get("benchmark") and (cur["benchmark"].split(" (")[0] if cur["phase"] in ("coding", "paused") else cur["benchmark"]),
             "hints": len(cur.get("hints", [])),
         })
         if cur["phase"] in ("coding", "paused"):
@@ -584,14 +588,17 @@ then edit {main}. All commands work without the interviewer.
 | step | command |
 |---|---|
 | run the visible tests | `interview run` |
-| run the hidden tests (pass or fail and a count only) | `interview submit-tests` |
+| run the hidden tests, then the benchmark (pass or fail and a count, met or not met) | `interview submit-tests` |
 | next hint from the ladder | `interview hint` |
 | time left | `interview status` |
 | finish early (hidden tests passed on the current code) | `interview done` |
 | end the review and log the interview | `interview close` |
 
 `interview done` works once `interview submit-tests` has passed on exactly the files as they are
-now; otherwise wait for the clock, or ask the interviewer to approve. When coding ends the files
+now; otherwise wait for the clock, or ask the interviewer to approve. Hidden tests are small: any
+correct solution passes them, brute force included, and passing them solves the problem. The
+benchmark runs large inputs against a time limit per case; meeting it is the ideal complexity, not
+a requirement. When coding ends the files
 freeze, and SOLUTIONS.md (a short list of methods with their complexity) and a review.md
 template appear here. During review, `interview submit-tests` shows the full hidden output and
 `interview hint --all` the whole ladder with its follow-ups. Compare your approach against
@@ -912,6 +919,105 @@ def test_counts(output: str) -> str:
     return f"{passed}/{passed + failed} cases pass" if passed + failed else "no cases ran: the code may not compile, see `interview run`"
 
 
+HIDDEN_SECONDS = 300
+BENCH_BUILD_SECONDS = 300
+BENCH_SETUP_SECONDS = 60
+
+
+def test_copy(session: Path, extra: Path, name: str) -> Path:
+    scratch = STATE / name
+    shutil.rmtree(scratch, ignore_errors=True)
+    shutil.copytree(session, scratch, ignore=shutil.ignore_patterns(*BUILD_DIRS, *REVIEW_FILES))
+    for path in scratch.rglob("*"):
+        path.chmod(path.stat().st_mode | stat.S_IWUSR)
+    if extra.is_dir():
+        shutil.copytree(extra, scratch, dirs_exist_ok=True)
+    return scratch
+
+
+def kill_group(proc: subprocess.Popen) -> None:
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    proc.wait()
+
+
+def run_capped(command: list[str], cwd: Path, seconds: float) -> tuple[int | None, str]:
+    proc = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+    try:
+        out, _ = proc.communicate(timeout=seconds)
+        return proc.returncode, out
+    except subprocess.TimeoutExpired:
+        kill_group(proc)
+        return None, proc.stdout.read() if proc.stdout else ""
+
+
+def run_bench(command: list[str], cwd: Path) -> dict:
+    proc = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    fd = proc.stdout.fileno()
+    limits: list[float] = []
+    done: dict[int, tuple[str, float]] = {}
+    killed: tuple[int, float] | None = None
+    output, pending = [], b""
+    deadline, running, started = time.monotonic() + BENCH_BUILD_SECONDS, None, 0.0
+    while True:
+        wait = deadline - time.monotonic()
+        if wait <= 0:
+            if running is not None:
+                killed = (running, time.monotonic() - started)
+            kill_group(proc)
+            break
+        ready, _, _ = select.select([fd], [], [], wait)
+        if not ready:
+            continue
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            proc.wait()
+            break
+        pending += chunk
+        *lines, pending = pending.split(b"\n")
+        for raw in lines:
+            line = raw.decode(errors="replace")
+            output.append(line)
+            if m := re.search(r"BENCH limits ([\d. ]*)$", line):
+                limits = [float(x) for x in m[1].split()]
+            elif m := re.search(r"BENCH start (\d+)", line):
+                running, started = int(m[1]), time.monotonic()
+                limit = limits[running] if running < len(limits) else 1.0
+                deadline = started + 3 * limit + 1
+            elif m := re.search(r"BENCH done (\d+) (\w+) ([\d.]+)", line):
+                done[int(m[1])] = (m[2], float(m[3]))
+                running, deadline = None, time.monotonic() + BENCH_SETUP_SECONDS
+    cases = []
+    for k, limit in enumerate(limits):
+        if k in done:
+            status, seconds = done[k]
+            cases.append({"case": k, "limit": limit, "status": status, "seconds": seconds,
+                          "met": status in ("ok", "unchecked") and seconds <= limit})
+        elif killed and killed[0] == k:
+            cases.append({"case": k, "limit": limit, "status": "killed", "seconds": killed[1], "met": False})
+        else:
+            cases.append({"case": k, "limit": limit, "status": "not run", "seconds": None, "met": False})
+    return {"cases": cases, "output": output}
+
+
+def bench_summary(result: dict | None) -> str:
+    if result is None:
+        return "none for this problem"
+    if isinstance(result, str):
+        return result
+    cases = result["cases"]
+    met = sum(c["met"] for c in cases)
+    return f"{'met' if met == len(cases) else 'not met'} ({met}/{len(cases)} within limit)"
+
+
+def bench_case_line(c: dict) -> str:
+    if c["status"] == "not run":
+        return f"  case {c['case']}: not run (limit {c['limit']:g}s)"
+    if c["status"] == "killed":
+        return f"  case {c['case']}: stopped after {c['seconds']:.1f}s (limit {c['limit']:g}s)"
+    return f"  case {c['case']}: {c['status']} in {c['seconds']:.3f}s (limit {c['limit']:g}s)"
+
+
 def cmd_submit_tests(args) -> int:
     session = session_dir(args.dir)
     cur = load_current()
@@ -919,37 +1025,49 @@ def cmd_submit_tests(args) -> int:
     problem = meta["problem"] if meta else session.name.split("-", 1)[1]
     lang = meta["lang"] if meta else session.name.split("-", 1)[0]
     hidden = problem_dir(problem) / "hidden" / lang
+    bench = problem_dir(problem) / "bench" / lang
     secret = bool(meta) and meta["phase"] in ("coding", "paused") and not args.show
-    scratch = STATE / "hidden-run"
-    shutil.rmtree(scratch, ignore_errors=True)
-    shutil.copytree(session, scratch, ignore=shutil.ignore_patterns(*BUILD_DIRS, *REVIEW_FILES))
-    for path in scratch.rglob("*"):
-        path.chmod(path.stat().st_mode | stat.S_IWUSR)
-    if hidden.is_dir():
-        shutil.copytree(hidden, scratch, dirs_exist_ok=True)
-    else:
+    repo = Path(config()["repo"])
+    if not hidden.is_dir():
         print(f"no hidden tests at {hidden}; running visible tests only")
     state = digest(session)
-    if secret:
-        repo = Path(config()["repo"])
-        result = subprocess.run(in_shell(repo, lang, ["just", "test"]), cwd=scratch, capture_output=True, text=True)
-        code = result.returncode
-        summary = test_counts(result.stdout + result.stderr)
-    else:
-        code = nix_run(Path(config()["repo"]), scratch, ["just", "test"], lang)
-        summary = ""
+    scratch = test_copy(session, hidden, "hidden-run")
+    code, out = run_capped(in_shell(repo, lang, ["just", "test"]), scratch, HIDDEN_SECONDS)
     shutil.rmtree(scratch, ignore_errors=True)
+    hidden_result = "timeout" if code is None else "pass" if code == 0 else "fail"
+    if not secret:
+        print(out, end="" if out.endswith("\n") else "\n")
+    summary = test_counts(out) if secret else ""
+    word = {"pass": "PASS", "fail": "FAIL", "timeout": f"TIMEOUT after {HIDDEN_SECONDS}s"}[hidden_result]
+    print(f"hidden tests: {word}{' (' + summary + ')' if summary else ''}")
+    if hidden_result != "pass":
+        bench_result = "skipped (hidden tests do not pass)"
+    elif not bench.is_dir():
+        bench_result = None
+    else:
+        scratch = test_copy(session, bench, "bench-run")
+        bench_result = run_bench(in_shell(repo, lang, ["just", "bench"]), scratch)
+        shutil.rmtree(scratch, ignore_errors=True)
+        if not bench_result["cases"]:
+            if not secret:
+                print("\n".join(bench_result["output"][-30:]))
+            bench_result = "not run (the benchmark did not build)"
+    line = bench_summary(bench_result)
+    print(f"benchmark: {line.split(' (')[0] if secret and isinstance(bench_result, dict) else line}")
+    if not secret and isinstance(bench_result, dict):
+        for c in bench_result["cases"]:
+            print(bench_case_line(c))
     if meta:
         with locked():
             cur = load_current()
             if cur and cur["id"] == meta["id"]:
-                cur["hidden_tests"] = "pass" if code == 0 else "fail"
-                cur["hidden_digest"] = state if code == 0 else None
+                cur["hidden_tests"] = hidden_result
+                cur["hidden_digest"] = state if hidden_result == "pass" else None
+                cur["benchmark"] = line
                 save_current(cur)
-    print(f"hidden tests: {'PASS' if code == 0 else 'FAIL'}{' (' + summary + ')' if summary else ''}")
-    if secret and code == 0 and meta["phase"] == "coding":
+    if secret and hidden_result == "pass" and meta["phase"] == "coding":
         print("you may finish early now with `interview done` (or keep improving)")
-    return code
+    return 0 if hidden_result == "pass" else 1
 
 
 def ladder_rungs(problem: str) -> list[str]:
@@ -1101,6 +1219,8 @@ def cmd_log(args) -> int:
             continue
         if e["kind"] == "learning":
             e = {**e, "kind": "paused"}
+        if e["kind"] == "coding" and "active" in e:
+            e = {**e, "seconds": e["active"]}
         d = days.setdefault(e["date"], {"coding": 0, "paused": 0, "review": 0, "tutor": 0, "sessions": {}, "completed": 0})
         if e["kind"] in ("coding", "paused", "review", "tutor"):
             d[e["kind"]] += e["seconds"]
@@ -1110,7 +1230,7 @@ def cmd_log(args) -> int:
         if e["kind"] in ("coding", "paused", "review"):
             s[e["kind"]] += e["seconds"]
         if e["kind"] == "complete" and worked(e):
-            s.update(complete=True, early=e.get("early"), hidden_tests=e.get("hidden_tests"), dir=e.get("dir"), review_md=str(Path(e.get("dir", ""), "review.md")))
+            s.update(complete=True, early=e.get("early"), hidden_tests=e.get("hidden_tests"), benchmark=e.get("benchmark"), dir=e.get("dir"), review_md=str(Path(e.get("dir", ""), "review.md")))
             d["completed"] += 1
         if e.get("live"):
             s["live"] = True
