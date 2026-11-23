@@ -4609,7 +4609,7 @@ TODO: test Polymode interactively in real Nix, Org, Markdown, and noweb files.
 #+end_src
 
 ** Formatting
-Using Apheleia. OCaml goes through =ocamlformat= as a stdin filter rather than =dune-fmt=: =dune build @fmt= exits non-zero whenever it promoted a file, which Apheleia reads as a formatter failure, and =--auto-promote= rewrites the file on disk behind the buffer. ReasonML keeps =dune-fmt= because =ocamlformat= does not handle its syntax; the =;= there replaces an =&&= for the same exit-code reason.
+Using Apheleia. OCaml goes through =ocamlformat= as a stdin filter rather than =dune-fmt=: =dune build @fmt= exits non-zero whenever it promoted a file, which Apheleia reads as a formatter failure, and =--auto-promote= rewrites the file on disk behind the buffer. ReasonML keeps =dune-fmt= because =ocamlformat= does not handle its syntax; the =;= there replaces an =&&= for the same exit-code reason. A failed formatter shows its name and first stderr line in the echo area.
 
 #+begin_src emacs-lisp
 
@@ -4642,6 +4642,27 @@ Using Apheleia. OCaml goes through =ocamlformat= as a stdin filter rather than =
 
 (dolist (hook '(neocaml-base-mode-hook caml-mode-hook))
   (add-hook hook #'max/set-ocaml-formatter))
+
+(defun max/apheleia-failure-line (log)
+  "Return the first stderr line of the last run in LOG."
+  (with-current-buffer log
+    (save-excursion
+      (goto-char (point-max))
+      (when (re-search-backward "^\\$ " nil t)
+        (forward-line 1)
+        (skip-chars-forward "\n")
+        (buffer-substring-no-properties (point) (line-end-position))))))
+
+(defun max/apheleia-report-failure (&rest result)
+  "Show a failed formatter run from RESULT in the echo area."
+  (when (plist-get result :error)
+    (let ((line (when-let* ((log (plist-get result :log))) (max/apheleia-failure-line log))))
+      (run-at-time 0 nil #'message "%s"
+                   (propertize (format "%s failed%s" (plist-get result :formatter)
+                                       (if (string-empty-p (or line "")) "" (concat ": " line)))
+                               'face 'error)))))
+
+(add-hook 'apheleia-formatter-exited-hook #'max/apheleia-report-failure)
 
 #+end_src
 
@@ -4958,13 +4979,16 @@ TODO: connect embedded buffers to project-local direnv servers or language serve
 Eglot forces =eldoc-documentation-compose=, which runs its five documentation
 functions in series and shows nothing until the slowest returns. On ocamllsp
 =signatureHelp= alone costs about 220ms and =codeAction= another 150ms, so
-every pause spent a second before the echo area said anything.
+every pause spent a second before the echo area said anything. Each composed
+source keeps its full text, since a one-line echo area cut a type off behind
+the source shown before it.
 
 #+begin_src emacs-lisp
 (defun my/eglot-eldoc-responsive ()
   "Show each Eglot documentation source as soon as it answers."
   (setq-local eldoc-documentation-strategy #'eldoc-documentation-compose-eagerly
-              eldoc-idle-delay 0.15)
+              eldoc-idle-delay 0.15
+              eldoc-echo-area-use-multiline-p t)
   (remove-hook 'eldoc-documentation-functions #'eglot-code-action-suggestion t))
 
 (add-hook 'eglot-managed-mode-hook #'my/eglot-eldoc-responsive)
