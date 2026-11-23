@@ -369,6 +369,11 @@ Item {
                             session: session.modelData
                         }
 
+                        PracticeCaseBars {
+                            Layout.fillWidth: true
+                            session: session.modelData
+                        }
+
                         PracticeSessionActions {
                             Layout.fillWidth: true
                             session: session.modelData

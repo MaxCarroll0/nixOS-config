@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import re
 import json
+import math
 import os
 import select
 import shlex
@@ -1220,6 +1221,69 @@ def evaluate(session: Path, problem: str, lang: str, fn: str, expr: str | None) 
     return result
 
 
+def bench_cases(problem: str, versions: list[dict]) -> list[dict]:
+    spec = problem_dir(problem) / "spec.json"
+    specced = json.loads(spec.read_text()).get("bench", []) if spec.exists() else []
+    limits = {}
+    for v in versions:
+        for c in v.get("cases", []):
+            limits.setdefault(c["case"], c["limit"])
+    return [{"case": k, "label": (specced[k].get("label") if k < len(specced) else None) or f"case {k}", "limit": limits[k]}
+            for k in sorted(limits)]
+
+
+BAR_FLOOR = 1e-4
+BAR_WIDTH = 32
+
+
+def bar_scale(cases: list[dict], versions: list[dict]) -> float:
+    longest = max((c.get("seconds") or 0 for v in versions for c in v.get("cases", [])), default=0)
+    return max([longest] + [4 * c["limit"] for c in cases] + [BAR_FLOOR * 10])
+
+
+def bar_position(seconds: float, top: float) -> float:
+    return math.log(max(seconds, BAR_FLOOR) / BAR_FLOOR) / math.log(top / BAR_FLOOR)
+
+
+def bar_text(seconds: float | None, limit: float, top: float) -> str:
+    filled = 0 if seconds is None else round(bar_position(seconds, top) * BAR_WIDTH * 8)
+    cells = []
+    for i in range(BAR_WIDTH):
+        part = max(0, min(8, filled - 8 * i))
+        cells.append(" ▏▎▍▌▋▊▉█"[part])
+    tick = min(BAR_WIDTH - 1, int(bar_position(limit, top) * BAR_WIDTH))
+    if cells[tick] == " ":
+        cells[tick] = "┊"
+    return "".join(cells)
+
+
+def case_status(c: dict) -> str:
+    if c["status"] == "killed":
+        return f"stopped at {c['seconds']:.1f}s"
+    if c["status"] == "not run":
+        return "not run"
+    if c["status"] in WRONG_STATUSES:
+        return c["status"].upper()
+    return f"{c['seconds']:.3f}s{'' if c['met'] else ' over'}"
+
+
+def print_bench_chart(problem: str, record: dict) -> None:
+    versions = [v for v in record["versions"] if v.get("cases")]
+    if not versions:
+        return
+    cases = bench_cases(problem, versions)
+    top = bar_scale(cases, versions)
+    width = max(len(v["name"]) for v in versions)
+    print(f"\nper case (log scale {BAR_FLOOR:g}s to {top:g}s, ┊ marks the limit)")
+    for case in cases:
+        print(f"case {case['case']}: {case['label']} (limit {case['limit']:g}s)")
+        for v in versions:
+            c = next((c for c in v["cases"] if c["case"] == case["case"]), None)
+            if c is None:
+                continue
+            print(f"  {v['name']:<{width}} {bar_text(c['seconds'] if c['status'] != 'not run' else None, case['limit'], top)} {case_status(c)}")
+
+
 def cmd_bench(args) -> int:
     session = session_dir(args.dir)
     cur = load_current()
@@ -1240,6 +1304,9 @@ def cmd_bench(args) -> int:
         versions = versions[1:]
     store = session / "benchmarks.json"
     record = json.loads(store.read_text()) if store.exists() else {"target": fn, "versions": []}
+    if args.report:
+        print_bench_chart(problem, record)
+        return 0
     failed = False
     for name, expr in versions:
         try:
@@ -1261,6 +1328,7 @@ def cmd_bench(args) -> int:
     record["versions"].sort(key=lambda v: v["name"] != "submitted")
     record["target"] = fn
     store.write_text(json.dumps(record, indent=1) + "\n")
+    print_bench_chart(problem, record)
     print(f"recorded in {store}")
     return 1 if failed else 0
 
@@ -1428,16 +1496,19 @@ def cmd_log(args) -> int:
             sdir = Path(e.get("dir", ""))
             review = sdir / "review.md"
             store = sdir / "benchmarks.json"
-            versions = []
-            with contextlib.suppress(OSError, ValueError):
-                for v in json.loads(store.read_text())["versions"]:
+            versions, cases = [], []
+            with contextlib.suppress(OSError, ValueError, KeyError):
+                stored = json.loads(store.read_text())["versions"]
+                cases = bench_cases(e["problem"], stored)
+                for v in stored:
                     time_sum = round(sum(c.get("seconds") or 0 for c in v.get("cases", [])), 6)
                     correctness, performance = classify(v.get("hidden", "none"), v.get("cases", []), v.get("hidden_wrong", 0))
                     entry = {k: v.get(k) for k in ("name", "hidden", "benchmark", "met", "total", "slowest")}
-                    entry.update(time=time_sum, correctness=correctness, performance=performance)
+                    entry.update(time=time_sum, correctness=correctness, performance=performance,
+                                 cases=[{"seconds": c.get("seconds"), "status": c["status"], "met": c["met"]} for c in v.get("cases", [])])
                     versions.append(entry)
             s.update(complete=True, early=e.get("early"), hidden_tests=e.get("hidden_tests"), benchmark=e.get("benchmark"), dir=e.get("dir"),
-                     review_md=str(review) if review.exists() else None, versions=versions)
+                     review_md=str(review) if review.exists() else None, versions=versions, bench_cases=cases)
             d["completed"] += 1
         if e.get("live"):
             s["live"] = True
@@ -1761,6 +1832,7 @@ def main() -> int:
     p.add_argument("versions", nargs="*", metavar="NAME=EXPR", help="a reviewed version: EXPR replaces the problem function (OCaml Reviewed.Pruned.coin_change, Python Reviewed.Pruned.coin_change, Rust reviewed::pruned::coin_change, C# Reviewed.Pruned.CoinChange, C reviewed_pruned_coin_change)")
     p.add_argument("--target", help="the function the tests call; default from spec.json")
     p.add_argument("--versions-only", action="store_true", help="skip re-running the submission")
+    p.add_argument("--report", action="store_true", help="print the per-case chart from DIR/benchmarks.json without running anything")
     p.set_defaults(fn=cmd_bench)
 
     p = sub.add_parser("open", help="open a past session's prompt, code or review in Emacs, or revisit it as a writable improved/ copy")
