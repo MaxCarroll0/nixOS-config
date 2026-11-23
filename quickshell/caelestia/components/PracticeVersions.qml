@@ -23,24 +23,25 @@ GridLayout {
             const cells = [];
             for (const v of root.session.versions ?? []) {
                 const benched = v.total > 0;
-                const met = benched && v.met === v.total;
+                const correctness = v.correctness;
+                const performance = v.performance;
                 cells.push({
                     text: v.name,
                     tone: "",
                     mono: false,
                     fill: true
                 }, {
-                    text: v.hidden,
-                    tone: v.hidden === "pass" ? "" : "error",
+                    text: correctness === "unknown" ? "?" : correctness,
+                    tone: correctness === "wrong" ? "error" : "",
                     mono: true,
                     fill: false
                 }, {
-                    text: benched ? `${v.met}/${v.total}` : "-",
-                    tone: v.hidden !== "pass" ? "error" : met ? "primary" : "tertiary",
+                    text: performance === "unknown" ? "-" : !benched ? "slow" : performance === "met" ? `${v.met}/${v.total}` : `slow ${v.met}/${v.total}`,
+                    tone: performance === "met" ? "primary" : performance === "slow" ? "tertiary" : "",
                     mono: true,
                     fill: false
                 }, {
-                    text: benched ? root.seconds(v.time ?? v.slowest ?? 0) : "",
+                    text: benched && performance !== "unknown" ? root.seconds(v.time ?? v.slowest ?? 0) : "",
                     tone: "",
                     mono: true,
                     fill: false

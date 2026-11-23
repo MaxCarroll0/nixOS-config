@@ -1004,6 +1004,25 @@ def run_bench(command: list[str], cwd: Path) -> dict:
     return {"cases": cases, "output": output}
 
 
+WRONG_STATUSES = ("wrong", "raised")
+
+
+def wrong_lines(output: str) -> int:
+    return len(re.findall(r"^(?:FAIL\b|test .* \.\.\. FAILED$|FAILED )", output, re.M))
+
+
+def classify(hidden: str, cases: list[dict], hidden_wrong: int = 0) -> tuple[str, str]:
+    if hidden == "fail":
+        return "wrong", "unknown"
+    if hidden == "timeout":
+        return ("wrong" if hidden_wrong else "unknown"), "slow"
+    if any(c["status"] in WRONG_STATUSES for c in cases):
+        return "wrong", "slow" if any(c["status"] == "killed" for c in cases) else "unknown"
+    if not cases:
+        return ("correct" if hidden == "pass" else "unknown"), "unknown"
+    return "correct", "met" if all(c["met"] for c in cases) else "slow"
+
+
 def bench_summary(result: dict | None) -> str:
     if result is None:
         return "none for this problem"
@@ -1011,7 +1030,35 @@ def bench_summary(result: dict | None) -> str:
         return result
     cases = result["cases"]
     met = sum(c["met"] for c in cases)
-    return f"{'met' if met == len(cases) else 'not met'} ({met}/{len(cases)} within limit)"
+    within = f"{met}/{len(cases)} within limit"
+    wrong = [c for c in cases if c["status"] in WRONG_STATUSES]
+    if wrong:
+        named = ", ".join(f"case {c['case']} {c['status']}" for c in wrong)
+        return f"wrong answer (correctness: {named}; {within})"
+    if met == len(cases):
+        return f"met ({within})"
+    parts = [within]
+    over = sum(1 for c in cases if c["status"] in ("ok", "unchecked") and not c["met"])
+    if over:
+        parts.append(f"{over} finished over the limit")
+    for c in cases:
+        if c["status"] == "killed":
+            parts.append(f"case {c['case']} stopped after {c['seconds']:.1f}s")
+    skipped = sum(1 for c in cases if c["status"] == "not run")
+    if skipped:
+        parts.append(f"{skipped} not run after the stop")
+    return f"not met: too slow (performance: {'; '.join(parts)})"
+
+
+def hidden_line(hidden: str, counts: str, wrong: int) -> str:
+    if hidden == "pass":
+        return f"PASS ({counts})" if counts else "PASS"
+    if hidden == "fail":
+        return f"FAIL: wrong answer or no build (correctness{': ' + counts if counts else ''})"
+    stopped = f"TIMEOUT after {HIDDEN_SECONDS}s: too slow or never ends"
+    if wrong:
+        return f"{stopped} (performance); also {wrong} wrong before the stop (correctness)"
+    return f"{stopped} (performance; no wrong answer before the stop)"
 
 
 def bench_case_line(c: dict) -> str:
@@ -1041,9 +1088,7 @@ def cmd_submit_tests(args) -> int:
     hidden_result = "timeout" if code is None else "pass" if code == 0 else "fail"
     if not secret:
         print(out, end="" if out.endswith("\n") else "\n")
-    summary = test_counts(out) if secret else ""
-    word = {"pass": "PASS", "fail": "FAIL", "timeout": f"TIMEOUT after {HIDDEN_SECONDS}s"}[hidden_result]
-    print(f"hidden tests: {word}{' (' + summary + ')' if summary else ''}")
+    print(f"hidden tests: {hidden_line(hidden_result, test_counts(out) if secret else '', wrong_lines(out))}")
     if hidden_result != "pass":
         bench_result = "skipped (hidden tests do not pass)"
     elif not bench.is_dir():
@@ -1156,6 +1201,7 @@ def evaluate(session: Path, problem: str, lang: str, fn: str, expr: str | None) 
                 code, out = run_capped(in_shell(repo, lang, ["just", "test"]), scratch, HIDDEN_SECONDS)
                 result["hidden"] = "timeout" if code is None else "pass" if code == 0 else "fail"
                 result["hidden_counts"] = test_counts(out)
+                result["hidden_wrong"] = wrong_lines(out)
                 if code != 0:
                     result["output"] = out.splitlines()[-30:]
                     break
@@ -1170,6 +1216,7 @@ def evaluate(session: Path, problem: str, lang: str, fn: str, expr: str | None) 
                                   slowest=max((c["seconds"] or 0) for c in cases), cases=cases)
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+    result["correctness"], result["performance"] = classify(result["hidden"], result.get("cases", []), result.get("hidden_wrong", 0))
     return result
 
 
@@ -1203,7 +1250,9 @@ def cmd_bench(args) -> int:
         entry = {"name": name, "expr": expr, "at": iso(now()), **{k: v for k, v in r.items() if k != "output"}}
         record["versions"] = [v for v in record["versions"] if v["name"] != name] + [entry]
         bench = r["benchmark"] or ("skipped (hidden tests do not pass)" if r["hidden"] != "pass" else "none for this problem")
-        print(f"{name}: hidden {r['hidden']}{' (' + r['hidden_counts'] + ')' if r.get('hidden_counts') else ''}, benchmark {bench}")
+        print(f"{name}: correctness {r['correctness']}, performance {r['performance']}")
+        print(f"  hidden {hidden_line(r['hidden'], r.get('hidden_counts', ''), r.get('hidden_wrong', 0))}")
+        print(f"  benchmark {bench}")
         for c in r.get("cases", []):
             print(bench_case_line(c))
         if r.get("output"):
@@ -1383,7 +1432,10 @@ def cmd_log(args) -> int:
             with contextlib.suppress(OSError, ValueError):
                 for v in json.loads(store.read_text())["versions"]:
                     time_sum = round(sum(c.get("seconds") or 0 for c in v.get("cases", [])), 6)
-                    versions.append({k: v.get(k) for k in ("name", "hidden", "benchmark", "met", "total", "slowest")} | {"time": time_sum})
+                    correctness, performance = classify(v.get("hidden", "none"), v.get("cases", []), v.get("hidden_wrong", 0))
+                    entry = {k: v.get(k) for k in ("name", "hidden", "benchmark", "met", "total", "slowest")}
+                    entry.update(time=time_sum, correctness=correctness, performance=performance)
+                    versions.append(entry)
             s.update(complete=True, early=e.get("early"), hidden_tests=e.get("hidden_tests"), benchmark=e.get("benchmark"), dir=e.get("dir"),
                      review_md=str(review) if review.exists() else None, versions=versions)
             d["completed"] += 1

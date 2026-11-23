@@ -359,8 +359,8 @@ Item {
                             }
 
                             MaterialIcon {
-                                text: session.modelData.live ? "radio_button_checked" : !session.modelData.complete ? "pending" : session.modelData.hidden_tests === "pass" ? "verified" : session.modelData.hidden_tests === "fail" ? "bug_report" : "task_alt"
-                                color: session.modelData.hidden_tests === "fail" ? Colours.palette.m3error : Colours.palette.m3primary
+                                text: session.modelData.live ? "radio_button_checked" : !session.modelData.complete ? "pending" : session.modelData.hidden_tests === "pass" ? "verified" : session.modelData.hidden_tests === "fail" ? "bug_report" : session.modelData.hidden_tests === "timeout" ? "hourglass_disabled" : "task_alt"
+                                color: session.modelData.hidden_tests === "fail" ? Colours.palette.m3error : session.modelData.hidden_tests === "timeout" ? Colours.palette.m3tertiary : Colours.palette.m3primary
                             }
                         }
 
