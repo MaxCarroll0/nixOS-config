@@ -80,12 +80,6 @@ local function move(window, target)
     hl.dispatch(hl.dsp.window.move({ workspace = target, follow = false, window = window }))
 end
 
-local function maximise(window)
-    if window.fullscreen == 0 then
-        hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 1, client = 0, window = "address:" .. window.address }))
-    end
-end
-
 local function kept(window)
     return any_match(M.keep[M.active.profile], window) or any_match(M.spare, window)
 end
@@ -255,7 +249,6 @@ hl.on("window.open", function(window)
     hl.timer(function()
         if not M.active then return end
         if not on(window, M.active.workspace) then move(window, home()) end
-        maximise(window)
     end, { timeout = 50, type = "oneshot" })
 end)
 
