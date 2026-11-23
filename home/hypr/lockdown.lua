@@ -6,9 +6,12 @@ local M = {
     kb_options = nil,
     submaps = {},
     keep = {},
+    origins = nil,
 }
 
-local runtime = (os.getenv("XDG_RUNTIME_DIR") or "/run/user/1000") .. "/lockdown/active.lua"
+local runtime_dir = (os.getenv("XDG_RUNTIME_DIR") or "/run/user/1000") .. "/lockdown"
+local runtime = runtime_dir .. "/active.lua"
+local origins_file = runtime_dir .. "/origins.lua"
 local stash = "special:lockdown"
 
 local function read_active()
@@ -72,8 +75,53 @@ local function on(window, name)
     return window.workspace ~= nil and window.workspace.name == name
 end
 
+local function origins()
+    if M.origins then return M.origins end
+    M.origins = {}
+    local file = io.open(origins_file, "r")
+    if not file then return M.origins end
+    local chunk = load(file:read("a"), "origins", "t", {})
+    file:close()
+    local ok, value = pcall(chunk or function() end)
+    if ok and type(value) == "table" then M.origins = value end
+    return M.origins
+end
+
+local function save_origins()
+    local file = io.open(origins_file, "w")
+    if not file then return end
+    file:write("return {\n")
+    for address, target in pairs(origins()) do
+        file:write(string.format("  [%q] = %q,\n", address, target))
+    end
+    file:write("}\n")
+    file:close()
+end
+
+local function workspace_target(ws)
+    if ws.id and ws.id > 0 then return tostring(ws.id) end
+    return "name:" .. ws.name
+end
+
 local function move(window, target)
+    local ws = window.workspace
+    if target == stash and ws and ws.name ~= stash and not ws.special then
+        origins()[window.address] = workspace_target(ws)
+        save_origins()
+    end
     hl.dispatch(hl.dsp.window.move({ workspace = target, follow = false, window = window }))
+end
+
+local function restore()
+    local known = origins()
+    for _, window in ipairs(hl.get_windows()) do
+        local target = known[window.address]
+        if target and window.mapped and on(window, stash) then
+            hl.dispatch(hl.dsp.window.move({ workspace = target, follow = false, window = window }))
+        end
+    end
+    M.origins = {}
+    os.remove(origins_file)
 end
 
 local function free_workspace(taken)
@@ -181,6 +229,7 @@ end
 
 
 local function release()
+    restore()
     rehome()
     if M.kb_options ~= nil then
         hl.config({ ["input.kb_options"] = M.kb_options })
@@ -227,7 +276,10 @@ end)
 hl.timer(poll, { timeout = 1000, type = "repeat" })
 hl.on("hyprland.start", function()
     poll()
-    if not M.active then rehome() end
+    if not M.active then
+        restore()
+        rehome()
+    end
 end)
 
 return M
