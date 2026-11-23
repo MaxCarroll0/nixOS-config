@@ -27,7 +27,17 @@ let
   };
 in
 {
-  imports = [ ./common.nix ];
+  imports = [
+    ./common.nix
+    inputs.jobs.homeManagerModules.worker
+  ];
+
+  services.jobs-worker = {
+    enable = true;
+    remote = "https://pi.taild5b88a.ts.net/jobs";
+    environmentFile = "/run/secrets/jobs-worker-env";
+    environment.OLLAMA_URL = "http://127.0.0.1:11434";
+  };
 
   local.wm.enable = true;
 

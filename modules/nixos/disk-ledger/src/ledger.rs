@@ -27,6 +27,7 @@ const GIB: i64 = 1 << 30;
 const MIB: i64 = 1 << 20;
 const DAY: i64 = 86400;
 const PROBE_SECONDS: f64 = 10.0;
+const SETTLE_SECONDS: f64 = 60.0;
 const MARGIN: i64 = 512 * MIB;
 const FIT_SLACK: i64 = 1024 * MIB;
 const RAMP: i64 = 4 * GIB;
@@ -75,7 +76,7 @@ const SWEPT: usize = 40;
 const COMMIT_SECONDS: f64 = 6.0;
 const SWEPT_LOG_BYTES: u64 = 8 << 20;
 
-pub const SEGMENTS: [(&str, &str, &str, bool); 23] = [
+pub const SEGMENTS: [(&str, &str, &str, bool); 24] = [
     ("running_system", "running system", "live", false),
     ("home_profile", "profiles", "live", false),
     ("processes", "in use", "live", false),
@@ -97,6 +98,7 @@ pub const SEGMENTS: [(&str, &str, &str, bool); 23] = [
     ("system_files", "system files", "files", false),
     ("swap", "swapfile", "system", false),
     ("held", "deleted, still open", "system", false),
+    ("unaccounted", "unaccounted", "system", false),
     ("filesystem", "filesystem internals", "system", false),
     ("reserved", "ext4 root reserve", "system", false),
 ];
@@ -518,8 +520,10 @@ pub struct Ledger {
     held: Vec<Held>,
     held_at: f64,
     held_residual: i64,
+    unaccounted: i64,
     dirty_target: &'static str,
     settled_residual: i64,
+    settled_at: f64,
     internals: Vec<(String, u64)>,
     internals_at: f64,
     xattr: HashMap<String, u64>,
@@ -758,8 +762,10 @@ impl Ledger {
             held: Vec::new(),
             held_at: -HELD_SECONDS,
             held_residual: 0,
+            unaccounted: 0,
             dirty_target: "system_files",
             settled_residual: 0,
+            settled_at: 0.0,
             internals,
             internals_at: clock(),
             xattr: HashMap::new(),
@@ -1141,7 +1147,7 @@ impl Ledger {
             "recent",
             slots.iter().map(|slot| self.store.size(*slot) as i64).sum(),
         );
-        *sums.entry("dead").or_insert(0) += self.store.orphan_bytes as i64;
+        *sums.entry("dead").or_insert(0) += (self.store.orphan_bytes + self.store.invalid_bytes) as i64;
         self.sums = sums;
         self.model_version += 1;
     }
@@ -1273,8 +1279,9 @@ impl Ledger {
         }
         segments.insert("held", self.held.iter().map(|row| row.size as i64).sum());
         let mut residual = disk.used - segments.values().sum::<i64>();
-        if self.tree.dirty.is_empty() {
+        if self.tree.dirty.is_empty() || clock() - self.settled_at >= SETTLE_SECONDS {
             self.settled_residual = residual;
+            self.settled_at = clock();
         } else if residual != self.settled_residual {
             let target = self.dirty_segment();
             let current = segments.get(target).copied().unwrap_or(0);
@@ -1282,8 +1289,10 @@ impl Ledger {
             segments.insert(target, current + moved);
             residual -= moved;
         }
-        let mut rest = residual;
-        for key in ["held", "system_files"] {
+        self.unaccounted = residual.max(0);
+        segments.insert("unaccounted", self.unaccounted);
+        let mut rest = residual.min(0);
+        for key in ["system_files", "held"] {
             let current = segments.get(key).copied().unwrap_or(0);
             let moved = rest.max(-current);
             segments.insert(key, current + moved);
@@ -1469,7 +1478,7 @@ impl Ledger {
         };
         let live_temp = segments.get("tmp_files").copied().unwrap_or(0)
             + segments.get("tmp_roots").copied().unwrap_or(0);
-        let rows: Vec<Value> = SEGMENTS.iter().map(|(key, label, group, can)| json!({"key": key, "label": label, "group": group, "reclaimable": can, "bytes": segments.get(key).copied().unwrap_or(0) + match *key { "temp" => live_temp, "generation" => segments.get("previous").copied().unwrap_or(0), "home_profile" => segments.get("profiles").copied().unwrap_or(0), "processes" => segments.get("shells").copied().unwrap_or(0), "agent" => segments.get("agent_files").copied().unwrap_or(0), "stray" => segments.get("deploy").copied().unwrap_or(0) + segments.get("roots").copied().unwrap_or(0), _ => 0 }, "weight": Kind::from_name(key).filter(|kind| kind.key() == *key).map(Kind::weight), "reclaim_bytes": if *can { folded(key).iter().map(|part| segments.get(part).copied().unwrap_or(0)).sum::<i64>() } else { 0 }, "scheduled": folded(key).iter().map(|part| scheduled.get(part).copied().unwrap_or(0)).sum::<i64>(), "deleting": folded(key).iter().map(|part| deleting.get(part).copied().unwrap_or(0)).sum::<i64>(), "lagging": folded(key).iter().map(|part| lagging.get(part).copied().unwrap_or(0)).sum::<i64>(), "deleting_spans": match *key { "home_files" => home["deleting"].clone(), "generation" => generation["deleting"].clone(), "temp" => temp["deleting"].clone(), _ => red_items(key)["deleting"].clone() }, "lagging_spans": match *key { "home_files" => home["lagging"].clone(), "generation" => generation["lagging"].clone(), "temp" => temp["lagging"].clone(), _ => red_items(key)["lagging"].clone() }, "items": if *can { folded(key).iter().map(|part| self.kind_items.get(*part).map(Vec::len).unwrap_or(0)).sum::<usize>() } else { 0 }, "reclaim_spans": match *key { "home_files" => home["reclaim"].clone(), "generation" => generation["reclaim"].clone(), "temp" => temp["reclaim"].clone(), _ => Value::Null }, "scheduled_spans": match *key { "home_files" => home["scheduled"].clone(), "generation" => generation["scheduled"].clone(), "temp" => temp["scheduled"].clone(), _ => Value::Null }, "red_spans": match *key { "home_files" => home["red"].clone(), "generation" => generation["red"].clone(), "temp" => temp["red"].clone(), _ => red_items(key)["red"].clone() }, "next_span": if *key == "home_files" { home["next"].get(0).cloned().unwrap_or(Value::Null) } else if *key == "generation" { generation["next"].get(0).cloned().unwrap_or(Value::Null) } else if *key == "temp" { temp["next"].get(0).cloned().unwrap_or(Value::Null) } else { red_items(key)["next"].clone() }})).collect();
+        let rows: Vec<Value> = SEGMENTS.iter().map(|(key, label, group, can)| json!({"key": key, "label": label, "group": group, "reclaimable": can, "bytes": segments.get(key).copied().unwrap_or(0) + match *key { "temp" => live_temp, "generation" => segments.get("previous").copied().unwrap_or(0), "home_profile" => segments.get("profiles").copied().unwrap_or(0), "processes" => segments.get("shells").copied().unwrap_or(0), "agent" => segments.get("agent_files").copied().unwrap_or(0), "stray" => segments.get("deploy").copied().unwrap_or(0) + segments.get("roots").copied().unwrap_or(0), "home_files" => segments.get("repo").copied().unwrap_or(0) + segments.get("game").copied().unwrap_or(0), _ => 0 }, "weight": Kind::from_name(key).filter(|kind| kind.key() == *key).map(Kind::weight), "reclaim_bytes": if *can { folded(key).iter().map(|part| segments.get(part).copied().unwrap_or(0)).sum::<i64>() } else { 0 }, "scheduled": folded(key).iter().map(|part| scheduled.get(part).copied().unwrap_or(0)).sum::<i64>(), "deleting": folded(key).iter().map(|part| deleting.get(part).copied().unwrap_or(0)).sum::<i64>(), "lagging": folded(key).iter().map(|part| lagging.get(part).copied().unwrap_or(0)).sum::<i64>(), "deleting_spans": match *key { "home_files" => home["deleting"].clone(), "generation" => generation["deleting"].clone(), "temp" => temp["deleting"].clone(), _ => red_items(key)["deleting"].clone() }, "lagging_spans": match *key { "home_files" => home["lagging"].clone(), "generation" => generation["lagging"].clone(), "temp" => temp["lagging"].clone(), _ => red_items(key)["lagging"].clone() }, "items": if *can { folded(key).iter().map(|part| self.kind_items.get(*part).map(Vec::len).unwrap_or(0)).sum::<usize>() } else { 0 }, "reclaim_spans": match *key { "home_files" => home["reclaim"].clone(), "generation" => generation["reclaim"].clone(), "temp" => temp["reclaim"].clone(), _ => Value::Null }, "scheduled_spans": match *key { "home_files" => home["scheduled"].clone(), "generation" => generation["scheduled"].clone(), "temp" => temp["scheduled"].clone(), _ => Value::Null }, "red_spans": match *key { "home_files" => home["red"].clone(), "generation" => generation["red"].clone(), "temp" => temp["red"].clone(), _ => red_items(key)["red"].clone() }, "next_span": if *key == "home_files" { home["next"].get(0).cloned().unwrap_or(Value::Null) } else if *key == "generation" { generation["next"].get(0).cloned().unwrap_or(Value::Null) } else if *key == "temp" { temp["next"].get(0).cloned().unwrap_or(Value::Null) } else { red_items(key)["next"].clone() }})).collect();
         self.cut_rank = cut;
         let head = usize::try_from(self.next_rank).ok().and_then(|index| self.model.items.get(index)).map(|item| json!({"path": item.path, "label": short(&item.path, &self.home), "kind": item.kind.key(), "size": item.freed(), "last_used": item.last_used, "rank": self.next_rank, "ranking": self.ranking}));
         json!({
@@ -2892,6 +2901,18 @@ impl Ledger {
                 false,
                 false,
             )],
+            "unaccounted" => vec![row(
+                "meta:unaccounted".into(),
+                "used blocks no segment explains".into(),
+                String::new(),
+                self.unaccounted,
+                0,
+                "statfs used minus every measured segment: a ledger bug to find".into(),
+                false,
+                false,
+                false,
+                false,
+            )],
             "held" => self
                 .held
                 .iter()
@@ -2969,6 +2990,23 @@ impl Ledger {
                         false,
                     ));
                 }
+                if key == "dead" && self.store.invalid_bytes != 0 {
+                    rows.push(row(
+                        "meta:invalid".into(),
+                        "store paths missing from the nix database".into(),
+                        "/nix/store".into(),
+                        self.store.invalid_bytes as i64,
+                        0,
+                        format!(
+                            "{} paths left by an interrupted deletion, freed with the next deletion",
+                            self.store.invalid.len()
+                        ),
+                        true,
+                        self.cut_rank >= 0,
+                        false,
+                        false,
+                    ));
+                }
                 rows.extend(
                     items
                         .iter()
@@ -2977,18 +3015,17 @@ impl Ledger {
                 if key == "generation" {
                     let mut kept = self.segment_rows("previous");
                     for entry in kept.iter_mut() {
-                        let boot = entry
-                            .get("path")
-                            .and_then(Value::as_str)
-                            .is_some_and(|path| path.ends_with("/previous-successful-boot"));
-                        entry.insert(
-                            "kind".into(),
-                            json!(if boot {
-                                "previous successful boot"
-                            } else {
-                                "last generation"
-                            }),
-                        );
+                        let path = entry.get("path").and_then(Value::as_str).unwrap_or("");
+                        let reason = self.model.protected.get(path).map(String::as_str);
+                        let kind = if path.ends_with("/previous-successful-boot")
+                            || path == "/run/booted-system"
+                            || reason == Some("previous successful boot")
+                        {
+                            "previous successful boot"
+                        } else {
+                            "last generation"
+                        };
+                        entry.insert("kind".into(), json!(kind));
                     }
                     rows.extend(kept);
                 }
@@ -3793,6 +3830,11 @@ impl Ledger {
             } else {
                 self.store.orphans.clone()
             },
+            invalid: if self.session_open {
+                Vec::new()
+            } else {
+                self.store.invalid.clone()
+            },
             scope: self.model.scope(),
             level,
             round: self.ranking,
@@ -4477,7 +4519,8 @@ extern "C" {
 
 fn scan_links(file: String) -> std::thread::JoinHandle<gc::LinkScan> {
     std::thread::spawn(move || {
-        let scan = gc::scan_links(store::LINKS);
+        let mut scan = gc::scan_links(store::LINKS);
+        scan.invalid = gc::scan_invalid("/nix/store", "/nix/var/nix");
         if scan.complete {
             let _ = gc::publish(&file, &scan.entries);
         }

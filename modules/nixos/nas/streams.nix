@@ -44,6 +44,7 @@ let
       use chroot = no
       read only = no
       write only = yes
+      timeout = 120
       uid = root
       gid = root
       post-xfer exec = ${lib.getExe point} ${indexDir name} ${dataDir st} ${mirrorDir name}
@@ -176,7 +177,7 @@ in
             ExecStart = "${pkgs.util-linux}/bin/flock ${cfg.nilfsWriteLock} ${lib.getExe pkgs.rsync} --daemon --config=${rsyncdConf name st}";
             StandardInput = "socket";
             StandardOutput = "inherit";
-            RuntimeMaxSec = "10min";
+            RuntimeMaxSec = "1h";
             Nice = 5;
           };
         }

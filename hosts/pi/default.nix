@@ -1,6 +1,7 @@
 # Raspberry Pi 5: always-on server, no VPN, remote build client.
 
 {
+  config,
   lib,
   pkgs,
   inputs,
@@ -8,6 +9,66 @@
   ...
 }:
 
+let
+  tailnetName = "pi.taild5b88a.ts.net";
+  tailnetCertDir = "/var/lib/tailscale-cert";
+  tailnetOnly = ''
+    allow 100.64.0.0/10;
+    allow fd7a:115c:a1e0::/48;
+    deny all;
+  '';
+  httpsListen =
+    map
+      (addr: {
+        inherit addr;
+        port = 443;
+        ssl = true;
+      })
+      [
+        "0.0.0.0"
+        "[::0]"
+      ];
+  grafanaProxy = {
+    proxyPass = "http://127.0.0.1:3000";
+    proxyWebsockets = true;
+    extraConfig = ''
+      proxy_set_header Tailscale-User-Login $grafana_user_login;
+      proxy_set_header Tailscale-User-Name $grafana_user_name;
+    '';
+  };
+  apps = [
+    {
+      name = "Jobs";
+      href = "/jobs/";
+    }
+    {
+      name = "Bookshelf";
+      href = "/bookshelf/";
+    }
+    {
+      name = "Observatory";
+      href = "/observatory/";
+    }
+    {
+      name = "Servers";
+      href = "/servers/";
+    }
+  ];
+  landing = pkgs.writeTextDir "index.html" ''
+    <!doctype html>
+    <html lang="en">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>pi</title>
+    <style>
+      body { font: 18px/1.4 system-ui, sans-serif; margin: 0 auto; max-width: 28rem; padding: 2rem 1rem; }
+      a { display: block; padding: 1rem; margin: .5rem 0; border: 1px solid #8884; border-radius: .6rem; text-decoration: none; color: inherit; font-size: 1.25rem; }
+    </style>
+    <h1>pi</h1>
+    ${lib.concatMapStrings (a: ''<a href="${a.href}">${a.name}</a>'' + "\n") apps}
+  '';
+in
 {
   imports = [
     ./hardware.nix
@@ -37,6 +98,7 @@
     ../../modules/nixos/pam-ssh-agent-sudo.nix
     ../../modules/nixos/browser-sync.nix
     inputs.bookshelf.nixosModules.default
+    inputs.jobs.nixosModules.pi
     ../../modules/nixos/mdns-aliases.nix
     ./satisfactory.nix
   ];
@@ -64,8 +126,6 @@
       serverAliases = [
         "grafana"
         "pi.grafana"
-        "pi"
-        "pi.taild5b88a.ts.net"
         "observatory.local"
         "grafana.local"
       ];
@@ -79,19 +139,138 @@
           port = 80;
         }
       ];
-      locations."/" = {
-        proxyPass = "http://127.0.0.1:3000";
-        proxyWebsockets = true;
+      locations."= /".return = "302 /observatory/";
+      locations."/observatory/" = grafanaProxy;
+    };
+    virtualHosts.pi-short-http = {
+      serverName = "pi";
+      serverAliases = [ tailnetName ];
+      listen = [
+        {
+          addr = facts.pi.tailscale;
+          port = 80;
+        }
+        {
+          addr = "[::0]";
+          port = 80;
+        }
+      ];
+      extraConfig = tailnetOnly;
+      locations."/".return = "301 https://${tailnetName}$request_uri";
+      locations."~ ^/fleet-history/(api/v1/(query|query_range|series))$" = {
+        proxyPass = "http://127.0.0.1:9091/$1$is_args$args";
+        extraConfig = "limit_except GET { deny all; }";
+      };
+    };
+    virtualHosts.pi-short = {
+      serverName = "pi";
+      listen = httpsListen;
+      onlySSL = true;
+      sslCertificate = ../../keys/bookshelf.crt;
+      sslCertificateKey = config.sops.secrets.bookshelf-tls-key.path;
+      extraConfig = tailnetOnly;
+      locations."/".return = "301 https://${tailnetName}$request_uri";
+    };
+    virtualHosts.pi = {
+      serverName = tailnetName;
+      listen = httpsListen;
+      onlySSL = true;
+      sslCertificate = "${tailnetCertDir}/cert.pem";
+      sslCertificateKey = "${tailnetCertDir}/key.pem";
+      extraConfig = tailnetOnly;
+      locations."= /" = {
+        root = landing;
+        tryFiles = "/index.html =404";
         extraConfig = ''
-          proxy_set_header Tailscale-User-Login $grafana_user_login;
-          proxy_set_header Tailscale-User-Name $grafana_user_name;
+          default_type text/html;
+          add_header Cache-Control "no-cache";
+        '';
+      };
+      locations."/observatory/" = grafanaProxy;
+      locations."= /bookshelf".return = "301 /bookshelf/";
+      locations."/bookshelf/" = {
+        proxyPass = "http://127.0.0.1:${toString config.local.bookshelf.port}/";
+        extraConfig = ''
+          proxy_set_header Tailscale-User-Login $bookshelf_identity;
+          proxy_set_header Bookshelf-Writable-At $bookshelf_writable_at;
+          proxy_set_header Accept-Encoding "";
+          proxy_buffering off;
+          proxy_redirect / /bookshelf/;
+          client_max_body_size 4m;
+          sub_filter_once off;
+          sub_filter_types application/javascript text/javascript text/event-stream;
+          sub_filter 'href="/' 'href="/bookshelf/';
+          sub_filter 'action="/' 'action="/bookshelf/';
+          sub_filter 'src="/' 'src="/bookshelf/';
+          sub_filter 'data-tree="/' 'data-tree="/bookshelf/';
+          sub_filter "'/lookup" "'/bookshelf/lookup";
+          sub_filter '`/' '`/bookshelf/';
+        '';
+      };
+      locations."= /servers".return = "301 /servers/";
+      locations."/servers/" = {
+        proxyPass = "http://${facts.pi.tailscale}:7780/";
+        recommendedProxySettings = false;
+        extraConfig = ''
+          proxy_set_header X-Forwarded-For $remote_addr;
+          proxy_set_header Accept-Encoding "";
+          proxy_redirect / /servers/;
+          sub_filter_once off;
+          sub_filter '"/api/' '"/servers/api/';
+          sub_filter '"/minecraft-mods.zip' '"/servers/minecraft-mods.zip';
         '';
       };
     };
   };
   systemd.services.nginx = {
-    after = [ "tailscaled.service" ];
-    wants = [ "tailscaled.service" ];
+    after = [
+      "tailscaled.service"
+      "tailscale-cert.service"
+    ];
+    wants = [
+      "tailscaled.service"
+      "tailscale-cert.service"
+    ];
+  };
+  systemd.services.tailscale-cert = {
+    description = "Tailscale certificate for ${tailnetName}";
+    after = [
+      "tailscaled.service"
+      "network-online.target"
+    ];
+    wants = [ "network-online.target" ];
+    path = [
+      config.services.tailscale.package
+      pkgs.coreutils
+      pkgs.systemd
+    ];
+    serviceConfig = {
+      Type = "oneshot";
+      TimeoutStartSec = "3min";
+      StateDirectory = "tailscale-cert";
+      StateDirectoryMode = "0750";
+      Group = "nginx";
+    };
+    script = ''
+      dir=${tailnetCertDir}
+      if timeout 120 tailscale cert --cert-file "$dir/cert.new" --key-file "$dir/key.new" ${tailnetName}; then
+        mv "$dir/cert.new" "$dir/cert.pem"
+        mv "$dir/key.new" "$dir/key.pem"
+      elif [ ! -s "$dir/cert.pem" ]; then
+        cp ${../../keys/bookshelf.crt} "$dir/cert.pem"
+        cp ${config.sops.secrets.bookshelf-tls-key.path} "$dir/key.pem"
+      fi
+      chmod 0640 "$dir/cert.pem" "$dir/key.pem"
+      if systemctl is-active --quiet nginx; then systemctl reload --no-block nginx; fi
+    '';
+  };
+  systemd.timers.tailscale-cert = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnCalendar = "daily";
+      Persistent = true;
+      RandomizedDelaySec = "1h";
+    };
   };
   # end0 and wld0 on one subnet break interface-scoped matching, so open both.
   networking.firewall.interfaces = {
@@ -128,6 +307,8 @@
       }
     ];
   };
+
+  local.disk.ledger.enable = false;
 
   local.wake.peers.desktopnew.timeoutSeconds = 120;
   local.wakeEndpoint.peer = "desktopnew";
@@ -180,6 +361,7 @@
     };
     piFirmware.enable = true;
     grafana.domain = "pi";
+    grafana.path = "/observatory/";
     smart.selfTest.enable = true;
     server.enable = true;
     grafana.enable = true;
@@ -317,6 +499,12 @@
     "observatory.local"
     "grafana.local"
   ];
+
+  local.jobs.web = {
+    enable = true;
+    package = inputs.jobs.packages.x86_64-linux.web;
+    virtualHost = "pi";
+  };
 
   local.bookshelf = {
     enable = true;

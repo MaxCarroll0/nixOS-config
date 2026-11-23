@@ -22,17 +22,5 @@
     remote.authorizedKeys = [ (builtins.readFile ../../keys/satisfactory-remote.pub) ];
   };
 
-  local.vpn.selection.deferWhile = [
-    (lib.getExe (
-      pkgs.writeShellApplication {
-        name = "satisfactory-occupied";
-        runtimeInputs = [ pkgs.jq ];
-        text = ''
-          jq -e --argjson now "$(date +%s)" '(.players // 0) > 0 and $now - .updated < 180' /run/satisfactory/status.json >/dev/null 2>&1
-        '';
-      }
-    ))
-  ];
-
   local.server.ssh.allowUsers = [ config.local.satisfactory.server.remote.user ];
 }

@@ -7,6 +7,10 @@ toplevel() {
 
 staged=$(toplevel /nix/var/nix/profiles/system)
 [ "$staged" != "$(toplevel /run/current-system)" ] || exit 0
+if [ "$(cat /var/lib/nixos-upgrade/staged 2>/dev/null)" != "$staged" ]; then
+  echo "the staged $staged is not an upgrade's; it waits for the next boot"
+  exit 0
+fi
 
 graphical_session_open() {
   local session props
@@ -20,12 +24,17 @@ graphical_session_open() {
   return 1
 }
 
+if [ "${1:-}" = --now ]; then
+  echo "${2:-asked}: switching to the staged $staged"
+  exec "$staged/bin/switch-to-configuration" switch
+fi
+
 for _ in $(seq 1 30); do
   graphical_session_open || break
   sleep 2
 done
 if graphical_session_open; then
-  echo "a graphical session is open; the staged system waits for the next logout or boot"
+  echo "a graphical session is open; the staged system waits for the next lock, sleep or logout"
   exit 0
 fi
 

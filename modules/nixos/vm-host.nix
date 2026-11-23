@@ -144,6 +144,7 @@ let
   };
 
   guestHoldLock = "/run/keep-running.lock";
+  guestBackupLock = "/run/minecraft-backup.lock";
 
   guestRun =
     name: path: args:
@@ -210,6 +211,49 @@ let
     ''
   ];
 
+  lagStatus = "/run/${domainName}-lag.json";
+  lagState = "/run/${domainName}-lag.state.json";
+
+  guestLagSample = guestRun "lag-sample" "/usr/bin/sh" [
+    "-c"
+    (builtins.replaceStrings [ "@minecraftPort@" ] [ (toString minecraftPort) ] (
+      builtins.readFile ./vm-host-lag-sample.sh
+    ))
+  ];
+
+  lagUpdate = pkgs.writeShellApplication {
+    name = "${domainName}-lag-update";
+    runtimeInputs = [
+      pkgs.jq
+      pkgs.coreutils
+    ];
+    text =
+      builtins.replaceStrings
+        [
+          "@guestLagSample@"
+          "@lagState@"
+          "@lagStatus@"
+          "@program@"
+          "@span@"
+          "@busyLimit@"
+          "@lossLimit@"
+          "@lossMinBytes@"
+          "@rttLimit@"
+        ]
+        [
+          (lib.getExe guestLagSample)
+          lagState
+          lagStatus
+          "${./vm-host-lag.jq}"
+          "300"
+          "0.8"
+          "2"
+          "524288"
+          "150"
+        ]
+        (builtins.readFile ./vm-host-lag.sh);
+  };
+
   idleShutdownMinutes = 10;
   shutdownGraceMinutes = 6;
   idleCountdown = "${domainName}-idle-shutdown";
@@ -217,15 +261,32 @@ let
 
   virsh = "virsh -c qemu:///system";
 
+  guestBackupQuiesce = guestRun "backup-quiesce" "/usr/bin/sh" [
+    "-c"
+    ''
+      /usr/bin/systemctl stop minecraft-backup.timer 2>/dev/null || true
+      /usr/bin/lslocks -rn -o PATH | /usr/bin/grep -cx ${guestBackupLock} || true
+    ''
+  ];
+
+  backupWaitMinutes = 2;
+
   shutdownRun = pkgs.writeShellApplication {
     name = "${domainName}-shutdown-run";
     runtimeInputs = [
       config.virtualisation.libvirtd.package
       pkgs.coreutils
+      config.local.power.keepAwakePackage
     ];
     text = ''
       run=$1
       [ "$(${virsh} domid ${domainName} 2>/dev/null)" = "$run" ] || exit 0
+      for _ in $(seq ${toString (backupWaitMinutes * 6)}); do
+        [ "$(${lib.getExe guestBackupQuiesce} || echo 0)" = 0 ] && break
+        [ "$(${virsh} domid ${domainName} 2>/dev/null)" = "$run" ] || exit 0
+        keep-awake --take ${domainName} --drain --for 3m --why "${domainName} backup in progress" >/dev/null
+        sleep 10
+      done
       ${virsh} shutdown ${domainName}
       for _ in $(seq ${toString (shutdownGraceMinutes * 12)}); do
         [ "$(${virsh} domid ${domainName} 2>/dev/null)" = "$run" ] || exit 0
@@ -244,7 +305,35 @@ let
       pkgs.jq
       config.local.power.keepAwakePackage
     ];
-    text = builtins.replaceStrings [ "@virsh@" "@domainName@" "@idleCountdown@" "@idleStatus@" "@guestLockCount@" "@guestLoginCount@" "@guestServerReadyAt@" "@idleAfter@" ] [ "${virsh}" "${domainName}" "${idleCountdown}" "${idleStatus}" "${lib.getExe guestLockCount}" "${lib.getExe guestLoginCount}" "${lib.getExe guestServerReadyAt}" "${toString (idleShutdownMinutes * 60)}" ] (builtins.readFile ./vm-host-shutdown-when-idle.sh);
+    text =
+      builtins.replaceStrings
+        [
+          "@virsh@"
+          "@domainName@"
+          "@idleCountdown@"
+          "@idleStatus@"
+          "@guestLockCount@"
+          "@guestLoginCount@"
+          "@guestServerReadyAt@"
+          "@idleAfter@"
+          "@lagUpdate@"
+          "@lagStatus@"
+          "@lagState@"
+        ]
+        [
+          "${virsh}"
+          "${domainName}"
+          "${idleCountdown}"
+          "${idleStatus}"
+          "${lib.getExe guestLockCount}"
+          "${lib.getExe guestLoginCount}"
+          "${lib.getExe guestServerReadyAt}"
+          "${toString (idleShutdownMinutes * 60)}"
+          "${lib.getExe lagUpdate}"
+          lagStatus
+          lagState
+        ]
+        (builtins.readFile ./vm-host-shutdown-when-idle.sh);
   };
 
   resume = pkgs.writeShellApplication {
@@ -277,9 +366,27 @@ let
     name = "${domainName}-control";
     runtimeInputs = [
       config.virtualisation.libvirtd.package
+      config.systemd.package
       pkgs.jq
+      pkgs.coreutils
     ];
-    text = builtins.replaceStrings [ "@virsh@" "@domainName@" "@idleStatus@" "@resume@" ] [ "${virsh}" "${domainName}" "${idleStatus}" "${lib.getExe resume}" ] (builtins.readFile ./vm-host-control.sh);
+    text =
+      builtins.replaceStrings
+        [
+          "@virsh@"
+          "@domainName@"
+          "@idleStatus@"
+          "@resume@"
+          "@lagStatus@"
+        ]
+        [
+          "${virsh}"
+          "${domainName}"
+          "${idleStatus}"
+          "${lib.getExe resume}"
+          lagStatus
+        ]
+        (builtins.readFile ./vm-host-control.sh);
   };
 in
 
@@ -330,20 +437,6 @@ in
     };
   };
 
-  local.vpn.moderateNat = true;
-
-  local.vpn.selection.deferWhile = [
-    (lib.getExe (
-      pkgs.writeShellApplication {
-        name = "${domainName}-locked";
-        runtimeInputs = [ pkgs.jq ];
-        text = ''
-          jq -e --argjson now "$(date +%s)" '.locks > 0 and $now - .updated < 180' ${idleStatus} >/dev/null 2>&1
-        '';
-      }
-    ))
-  ];
-
   local.server.ssh.hostOnlyInterfaces = [ bridge ];
 
   networking.firewall.interfaces.${bridge} = {
@@ -354,6 +447,7 @@ in
     allowedTCPPorts = [ 53 ];
   };
 
+  networking.nftables.enable = true;
   networking.nftables.tables.vm-isolation = {
     family = "inet";
     content = ''
@@ -369,7 +463,6 @@ in
         iifname "${bridge}" ip saddr ${guestAddress} ip daddr ${facts.pi.tailscale} oifname "tailscale0" tcp dport ${toString nasStreamPort} accept
         iifname "${bridge}" meta nfproto ipv6 counter drop
         iifname "${bridge}" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 } counter drop
-        iifname "${bridge}" oifname != "${config.local.vpn.interface}" counter drop
       }
     '';
   };

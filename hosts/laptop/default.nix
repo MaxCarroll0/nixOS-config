@@ -20,6 +20,7 @@
     ../../modules/nixos/pam-ssh-agent-sudo.nix
     ../../modules/nixos/nas/accounts.nix
     ../../modules/nixos/nas/unlock.nix
+    ../../modules/nixos/lockdown-guard.nix
   ];
 
   networking.hostName = "laptop";
@@ -29,6 +30,21 @@
   };
 
   local.gaming.enable = true;
+  local.lockdownGuard = {
+    enable = true;
+    apps = [
+      "ash"
+      "chromium"
+      "Discord"
+      "discord"
+      "heroic"
+      "lutris"
+      "mpv"
+      "prismlauncher"
+      "steam"
+      "steamwebhelper"
+    ];
+  };
   local.desktop.plasma.enable = false;
 
   local.nas.unlock = {

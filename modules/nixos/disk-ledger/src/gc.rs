@@ -54,6 +54,79 @@ pub struct LinkScan {
     pub entries: Vec<(u64, [u8; 32])>,
     pub strays: Vec<(String, u64)>,
     pub complete: bool,
+    pub invalid: Vec<(String, u64)>,
+}
+
+pub fn scan_invalid(store: &str, state: &str) -> Vec<(String, u64)> {
+    static SIZES: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    let Some(dir) = sys::open_dir(store) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    let complete = sys::read_names(dir, |name, _| {
+        names.push(String::from_utf8_lossy(name).into_owned())
+    });
+    sys::close(dir);
+    let Ok(db) = Connection::open_with_flags(
+        format!("{state}/db/db.sqlite"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return Vec::new();
+    };
+    let valid: rusqlite::Result<HashSet<String>> = db
+        .prepare("select path from ValidPaths")
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect()
+        });
+    let (true, Ok(valid)) = (complete, valid) else {
+        return Vec::new();
+    };
+    let present: HashSet<&str> = names.iter().map(String::as_str).collect();
+    let mut sizes = locked(SIZES.get_or_init(Default::default));
+    let mut found = Vec::new();
+    for name in &names {
+        let logical = format!("{LOGICAL}{name}");
+        if hash_part(&logical).is_none()
+            || name.ends_with(".lock")
+            || present.contains(format!("{name}.lock").as_str())
+            || valid.contains(&logical)
+        {
+            continue;
+        }
+        let physical = format!("{store}/{name}");
+        if sys::lstat(&physical).is_none_or(|entry| entry.mtime != 1) {
+            continue;
+        }
+        let bytes = *sizes
+            .entry(name.clone())
+            .or_insert_with(|| unshared_bytes(std::path::Path::new(&physical)));
+        found.push((name.clone(), bytes));
+    }
+    sizes.retain(|name, _| present.contains(name.as_str()));
+    found
+}
+
+fn unshared_bytes(path: &std::path::Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(info) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    let own = if info.is_file() && info.nlink() > 2 {
+        0
+    } else {
+        info.blocks() * 512
+    };
+    if !info.is_dir() {
+        return own;
+    }
+    own + std::fs::read_dir(path)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| unshared_bytes(&entry.path()))
+        .sum::<u64>()
 }
 
 pub fn scan_links(path: &str) -> LinkScan {
@@ -109,12 +182,13 @@ pub struct Report {
     pub unlinking: f64,
     pub linking: f64,
     pub indexing: f64,
+    pub invalid: u64,
 }
 
 impl Report {
     pub fn milliseconds(&self) -> serde_json::Value {
         let round = |seconds: f64| (seconds * 1e4).round() / 10.0;
-        serde_json::json!({"lock": round(self.waited), "roots": round(self.roots), "rescanned": self.rescanned, "database": round(self.database), "prefetch": round(self.warming), "unlink": round(self.unlinking), "index": round(self.indexing), "links": round(self.linking)})
+        serde_json::json!({"lock": round(self.waited), "roots": round(self.roots), "rescanned": self.rescanned, "database": round(self.database), "prefetch": round(self.warming), "unlink": round(self.unlinking), "index": round(self.indexing), "links": round(self.linking), "invalid": self.invalid})
     }
 }
 
@@ -800,7 +874,7 @@ impl Drop for Session {
 }
 
 impl Session {
-    pub fn open(layout: &Layout, orphans: &[String]) -> Result<Session, String> {
+    pub fn open(layout: &Layout, orphans: &[String], invalid: &[String]) -> Result<Session, String> {
         let mut guard = locked(&COLLECTOR);
         if !guard.as_ref().is_some_and(|collector| {
             collector.store == layout.store && collector.state == layout.state
@@ -873,7 +947,44 @@ impl Session {
                 session.report.links += drop_orphan(session.links, &name).0;
             }
         }
+        for name in invalid {
+            if session.drop_invalid(name) {
+                session.report.invalid += 1;
+            }
+        }
         Ok(session)
+    }
+
+    fn drop_invalid(&mut self, name: &str) -> bool {
+        let logical = format!("{LOGICAL}{name}");
+        let temp = locked(&self.shared).temp.clone();
+        if name.contains('/') || name.ends_with(".lock") || self.cause(&logical, &temp).is_some() {
+            return false;
+        }
+        let links = self.links;
+        let collector = self.collector();
+        let physical = format!("{}/{name}", collector.store);
+        if std::path::Path::new(&format!("{physical}.lock")).exists()
+            || sys::lstat(&physical).is_none_or(|entry| entry.mtime != 1)
+            || collector
+                .db
+                .query_row(
+                    "select count(*) from ValidPaths where path = ?",
+                    [&logical],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_or(true, |count| count != 0)
+        {
+            return false;
+        }
+        let mut removed = remove::Outcome::default();
+        let mut linked: Vec<u64> = Vec::new();
+        remove::remove_tree_linked(&physical, &mut removed, &mut Some(&mut linked));
+        if links >= 0 && !linked.is_empty() {
+            self.report.links += self.collector().drop_linked(links, linked).0;
+        }
+        self.report.entries += removed.removed as u64;
+        removed.failed.is_empty()
     }
 
     pub fn unroot(&mut self, links: &[String]) {
@@ -1134,7 +1245,7 @@ mod tests {
             links_index: None,
         };
         let _ = std::fs::remove_dir_all(format!("{root}/nix/var/nix/temproots"));
-        let mut session = Session::open(&layout, &[]).unwrap();
+        let mut session = Session::open(&layout, &[], &[]).unwrap();
         let client = nix_store(&root, &["--add", base.join("rooted").to_str().unwrap()]);
         assert!(client.status.success(), "{}", String::from_utf8_lossy(&client.stderr));
         let outcome = session.delete(&[rooted.clone(), free.clone()], &HashMap::new());
@@ -1148,6 +1259,44 @@ mod tests {
         assert!(!valid.status.success());
         let kept = nix_store(&root, &["--check-validity", &rooted]);
         assert!(kept.status.success());
+        let _ = std::process::Command::new("chmod").args(["-R", "u+w"]).arg(&base).status();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[ignore]
+    fn invalid_paths_are_found_and_dropped_unless_locked_or_valid() {
+        let base = std::env::temp_dir().join(format!("ledger-invalid-{}", std::process::id()));
+        let root = base.join("root").to_string_lossy().into_owned();
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let add = |name: &str| {
+            let file = base.join(name);
+            std::fs::write(&file, name.repeat(4096)).unwrap();
+            let output = nix_store(&root, &["--add", file.to_str().unwrap()]);
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        let (stray, locked, valid) = (add("stray"), add("locked"), add("valid"));
+        let store = format!("{root}/nix/store");
+        let state = format!("{root}/nix/var/nix");
+        let db = Connection::open(format!("{state}/db/db.sqlite")).unwrap();
+        for path in [&stray, &locked] {
+            db.execute("delete from ValidPaths where path = ?", [path]).unwrap();
+        }
+        drop(db);
+        std::fs::write(format!("{root}{locked}.lock"), "").unwrap();
+        let name = |path: &str| path.strip_prefix(LOGICAL).unwrap().to_string();
+        let found = scan_invalid(&store, &state);
+        assert_eq!(found.iter().map(|entry| entry.0.clone()).collect::<Vec<_>>(), vec![name(&stray)]);
+        assert!(found[0].1 >= 4096);
+        let layout = Layout { store, state, links_index: None };
+        let session = Session::open(&layout, &[], &[name(&stray), name(&locked), name(&valid)]).unwrap();
+        assert_eq!(session.report.invalid, 1);
+        drop(session);
+        assert!(!std::path::Path::new(&format!("{root}{stray}")).exists());
+        assert!(std::path::Path::new(&format!("{root}{locked}")).exists());
+        assert!(std::path::Path::new(&format!("{root}{valid}")).exists());
         let _ = std::process::Command::new("chmod").args(["-R", "u+w"]).arg(&base).status();
         let _ = std::fs::remove_dir_all(&base);
     }

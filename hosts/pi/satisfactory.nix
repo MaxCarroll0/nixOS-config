@@ -17,7 +17,10 @@
   local.satisfactory.panel = {
     enable = true;
     address = facts.pi.tailscale;
-    trustedProxies = [ "100.125.126.78" ];
+    trustedProxies = [
+      "100.125.126.78"
+      facts.pi.tailscale
+    ];
     desktop = {
       address = facts.desktopnew.tailscale;
       wakeName = "desktopnew";

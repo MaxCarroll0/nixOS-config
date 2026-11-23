@@ -1,11 +1,16 @@
 state() { @virsh@ domstate @domainName@ 2>/dev/null || echo unknown; }
 status_json() {
-  local current idle='{}'
+  local current idle='{}' lag=null
   current=$(state)
   if [ "$current" = running ] && [ -r @idleStatus@ ]; then
     idle=$(cat @idleStatus@)
   fi
-  jq -cn --arg state "$current" --argjson idle "$idle" '{state:$state} + $idle'
+  if [ "$current" = running ] && [ -r @lagStatus@ ]; then
+    lag=$(cat @lagStatus@)
+  fi
+  jq -cn --arg state "$current" --argjson idle "$idle" --argjson lag "$lag" \
+    --argjson now "$(date +%s)" \
+    '{state:$state} + $idle + {lag:(if $lag != null and $now - $lag.updated < 180 then $lag else null end)}'
 }
 
 case "${1:-}" in

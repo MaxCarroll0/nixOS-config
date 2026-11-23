@@ -1,4 +1,4 @@
-# Deploy tooling: rebuild (snapshot deploys with deploy-rs), deploy-status, activate-detached.
+# Deploy tooling: rebuild (snapshot deploys with deploy-rs), deploy-status, land, activate-detached.
 
 {
   config,
@@ -15,7 +15,7 @@ let
 
   runtimeEnv = {
     REBUILD_HOST = config.networking.hostName;
-    REBUILD_FLAKE = flakePath;
+    REBUILD_DEFAULT_FLAKE = flakePath;
     REBUILD_NODES = lib.concatStringsSep " " nodes;
     REBUILD_WAKE_PEERS = lib.concatStringsSep " " wakePeers;
   };
@@ -32,7 +32,10 @@ let
       pkgs.gawk
       pkgs.curl
     ];
-    text = builtins.readFile ./deploy/claim.sh + builtins.readFile ./deploy/rebuild.sh;
+    text =
+      builtins.readFile ./deploy/claim.sh
+      + builtins.readFile ./deploy/overlay.sh
+      + builtins.readFile ./deploy/rebuild.sh;
   };
 
   deployStatus = pkgs.writeShellApplication {
@@ -46,6 +49,17 @@ let
       config.services.tailscale.package
     ];
     text = builtins.readFile ./deploy/deploy-status.sh;
+  };
+
+  land = pkgs.writeShellApplication {
+    name = "land";
+    inherit runtimeEnv;
+    runtimeInputs = [
+      pkgs.git
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = builtins.readFile ./deploy/overlay.sh + builtins.readFile ./deploy/land.sh;
   };
 
   activateDetached = pkgs.writeShellApplication {
@@ -85,6 +99,7 @@ in
   environment.systemPackages = [
     rebuild
     deployStatus
+    land
     activateDetached
   ];
 }

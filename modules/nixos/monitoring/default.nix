@@ -293,6 +293,12 @@ in
       description = "Hostname Grafana believes it is served as, used to build redirects; default localhost.";
     };
 
+    grafana.path = lib.mkOption {
+      type = lib.types.strMatching "/(([^/]+/)+)?";
+      default = "/";
+      description = "URL path Grafana is served under behind the proxy.";
+    };
+
     grafana.anonymousViewer = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -688,7 +694,8 @@ in
           http_addr = "127.0.0.1";
           http_port = 3000;
           domain = cfg.grafana.domain;
-          root_url = "%(protocol)s://%(domain)s/";
+          root_url = "%(protocol)s://%(domain)s${cfg.grafana.path}";
+          serve_from_sub_path = cfg.grafana.path != "/";
         };
         settings.dashboards.default_home_dashboard_path = "${dashboardDir "overview"}/home.json";
         settings.security.secret_key = "$__file{${config.sops.secrets."grafana-secret-key".path}}";
