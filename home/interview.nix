@@ -220,6 +220,7 @@ in
       active = [
         { class = "^emacs$"; }
         { class = "^interview%-claude$"; }
+        { class = "^interview%-tutor%-emacs$"; }
       ];
       paused = [
         { class = "^interview%-tutor$"; }

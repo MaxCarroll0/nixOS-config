@@ -83,32 +83,32 @@ local function maximise(window)
     end
 end
 
-local function find_window(address)
-    for _, window in ipairs(hl.get_windows()) do
-        if window.address == address then return window end
-    end
-    return nil
-end
-
 local function kept(window)
     return any_match(M.keep[M.active.profile], window) or any_match(M.spare, window)
 end
 
+local function command_name(pid)
+    local file = io.open("/proc/" .. pid .. "/comm", "r")
+    if not file then return "" end
+    local name = file:read("l") or ""
+    file:close()
+    return name
+end
+
 local function protected(window)
-    if kept(window) or not window.pid or window.pid <= 1 then return true end
+    if not window.pid or window.pid <= 1 or (window.class or "") == "" or kept(window) then return true end
+    if command_name(window.pid):match("^emacs") then return true end
     for _, other in ipairs(hl.get_windows()) do
         if other.pid == window.pid and (M.before[other.address] or kept(other)) then return true end
     end
     return false
 end
 
-local function reap(address, signal, next_signal)
+local function reap(pid, signal, next_signal)
     if not M.active then return end
-    local window = find_window(address)
-    if not window or protected(window) then return end
-    hl.dispatch(hl.dsp.exec_cmd(string.format("kill -%s %d", signal, window.pid)))
+    hl.dispatch(hl.dsp.exec_cmd(string.format("kill -%s %d", signal, pid)))
     if next_signal then
-        hl.timer(function() reap(address, next_signal, nil) end, { timeout = M.stray_kill_ms, type = "oneshot" })
+        hl.timer(function() reap(pid, next_signal, nil) end, { timeout = M.stray_kill_ms, type = "oneshot" })
     end
 end
 
@@ -216,9 +216,11 @@ end
 hl.on("window.open", function(window)
     if not M.active then return end
     if not allowed(window) then
-        local address = window.address
-        hl.dispatch(hl.dsp.window.close({ window = "address:" .. address }))
-        hl.timer(function() reap(address, "TERM", "KILL") end, { timeout = M.stray_check_ms, type = "oneshot" })
+        local pid = not protected(window) and window.pid
+        hl.dispatch(hl.dsp.window.close({ window = "address:" .. window.address }))
+        if pid then
+            hl.timer(function() reap(pid, "TERM", "KILL") end, { timeout = M.stray_check_ms, type = "oneshot" })
+        end
         return
     end
     M.opened[window.address] = true
