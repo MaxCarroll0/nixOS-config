@@ -62,7 +62,11 @@ end
 local function enter_submap()
     if not M.active then return end
     local want = submap_name()
-    if hl.get_current_submap() ~= want then hl.dispatch(hl.dsp.submap(want)) end
+    local current = hl.get_current_submap()
+    if current == want then return end
+    if current == nil or current == "" or current == "default" or current == "reset" or is_lockdown_submap(current) then
+        hl.dispatch(hl.dsp.submap(want))
+    end
 end
 
 local function home()

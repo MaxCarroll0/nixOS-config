@@ -202,7 +202,6 @@ let
   baseEntries = [
     promptEntry
     (entry "ALT+Tab" "hl.dsp.window.cycle_next()" "next allowed window")
-    (entry "SUPER+Tab" "hl.dsp.window.cycle_next()" "next allowed window, as ALT+Tab")
   ];
 
   entriesFor =
@@ -230,12 +229,16 @@ let
 
   bindLua = e: "hl.bind(${luaStr e.key}, ${e.lua}, { description = ${luaStr e.description} })";
 
-  lockedLua = config.local.wm.lockedBindsLua or "";
+  wmLines =
+    entries:
+    map (w: w.lua) (
+      lib.filter (w: !(lib.elem w.key (map (e: e.key) entries))) (config.local.wm.lockdownBinds or [ ])
+    );
 
   submapBlock = name: entries: ''
     hl.define_submap(${luaStr name}, function()
     ${lib.concatMapStringsSep "\n" bindLua entries}
-    ${lockedLua}
+    ${lib.concatStringsSep "\n" (wmLines entries)}
     end)
   '';
 

@@ -273,6 +273,14 @@ let
 
   leaderKey = "code:66";
 
+  lockdownKept =
+    b:
+    !(lib.elem b.group [
+      "launch"
+      "session"
+    ])
+    && b.name != "escape-terminal";
+
   leaderLua = ''
     local wm_border = hl.get_config("general.border_size") or 1
     wm_leader_pending = false
@@ -285,7 +293,7 @@ let
       return hl.dsp.no_op()
     end
 
-    local function wm_leader()
+    function wm_leader()
       local window = hl.get_active_window()
       if window and window.class == "emacs" then
         wm_leader_pending = true
@@ -772,10 +780,10 @@ in
       description = "Generated Lua bind fragment, loaded with dofile.";
     };
 
-    lockedBindsLua = lib.mkOption {
-      type = lib.types.str;
+    lockdownBinds = lib.mkOption {
+      type = lib.types.listOf (lib.types.attrsOf lib.types.str);
       readOnly = true;
-      description = "Lua bind lines for the root bindings flagged locked, for submaps that keep media and brightness keys.";
+      description = "Root bindings as key spec and Lua bind line, without launchers or the session menu, for lockdown submaps.";
     };
 
     lockdownHelp = lib.mkOption {
@@ -821,9 +829,25 @@ in
     ];
 
     local.wm.bindsFile = bindsLua;
-    local.wm.lockedBindsLua = lib.concatMapStringsSep "\n" bindLine (
-      lib.filter (b: lib.elem "locked" b.flags) (named cfg.keys)
-    );
+    local.wm.lockdownBinds =
+      map (b: {
+        key = keySpec b;
+        lua = bindLine b;
+      }) (lib.filter lockdownKept (named cfg.keys))
+      ++ lib.mapAttrsToList (name: s: {
+        key = keySpec s;
+        lua = entryLine s name;
+      }) chordSubmaps
+      ++ [
+        {
+          key = leaderKey;
+          lua = "hl.bind(${luaStr leaderKey}, wm_leader, { description = \"NORMAL state\" })";
+        }
+        {
+          key = "SUPER+escape";
+          lua = "hl.bind(\"SUPER+escape\", ${submapTo "normal"}, { description = \"NORMAL state\" })";
+        }
+      ];
     local.wm.panicCommand = "${wmPanic}/bin/wm-panic";
     home.packages = lib.mkIf cfg.enable [
       emacsCall
