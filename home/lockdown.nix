@@ -204,9 +204,14 @@ let
     (entry "ALT+Tab" "hl.dsp.window.cycle_next()" "next allowed window")
   ];
 
+  homeEntry =
+    p: entry "SUPER+0" "hl.dsp.focus({ workspace = ${luaStr "name:${p.workspace}"} })" "back to ${p.workspace}";
+
   entriesFor =
     p: s:
-    map (b: entry b.key (exec b.command) b.description) (lib.filter (heldIn s) p.binds) ++ baseEntries;
+    map (b: entry b.key (exec b.command) b.description) (lib.filter (heldIn s) p.binds)
+    ++ baseEntries
+    ++ [ (homeEntry p) ];
 
   submaps = lib.concatLists (
     lib.mapAttrsToList (
