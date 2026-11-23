@@ -567,7 +567,7 @@ pub fn covered_mountpoints(root: &str) -> Vec<String> {
         .into_iter()
         .filter(|mount| {
             mount.point != root
-                && mount.dev != device
+                && (mount.dev != device || mount.root != mount.point)
                 && dev_of.get(&mount.parent) == Some(&device)
         })
         .map(|mount| mount.point)

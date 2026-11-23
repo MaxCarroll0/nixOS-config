@@ -76,6 +76,7 @@ pub struct Mount {
     pub id: u32,
     pub parent: u32,
     pub dev: u64,
+    pub root: String,
     pub point: String,
 }
 
@@ -87,11 +88,13 @@ pub fn mounts(mountinfo: &str) -> Vec<Mount> {
             let id = fields.next()?.parse().ok()?;
             let parent = fields.next()?.parse().ok()?;
             let (major, minor) = fields.next()?.split_once(':')?;
-            let point = fields.nth(1)?;
+            let root = fields.next()?;
+            let point = fields.next()?;
             Some(Mount {
                 id,
                 parent,
                 dev: libc::makedev(major.parse().ok()?, minor.parse().ok()?),
+                root: unescape_mount(root),
                 point: unescape_mount(point),
             })
         })
@@ -101,7 +104,7 @@ pub fn mounts(mountinfo: &str) -> Vec<Mount> {
 pub fn foreign_mounts(mountinfo: &str, device: u64) -> HashSet<String> {
     mounts(mountinfo)
         .into_iter()
-        .filter(|mount| mount.dev != device)
+        .filter(|mount| mount.dev != device || mount.root != mount.point)
         .map(|mount| mount.point)
         .collect()
 }
@@ -1043,11 +1046,16 @@ mod tests {
 26 1 259:5 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p5 rw
 27 26 259:5 /nix/store /nix/store ro,relatime shared:2 - ext4 /dev/nvme0n1p5 rw
 28 26 0:25 / /proc rw shared:3 - proc proc rw
-91 26 0:58 / /mnt/nas\\040share rw shared:40 - cifs //pi/nas rw";
+91 26 0:58 / /mnt/nas\\040share rw shared:40 - cifs //pi/nas rw
+92 26 259:5 / /tmp/scratch/root ro,relatime shared:1 - ext4 /dev/nvme0n1p5 rw";
         let mounts = foreign_mounts(mountinfo, root);
         assert_eq!(
             mounts,
-            HashSet::from(["/proc".to_string(), "/mnt/nas share".to_string()])
+            HashSet::from([
+                "/proc".to_string(),
+                "/mnt/nas share".to_string(),
+                "/tmp/scratch/root".to_string()
+            ])
         );
         let skip = within_device(root, std::sync::Arc::new(|_: &str, _: &str| false));
         assert!(skip("/", "proc") || !std::path::Path::new("/proc/self").exists());

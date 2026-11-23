@@ -1,5 +1,7 @@
 // Store index over the nix database: graph, liveness, exact per-path disk use from shared inodes, deletion.
 
+const CACHE_VERSION: i64 = 1;
+
 use crate::{gc, sys};
 use hashbrown::HashTable;
 use regex::Regex;
@@ -793,6 +795,14 @@ impl Store {
         let _ = cache.pragma_update(None, "journal_mode", "wal");
         let _ = cache.pragma_update(None, "cache_size", -256);
         let _ = cache.execute_batch("drop table if exists disk; drop table if exists drift; create table if not exists store (path text primary key, own integer, used integer, inodes blob)");
+        let version: i64 = cache
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap_or(0);
+        if version < CACHE_VERSION {
+            let _ = cache.execute_batch(&format!(
+                "delete from store; pragma user_version = {CACHE_VERSION}"
+            ));
+        }
         let mut stale = Vec::new();
         let mut loaded = Vec::new();
         if let Ok(mut statement) = cache.prepare("select path, own, used, inodes from store") {
