@@ -1,4 +1,4 @@
-flake="$REBUILD_FLAKE"
+flake="${REBUILD_FLAKE:-$REBUILD_DEFAULT_FLAKE}"
 self="$REBUILD_HOST"
 read -ra nodes <<<"$REBUILD_NODES"
 

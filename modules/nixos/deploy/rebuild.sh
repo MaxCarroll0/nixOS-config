@@ -1,5 +1,5 @@
 host="$REBUILD_HOST"
-flake="$REBUILD_FLAKE"
+flake="${REBUILD_FLAKE:-$REBUILD_DEFAULT_FLAKE}"
 stateDir="${XDG_STATE_HOME:-$HOME/.local/state}/rebuild"
 opts=()
 rebuildStarted=$SECONDS
@@ -217,6 +217,16 @@ publishSnapshot() {
   fi
 }
 
+onTarget() {
+  local limit=$1
+  shift
+  if [ "$target" = "$host" ]; then
+    timeout "$limit" bash -c "$*"
+  else
+    timeout "$limit" ssh -o BatchMode=yes "$target" "$*"
+  fi
+}
+
 recordDeployed() {
   git -C "$flake" update-ref "$deployRef" "$rev"
   if [ "$rev" != "$base" ] && [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
@@ -289,7 +299,7 @@ if [ -n "$target" ]; then
   if activating; then
     claim_or_exit "$target"
     git -C "$flake" fetch -q origin '+refs/deploys/*:refs/remotes/deploys/*' '+refs/snapshots/*:refs/snapshots/*' 2>/dev/null || true
-    check_running "$target" "$(timeout 20 ssh -o BatchMode=yes "$target" nixos-version --configuration-revision 2>/dev/null || true)"
+    check_running "$target" "$(onTarget 20 nixos-version --configuration-revision 2>/dev/null || true)"
     publishSnapshot
   fi
 
@@ -307,7 +317,7 @@ eval-cache = false"
   deployTarget="$source#$target"
   [ -n "$profile" ] && deployTarget="$source#$target.$profile"
 
-  live=$(timeout 30 ssh -o BatchMode=yes "$target" 'readlink -f /run/current-system ~/.local/state/nix/profiles/home-manager 2>/dev/null' 2>/dev/null || true)
+  live=$(onTarget 30 'readlink -f /run/current-system ~/.local/state/nix/profiles/home-manager 2>/dev/null' 2>/dev/null || true)
   if [ -n "$live" ]; then
     echo "seeding the store with what $target runs"
     # shellcheck disable=SC2086
@@ -344,8 +354,8 @@ eval-cache = false"
 
   case "$action" in
     switch|test)
-      now=$(timeout 30 ssh -o BatchMode=yes "$target" nixos-version --configuration-revision 2>/dev/null || true)
-      failed=$(timeout 30 ssh -o BatchMode=yes "$target" systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | paste -sd, || true)
+      now=$(onTarget 30 nixos-version --configuration-revision 2>/dev/null || true)
+      failed=$(onTarget 30 systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | paste -sd, || true)
       if [ "$now" = "$rev" ]; then
         recordDeployed
         echo "VERIFIED: $target runs ${rev:0:7}${failed:+; failed units: $failed}"

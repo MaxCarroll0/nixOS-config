@@ -15,7 +15,7 @@ let
 
   runtimeEnv = {
     REBUILD_HOST = config.networking.hostName;
-    REBUILD_FLAKE = flakePath;
+    REBUILD_DEFAULT_FLAKE = flakePath;
     REBUILD_NODES = lib.concatStringsSep " " nodes;
     REBUILD_WAKE_PEERS = lib.concatStringsSep " " wakePeers;
   };
