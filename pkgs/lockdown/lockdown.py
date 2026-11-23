@@ -148,6 +148,7 @@ def publish(active: dict | None) -> None:
         f"substate = {lua_string(active['substate'])}",
         f"workspace = {lua_string(active['workspace'])}",
         f"allow = {lua_rules(active['allow'])}",
+        f"since = {active['since']}",
     ]
     text = "return { " + ", ".join(fields) + " }\n"
     for path, body in ((lua, text), (js, json.dumps(active))):
@@ -173,6 +174,7 @@ def apply(at: dt.datetime) -> dict:
             state["engaged"] = on
             if on:
                 state["substate"] = "active"
+                state["since"] = at.timestamp()
             save_state(name, state)
             hooks.append(profile.get("on_engage") if on else profile.get("on_release"))
         report[name] = {"engaged": on, "reason": why, "substate": state.get("substate", "active")}
@@ -187,6 +189,7 @@ def apply(at: dt.datetime) -> dict:
                 "actions": profile.get("actions", []),
                 "message": profile.get("message", ""),
                 "reason": why,
+                "since": int(state.get("since") or at.replace(hour=int(profile["start"][:2]), minute=int(profile["start"][3:]), second=0, microsecond=0).timestamp()),
             }
     publish(engaged)
     for hook in hooks:

@@ -1,10 +1,9 @@
--- Lockdown enforcement: pins focus to the engaged profile's own workspace, keeps only allowlisted windows on it and holds the profile's submap.
+-- Lockdown enforcement: stashes every window older than the lockdown except the profile's own, closes new disallowed windows and holds the profile's submap.
 
 local M = {
     source = nil,
     active = nil,
     kb_options = nil,
-    opened = {},
     before = {},
     submaps = {},
     keep = {},
@@ -150,26 +149,51 @@ local function rehome(only)
     if landing then hl.dispatch(hl.dsp.focus({ workspace = landing })) end
 end
 
+local boot_time = nil
+
+local function booted()
+    if boot_time then return boot_time end
+    local file = io.open("/proc/stat", "r")
+    if not file then return 0 end
+    for line in file:lines() do
+        local value = line:match("^btime (%d+)")
+        if value then boot_time = tonumber(value) end
+    end
+    file:close()
+    return boot_time or 0
+end
+
+local function started(pid)
+    local file = io.open("/proc/" .. pid .. "/stat", "r")
+    if not file then return nil end
+    local text = file:read("a")
+    file:close()
+    local fields = {}
+    for field in (text:match("%) (.*)") or ""):gmatch("%S+") do fields[#fields + 1] = field end
+    local ticks = tonumber(fields[20])
+    return ticks and booted() + ticks / 100
+end
+
+local function native(window)
+    if not (window.pid and window.pid > 1 and M.active.since) then return false end
+    local at = started(window.pid)
+    return at ~= nil and at >= M.active.since
+end
+
 local function settle(window)
     if not (M.active and window and window.mapped and window.workspace) then return end
-    local here = on(window, M.active.workspace)
     local stashed = on(window, stash)
-    if allowed(window) then
-        if stashed or (M.opened[window.address] and not here) then
-            move(window, home())
-            maximise(window)
-        elseif here then
-            maximise(window)
-        end
-    elseif stashed and managed(window) then
-        move(window, home())
+    if allowed(window) or managed(window) then
+        if stashed then move(window, home()) end
+    elseif not native(window) and not stashed then
+        move(window, stash)
     end
 end
 
 local function enforce()
     if not M.active then return end
     for _, window in ipairs(hl.get_windows()) do settle(window) end
-    rehome(function(window) return not managed(window) end)
+    rehome(function(window) return native(window) and not on(window, M.active.workspace) and not managed(window) end)
     local special = hl.get_active_special_workspace()
     if special and special.name == stash then
         hl.dispatch(hl.dsp.workspace.toggle_special("lockdown"))
@@ -192,7 +216,6 @@ end
 
 local function release()
     rehome()
-    M.opened = {}
     M.before = {}
     if M.kb_options ~= nil then
         hl.config({ ["input.kb_options"] = M.kb_options })
@@ -229,18 +252,17 @@ hl.on("window.open", function(window)
         end
         return
     end
-    M.opened[window.address] = true
-    hl.timer(function() settle(window) end, { timeout = 50, type = "oneshot" })
+    hl.timer(function()
+        if not M.active then return end
+        if not on(window, M.active.workspace) then move(window, home()) end
+        maximise(window)
+    end, { timeout = 50, type = "oneshot" })
 end)
 
 
 hl.on("keybinds.submap", function(name)
     if not M.active or name == submap_name() then return end
     hl.timer(enter_submap, { timeout = 10, type = "oneshot" })
-end)
-
-hl.on("window.close", function(window)
-    M.opened[window.address] = nil
 end)
 
 hl.timer(poll, { timeout = 1000, type = "repeat" })
