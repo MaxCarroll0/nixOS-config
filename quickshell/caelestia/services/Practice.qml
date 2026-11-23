@@ -107,12 +107,10 @@ Singleton {
                 const t = out[s.lang] ?? (out[s.lang] = {
                         lang: s.lang,
                         coding: 0,
-                        learning: 0,
                         review: 0,
                         completed: 0
                     });
                 t.coding += s.coding;
-                t.learning += s.learning;
                 t.review += s.review;
                 if (s.complete)
                     t.completed++;

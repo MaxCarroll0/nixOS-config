@@ -52,7 +52,7 @@ Item {
         };
     }
     readonly property var langTotals: Practice.totals()
-    readonly property real maxLang: Math.max(1, ...langTotals.map(t => t.coding + t.learning + t.review))
+    readonly property real maxLang: Math.max(1, ...langTotals.map(t => t.coding + t.review))
 
     implicitWidth: 1000
     implicitHeight: editing ? settingsLoader.implicitHeight : layout.implicitHeight
@@ -268,10 +268,6 @@ Item {
                             colour: Colours.palette.m3primary
                         },
                         {
-                            key: "learning",
-                            colour: Colours.palette.m3tertiary
-                        },
-                        {
                             key: "tutor",
                             colour: Colours.palette.m3tertiaryContainer
                         },
@@ -297,7 +293,7 @@ Item {
                 spacing: Tokens.spacing.medium
 
                 Repeater {
-                    model: [["coding", "Coding"], ["learning", "Learning (paused)"], ["tutor", "Tutor"], ["review", "Review"]]
+                    model: [["coding", "Coding"], ["tutor", "Tutor"], ["review", "Review"]]
 
                     StyledText {
                         required property var modelData
@@ -356,7 +352,7 @@ Item {
                             }
 
                             StyledText {
-                                text: `coding ${Practice.hours(session.modelData.coding)} · learning ${Practice.hours(session.modelData.learning)} · review ${Practice.hours(session.modelData.review)}`
+                                text: `coding ${Practice.hours(session.modelData.coding)} · review ${Practice.hours(session.modelData.review)}`
                                 color: Colours.palette.m3onSurfaceVariant
                                 font: Tokens.font.body.small
                             }
@@ -397,7 +393,7 @@ Item {
                     id: langRow
 
                     required property var modelData
-                    readonly property real total: modelData.coding + modelData.learning + modelData.review
+                    readonly property real total: modelData.coding + modelData.review
 
                     Layout.fillWidth: true
                     spacing: Tokens.spacing.medium

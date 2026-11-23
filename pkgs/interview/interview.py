@@ -365,7 +365,7 @@ def end_coding(cur: dict, at: float, early: bool) -> dict:
         cur["used_before"] = coding_used(cur, at)
         cur["running_since"] = None
     if cur["phase"] == "paused":
-        log("learning", cur, cur["pause_started"], at)
+        log("paused", cur, cur["pause_started"], at)
         cur["pause_seconds"] += at - cur["pause_started"]
         run_hook(config()["on_resume"])
     log("coding", cur, cur["started"], at, active=round(cur["used_before"]), early=early)
@@ -774,7 +774,7 @@ def do_resume(cur: dict, at: float):
     if cur["phase"] != "paused":
         print(f"cannot resume during {cur['phase']}", file=sys.stderr)
         return 1
-    log("learning", cur, cur["pause_started"], at)
+    log("paused", cur, cur["pause_started"], at)
     cur["pause_seconds"] += at - cur["pause_started"]
     cur["pause_started"] = None
     cur["running_since"] = at
@@ -1039,7 +1039,7 @@ def cmd_log(args) -> int:
         if cur["phase"] in ("coding", "paused"):
             entries.append({"kind": "coding", "date": day_of(cur["started"]), "start": iso(cur["started"]), "seconds": round(coding_used(cur, at)), "session": cur["id"], "track": cur["track"], "lang": cur["lang"], "problem": cur["problem"], "live": True})
         if cur["phase"] == "paused":
-            entries.append({"kind": "learning", "date": day_of(cur["pause_started"]), "start": iso(cur["pause_started"]), "seconds": round(at - cur["pause_started"]), "session": cur["id"], "track": cur["track"], "lang": cur["lang"], "problem": cur["problem"], "live": True})
+            entries.append({"kind": "paused", "date": day_of(cur["pause_started"]), "start": iso(cur["pause_started"]), "seconds": round(at - cur["pause_started"]), "session": cur["id"], "track": cur["track"], "lang": cur["lang"], "problem": cur["problem"], "live": True})
         if cur["phase"] == "review":
             entries.append({"kind": "review", "date": day_of(cur["review_started"]), "start": iso(cur["review_started"]), "seconds": round(at - cur["review_started"]), "session": cur["id"], "track": cur["track"], "lang": cur["lang"], "problem": cur["problem"], "live": True})
     since = (dt.date.fromtimestamp(at) - dt.timedelta(days=args.days - 1)).isoformat()
@@ -1047,13 +1047,15 @@ def cmd_log(args) -> int:
     for e in entries:
         if e["date"] < since:
             continue
-        d = days.setdefault(e["date"], {"coding": 0, "learning": 0, "review": 0, "tutor": 0, "sessions": {}, "completed": 0})
-        if e["kind"] in ("coding", "learning", "review", "tutor"):
+        if e["kind"] == "learning":
+            e = {**e, "kind": "paused"}
+        d = days.setdefault(e["date"], {"coding": 0, "paused": 0, "review": 0, "tutor": 0, "sessions": {}, "completed": 0})
+        if e["kind"] in ("coding", "paused", "review", "tutor"):
             d[e["kind"]] += e["seconds"]
         if e["kind"] == "tutor":
             continue
-        s = d["sessions"].setdefault(e["session"], {"session": e["session"], "lang": e["lang"], "track": e["track"], "problem": e["problem"], "coding": 0, "learning": 0, "review": 0, "complete": False})
-        if e["kind"] in ("coding", "learning", "review"):
+        s = d["sessions"].setdefault(e["session"], {"session": e["session"], "lang": e["lang"], "track": e["track"], "problem": e["problem"], "coding": 0, "paused": 0, "review": 0, "complete": False})
+        if e["kind"] in ("coding", "paused", "review"):
             s[e["kind"]] += e["seconds"]
         if e["kind"] == "complete" and worked(e):
             s.update(complete=True, early=e.get("early"), hidden_tests=e.get("hidden_tests"), dir=e.get("dir"), review_md=str(Path(e.get("dir", ""), "review.md")))
@@ -1062,13 +1064,13 @@ def cmd_log(args) -> int:
             s["live"] = True
     for d in days.values():
         d["sessions"] = list(d["sessions"].values())
-        d["total"] = d["coding"] + d["learning"] + d["review"] + d["tutor"]
+        d["total"] = d["coding"] + d["review"] + d["tutor"]
     if args.json:
         print(json.dumps({"today": day_of(at), "required_per_day": config()["required_per_day"], "days": days}))
         return 0
     for date in sorted(days):
         d = days[date]
-        print(f"{date}  total {d['total'] // 60:4}m  coding {d['coding'] // 60:3}m  learning {(d['learning'] + d['tutor']) // 60:3}m  review {d['review'] // 60:3}m  completed {d['completed']}")
+        print(f"{date}  total {d['total'] // 60:4}m  coding {d['coding'] // 60:3}m  tutor {d['tutor'] // 60:3}m  paused {d['paused'] // 60:3}m  review {d['review'] // 60:3}m  completed {d['completed']}")
     return 0
 
 
@@ -1227,9 +1229,6 @@ def cmd_tutor(args) -> int:
     at = now()
     marker = STATE / "tutor-open.json"
     if args.action == "start":
-        cur = load_current()
-        if cur and cur["phase"] == "paused":
-            return 0
         STATE.mkdir(parents=True, exist_ok=True)
         marker.write_text(json.dumps({"start": at}))
         return 0

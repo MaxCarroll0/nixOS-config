@@ -132,11 +132,15 @@ local function stranded(window)
     return window.mapped and ws ~= nil and (ws.name == stash or (ws.id == nil and not ws.special))
 end
 
-local function rehome()
+local function managed(window)
+    return any_match(M.keep[M.active.profile], window)
+end
+
+local function rehome(only)
     local targets, taken = {}, {}
     local current = hl.get_active_workspace()
     for _, window in ipairs(hl.get_windows()) do
-        if stranded(window) then
+        if stranded(window) and (only == nil or only(window)) then
             local from = window.workspace.name
             targets[from] = targets[from] or free_workspace(taken)
             move(window, targets[from])
@@ -157,7 +161,7 @@ local function settle(window)
         elseif here then
             maximise(window)
         end
-    elseif here then
+    elseif managed(window) and not stashed then
         M.opened[window.address] = true
         move(window, stash)
     end
@@ -166,13 +170,10 @@ end
 local function enforce()
     if not M.active then return end
     for _, window in ipairs(hl.get_windows()) do settle(window) end
+    rehome(function(window) return not managed(window) end)
     local special = hl.get_active_special_workspace()
     if special and special.name == stash then
         hl.dispatch(hl.dsp.workspace.toggle_special("lockdown"))
-    end
-    local current = hl.get_active_workspace()
-    if not (current and current.name == M.active.workspace) then
-        hl.dispatch(hl.dsp.focus({ workspace = home() }))
     end
     enter_submap()
 end
@@ -186,7 +187,9 @@ local function engage()
         hl.config({ ["input.kb_options"] = opts })
     end
     enforce()
+    hl.dispatch(hl.dsp.focus({ workspace = home() }))
 end
+
 
 local function release()
     rehome()
@@ -231,15 +234,6 @@ hl.on("window.open", function(window)
     hl.timer(function() settle(window) end, { timeout = 50, type = "oneshot" })
 end)
 
-hl.on("workspace.active", function()
-    if not M.active then return end
-    local current = hl.get_active_workspace()
-    if current and current.name ~= M.active.workspace then
-        hl.timer(function()
-            if M.active then hl.dispatch(hl.dsp.focus({ workspace = home() })) end
-        end, { timeout = 10, type = "oneshot" })
-    end
-end)
 
 hl.on("keybinds.submap", function(name)
     if not M.active or name == submap_name() then return end
