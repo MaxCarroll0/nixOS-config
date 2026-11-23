@@ -15,24 +15,46 @@ let
     flakeIgnore = [ "E501" ];
   } (builtins.readFile ../pkgs/interview/interview.py);
 
-  hook =
-    name:
-    lib.getExe (
-      pkgs.writeShellApplication {
-        name = "interview-${name}";
-        runtimeInputs = [
-          config.services.lockdown.package
-          interview
-          pkgs.jq
-          pkgs.util-linux
-        ];
-        runtimeEnv = {
-          INTERVIEW_REPO = repo;
-          INTERVIEW_WORKSPACE = "interview";
-        };
-        text = builtins.readFile ../pkgs/interview/${name}.sh;
-      }
-    );
+  emacs = config.programs.emacs.finalPackage;
+  tutorEmacsState = "${config.xdg.stateHome}/interview-tutor-emacs";
+
+  script =
+    inputs: name:
+    pkgs.writeShellApplication {
+      name = "interview-${name}";
+      runtimeInputs = [
+        config.services.lockdown.package
+        interview
+        emacs
+        pkgs.coreutils
+        pkgs.jq
+        pkgs.libnotify
+        pkgs.util-linux
+      ]
+      ++ inputs;
+      runtimeEnv = {
+        INTERVIEW_REPO = repo;
+        INTERVIEW_WORKSPACE = "interview";
+      };
+      text = builtins.readFile ../pkgs/interview/${name}.sh;
+    };
+
+  emacsFrame = script [ ] "emacs-frame";
+  tutorEmacsFrame = script [ ] "tutor-emacs-frame";
+  onTutor = script [ tutorEmacsFrame ] "on-tutor";
+  hookInputs = [
+    emacsFrame
+    tutorEmacsFrame
+    onTutor
+  ];
+
+  hook = name: lib.getExe (script hookInputs name);
+
+  tutorEmacsEnv = script [ ] "tutor-emacs-env";
+
+  tutorEmacsRun = pkgs.writeShellScript "interview-tutor-emacs" (
+    builtins.readFile ../pkgs/interview/tutor-emacs.sh
+  );
 
   planWeek = pkgs.writeShellApplication {
     name = "interview-plan-week";
@@ -199,7 +221,10 @@ in
         { class = "^emacs$"; }
         { class = "^interview%-claude$"; }
       ];
-      paused = [ { class = "^interview%-tutor$"; } ];
+      paused = [
+        { class = "^interview%-tutor$"; }
+        { class = "^interview%-tutor%-emacs$"; }
+      ];
     };
     actions = [
       {
@@ -227,14 +252,66 @@ in
         key = "SUPER+F5";
         command = "${interviewExe} toggle";
         description = "pause or resume the interview clock";
+        global = true;
       }
       {
         key = "SUPER+F6";
         command = hook "on-engage";
         description = "reopen Emacs and the interviewer";
+        global = true;
+        substates = [ "active" ];
+      }
+      {
+        key = "SUPER+F6";
+        command = lib.getExe onTutor;
+        description = "reopen the tutor and its Emacs";
+        substates = [ "paused" ];
+      }
+      {
+        key = "SUPER+CTRL+ALT+r";
+        command = "${hook "emacs-restart"} main";
+        description = "restart the interview Emacs";
+        substates = [ "active" ];
+      }
+      {
+        key = "SUPER+CTRL+ALT+r";
+        command = "${hook "emacs-restart"} tutor";
+        description = "restart the tutor Emacs";
+        substates = [ "paused" ];
       }
     ];
     onEngage = [ (hook "on-engage") ];
     settingsFile = "${config.xdg.stateHome}/interview/settings.json";
+  };
+
+  systemd.user.services.interview-tutor-emacs = {
+    Unit.Description = "Tutor Emacs, a separate daemon that cannot read interview problems or sessions";
+    Service = {
+      Type = "notify";
+      RuntimeDirectory = "interview-tutor-emacs";
+      RuntimeDirectoryMode = "0700";
+      ExecStartPre = "+${lib.getExe tutorEmacsEnv}";
+      ExecStart = "${tutorEmacsRun}";
+      Environment = [
+        "PATH=${lib.makeBinPath [ pkgs.evcxr ]}:${config.home.profileDirectory}/bin:/run/current-system/sw/bin"
+        "INTERVIEW_REPO=${repo}"
+        "TUTOR_EMACS=${lib.getExe' emacs "emacs"}"
+        "TUTOR_EMACS_STATE=${tutorEmacsState}"
+      ];
+      InaccessiblePaths = [
+        "${repo}/problems"
+        "${repo}/sessions"
+        "${repo}/.git"
+        "-%t/emacs"
+        "-%t/hypr"
+        "-%t/bus"
+        "-%t/systemd/private"
+      ];
+      PrivateTmp = true;
+      Restart = "on-failure";
+      SuccessExitStatus = 15;
+      TimeoutStartSec = "180s";
+      TimeoutStopSec = "10s";
+    };
   };
 }

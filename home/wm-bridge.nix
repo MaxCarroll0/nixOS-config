@@ -1,4 +1,4 @@
-# Bridge robustness: a watchdog that reports a wedged Emacs daemon without acting on it.
+# Bridge robustness: a watchdog that restarts a wedged Emacs daemon.
 
 {
   config,
@@ -31,10 +31,12 @@ let
     echo "$fails" > "$counter"
     echo "wm-watchdog: Emacs unresponsive, consecutive failures $fails"
 
-    if [ "$fails" = ${toString cfg.watchdogFailures} ]; then
+    if [ $((fails % ${toString cfg.watchdogFailures})) = 0 ]; then
+      echo "wm-watchdog: restarting emacs.service"
+      systemctl --user --no-block restart emacs.service
       ${pkgs.libnotify}/bin/notify-send --urgency=critical \
-        "Emacs daemon unresponsive" \
-        "No reply for $((fails * ${cfg.watchdogInterval}))s. SUPER+CTRL+ALT+R restarts it; window keys already fall back to Hyprland." \
+        "Emacs daemon restarted" \
+        "No reply for $((fails * ${cfg.watchdogInterval}))s, so the watchdog restarted it. SUPER+CTRL+ALT+R restarts it by hand." \
         || true
     fi
   '';
@@ -56,15 +58,17 @@ in
     watchdogFailures = lib.mkOption {
       type = lib.types.int;
       default = 3;
-      description = "Consecutive failures before notifying; it never restarts anything.";
+      description = "Consecutive failed pings after which the watchdog restarts emacs.service, and again after each further run of as many.";
     };
   };
 
   config = lib.mkIf cfg.enable {
     home.packages = [ watchdog ];
 
+    systemd.user.services.emacs.Service.TimeoutStopSec = "15s";
+
     systemd.user.services.wm-watchdog = {
-      Unit.Description = "Report a wedged Emacs daemon";
+      Unit.Description = "Restart a wedged Emacs daemon";
       Service = {
         Type = "oneshot";
         ExecStart = "${watchdog}/bin/wm-watchdog";
