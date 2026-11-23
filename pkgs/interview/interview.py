@@ -875,6 +875,29 @@ def do_close(cur: dict, at: float):
     return "interview complete"
 
 
+def cmd_abandon(args) -> int:
+    def abandon(cur: dict, at: float):
+        if cur["phase"] not in ("coding", "paused"):
+            print(f"only a coding interview can be abandoned, not one in {cur['phase']}; `interview close` ends a review", file=sys.stderr)
+            return 1
+        if cur["phase"] == "paused":
+            log("paused", cur, cur["pause_started"], at)
+            run_hook(config()["on_resume"])
+        log("abandoned", cur, cur["started"], at, reason=args.reason, dir=cur["dir"])
+        meta = {k: v for k, v in cur.items() if k != "running_since"}
+        meta.update(abandoned=iso(at), reason=args.reason)
+        session = Path(cur["dir"])
+        with contextlib.suppress(OSError):
+            (session / ".interview.json").write_text(json.dumps(meta, indent=2))
+        repo = Path(config()["repo"])
+        git(repo, "add", "--", str(session))
+        git(repo, "commit", "-q", "-m", f"interview: abandon {cur['id']}", "--", str(session))
+        emit(cur, "ABANDONED", args.reason)
+        save_current(None)
+        return f"abandoned {cur['id']}; not counted, a new interview can start"
+    return mutate(abandon)
+
+
 def in_shell(repo: Path, lang: str | None, command: list[str]) -> list[str]:
     if not (shutil.which("nix") and (repo / "flake.nix").exists()):
         return command
@@ -1840,6 +1863,9 @@ def main() -> int:
     p.add_argument("reason")
     p.set_defaults(fn=cmd_extend)
 
+    p = sub.add_parser("abandon", help="drop the running interview before review: logged as abandoned, never counted")
+    p.add_argument("--reason", required=True)
+    p.set_defaults(fn=cmd_abandon)
     p = sub.add_parser("status")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_status)
