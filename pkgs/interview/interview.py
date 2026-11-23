@@ -44,6 +44,7 @@ RULES = [
 
 BUILD_DIRS = {"_build", "target", "bin", "obj", "__pycache__", ".pytest_cache", "build", "improved"}
 REVIEW_FILES = {"review.md", "SOLUTIONS.md", ".interview.json"}
+EXTEND_CAP_MINUTES = 15
 LEGACY_MAIN = {"ocaml": "solution.ml", "rust": "src/lib.rs", "c": "solution.c", "csharp": "Solution.cs", "python": "solution.py"}
 
 EVENT_GUIDE = {
@@ -52,6 +53,7 @@ EVENT_GUIDE = {
     "WARN_5": "5 minutes of coding left. No new subproblems; help the candidate land and test what they have.",
     "PAUSED": "Candidate paused the clock and is with the tutor. Do not continue the interview until RESUMED.",
     "RESUMED": "Clock running again. Pick up where the interview left off.",
+    "EXTENDED": "You extended the coding clock for an environment fault; the new time left is in `interview status`.",
     "FINISH_APPROVED": "You approved finishing early; the candidate can now press Finish early, or run `interview done` yourself if they asked to finish.",
     "HINT": "The candidate took the next ladder rung themselves; do not repeat it, build on it.",
     "CODING_OVER": "Coding phase over and the submission is frozen. Stop coaching and run /review now.",
@@ -319,6 +321,7 @@ Fill this in during the review phase. Compare against SOLUTIONS.md beside it.
 - finished: {how} after {minutes} active minutes
 - hidden tests: {hidden} (rerun with `interview submit-tests`; full output is shown during review)
 - hints used: {hints}
+- extended: {extended}
 
 ## My approach
 
@@ -346,6 +349,17 @@ Fill this in during the review phase. Compare against SOLUTIONS.md beside it.
 """
 
 
+def extended_minutes(cur: dict) -> int:
+    return sum(e["minutes"] for e in cur.get("extensions", []))
+
+
+def extensions_line(cur: dict) -> str:
+    given = cur.get("extensions", [])
+    if not given:
+        return "no"
+    return "; ".join(f"{e['minutes']} min ({e['reason']})" for e in given)
+
+
 def open_review(cur: dict, early: bool) -> None:
     session = Path(cur["dir"])
     solutions = problem_dir(cur["problem"]) / "SOLUTIONS.md"
@@ -357,7 +371,8 @@ def open_review(cur: dict, early: bool) -> None:
             review.write_text(REVIEW_TEMPLATE.format(
                 lang=cur["lang"], problem=cur["problem"], dir=cur["dir"],
                 how="early" if early else "at time", minutes=round(cur["used_before"] / 60),
-                hidden=cur.get("hidden_tests") or "not run", hints=len(cur.get("hints", []))))
+                hidden=cur.get("hidden_tests") or "not run", hints=len(cur.get("hints", [])),
+                extended=extensions_line(cur)))
 
 
 def end_coding(cur: dict, at: float, early: bool) -> dict:
@@ -526,6 +541,7 @@ def status_dict(at: float) -> dict:
             "pause_started": cur.get("pause_started"),
             "pause_seconds": cur["pause_seconds"],
             "finish_approved": cur.get("finish_approved"),
+            "extended_minutes": extended_minutes(cur),
             "hidden_tests": cur.get("hidden_tests"),
             "hints": len(cur.get("hints", [])),
         })
@@ -585,8 +601,11 @@ SOLUTIONS.md, fill in review.md, then `interview close`.
 
 def open_files(dest: Path, lang: str) -> None:
     with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-        subprocess.run(["emacsclient", "-n", str(dest / "PROMPT.md"), str(dest / main_file(lang))],
-                       capture_output=True, timeout=5)
+        frames = subprocess.run(["emacsclient", "--eval", "(seq-some (lambda (f) (and (window-system f) (frame-visible-p f))) (frame-list))"],
+                                capture_output=True, text=True, timeout=5)
+        create = ["-c"] if frames.stdout.strip() in ("", "nil") else []
+        subprocess.run(["emacsclient", *create, "-n", str(dest / "PROMPT.md"), str(dest / main_file(lang))],
+                       capture_output=True, timeout=10)
 
 
 def begin(at: float, lang: str | None, problem: str | None, minutes: int | None = None,
@@ -812,6 +831,28 @@ def cmd_approve_finish(args) -> int:
         emit(cur, "FINISH_APPROVED", args.reason)
         return "finishing early approved"
     return mutate(approve)
+
+
+def cmd_extend(args) -> int:
+    def extend(cur: dict, at: float):
+        if cur["phase"] not in ("coding", "paused"):
+            print(f"the clock can only be extended before coding ends, not during {cur['phase']}", file=sys.stderr)
+            return 1
+        if args.minutes <= 0:
+            print("extend by a positive number of minutes", file=sys.stderr)
+            return 1
+        room = EXTEND_CAP_MINUTES - extended_minutes(cur)
+        if args.minutes > room:
+            print(f"at most {EXTEND_CAP_MINUTES} minutes per interview; {room} left to grant", file=sys.stderr)
+            return 1
+        cur["coding_budget"] += args.minutes * 60
+        cur.setdefault("extensions", []).append({"t": iso(at), "minutes": args.minutes, "reason": args.reason})
+        left = coding_left(cur, at)
+        cur["warned"] = [w for w in cur.get("warned", []) if not (w.startswith("WARN_") and left > int(w[5:]) * 60)]
+        save_current(cur)
+        emit(cur, "EXTENDED", f"{args.minutes} minutes: {args.reason}; {round(left / 60)} minutes left")
+        return f"coding extended by {args.minutes} minutes; {round(left / 60)} minutes left"
+    return mutate(extend)
 
 
 def do_close(cur: dict, at: float):
@@ -1308,6 +1349,11 @@ def main() -> int:
     p = sub.add_parser("approve-finish", help="interviewer only: allow the candidate to finish coding early")
     p.add_argument("reason")
     p.set_defaults(fn=cmd_approve_finish)
+
+    p = sub.add_parser("extend", help=f"interviewer only: add coding minutes for an environment fault, at most {EXTEND_CAP_MINUTES} per interview")
+    p.add_argument("minutes", type=int)
+    p.add_argument("reason")
+    p.set_defaults(fn=cmd_extend)
 
     p = sub.add_parser("status")
     p.add_argument("--json", action="store_true")
