@@ -429,6 +429,7 @@ in
     allowedTCPPorts = [ 53 ];
   };
 
+  networking.nftables.enable = true;
   networking.nftables.tables.vm-isolation = {
     family = "inet";
     content = ''
