@@ -161,9 +161,8 @@ local function settle(window)
         elseif here then
             maximise(window)
         end
-    elseif managed(window) and not stashed then
-        M.opened[window.address] = true
-        move(window, stash)
+    elseif stashed and managed(window) then
+        move(window, home())
     end
 end
 
