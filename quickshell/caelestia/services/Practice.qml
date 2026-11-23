@@ -31,8 +31,9 @@ Singleton {
     readonly property string phase: current?.phase ?? "idle"
     readonly property bool active: phase !== "idle"
     readonly property real codingLeft: current ? Math.max(0, current.coding_budget - current.used_before - (current.running_since ? now - current.running_since : 0)) : 0
-    readonly property real reviewLeft: current?.review_started ? Math.max(0, current.review_budget - (now - current.review_started)) : 0
-    readonly property real left: phase === "review" ? reviewLeft : codingLeft
+    readonly property bool reviewing: phase === "review" || phase === "records"
+    readonly property real reviewElapsed: current?.review_started ? Math.max(0, (current.review_ended ?? now) - current.review_started) : 0
+    readonly property real left: reviewing ? reviewElapsed : codingLeft
     readonly property var today: log.days[log.today] ?? null
     readonly property int completedToday: today?.completed ?? 0
     readonly property int required: log.required_per_day ?? 2
@@ -137,6 +138,10 @@ Singleton {
 
     function finishEarly(): void {
         command(["done"]);
+    }
+
+    function endInterview(): void {
+        command(["end"]);
     }
 
     function openSession(dir: string, what: string): void {

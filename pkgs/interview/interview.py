@@ -46,7 +46,7 @@ RULES = [
 ]
 
 BUILD_DIRS = {"_build", "target", "bin", "obj", "__pycache__", ".pytest_cache", "build", "improved"}
-REVIEW_FILES = {"review.md", "SOLUTIONS.md", ".interview.json", "benchmarks.json"}
+REVIEW_FILES = {"review.org", "review.md", "SOLUTIONS.org", "SOLUTIONS.md", ".interview.json", "benchmarks.json"}
 EXTEND_CAP_MINUTES = 15
 LEGACY_MAIN = {"ocaml": "solution.ml", "rust": "src/lib.rs", "c": "solution.c", "csharp": "Solution.cs", "python": "solution.py"}
 
@@ -60,15 +60,15 @@ EVENT_GUIDE = {
     "FINISH_APPROVED": "You approved finishing early; the candidate can now press Finish early, or run `interview done` yourself if they asked to finish.",
     "HINT": "The candidate took the next ladder rung themselves; do not repeat it, build on it.",
     "CODING_OVER": "Coding phase over and the submission is frozen. Stop coaching and run /review now.",
-    "REVIEW_WARN": "3 minutes of review left. Give the remaining top improvements and wrap up.",
-    "REVIEW_OVER": "Review over and the interview is logged. Sign off in two lines; the next interview starts automatically after the break with a fresh interviewer.",
+    "RECORDS": "The candidate pressed End interview: the discussion is over. Write the records now (review steps 6 to 10), then run `interview close`, which counts the interview and closes this window.",
+    "REVIEW_OVER": "Interview closed and logged; the interviewer window and the session's Emacs buffers close now.",
 }
 
 
 def track_entry(name: str, langs: list[str], context: str = "", difficulty: str = "easy-medium",
-                enabled: bool = True, coding_minutes: int | None = None, review_minutes: int | None = None, **_) -> dict:
+                enabled: bool = True, coding_minutes: int | None = None, syntax_notes: bool = False, **_) -> dict:
     return {"name": name, "langs": list(langs), "context": context, "difficulty": difficulty, "enabled": enabled,
-            "coding_minutes": coding_minutes, "review_minutes": review_minutes}
+            "coding_minutes": coding_minutes, "syntax_notes": syntax_notes}
 
 
 def track_minutes(cfg: dict, track: str | None, key: str) -> int:
@@ -87,7 +87,6 @@ def base_config() -> dict:
     cfg = {
         "repo": str(Path.home() / "Jobs/general"),
         "coding_minutes": 45,
-        "review_minutes": 15,
         "required_per_day": 2,
         "context": "",
         "lockdown": True,
@@ -95,6 +94,7 @@ def base_config() -> dict:
         "on_pause": None,
         "on_resume": None,
         "on_complete": None,
+        "on_close": None,
         "on_start": None,
         "auto": {"enabled": False, "days": ["Mon", "Tue", "Wed", "Thu", "Fri"], "start": "05:00", "break_minutes": 5, "snooze_minutes": 15},
     }
@@ -113,7 +113,6 @@ def editable(cfg: dict) -> dict:
         "auto_start": bool(auto.get("enabled")),
         "lockdown": bool(cfg.get("lockdown", True)),
         "coding_minutes": cfg["coding_minutes"],
-        "review_minutes": cfg["review_minutes"],
         "break_minutes": auto["break_minutes"],
         "snooze_minutes": auto["snooze_minutes"],
         "required_per_day": cfg["required_per_day"],
@@ -128,7 +127,7 @@ def overlay(cfg: dict, settings: dict) -> dict:
                         ("break_minutes", "break_minutes"), ("snooze_minutes", "snooze_minutes")):
         if key in settings:
             auto[target] = settings[key]
-    for key in ("lockdown", "coding_minutes", "review_minutes", "required_per_day", "context"):
+    for key in ("lockdown", "coding_minutes", "required_per_day", "context"):
         if key in settings:
             cfg[key] = settings[key]
     if "tracks" in settings:
@@ -269,10 +268,6 @@ def coding_left(cur: dict, at: float) -> float:
     return cur["coding_budget"] - coding_used(cur, at)
 
 
-def review_left(cur: dict, at: float) -> float:
-    return cur["review_budget"] - (at - cur["review_started"])
-
-
 def run_hook(command: list[str] | None) -> None:
     if command:
         subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -315,41 +310,41 @@ def freeze(cur: dict) -> None:
         subprocess.run(["emacsclient", "--eval", elisp], capture_output=True, timeout=5)
 
 
-REVIEW_TEMPLATE = """# Review: {lang} {problem}
+REVIEW_TEMPLATE = """#+title: Review: {lang} {problem}
 
-Fill this in during the review phase. Compare against SOLUTIONS.md beside it.
+Filled in during the review. Compare against {solutions} beside it.
 
-## Result
+* Result
 
 - finished: {how} after {minutes} active minutes
-- hidden tests: {hidden} (rerun with `interview submit-tests`; full output is shown during review)
+- hidden tests: {hidden} (rerun with ~interview submit-tests~; full output is shown during review)
 - benchmark, the ideal complexity: {benchmark}
 - hints used: {hints}
 - extended: {extended}
 
-## My approach
+* My approach
 
 - method:
 - time and space:
 
-## Against the listed solutions
+* Against the listed solutions
 
 - closest listed method:
 - what the better method does that mine does not:
 
-## Mistakes and slow spots
+* Mistakes and slow spots
 
 -
 
-## Three improvements
+* Three improvements
 
 1.
 2.
 3.
 
-## Revisit
+* Revisit
 
-- redo in `improved/` (`interview revisit {dir}`)? yes / no
+- redo in =improved/= (~interview revisit {dir}~)? yes / no
 """
 
 
@@ -366,14 +361,14 @@ def extensions_line(cur: dict) -> str:
 
 def open_review(cur: dict, early: bool) -> None:
     session = Path(cur["dir"])
-    solutions = problem_dir(cur["problem"]) / "SOLUTIONS.md"
+    solutions = doc(problem_dir(cur["problem"]), "SOLUTIONS")
     with contextlib.suppress(OSError):
         if solutions.exists():
-            shutil.copyfile(solutions, session / "SOLUTIONS.md")
-        review = session / "review.md"
+            shutil.copyfile(solutions, session / solutions.name)
+        review = doc(session, "review")
         if not review.exists():
             review.write_text(REVIEW_TEMPLATE.format(
-                lang=cur["lang"], problem=cur["problem"], dir=cur["dir"],
+                lang=cur["lang"], problem=cur["problem"], dir=cur["dir"], solutions=solutions.name,
                 how="early" if early else "at time", minutes=round(cur["used_before"] / 60),
                 hidden=cur.get("hidden_tests") or "not run", benchmark=cur.get("benchmark") or "not run", hints=len(cur.get("hints", [])),
                 extended=extensions_line(cur)))
@@ -398,10 +393,11 @@ def end_coding(cur: dict, at: float, early: bool) -> dict:
 
 
 def finish(cur: dict, at: float, reason: str) -> None:
-    log("review", cur, cur["review_started"], at)
+    review_end = cur.get("review_ended") or at
+    log("review", cur, cur["review_started"], review_end)
     log("complete", cur, cur["started"], at,
         coding=round(cur["used_before"]), pauses=round(cur["pause_seconds"]),
-        review=round(at - cur["review_started"]), early=cur.get("early", False),
+        review=round(review_end - cur["review_started"]), early=cur.get("early", False),
         hidden_tests=cur.get("hidden_tests"), benchmark=cur.get("benchmark"), dir=cur["dir"],
         worked=edited(cur["problem"], cur["lang"], cur["dir"]))
     meta = {k: v for k, v in cur.items() if k not in ("running_since",)}
@@ -410,7 +406,10 @@ def finish(cur: dict, at: float, reason: str) -> None:
         Path(cur["dir"], ".interview.json").write_text(json.dumps(meta, indent=2))
     emit(cur, "REVIEW_OVER", reason)
     save_current(None)
-    run_hook(config()["on_complete"])
+    cfg = config()
+    run_hook(cfg["on_complete"])
+    if cfg["on_close"]:
+        run_hook([*cfg["on_close"], cur["dir"]])
 
 
 def tick(at: float) -> None:
@@ -428,15 +427,6 @@ def tick(at: float) -> None:
         if left <= 0:
             cur = end_coding(cur, at, early=False)
         save_current(cur)
-    elif cur["phase"] == "review":
-        left = review_left(cur, at)
-        if left <= 3 * 60 and "REVIEW_WARN" not in warned:
-            warned.add("REVIEW_WARN")
-            cur["warned"] = sorted(warned)
-            emit(cur, "REVIEW_WARN", f"{max(0, round(left / 60))} minutes left")
-            save_current(cur)
-        if left <= 0:
-            finish(cur, at, "review time up")
 
 
 def edited(problem: str, lang: str, session: str) -> bool:
@@ -555,10 +545,9 @@ def status_dict(at: float) -> dict:
                 cur.get("hidden_tests") == "pass" and cur.get("hidden_digest") == digest(Path(cur["dir"])))
         if cur["phase"] in ("coding", "paused"):
             out["coding_left"] = max(0, round(coding_left(cur, at)))
-        if cur["phase"] == "review":
+        if cur["phase"] in ("review", "records"):
             out["review_started"] = cur["review_started"]
-            out["review_budget"] = cur["review_budget"]
-            out["review_left"] = max(0, round(review_left(cur, at)))
+            out["review_elapsed"] = round(at - cur["review_started"])
     return out
 
 
@@ -574,37 +563,46 @@ def status_line(s: dict) -> str:
         return head + f" CODING {where}: {s['coding_left'] // 60}m{s['coding_left'] % 60:02d}s of coding left; scope every request to fit.{approved}"
     if s["phase"] == "paused":
         return head + f" PAUSED {where}: clock stopped with {s['coding_left'] // 60}m{s['coding_left'] % 60:02d}s left; candidate is with the tutor."
-    return head + f" REVIEW {where}: {s['review_left'] // 60}m{s['review_left'] % 60:02d}s of review left; submission frozen at tag sub/{s['session']}."
+    if s["phase"] == "records":
+        return head + f" RECORDS {where}: the candidate ended the review; write the records, then `interview close`."
+    return head + f" REVIEW {where}: {s['review_elapsed'] // 60}m{s['review_elapsed'] % 60:02d}s in, no time limit; it ends when the candidate presses End interview; submission frozen at tag sub/{s['session']}."
 
 
 def problem_dir(problem: str) -> Path:
     return Path(config()["repo"], "problems", problem)
 
 
-HOWTO = """# Working on {lang} {problem}
+HOWTO = """#+title: Working on {lang} {problem}
 
-The clock is running: {minutes} minutes of coding, paused with SUPER+F5 or the bar. Read PROMPT.md,
+The clock is running: {minutes} minutes of coding, paused with SUPER+F5 or the bar. Read {prompt},
 then edit {main}. All commands work without the interviewer.
 
-| step | command |
-|---|---|
-| run the visible tests | `interview run` |
-| run the hidden tests, then the benchmark (pass or fail and a count, met or not met) | `interview submit-tests` |
-| next hint from the ladder | `interview hint` |
-| time left | `interview status` |
-| finish early (hidden tests passed on the current code) | `interview done` |
-| end the review and log the interview | `interview close` |
+| step                                                                               | command                                     |
+|------------------------------------------------------------------------------------+---------------------------------------------|
+| run the visible tests                                                              | ~interview run~                             |
+| run the hidden tests, then the benchmark (pass or fail and a count, met or not met) | ~interview submit-tests~                    |
+| next hint from the ladder                                                          | ~interview hint~                            |
+| time left                                                                          | ~interview status~                          |
+| finish early (hidden tests passed on the current code)                             | ~interview done~                            |
+| end the review                                                                     | the End interview button, or ~interview end~ |
 
-`interview done` works once `interview submit-tests` has passed on exactly the files as they are
+~interview done~ works once ~interview submit-tests~ has passed on exactly the files as they are
 now; otherwise wait for the clock, or ask the interviewer to approve. Hidden tests are small: any
 correct solution passes them, brute force included, and passing them solves the problem. The
 benchmark runs large inputs against a time limit per case; meeting it is the ideal complexity, not
-a requirement. When coding ends the files
-freeze, and SOLUTIONS.md (a short list of methods with their complexity) and a review.md
-template appear here. During review, `interview submit-tests` shows the full hidden output and
-`interview hint --all` the whole ladder with its follow-ups. Compare your approach against
-SOLUTIONS.md, fill in review.md, then `interview close`.
+a requirement. When coding ends the files freeze, and the solutions (a short list of methods with
+their complexity) and a review template appear here. During review, ~interview submit-tests~ shows
+the full hidden output and ~interview hint --all~ the whole ladder with its follow-ups. The review
+has no time limit: when it is over, press End interview; the interviewer writes the records and
+closes the interview.
 """
+
+
+def doc(folder: Path, stem: str) -> Path:
+    for suffix in (".org", ".md"):
+        if (folder / f"{stem}{suffix}").exists():
+            return folder / f"{stem}{suffix}"
+    return folder / f"{stem}.org"
 
 
 def emacs_open(*paths: Path) -> bool:
@@ -617,11 +615,11 @@ def emacs_open(*paths: Path) -> bool:
 
 
 def open_files(dest: Path, lang: str) -> None:
-    emacs_open(dest / "PROMPT.md", dest / main_file(lang))
+    emacs_open(doc(dest, "PROMPT"), dest / main_file(lang))
 
 
 def begin(at: float, lang: str | None, problem: str | None, minutes: int | None = None,
-          review_minutes: int | None = None, again: bool = False, track: str | None = None) -> tuple[dict, Path] | str:
+          again: bool = False, track: str | None = None) -> tuple[dict, Path] | str:
     cfg = config()
     known = languages(cfg["repo"])
     if load_current():
@@ -647,10 +645,10 @@ def begin(at: float, lang: str | None, problem: str | None, minutes: int | None 
         return f"{dest} exists; this problem was already attempted in {lang} today"
     shutil.copytree(template, dest)
     budget = (minutes or track_minutes(cfg, track, "coding_minutes")) * 60
-    prompt = problem_dir(problem) / "PROMPT.md"
+    prompt = doc(problem_dir(problem), "PROMPT")
     if prompt.exists():
-        shutil.copyfile(prompt, dest / "PROMPT.md")
-    (dest / "HOWTO.md").write_text(HOWTO.format(lang=lang, problem=problem, minutes=budget // 60, main=known[lang]["main"]))
+        shutil.copyfile(prompt, dest / prompt.name)
+    (dest / "HOWTO.org").write_text(HOWTO.format(lang=lang, problem=problem, minutes=budget // 60, main=known[lang]["main"], prompt=prompt.name))
     repo = Path(cfg["repo"])
     git(repo, "add", "--", str(dest))
     git(repo, "commit", "-q", "-m", f"interview: start {sid}", "--", str(dest))
@@ -663,7 +661,6 @@ def begin(at: float, lang: str | None, problem: str | None, minutes: int | None 
         "phase": "coding",
         "started": at,
         "coding_budget": budget,
-        "review_budget": (review_minutes if review_minutes is not None else track_minutes(cfg, track, "review_minutes")) * 60,
         "used_before": 0,
         "running_since": at,
         "pause_seconds": 0,
@@ -676,14 +673,18 @@ def begin(at: float, lang: str | None, problem: str | None, minutes: int | None 
 
 def cmd_start(args) -> int:
     with locked():
-        started = begin(now(), args.lang, args.problem, args.minutes, args.review_minutes, args.again, args.track)
+        started = begin(now(), args.lang, args.problem, args.minutes, args.again, args.track)
     if isinstance(started, str):
         print(started, file=sys.stderr)
         return 1
     cur, dest = started
-    print(f"started {cur['id']}: {dest}\nread {dest / 'PROMPT.md'}, edit {dest / main_file(cur['lang'])}; {dest / 'HOWTO.md'} lists the commands")
+    print(f"started {cur['id']}: {dest}\nread {doc(dest, 'PROMPT')}, edit {dest / main_file(cur['lang'])}; {dest / 'HOWTO.org'} lists the commands")
     if args.open:
-        open_files(dest, cur["lang"])
+        hook = config()["on_start"]
+        if hook:
+            run_hook([*hook, str(doc(dest, "PROMPT")), str(dest / main_file(cur["lang"]))])
+        else:
+            open_files(dest, cur["lang"])
     return 0
 
 
@@ -769,7 +770,7 @@ def cmd_auto(args) -> int:
     print(f"started {cur['id']}: {dest}")
     hook = cfg["on_start"]
     if hook:
-        run_hook([*hook, str(dest / "PROMPT.md"), str(dest / main_file(cur["lang"]))])
+        run_hook([*hook, str(doc(dest, "PROMPT")), str(dest / main_file(cur["lang"]))])
     return 0
 
 
@@ -867,11 +868,27 @@ def cmd_extend(args) -> int:
     return mutate(extend)
 
 
-def do_close(cur: dict, at: float):
+def do_end(cur: dict, at: float):
+    if cur["phase"] == "records":
+        finish(cur, at, "ended by the candidate while records were being written")
+        return "interview complete"
     if cur["phase"] != "review":
+        print(f"cannot end during {cur['phase']}; the review starts when coding finishes", file=sys.stderr)
+        return 1
+    cur["phase"] = "records"
+    cur["review_ended"] = at
+    save_current(cur)
+    emit(cur, "RECORDS", f"review ended after {round((at - cur['review_started']) / 60)} minutes")
+    return "review ended; the interviewer is writing the records and closes the interview when done"
+
+
+def do_close(cur: dict, at: float):
+    if cur["phase"] not in ("review", "records"):
         print(f"cannot close during {cur['phase']}; finish coding first with `interview done`", file=sys.stderr)
         return 1
-    finish(cur, at, "review closed")
+    if cur["phase"] == "review":
+        cur["review_ended"] = at
+    finish(cur, at, "records written")
     return "interview complete"
 
 
@@ -1417,11 +1434,11 @@ def cmd_bench(args) -> int:
 
 
 def ladder_rungs(problem: str) -> list[str]:
-    text = (problem_dir(problem) / "LADDER.md").read_text()
+    text = doc(problem_dir(problem), "LADDER").read_text()
     rungs, current = [], None
     for line in text.splitlines():
-        if re.match(r"^\d+\.\s", line):
-            current = re.sub(r"^\d+\.\s+", "", line)
+        if re.match(r"^\d+[.)]\s", line):
+            current = re.sub(r"^\d+[.)]\s+", "", line)
             rungs.append(current)
         elif current is not None and line.startswith("   ") and line.strip():
             rungs[-1] += " " + line.strip()
@@ -1446,7 +1463,7 @@ def cmd_hint(args) -> int:
             return 1
         rungs = for_lang(ladder_rungs(cur["problem"]), cur["lang"])
         if args.all:
-            if cur["phase"] != "review":
+            if cur["phase"] not in ("review", "records"):
                 print("the whole ladder opens during review; `interview hint` gives the next rung", file=sys.stderr)
                 return 1
             for n, rung in enumerate(rungs, 1):
@@ -1556,8 +1573,8 @@ def cmd_log(args) -> int:
             entries.append({"kind": "coding", "date": day_of(cur["started"]), "start": iso(cur["started"]), "seconds": round(coding_used(cur, at)), "session": cur["id"], "track": cur["track"], "lang": cur["lang"], "problem": cur["problem"], "live": True})
         if cur["phase"] == "paused":
             entries.append({"kind": "paused", "date": day_of(cur["pause_started"]), "start": iso(cur["pause_started"]), "seconds": round(at - cur["pause_started"]), "session": cur["id"], "track": cur["track"], "lang": cur["lang"], "problem": cur["problem"], "live": True})
-        if cur["phase"] == "review":
-            entries.append({"kind": "review", "date": day_of(cur["review_started"]), "start": iso(cur["review_started"]), "seconds": round(at - cur["review_started"]), "session": cur["id"], "track": cur["track"], "lang": cur["lang"], "problem": cur["problem"], "live": True})
+        if cur["phase"] in ("review", "records"):
+            entries.append({"kind": "review", "date": day_of(cur["review_started"]), "start": iso(cur["review_started"]), "seconds": round((cur.get("review_ended") or at) - cur["review_started"]), "session": cur["id"], "track": cur["track"], "lang": cur["lang"], "problem": cur["problem"], "live": True})
     since = (dt.date.fromtimestamp(at) - dt.timedelta(days=args.days - 1)).isoformat()
     days: dict[str, dict] = {}
     for e in entries:
@@ -1577,7 +1594,7 @@ def cmd_log(args) -> int:
             s[e["kind"]] += e["seconds"]
         if e["kind"] == "complete" and worked(e):
             sdir = Path(e.get("dir", ""))
-            review = sdir / "review.md"
+            review = doc(sdir, "review")
             store = sdir / "benchmarks.json"
             versions, cases = [], []
             with contextlib.suppress(OSError, ValueError, KeyError):
@@ -1591,7 +1608,7 @@ def cmd_log(args) -> int:
                                  tail=v["tail"], cases=[{k: c.get(k) for k in ("seconds", "status", "met", "ratio")} for c in v["cases"]])
                     versions.append(entry)
             s.update(complete=True, early=e.get("early"), hidden_tests=e.get("hidden_tests"), benchmark=e.get("benchmark"), dir=e.get("dir"),
-                     review_md=str(review) if review.exists() else None, versions=versions, bench_cases=cases)
+                     review_doc=str(review) if review.exists() else None, versions=versions, bench_cases=cases)
             d["completed"] += 1
         if e.get("live"):
             s["live"] = True
@@ -1634,7 +1651,7 @@ def check_settings(raw: dict, known: dict) -> tuple[dict, list[str]]:
     for key in ("auto_start", "lockdown"):
         if need(isinstance(raw.get(key), bool), f"{key}: true or false"):
             out[key] = raw[key]
-    for key, low, high in (("coding_minutes", 5, 240), ("review_minutes", 0, 60), ("break_minutes", 0, 240), ("snooze_minutes", 1, 240)):
+    for key, low, high in (("coding_minutes", 5, 240), ("break_minutes", 0, 240), ("snooze_minutes", 1, 240)):
         value = raw.get(key)
         if need(isinstance(value, int) and not isinstance(value, bool) and low <= value <= high, f"{key}: a whole number from {low} to {high}"):
             out[key] = value
@@ -1663,15 +1680,17 @@ def check_settings(raw: dict, known: dict) -> tuple[dict, list[str]]:
             need(isinstance(track_context, str) and len(track_context) <= 2000, f"{label}: context of at most 2000 characters")
             need(t.get("difficulty", "easy-medium") in DIFFICULTIES, f"{label}: difficulty one of {', '.join(DIFFICULTIES)}")
             need(isinstance(t.get("enabled", True), bool), f"{label}: enabled true or false")
+            need(isinstance(t.get("syntax_notes", False), bool), f"{label}: syntax_notes true or false")
             lengths = {}
-            for key, low, high in (("coding_minutes", 5, 240), ("review_minutes", 0, 60)):
+            for key, low, high in (("coding_minutes", 5, 240),):
                 value = t.get(key)
                 if need(value is None or (isinstance(value, int) and not isinstance(value, bool) and low <= value <= high),
                         f"{label}: {key} empty for the default, or a whole number from {low} to {high}"):
                     lengths[key] = value
             if good_langs and isinstance(name, str) and isinstance(track_context, str):
                 cleaned.append(track_entry(name, list(dict.fromkeys(langs)), context=track_context.strip(),
-                                           difficulty=t.get("difficulty", "easy-medium"), enabled=t.get("enabled", True), **lengths))
+                                           difficulty=t.get("difficulty", "easy-medium"), enabled=t.get("enabled", True),
+                                           syntax_notes=t.get("syntax_notes", False), **lengths))
         enabled = [t for t in cleaned if t["enabled"]]
         need(len(enabled) > 0, "tracks: at least one enabled")
         out["tracks"] = cleaned
@@ -1707,12 +1726,12 @@ def cmd_settings(args) -> int:
         else:
             s = doc["settings"]
             print(f"days {' '.join(s['days']) or 'none'} from {s['start']}{', starting ' + s['from'] if s['from'] else ''}; auto start {'on' if s['auto_start'] else 'off'}; lockdown {'on' if s['lockdown'] else 'off'}")
-            print(f"{s['coding_minutes']} min coding, {s['review_minutes']} min review, {s['break_minutes']} min break; {s['required_per_day']} of {len([t for t in s['tracks'] if t['enabled']])} questions required")
+            print(f"{s['coding_minutes']} min coding, review until ended, {s['break_minutes']} min break; {s['required_per_day']} of {len([t for t in s['tracks'] if t['enabled']])} questions required")
             print("always: " + " ".join(doc["rules"]))
             print(f"style: {s['context'] or '(none)'}")
             for t in s["tracks"]:
-                lengths = "".join(f"; {t[k]} min {k.split('_')[0]}" for k in ("coding_minutes", "review_minutes") if t[k] is not None)
-                print(f"track {t['name']}{'' if t['enabled'] else ' (off)'}: {', '.join(t['langs'])}; {t['difficulty']}{lengths}; {t['context'] or '(no extra context)'}")
+                lengths = "".join(f"; {t[k]} min {k.split('_')[0]}" for k in ("coding_minutes",) if t[k] is not None)
+                print(f"track {t['name']}{'' if t['enabled'] else ' (off)'}: {', '.join(t['langs'])}; {t['difficulty']}{lengths}{'; syntax notes' if t['syntax_notes'] else ''}; {t['context'] or '(no extra context)'}")
             print("settings: " + ("customised in the desktop UI" if doc["customised"] else "nix defaults"))
         return 0
     password = lockdown_password(base)
@@ -1800,14 +1819,14 @@ def cmd_open(args) -> int:
     if cur and Path(cur["dir"]).resolve() != session:
         print("past sessions open once the running interview is over", file=sys.stderr)
         return 1
-    meta = json.loads((session / ".interview.json").read_text())
+    meta = cur if cur else json.loads((session / ".interview.json").read_text())
     if args.what == "revisit":
         if cur:
             print("finish the running interview first", file=sys.stderr)
             return 1
         target = revisit(session) / main_file(meta["lang"])
     else:
-        target = session / {"prompt": "PROMPT.md", "code": main_file(meta["lang"]), "review": "review.md"}[args.what]
+        target = {"prompt": doc(session, "PROMPT"), "code": session / main_file(meta["lang"]), "review": doc(session, "review")}[args.what]
     if not target.exists():
         print(f"{target} does not exist", file=sys.stderr)
         return 1
@@ -1834,9 +1853,8 @@ def main() -> int:
     p = sub.add_parser("start", help="start an interview on a problem")
     p.add_argument("lang", nargs="?", help="language or track; default: the first pending scheduled one")
     p.add_argument("problem", nargs="?", help="default: today's problem from schedule.toml")
-    p.add_argument("--open", action="store_true", help="open PROMPT.md and the solution file in Emacs")
+    p.add_argument("--open", action="store_true", help="launch the interviewer and open the prompt and the solution file in Emacs")
     p.add_argument("--minutes", type=int)
-    p.add_argument("--review-minutes", type=int)
     p.add_argument("--again", action="store_true")
     p.add_argument("--track", help="count the interview toward this track")
     p.set_defaults(fn=cmd_start)
@@ -1850,7 +1868,7 @@ def main() -> int:
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_langs)
 
-    for name, fn in (("pause", do_pause), ("resume", do_resume), ("toggle", do_toggle), ("done", do_done), ("close", do_close)):
+    for name, fn in (("pause", do_pause), ("resume", do_resume), ("toggle", do_toggle), ("done", do_done), ("end", do_end), ("close", do_close)):
         p = sub.add_parser(name)
         p.set_defaults(fn=lambda _a, fn=fn: mutate(fn))
 

@@ -16,7 +16,15 @@
         (set-window-buffer (split-window-right) buffer))
       (select-window main))))
 
+(defun interview--graphical-frame ()
+  (if (window-system (selected-frame))
+      (selected-frame)
+    (seq-find (lambda (frame) (and (window-system frame) (frame-visible-p frame)))
+              (frame-list))))
+
 (defun interview-open-session (prompt main)
+  (when-let* ((frame (interview--graphical-frame)))
+    (select-frame-set-input-focus frame))
   (interview--layout main (lambda () (find-file-noselect prompt))))
 
 (defconst interview-tutor-langs

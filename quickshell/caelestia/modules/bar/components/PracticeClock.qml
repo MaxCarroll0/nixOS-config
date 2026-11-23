@@ -10,7 +10,7 @@ StyledRect {
     readonly property color accent: {
         if (Practice.phase === "paused")
             return Colours.palette.m3tertiary;
-        if (Practice.phase === "review")
+        if (Practice.reviewing)
             return Colours.palette.m3secondary;
         if (Practice.phase === "coding" && Practice.codingLeft < 300)
             return Colours.palette.m3error;
@@ -32,7 +32,7 @@ StyledRect {
 
         MaterialIcon {
             Layout.alignment: Qt.AlignHCenter
-            text: Practice.phase === "paused" ? "pause_circle" : Practice.phase === "review" ? "rate_review" : Practice.phase === "coding" ? "timer" : Practice.locked ? "lock_clock" : "school"
+            text: Practice.phase === "paused" ? "pause_circle" : Practice.phase === "review" ? "rate_review" : Practice.phase === "records" ? "edit_note" : Practice.phase === "coding" ? "timer" : Practice.locked ? "lock_clock" : "school"
             color: root.accent
             animate: true
         }

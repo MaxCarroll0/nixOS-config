@@ -74,7 +74,7 @@ ColumnLayout {
 
                 StyledText {
                     text: Practice.phase.toUpperCase()
-                    color: Practice.phase === "paused" ? Colours.palette.m3tertiary : Practice.phase === "review" ? Colours.palette.m3secondary : Colours.palette.m3primary
+                    color: Practice.phase === "paused" ? Colours.palette.m3tertiary : Practice.reviewing ? Colours.palette.m3secondary : Colours.palette.m3primary
                     font: Tokens.font.mono.small
                 }
             }
@@ -87,17 +87,13 @@ ColumnLayout {
 
             StyledProgressBar {
                 Layout.fillWidth: true
-                value: {
-                    if (!root.cur)
-                        return 0;
-                    const budget = Practice.phase === "review" ? root.cur.review_budget : root.cur.coding_budget;
-                    return budget > 0 ? 1 - Practice.left / budget : 0;
-                }
+                visible: !Practice.reviewing
+                value: root.cur && root.cur.coding_budget > 0 ? 1 - Practice.left / root.cur.coding_budget : 0
             }
 
             StyledText {
                 Layout.fillWidth: true
-                text: Practice.phase === "review" ? "Submission frozen; reviewing with the interviewer." : Practice.phase === "paused" ? "Clock stopped. The tutor window is up; SUPER+F5 resumes." : `Paused ${Practice.hours(root.cur?.pause_seconds ?? 0)} so far. ${Practice.finishApproved ? "Finishing early is allowed." : "Finish early: pass interview submit-tests, or ask the interviewer."}`
+                text: Practice.phase === "records" ? "The interviewer is writing the records; the interview counts and its windows close when they finish." : Practice.phase === "review" ? "Submission frozen; reviewing with the interviewer, no time limit. End interview when you are done." : Practice.phase === "paused" ? "Clock stopped. The tutor window is up; SUPER+F5 resumes." : `Paused ${Practice.hours(root.cur?.pause_seconds ?? 0)} so far. ${Practice.finishApproved ? "Finishing early is allowed." : "Finish early: pass interview submit-tests, or ask the interviewer."}`
                 color: Colours.palette.m3onSurfaceVariant
                 font: Tokens.font.body.small
                 wrapMode: Text.WordWrap
@@ -130,6 +126,17 @@ ColumnLayout {
             verticalPadding: Tokens.padding.extraSmall
             onClicked: Practice.finishEarly()
         }
+    }
+
+    IconTextButton {
+        Layout.fillWidth: true
+        visible: Practice.reviewing
+        icon: Practice.phase === "records" ? "close" : "done_all"
+        text: Practice.phase === "records" ? "Close now, skip waiting" : "End interview"
+        inactiveColour: Colours.palette.m3secondaryContainer
+        inactiveOnColour: Colours.palette.m3onSecondaryContainer
+        verticalPadding: Tokens.padding.extraSmall
+        onClicked: Practice.endInterview()
     }
 
     IconTextButton {

@@ -9,7 +9,9 @@ if [ $# -ge 2 ]; then
   prompt=$1 main=$2
 else
   status=$(interview status --json)
-  prompt=$(jq -r 'select(.phase != "idle") | .dir + "/PROMPT.md"' <<<"$status")
+  dir=$(jq -r 'select(.phase != "idle") | .dir' <<<"$status")
+  prompt=$dir/PROMPT.org
+  [ -e "$prompt" ] || prompt=$dir/PROMPT.md
   main=$(jq -r 'select(.phase != "idle") | .main // empty' <<<"$status")
 fi
 show=()

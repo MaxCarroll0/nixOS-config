@@ -45,10 +45,9 @@ Item {
         set("tracks", tracks);
     }
 
-    function setTrackLengths(index: int, coding: var, review: var): void {
+    function setTrackLength(index: int, coding: var): void {
         const tracks = copy(draft.tracks);
         tracks[index].coding_minutes = coding;
-        tracks[index].review_minutes = review;
         set("tracks", tracks);
     }
 
@@ -68,7 +67,7 @@ Item {
                 difficulty: "easy-medium",
                 enabled: true,
                 coding_minutes: null,
-                review_minutes: null
+                syntax_notes: false
             }]);
     }
 
@@ -258,15 +257,6 @@ Item {
                 }
 
                 StepperRow {
-                    label: "Review"
-                    subtext: "Minutes after coding"
-                    from: 0
-                    to: 60
-                    value: root.draft?.review_minutes ?? 15
-                    onMoved: v => root.set("review_minutes", Math.round(v))
-                }
-
-                StepperRow {
                     label: "Break"
                     subtext: "Minutes between interviews"
                     from: 0
@@ -413,7 +403,7 @@ Item {
                         readonly property var track: root.draft.tracks[index] ?? ({})
                         readonly property var langs: track.langs ?? []
                         readonly property color accent: langs.length ? (Practice.langColours[langs[0]] ?? Colours.palette.m3primary) : Colours.palette.m3outline
-                        readonly property bool customLength: track.coding_minutes != null || track.review_minutes != null
+                        readonly property bool customLength: track.coding_minutes != null
                         property bool pickingLangs: langs.length === 0
 
                         Layout.fillWidth: true
@@ -568,6 +558,35 @@ Item {
 
                         ConnectedRect {
                             Layout.fillWidth: true
+                            implicitHeight: notesRow.implicitHeight + Tokens.padding.medium * 2
+
+                            RowLayout {
+                                id: notesRow
+
+                                anchors.fill: parent
+                                anchors.margins: Tokens.padding.medium
+                                anchors.leftMargin: Tokens.padding.largeIncreased
+                                anchors.rightMargin: Tokens.padding.largeIncreased
+                                spacing: Tokens.spacing.medium
+
+                                RowLabel {
+                                    text: "Syntax notes"
+                                    subtext: "Prompts introduce new syntax in a line or two, never the approach"
+                                }
+
+                                Item {
+                                    Layout.fillWidth: true
+                                }
+
+                                StyledSwitch {
+                                    checked: card.track.syntax_notes ?? false
+                                    onToggled: root.setTrack(card.index, "syntax_notes", checked)
+                                }
+                            }
+                        }
+
+                        ConnectedRect {
+                            Layout.fillWidth: true
                             implicitHeight: lenRow.implicitHeight + Tokens.padding.medium * 2
 
                             RowLayout {
@@ -581,7 +600,7 @@ Item {
 
                                 RowLabel {
                                     text: "Length"
-                                    subtext: card.customLength ? "Minutes for this track" : `Default: ${root.draft?.coding_minutes ?? 45} min coding, ${root.draft?.review_minutes ?? 15} min review`
+                                    subtext: card.customLength ? "Minutes for this track" : `Default: ${root.draft?.coding_minutes ?? 45} min coding`
                                 }
 
                                 StyledText {
@@ -598,29 +617,13 @@ Item {
                                     stepSize: 5
                                     value: card.track.coding_minutes ?? root.draft?.coding_minutes ?? 45
                                     cLayer: 2
-                                    onValueModified: root.setTrackLengths(card.index, Math.round(value), card.track.review_minutes ?? root.draft.review_minutes)
-                                }
-
-                                StyledText {
-                                    visible: card.customLength
-                                    text: "review"
-                                    color: Colours.palette.m3outline
-                                    font: Tokens.font.label.small
-                                }
-
-                                StyledSpinBox {
-                                    visible: card.customLength
-                                    from: 0
-                                    to: 60
-                                    value: card.track.review_minutes ?? root.draft?.review_minutes ?? 15
-                                    cLayer: 2
-                                    onValueModified: root.setTrackLengths(card.index, card.track.coding_minutes ?? root.draft.coding_minutes, Math.round(value))
+                                    onValueModified: root.setTrackLength(card.index, Math.round(value))
                                 }
 
                                 Segmented {
                                     options: ["default", "custom"]
                                     current: card.customLength ? "custom" : "default"
-                                    onPicked: value => value === "custom" ? root.setTrackLengths(card.index, root.draft.coding_minutes, root.draft.review_minutes) : root.setTrackLengths(card.index, null, null)
+                                    onPicked: value => value === "custom" ? root.setTrackLength(card.index, root.draft.coding_minutes) : root.setTrackLength(card.index, null)
                                 }
                             }
                         }

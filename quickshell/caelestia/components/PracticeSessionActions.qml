@@ -30,7 +30,7 @@ RowLayout {
                 what: "review",
                 icon: "rate_review",
                 label: "Review",
-                shown: !!root.session.review_md
+                shown: !!root.session.review_doc
             },
             {
                 what: "revisit",

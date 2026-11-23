@@ -104,7 +104,6 @@ in
   xdg.configFile."interview/config.json".text = builtins.toJSON {
     inherit repo;
     coding_minutes = 45;
-    review_minutes = 15;
     required_per_day = 2;
     lockdown = true;
     context = "LeetCode-style: well-known algorithm and data-structure classics, climbing the curriculum topic ladder from arrays and hashing to dynamic programming.";
@@ -122,7 +121,8 @@ in
           "c"
         ];
         difficulty = "easy";
-        context = "Beginner in Rust and C: keep problems small and teach the language as it comes up, with beginner notes on ownership and borrowing in Rust and on pointers, lengths and memory in C.";
+        syntax_notes = true;
+        context = "Beginner in Rust and C: keep problems small. The prompt's notes never hint at the approach or the algorithm; they only introduce syntax the problem needs that is new to the candidate, each item in a line or two (ownership and borrowing in Rust; pointers, lengths and memory in C). Leave out anything TAUGHT.md already covers, except syntax taught in the last couple of interviews, which gets a one-line reminder. Keep the notes short: the interviewer explains the syntax in conversation.";
       }
       {
         name = "managed";
@@ -141,6 +141,7 @@ in
       "check"
     ];
     on_start = [ (hook "on-start") ];
+    on_close = [ (hook "on-close") ];
     auto = {
       enabled = true;
       days = [
@@ -226,8 +227,8 @@ in
     };
     actions = [
       {
-        label = "Open interviewer";
-        command = [ (hook "on-engage") ];
+        label = "Focus interviewer";
+        command = [ (hook "focus") ];
       }
       {
         label = "Start next";
@@ -242,6 +243,13 @@ in
         command = [
           interviewExe
           "toggle"
+        ];
+      }
+      {
+        label = "End interview";
+        command = [
+          interviewExe
+          "end"
         ];
       }
     ];

@@ -92,6 +92,10 @@ Scope {
                             const done = `${Practice.completedToday}/${Practice.required} done today`;
                             if (!Practice.active)
                                 return `${done} · no interview running`;
+                            if (Practice.phase === "records")
+                                return `${done} · interviewer writing records`;
+                            if (Practice.phase === "review")
+                                return `${done} · review ${Practice.clock(Practice.left)} in, End interview when done`;
                             return `${done} · ${Practice.phase} ${Practice.clock(Practice.left)} left`;
                         }
                     }
