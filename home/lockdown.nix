@@ -168,6 +168,15 @@ let
 
   enabled = lib.filterAttrs (_: p: p.enable) cfg.profiles;
 
+  shim = pkgs.writeShellScript "lockdown-shim" (builtins.readFile ../pkgs/lockdown/shim.sh);
+
+  shims = pkgs.runCommand "lockdown-shims" { } ''
+    mkdir -p $out/bin
+    for name in ${lib.escapeShellArgs cfg.recreational}; do
+      ln -s ${shim} "$out/bin/$name"
+    done
+  '';
+
   profilesJson = lib.mapAttrs (_: p: {
     inherit (p)
       workspace
@@ -354,6 +363,26 @@ in
       ];
       description = "Windows whose process is never killed as a stray during a lockdown.";
     };
+    recreational = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [
+        "ani-cli"
+        "anipy-cli"
+        "chromium"
+        "chromium-browser"
+        "curd"
+        "Discord"
+        "discord"
+        "heroic"
+        "lutris"
+        "mpv"
+        "prismlauncher"
+        "steam"
+        "umpv"
+        "yt-dlp"
+      ];
+      description = "Commands a shell started during a lockdown refuses to run while any profile is engaged.";
+    };
   };
 
   config = lib.mkIf (enabled != { }) {
@@ -364,6 +393,11 @@ in
 
     xdg.configFile."lockdown/profiles.json".text = builtins.toJSON profilesJson;
     xdg.configFile."hypr/lockdown.lua".source = ./hypr/lockdown.lua;
+    programs.bash.bashrcExtra = lib.mkAfter ''
+      if [ -e "''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lockdown/active.json" ]; then
+        PATH=${shims}/bin:$PATH
+      fi
+    '';
     local.wm.lockdownHelp = helpEntries;
 
     wayland.windowManager.hyprland.extraConfig = lib.mkAfter submapLua;
