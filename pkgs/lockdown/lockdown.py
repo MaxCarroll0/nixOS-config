@@ -185,7 +185,7 @@ def apply(at: dt.datetime) -> dict:
                 "profile": name,
                 "substate": substate,
                 "allow": allow,
-                "workspace": profile.get("workspace") or name,
+                "workspace": profile.get("substate_workspaces", {}).get(substate) or profile.get("workspace") or name,
                 "actions": profile.get("actions", []),
                 "message": profile.get("message", ""),
                 "reason": why,

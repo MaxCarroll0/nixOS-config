@@ -199,6 +199,7 @@ in
 
   services.lockdown.profiles.interview = {
     workspace = "interview";
+    workspaces.paused = "tutor";
     start = "05:00";
     from = firstDay;
     days = [
@@ -217,7 +218,6 @@ in
       active = [
         { class = "^emacs$"; }
         { class = "^interview%-claude$"; }
-        { class = "^interview%-tutor%-emacs$"; }
       ];
       paused = [
         { class = "^interview%-tutor$"; }

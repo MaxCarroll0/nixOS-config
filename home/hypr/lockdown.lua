@@ -1,4 +1,4 @@
--- Lockdown enforcement: stashes every window older than the lockdown except the profile's own, closes new app windows outside the allowlist and holds the profile's submap.
+-- Lockdown enforcement: stashes every window older than the lockdown except the substate's own, closes new app windows outside the allowlist and holds the profile's submap.
 
 local M = {
     source = nil,
@@ -199,11 +199,18 @@ end
 local function settle(window)
     if not (M.active and window and window.mapped and window.workspace) then return end
     local stashed = on(window, stash)
-    if allowed(window) or managed(window) then
+    if allowed(window) then
         if stashed then move(window, home()) end
-    elseif not native(window) and not stashed then
-        move(window, stash)
+    elseif managed(window) or not native(window) then
+        if not stashed then move(window, stash) end
     end
+end
+
+local function switch()
+    for _, window in ipairs(hl.get_windows()) do
+        if window.mapped and allowed(window) and not on(window, M.active.workspace) then move(window, home()) end
+    end
+    hl.dispatch(hl.dsp.focus({ workspace = home() }))
 end
 
 local function enforce()
@@ -251,6 +258,7 @@ local function poll()
     M.active = active
     if active and was then
         enforce()
+        if active.substate ~= was.substate or active.workspace ~= was.workspace then switch() end
     elseif active then
         engage()
     elseif was then
@@ -259,6 +267,7 @@ local function poll()
 end
 
 hl.on("window.open", function(window)
+    poll()
     if not M.active then return end
     if not allowed(window) and not desktop(window) then
         local pid = not protected(window) and window.pid

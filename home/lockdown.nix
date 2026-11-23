@@ -86,6 +86,11 @@ let
           default = name;
           description = "Named workspace the lockdown pins focus to; allowlisted windows live there.";
         };
+        workspaces = lib.mkOption {
+          type = lib.types.attrsOf lib.types.str;
+          default = { };
+          description = "Workspace per substate, replacing workspace while that substate holds.";
+        };
         actions = lib.mkOption {
           type = lib.types.listOf actionType;
           default = [ ];
@@ -192,6 +197,7 @@ let
     on_engage = p.onEngage;
     on_release = p.onRelease;
     settings_file = p.settingsFile;
+    substate_workspaces = p.workspaces;
     allow = lib.mapAttrs (_: map stripRule) p.allow;
     allow_always = [ promptRule ];
   }) enabled;
@@ -213,14 +219,17 @@ let
     (entry "ALT+Tab" "hl.dsp.window.cycle_next()" "next allowed window")
   ];
 
+  workspaceOf = p: s: p.workspaces.${s} or p.workspace;
+
   homeEntry =
-    p: entry "SUPER+0" "hl.dsp.focus({ workspace = ${luaStr "name:${p.workspace}"} })" "back to ${p.workspace}";
+    p: s:
+    entry "SUPER+0" "hl.dsp.focus({ workspace = ${luaStr "name:${workspaceOf p s}"} })" "back to ${workspaceOf p s}";
 
   entriesFor =
     p: s:
     map (b: entry b.key (exec b.command) b.description) (lib.filter (heldIn s) p.binds)
     ++ baseEntries
-    ++ [ (homeEntry p) ];
+    ++ [ (homeEntry p s) ];
 
   submaps = lib.concatLists (
     lib.mapAttrsToList (
