@@ -22,7 +22,7 @@ done
 [ $# -gt 0 ] && nodes=("$@")
 
 if [ "$fetch" = 1 ]; then
-  timeout 15 git -C "$flake" fetch -q origin 'main' '+refs/deploys/*:refs/remotes/deploys/*' 2>/dev/null || true
+  timeout 15 git -C "$flake" fetch -q origin 'main' '+refs/deploys/*:refs/remotes/deploys/*' '+refs/snapshots/*:refs/snapshots/*' 2>/dev/null || true
 fi
 main=$(git -C "$flake" rev-parse -q --verify origin/main 2>/dev/null || git -C "$flake" rev-parse main)
 

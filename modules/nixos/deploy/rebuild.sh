@@ -35,8 +35,8 @@ Without --only, rebuild builds HEAD exactly, or origin/main when this clone is b
 --base REV; it refuses a commit that lacks anything landed on origin/main. Uncommitted work is
 listed and left out.
 With --only, it builds the revision the target runs (or --base REV) plus the uncommitted
-changes under each PATH, as a snapshot commit on refs/deploys/NODE pushed to origin, so the
-target's configuration revision is always a real commit. --note labels that snapshot.
+changes under each PATH, as a snapshot commit pushed to origin as refs/snapshots/NODE/REV before
+activation, so every revision a host runs is fetchable everywhere. --note labels that snapshot.
 --supersede deploys over a revision deployed from another machine.
 EOF
 }
@@ -94,7 +94,7 @@ runningRevision() {
   if [ -z "$target" ]; then
     running=$(nixos-version --configuration-revision 2>/dev/null || true)
   else
-    git -C "$flake" fetch -q origin "+refs/deploys/$rebuildTarget:refs/remotes/deploys/$rebuildTarget" 2>/dev/null || true
+    git -C "$flake" fetch -q origin "+refs/deploys/$rebuildTarget:refs/remotes/deploys/$rebuildTarget" "+refs/snapshots/$rebuildTarget/*:refs/snapshots/$rebuildTarget/*" 2>/dev/null || true
     running=$(git -C "$flake" rev-parse -q --verify "refs/remotes/deploys/$rebuildTarget" 2>/dev/null \
       || git -C "$flake" rev-parse -q --verify "refs/deploys/$rebuildTarget" 2>/dev/null || true)
   fi
@@ -123,6 +123,11 @@ snapshotRevision() {
 dirtyPaths() {
   git -C "$flake" status --porcelain=v1 -uall --no-renames "$@" | cut -c4-
 }
+
+for spec in '+refs/deploys/*:refs/remotes/deploys/*' '+refs/snapshots/*:refs/snapshots/*'; do
+  git -C "$flake" config --get-all remote.origin.fetch | grep -qxF -- "$spec" \
+    || git -C "$flake" config --add remote.origin.fetch "$spec"
+done
 
 headRev=$(git -C "$flake" rev-parse HEAD)
 final=$headRev
@@ -201,6 +206,17 @@ pinOut=$(nix eval --raw --impure --expr "let p = import \"$srcPath/lib/pins.nix\
 [ -n "$pinOut" ] && mapfile -t pinArgs <<< "$pinOut"
 opts+=("${pinArgs[@]}")
 
+publishSnapshot() {
+  local mainRev
+  mainRev=$(git -C "$flake" rev-parse -q --verify origin/main 2>/dev/null || true)
+  [ -n "$mainRev" ] && git -C "$flake" merge-base --is-ancestor "$rev" "$mainRev" && return 0
+  if ! timeout 60 git -C "$flake" push -q origin "$rev:refs/snapshots/$rebuildTarget/$rev"; then
+    echo "error: could not push ${rev:0:7} to origin as refs/snapshots/$rebuildTarget/$rev" >&2
+    echo "  a host must never run a commit other machines cannot fetch; fix the push and rerun" >&2
+    exit 2
+  fi
+}
+
 recordDeployed() {
   git -C "$flake" update-ref "$deployRef" "$rev"
   if [ "$rev" != "$base" ] && [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
@@ -229,8 +245,10 @@ check_running() {
   local node=$1 running=${2%-dirty} base
   [ -n "$running" ] && [ "$running" != "$rev" ] || return 0
   if ! repo_git cat-file -e "$running^{commit}" 2>/dev/null; then
-    echo "warning: $node runs $running, a commit this clone does not have; deploying over it blind" >&2
-    return 0
+    [ "$supersede" = 1 ] && return 0
+    echo "error: $node runs $running, which neither this clone nor origin's refs/snapshots has." >&2
+    echo "  Fetch it from the clone that deployed it, or pass --supersede to deploy over it blind." >&2
+    exit 3
   fi
   base=$(upgrade_base "$running")
   if [ "$base" != "$running" ] && ! repo_git diff --quiet "$running" "$rev" -- flake.lock; then
@@ -270,8 +288,9 @@ if [ -n "$target" ]; then
 
   if activating; then
     claim_or_exit "$target"
-    git -C "$flake" fetch -q origin '+refs/deploys/*:refs/remotes/deploys/*' 2>/dev/null || true
+    git -C "$flake" fetch -q origin '+refs/deploys/*:refs/remotes/deploys/*' '+refs/snapshots/*:refs/snapshots/*' 2>/dev/null || true
     check_running "$target" "$(timeout 20 ssh -o BatchMode=yes "$target" nixos-version --configuration-revision 2>/dev/null || true)"
+    publishSnapshot
   fi
 
   export NIX_CONFIG="accept-flake-config = true
@@ -362,8 +381,9 @@ case "$action" in
   switch|boot|test|dry-activate)
     if activating; then
       claim_or_exit "$host"
-      git -C "$flake" fetch -q origin '+refs/deploys/*:refs/remotes/deploys/*' 2>/dev/null || true
+      git -C "$flake" fetch -q origin '+refs/deploys/*:refs/remotes/deploys/*' '+refs/snapshots/*:refs/snapshots/*' 2>/dev/null || true
       check_running "$host" "$(nixos-version --configuration-revision 2>/dev/null || true)"
+      publishSnapshot
     fi
     nixos-rebuild build --flake "$source#$host" "${opts[@]}" "$@"
     sudo nixos-rebuild "$action" --flake "$source#$host" "${opts[@]}" "$@"
