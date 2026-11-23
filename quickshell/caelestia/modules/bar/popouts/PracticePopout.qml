@@ -201,6 +201,11 @@ ColumnLayout {
                 font: Tokens.font.body.small
             }
 
+            PracticeVersions {
+                Layout.fillWidth: true
+                session: todaySession.modelData
+            }
+
             PracticeSessionActions {
                 Layout.fillWidth: true
                 session: todaySession.modelData

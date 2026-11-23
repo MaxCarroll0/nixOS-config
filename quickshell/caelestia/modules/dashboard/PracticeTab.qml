@@ -364,6 +364,11 @@ Item {
                             }
                         }
 
+                        PracticeVersions {
+                            Layout.fillWidth: true
+                            session: session.modelData
+                        }
+
                         PracticeSessionActions {
                             Layout.fillWidth: true
                             session: session.modelData

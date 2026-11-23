@@ -45,7 +45,7 @@ RULES = [
 ]
 
 BUILD_DIRS = {"_build", "target", "bin", "obj", "__pycache__", ".pytest_cache", "build", "improved"}
-REVIEW_FILES = {"review.md", "SOLUTIONS.md", ".interview.json"}
+REVIEW_FILES = {"review.md", "SOLUTIONS.md", ".interview.json", "benchmarks.json"}
 EXTEND_CAP_MINUTES = 15
 LEGACY_MAIN = {"ocaml": "solution.ml", "rust": "src/lib.rs", "c": "solution.c", "csharp": "Solution.cs", "python": "solution.py"}
 
@@ -1074,6 +1074,148 @@ def cmd_submit_tests(args) -> int:
     return 0 if hidden_result == "pass" else 1
 
 
+ALIAS_LANGS = {"ocaml": "let {fn} = {expr}", "python": "{fn} = {expr}"}
+FORWARD_LANGS = {"rust", "c", "csharp"}
+
+
+def target_name(problem: str, lang: str) -> str:
+    spec = problem_dir(problem) / "spec.json"
+    name = json.loads(spec.read_text())["name"] if spec.exists() else problem.split("-", 1)[1].replace("-", "_")
+    if lang == "csharp":
+        return "".join(part.capitalize() for part in name.split("_"))
+    return name
+
+
+def closing_paren(text: str, i: int) -> int:
+    depth = 0
+    for j in range(i, len(text)):
+        depth += {"(": 1, ")": -1}.get(text[j], 0)
+        if depth == 0:
+            return j
+    raise ValueError("unbalanced parentheses")
+
+
+def param_names(params: str) -> list[str]:
+    names, depth, cur = [], 0, ""
+    for ch in params + ",":
+        if ch in "(<[":
+            depth += 1
+        elif ch in ")>]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            if cur.strip():
+                names.append(re.findall(r"\w+", cur)[-1])
+            cur = ""
+        else:
+            cur += ch
+    return names
+
+
+def candidate_definition(text: str, fn: str) -> tuple[int, int, int]:
+    for m in re.finditer(rf"\b{fn}\s*\(", text):
+        close = closing_paren(text, m.end() - 1)
+        if re.match(r"\s*(\{|=>|->)", text[close + 1:]):
+            line = text.rfind("\n", 0, m.start()) + 1
+            return line, m.start(), close
+    raise ValueError(f"no definition of {fn} found")
+
+
+def apply_version(scratch: Path, lang: str, fn: str, expr: str) -> None:
+    main = scratch / main_file(lang)
+    text = main.read_text()
+    if lang in ALIAS_LANGS:
+        text += "\n" + ALIAS_LANGS[lang].format(fn=fn, expr=expr) + "\n"
+    elif lang in FORWARD_LANGS:
+        line, name, close = candidate_definition(text, fn)
+        renamed = text[:name] + fn + "_submitted" + text[name + len(fn):]
+        if lang == "rust":
+            text = renamed + f"\npub use self::{expr} as {fn};\n"
+        else:
+            head = text[line:close + 1]
+            call = f"{expr}({', '.join(param_names(text[text.index('(', name) + 1:close]))})"
+            if lang == "c":
+                text = renamed + f"\n{head.strip()}\n{{\n    return {call};\n}}\n"
+            else:
+                text = renamed[:line] + f"{head} => {call};\n\n" + renamed[line:]
+    else:
+        raise ValueError(f"versions are not supported for {lang}")
+    main.write_text(text)
+
+
+def evaluate(session: Path, problem: str, lang: str, fn: str, expr: str | None) -> dict:
+    repo = Path(config()["repo"])
+    result = {"hidden": "none", "benchmark": None}
+    for tier, extra in (("hidden", problem_dir(problem) / "hidden" / lang), ("bench", problem_dir(problem) / "bench" / lang)):
+        if not extra.is_dir():
+            continue
+        scratch = test_copy(session, extra, f"{tier}-version")
+        try:
+            if expr:
+                apply_version(scratch, lang, fn, expr)
+            if tier == "hidden":
+                code, out = run_capped(in_shell(repo, lang, ["just", "test"]), scratch, HIDDEN_SECONDS)
+                result["hidden"] = "timeout" if code is None else "pass" if code == 0 else "fail"
+                result["hidden_counts"] = test_counts(out)
+                if code != 0:
+                    result["output"] = out.splitlines()[-30:]
+                    break
+            else:
+                bench = run_bench(in_shell(repo, lang, ["just", "bench"]), scratch)
+                if not bench["cases"]:
+                    result["benchmark"] = "not run (the benchmark did not build)"
+                    result["output"] = bench["output"][-30:]
+                else:
+                    cases = bench["cases"]
+                    result.update(benchmark=bench_summary(bench), met=sum(c["met"] for c in cases), total=len(cases),
+                                  slowest=max((c["seconds"] or 0) for c in cases), cases=cases)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+    return result
+
+
+def cmd_bench(args) -> int:
+    session = session_dir(args.dir)
+    cur = load_current()
+    if cur and cur["phase"] in ("coding", "paused"):
+        print("benchmarks run once the coding phase is over", file=sys.stderr)
+        return 1
+    meta = json.loads((session / ".interview.json").read_text())
+    lang, problem = meta["lang"], meta["problem"]
+    fn = args.target or target_name(problem, lang)
+    versions = [("submitted", None)]
+    for v in args.versions:
+        name, sep, expr = v.partition("=")
+        if not sep or not name or not expr or name == "submitted":
+            print(f"version {v!r}: expected NAME=EXPR, NAME not 'submitted'", file=sys.stderr)
+            return 2
+        versions.append((name, expr))
+    if args.versions_only:
+        versions = versions[1:]
+    store = session / "benchmarks.json"
+    record = json.loads(store.read_text()) if store.exists() else {"target": fn, "versions": []}
+    failed = False
+    for name, expr in versions:
+        try:
+            r = evaluate(session, problem, lang, fn, expr)
+        except ValueError as error:
+            print(f"{name}: {error}", file=sys.stderr)
+            return 2
+        entry = {"name": name, "expr": expr, "at": iso(now()), **{k: v for k, v in r.items() if k != "output"}}
+        record["versions"] = [v for v in record["versions"] if v["name"] != name] + [entry]
+        bench = r["benchmark"] or ("skipped (hidden tests do not pass)" if r["hidden"] != "pass" else "none for this problem")
+        print(f"{name}: hidden {r['hidden']}{' (' + r['hidden_counts'] + ')' if r.get('hidden_counts') else ''}, benchmark {bench}")
+        for c in r.get("cases", []):
+            print(bench_case_line(c))
+        if r.get("output"):
+            print("\n".join("  | " + line for line in r["output"]))
+        failed |= expr is not None and r["hidden"] != "pass"
+    record["versions"].sort(key=lambda v: v["name"] != "submitted")
+    record["target"] = fn
+    store.write_text(json.dumps(record, indent=1) + "\n")
+    print(f"recorded in {store}")
+    return 1 if failed else 0
+
+
 def ladder_rungs(problem: str) -> list[str]:
     text = (problem_dir(problem) / "LADDER.md").read_text()
     rungs, current = [], None
@@ -1234,7 +1376,16 @@ def cmd_log(args) -> int:
         if e["kind"] in ("coding", "paused", "review"):
             s[e["kind"]] += e["seconds"]
         if e["kind"] == "complete" and worked(e):
-            s.update(complete=True, early=e.get("early"), hidden_tests=e.get("hidden_tests"), benchmark=e.get("benchmark"), dir=e.get("dir"), review_md=str(Path(e.get("dir", ""), "review.md")))
+            sdir = Path(e.get("dir", ""))
+            review = sdir / "review.md"
+            store = sdir / "benchmarks.json"
+            versions = []
+            with contextlib.suppress(OSError, ValueError):
+                for v in json.loads(store.read_text())["versions"]:
+                    time_sum = round(sum(c.get("seconds") or 0 for c in v.get("cases", [])), 6)
+                    versions.append({k: v.get(k) for k in ("name", "hidden", "benchmark", "met", "total", "slowest")} | {"time": time_sum})
+            s.update(complete=True, early=e.get("early"), hidden_tests=e.get("hidden_tests"), benchmark=e.get("benchmark"), dir=e.get("dir"),
+                     review_md=str(review) if review.exists() else None, versions=versions)
             d["completed"] += 1
         if e.get("live"):
             s["live"] = True
@@ -1552,6 +1703,13 @@ def main() -> int:
     p = sub.add_parser("revisit")
     p.add_argument("dir")
     p.set_defaults(fn=cmd_revisit)
+
+    p = sub.add_parser("bench", help="after coding: run hidden tests and the benchmark on the submission and on reviewed versions, recorded in DIR/benchmarks.json")
+    p.add_argument("dir")
+    p.add_argument("versions", nargs="*", metavar="NAME=EXPR", help="a reviewed version: EXPR replaces the problem function (OCaml Reviewed.Pruned.coin_change, Python Reviewed.Pruned.coin_change, Rust reviewed::pruned::coin_change, C# Reviewed.Pruned.CoinChange, C reviewed_pruned_coin_change)")
+    p.add_argument("--target", help="the function the tests call; default from spec.json")
+    p.add_argument("--versions-only", action="store_true", help="skip re-running the submission")
+    p.set_defaults(fn=cmd_bench)
 
     p = sub.add_parser("open", help="open a past session's prompt, code or review in Emacs, or revisit it as a writable improved/ copy")
     p.add_argument("dir")
