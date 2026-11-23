@@ -1,4 +1,4 @@
--- Lockdown enforcement: stashes every window older than the lockdown except the profile's own, closes new disallowed windows and holds the profile's submap.
+-- Lockdown enforcement: stashes every window older than the lockdown except the profile's own, closes new app windows outside the allowlist and holds the profile's submap.
 
 local M = {
     source = nil,
@@ -92,8 +92,30 @@ local function command_name(pid)
     return name
 end
 
+local function cgroup(pid)
+    local file = io.open("/proc/" .. pid .. "/cgroup", "r")
+    if not file then return "" end
+    local text = file:read("a") or ""
+    file:close()
+    return text
+end
+
+local function parent(pid)
+    local file = io.open("/proc/" .. pid .. "/stat", "r")
+    if not file then return nil end
+    local text = file:read("a") or ""
+    file:close()
+    return tonumber(text:match("%) %S+ (%d+)"))
+end
+
+local function desktop(window)
+    if not (window.pid and window.pid > 1) or not cgroup(window.pid):match("/session%.slice/") then return false end
+    local ppid = parent(window.pid)
+    return ppid ~= nil and command_name(ppid) == "systemd"
+end
+
 local function protected(window)
-    if not window.pid or window.pid <= 1 or (window.class or "") == "" or kept(window) then return true end
+    if not window.pid or window.pid <= 1 or (window.class or "") == "" or kept(window) or desktop(window) then return true end
     if command_name(window.pid):match("^emacs") then return true end
     for _, other in ipairs(hl.get_windows()) do
         if other.pid == window.pid and (M.before[other.address] or kept(other)) then return true end
@@ -238,7 +260,7 @@ end
 
 hl.on("window.open", function(window)
     if not M.active then return end
-    if not allowed(window) then
+    if not allowed(window) and not desktop(window) then
         local pid = not protected(window) and window.pid
         hl.dispatch(hl.dsp.window.close({ window = "address:" .. window.address }))
         if pid then
