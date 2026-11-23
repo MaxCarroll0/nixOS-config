@@ -35,6 +35,8 @@ let
       runtimeEnv = {
         INTERVIEW_REPO = repo;
         INTERVIEW_WORKSPACE = "interview";
+        INTERVIEW_EL = "${../pkgs/interview/interview.el}";
+        TUTOR_SCRATCH = "${tutorEmacsState}/scratch";
       };
       text = builtins.readFile ../pkgs/interview/${name}.sh;
     };
@@ -133,12 +135,7 @@ in
       }
     ];
     on_pause = [ (hook "on-pause") ];
-    on_resume = [
-      lockdown
-      "state"
-      "interview"
-      "active"
-    ];
+    on_resume = [ (hook "on-resume") ];
     on_complete = [
       lockdown
       "check"

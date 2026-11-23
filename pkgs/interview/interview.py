@@ -519,6 +519,7 @@ def status_dict(at: float) -> dict:
             "lang": cur["lang"],
             "problem": cur["problem"],
             "dir": cur["dir"],
+            "main": str(Path(cur["dir"]) / main_file(cur["lang"])),
             "coding_budget": cur["coding_budget"],
             "used_before": cur["used_before"],
             "running_since": cur.get("running_since"),
@@ -922,13 +923,23 @@ def ladder_rungs(problem: str) -> list[str]:
     return rungs
 
 
+def for_lang(rungs: list[str], lang: str) -> list[str]:
+    meta = languages().get(lang, {"id": lang, "name": lang})
+    own = {meta["id"].lower(), meta["name"].lower()}
+
+    def keep(rung: str) -> bool:
+        m = re.match(r"(?:hint|follow-up) \(([^)]+)\):", rung, re.IGNORECASE)
+        return m is None or m.group(1).strip().lower() in own
+    return [r for r in rungs if keep(r)]
+
+
 def cmd_hint(args) -> int:
     with locked():
         cur = load_current()
         if not cur:
             print("no interview running", file=sys.stderr)
             return 1
-        rungs = ladder_rungs(cur["problem"])
+        rungs = for_lang(ladder_rungs(cur["problem"]), cur["lang"])
         if args.all:
             if cur["phase"] != "review":
                 print("the whole ladder opens during review; `interview hint` gives the next rung", file=sys.stderr)
