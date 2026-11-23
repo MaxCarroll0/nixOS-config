@@ -308,6 +308,7 @@ Item {
                     id: session
 
                     required property var modelData
+                    property bool open: false
 
                     Layout.fillWidth: true
                     implicitHeight: sessionBox.implicitHeight + Tokens.padding.medium * 2
@@ -324,6 +325,11 @@ Item {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: Tokens.spacing.medium
+
+                            TapHandler {
+                                cursorShape: Qt.PointingHandCursor
+                                onTapped: session.open = !session.open
+                            }
 
                             StyledRect {
                                 implicitWidth: langLabel.implicitWidth + Tokens.padding.medium * 2
@@ -362,20 +368,22 @@ Item {
                                 text: session.modelData.live ? "radio_button_checked" : !session.modelData.complete ? "pending" : session.modelData.hidden_tests === "pass" ? "verified" : session.modelData.hidden_tests === "fail" ? "bug_report" : session.modelData.hidden_tests === "timeout" ? "hourglass_disabled" : "task_alt"
                                 color: session.modelData.hidden_tests === "fail" ? Colours.palette.m3error : session.modelData.hidden_tests === "timeout" ? Colours.palette.m3tertiary : Colours.palette.m3primary
                             }
+
+                            MaterialIcon {
+                                text: session.open ? "expand_less" : "expand_more"
+                                color: Colours.palette.m3onSurfaceVariant
+                            }
                         }
 
-                        PracticeVersions {
+                        PracticeResults {
                             Layout.fillWidth: true
-                            session: session.modelData
-                        }
-
-                        PracticeCaseBars {
-                            Layout.fillWidth: true
+                            visible: session.open && (session.modelData.versions ?? []).length > 0
                             session: session.modelData
                         }
 
                         PracticeSessionActions {
                             Layout.fillWidth: true
+                            visible: session.open && session.modelData.complete && !!session.modelData.dir
                             session: session.modelData
                         }
                     }

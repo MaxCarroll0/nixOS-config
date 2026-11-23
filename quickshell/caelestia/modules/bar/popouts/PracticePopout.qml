@@ -197,30 +197,43 @@ ColumnLayout {
             id: todaySession
 
             required property var modelData
+            property bool open: false
 
             Layout.fillWidth: true
             Layout.topMargin: Tokens.spacing.small
             spacing: Tokens.spacing.extraSmall
 
-            StyledText {
+            RowLayout {
                 Layout.fillWidth: true
-                text: `${Practice.langNames[todaySession.modelData.lang] ?? todaySession.modelData.lang} · ${todaySession.modelData.problem}`
-                elide: Text.ElideRight
-                font: Tokens.font.body.small
+                spacing: Tokens.spacing.extraSmall
+
+                TapHandler {
+                    cursorShape: Qt.PointingHandCursor
+                    onTapped: todaySession.open = !todaySession.open
+                }
+
+                StyledText {
+                    Layout.fillWidth: true
+                    text: `${Practice.langNames[todaySession.modelData.lang] ?? todaySession.modelData.lang} · ${todaySession.modelData.problem}`
+                    elide: Text.ElideRight
+                    font: Tokens.font.body.small
+                }
+
+                MaterialIcon {
+                    text: todaySession.open ? "expand_less" : "expand_more"
+                    color: Colours.palette.m3onSurfaceVariant
+                }
             }
 
-            PracticeVersions {
+            PracticeResults {
                 Layout.fillWidth: true
-                session: todaySession.modelData
-            }
-
-            PracticeCaseBars {
-                Layout.fillWidth: true
+                visible: todaySession.open && (todaySession.modelData.versions ?? []).length > 0
                 session: todaySession.modelData
             }
 
             PracticeSessionActions {
                 Layout.fillWidth: true
+                visible: todaySession.open && !!todaySession.modelData.dir
                 session: todaySession.modelData
             }
         }
