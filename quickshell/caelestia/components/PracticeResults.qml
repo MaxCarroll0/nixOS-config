@@ -89,6 +89,11 @@ ColumnLayout {
         return v.correctness === "wrong" ? "wrong" : `${v.met}/${v.total}`;
     }
 
+    function meanText(v: var): string {
+        const timed = (v.cases ?? []).filter(c => c.status === "ok" && typeof c.seconds === "number");
+        return timed.length ? seconds(timed.reduce((t, c) => t + c.seconds, 0) / timed.length) : "";
+    }
+
     function caseText(c: var): string {
         if (!c || c.status === "not run")
             return "not run";
@@ -114,11 +119,11 @@ ColumnLayout {
             const parts = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([i, n]) => `${cases[i]?.label ?? i}${n > 1 ? ` ×${n}` : ""}`);
             return `${role}: ${parts.join(", ")}`;
         }
-        return `slowdown vs fastest, 1x to ${ratio(ratioTop)} · long marks: median, max`;
+        return `slowdown vs fastest, 1x to ${ratio(ratioTop)} · time: mean · dots: median, bars: max`;
     }
 
     visible: versions.length > 0
-    spacing: 6
+    spacing: 0
 
     Repeater {
         model: root.versions
@@ -147,6 +152,8 @@ ColumnLayout {
                 id: strip
 
                 readonly property real usable: width - 2
+                readonly property int band: 12
+                readonly property int bandTop: (height - band) / 2
 
                 function nearest(x: real, only: var): int {
                     let best = -1, gap = 8;
@@ -167,20 +174,21 @@ ColumnLayout {
                 }
 
                 Layout.fillWidth: true
-                implicitHeight: 12
+                implicitHeight: 28
 
                 StyledRect {
-                    anchors.fill: parent
-                    anchors.topMargin: 1
-                    anchors.bottomMargin: 1
+                    y: strip.bandTop
+                    width: strip.width
+                    height: strip.band
                     radius: Tokens.rounding.small
                     color: Colours.palette.m3surfaceContainerHighest
                 }
 
                 Rectangle {
                     x: strip.usable * root.ratioPosition(2)
+                    y: strip.bandTop
                     width: 1
-                    height: strip.height
+                    height: strip.band
                     color: Colours.palette.m3outlineVariant
                 }
 
@@ -192,33 +200,58 @@ ColumnLayout {
                         required property int index
                         readonly property real at: root.tickPosition(modelData)
                         readonly property bool lit: row.selected === index
-                        readonly property int reach: index === row.worstCase ? 4 : index === row.medianCase ? 2 : -3
-                        readonly property int shown: lit ? Math.max(reach, 1) : reach
+                        readonly property bool marked: index === row.worstCase || index === row.medianCase
+                        readonly property int inset: lit || marked ? 0 : 3
 
                         visible: at >= 0
-                        z: lit ? 3 : reach > 0 ? 2 : 1
+                        z: lit ? 3 : marked ? 2 : 1
                         x: strip.usable * Math.max(0, at) - (lit ? 1 : 0)
-                        y: -shown
+                        y: strip.bandTop + inset
                         width: lit ? 4 : 2
-                        height: strip.height + 2 * shown
+                        height: strip.band - 2 * inset
                         radius: lit ? 1 : 0
                         color: lit ? Colours.palette.m3onSurface : root.tickColour(modelData)
-                        opacity: lit ? 1 : root.picking ? 0.3 : reach > 0 ? 1 : 0.75
+                        opacity: lit ? 1 : root.picking ? 0.3 : marked ? 1 : 0.6
+                    }
+                }
+
+                Repeater {
+                    model: [
+                        { role: "median", top: true },
+                        { role: "median", top: false },
+                        { role: "max", top: true },
+                        { role: "max", top: false }
+                    ]
+
+                    Rectangle {
+                        required property var modelData
+                        readonly property bool max: modelData.role === "max"
+                        readonly property int index: max ? row.worstCase : row.medianCase
+                        readonly property var result: index >= 0 ? (row.modelData.cases ?? [])[index] ?? null : null
+                        readonly property real at: result ? root.tickPosition(result) : -1
+                        readonly property bool active: root.role === modelData.role
+
+                        visible: at >= 0
+                        z: max ? 2 : 1
+                        width: max ? 8 : 5
+                        height: max ? 4 : 5
+                        x: Math.max(0, Math.min(strip.width - width, strip.usable * at + 1 - width / 2))
+                        y: modelData.top ? strip.bandTop - 3 - height : strip.bandTop + strip.band + 3
+                        radius: max ? 1 : width / 2
+                        color: active ? Colours.palette.m3onSurface : max ? root.tickColour(result) : Colours.palette.m3onSurfaceVariant
+                        opacity: active || !root.picking ? 1 : 0.3
                     }
                 }
 
                 MouseArea {
                     anchors.fill: parent
-                    anchors.topMargin: -4
-                    anchors.bottomMargin: -4
                     hoverEnabled: true
                     onExited: {
                         root.hovered = -1;
                         root.role = "";
                     }
                     onPositionChanged: mouse => {
-                        const inside = mouse.y >= 4 && mouse.y <= 4 + strip.height;
-                        if (inside) {
+                        if (mouse.y >= strip.bandTop - 1 && mouse.y <= strip.bandTop + strip.band + 1) {
                             root.role = "";
                             root.hovered = strip.nearest(mouse.x, null);
                             return;
@@ -231,17 +264,30 @@ ColumnLayout {
             }
 
             StyledText {
-                Layout.preferredWidth: 72
+                Layout.preferredWidth: 40
                 horizontalAlignment: Text.AlignRight
-                text: !root.picking ? root.summary(row.modelData) : row.selected >= 0 ? root.caseText(row.selectedResult) : ""
+                text: !root.picking ? root.summary(row.modelData) : row.selected >= 0 ? `#${row.selected}` : ""
+                elide: Text.ElideLeft
+                color: {
+                    if (root.picking)
+                        return Colours.palette.m3onSurface;
+                    if (row.modelData.correctness === "wrong")
+                        return Colours.palette.m3error;
+                    return row.modelData.performance === "slow" ? Colours.palette.m3tertiary : Colours.palette.m3onSurfaceVariant;
+                }
+                font: Tokens.font.mono.small
+            }
+
+            StyledText {
+                Layout.preferredWidth: 56
+                horizontalAlignment: Text.AlignRight
+                text: !root.picking ? root.meanText(row.modelData) : row.selected >= 0 ? root.caseText(row.selectedResult) : ""
                 elide: Text.ElideLeft
                 color: {
                     const r = row.selectedResult;
                     if (root.picking)
                         return root.failed(r) ? Colours.palette.m3error : r && !r.met ? Colours.palette.m3tertiary : Colours.palette.m3onSurface;
-                    if (row.modelData.correctness === "wrong")
-                        return Colours.palette.m3error;
-                    return row.modelData.performance === "slow" ? Colours.palette.m3tertiary : Colours.palette.m3onSurfaceVariant;
+                    return Colours.palette.m3onSurfaceVariant;
                 }
                 font: Tokens.font.mono.small
             }
