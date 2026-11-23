@@ -81,6 +81,8 @@ in
 
   home.packages = [ interview ];
 
+  programs.direnv.config.whitelist.prefix = [ "${repo}/sessions" ];
+
   local.wm.caelestia.patches = [ ./patches/caelestia-practice.patch ];
 
   home.activation.caelestiaPracticeEntry = lib.hm.dag.entryAfter [ "caelestiaVpnIcon" ] ''

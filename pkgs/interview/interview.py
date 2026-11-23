@@ -288,6 +288,11 @@ def git(repo: Path, *args: str, check: bool = False) -> subprocess.CompletedProc
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=check)
 
 
+def write_envrc(repo: Path, lang: str, dest: Path) -> None:
+    layout = repo / "langs" / lang / ".direnv"
+    (dest / ".envrc").write_text(f"direnv_layout_dir={shlex.quote(str(layout))}\nuse flake {shlex.quote(f'{repo}#{lang}')}\n")
+
+
 def solution_files(root: Path):
     for path in root.rglob("*"):
         if any(part in BUILD_DIRS for part in path.relative_to(root).parts):
@@ -673,6 +678,7 @@ def begin(at: float, lang: str | None, problem: str | None, minutes: int | None 
         shutil.copyfile(prompt, dest / prompt.name)
     (dest / "HOWTO.org").write_text(HOWTO.format(lang=lang, problem=problem, minutes=budget // 60, main=known[lang]["main"], prompt=prompt.name))
     repo = Path(cfg["repo"])
+    write_envrc(repo, lang, dest)
     git(repo, "add", "--", str(dest))
     git(repo, "commit", "-q", "-m", f"interview: start {sid}", "--", str(dest))
     cur = {
