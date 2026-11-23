@@ -453,7 +453,7 @@ def publish_polarity(roles):
     for ini in config["gtkSettings"]:
         set_ini_key(Path(ini), "gtk-application-prefer-dark-theme", "true" if dark else "false")
     write_atomic(Path(config["kittyColours"]), kitty_colours(roles))
-    subprocess.run(["pkill", "-USR1", "-u", str(os.getuid()), "-f", "^kitty( |$)"], check=False)
+    subprocess.run(["pkill", "-USR1", "-u", str(os.getuid()), "-f", "^([^ ]*/)?kitty( |$)"], check=False)
 
 
 def apply(path, mode):
