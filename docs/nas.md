@@ -2304,7 +2304,7 @@ was applied.
 
 ```
 guest mc-server: minecraft-backup.timer (1 min)          pi
-flock -s /run/keep-running.lock
+flock /run/minecraft-backup.lock
 console save-off; save-all flush
 rsync --inplace --block-size=4096 ---------------------> rsyncd module (under the write lock)
 console save-on (ExecStopPost)                           post-xfer: mkcp -s, points(captured -> cno)
@@ -2316,8 +2316,12 @@ console save-on (ExecStopPost)                           post-xfer: mkcp -s, poi
 - The world is consistent only between `save-all flush` and `save-on`; the rsync runs inside that
   window (a few seconds; the game keeps running, only disk writes pause).
 - The guest owns the service: `/etc/systemd/system/minecraft-backup.{service,timer}` and
-  `/usr/local/libexec/minecraft-backup`. The timer is `WantedBy=` and `PartOf=minecraft.service`,
-  and the shared lock keeps idle shutdown from stopping the VM mid-pass.
+  `/usr/local/libexec/minecraft-backup`. The timer is `WantedBy=` and `PartOf=minecraft.service`.
+- A pass never counts as use: the idle check reads only `/run/keep-running.lock` and logins, so a
+  failing push cannot hold the desktop awake. The idle shutdown stops the guest timer, then waits
+  up to 2 minutes for a pass holding `/run/minecraft-backup.lock`, under a drain hold, before
+  `virsh shutdown`. rsync runs with `--contimeout=15 --timeout=60`, so a dead path fails in
+  seconds.
 - The guest pushes to `192.168.122.1:8020`; `vm-isolation` DNATs that to pi:8020 over `tailscale0`
   and libvirt masquerades it to desktopnew's tailnet address. Nothing else leaves the VPN and
   nothing can connect back in. The module is write-only and accepts only desktopnew.

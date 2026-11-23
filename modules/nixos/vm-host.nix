@@ -144,6 +144,7 @@ let
   };
 
   guestHoldLock = "/run/keep-running.lock";
+  guestBackupLock = "/run/minecraft-backup.lock";
 
   guestRun =
     name: path: args:
@@ -260,15 +261,32 @@ let
 
   virsh = "virsh -c qemu:///system";
 
+  guestBackupQuiesce = guestRun "backup-quiesce" "/usr/bin/sh" [
+    "-c"
+    ''
+      /usr/bin/systemctl stop minecraft-backup.timer 2>/dev/null || true
+      /usr/bin/lslocks -rn -o PATH | /usr/bin/grep -cx ${guestBackupLock} || true
+    ''
+  ];
+
+  backupWaitMinutes = 2;
+
   shutdownRun = pkgs.writeShellApplication {
     name = "${domainName}-shutdown-run";
     runtimeInputs = [
       config.virtualisation.libvirtd.package
       pkgs.coreutils
+      config.local.power.keepAwakePackage
     ];
     text = ''
       run=$1
       [ "$(${virsh} domid ${domainName} 2>/dev/null)" = "$run" ] || exit 0
+      for _ in $(seq ${toString (backupWaitMinutes * 6)}); do
+        [ "$(${lib.getExe guestBackupQuiesce} || echo 0)" = 0 ] && break
+        [ "$(${virsh} domid ${domainName} 2>/dev/null)" = "$run" ] || exit 0
+        keep-awake --take ${domainName} --drain --for 3m --why "${domainName} backup in progress" >/dev/null
+        sleep 10
+      done
       ${virsh} shutdown ${domainName}
       for _ in $(seq ${toString (shutdownGraceMinutes * 12)}); do
         [ "$(${virsh} domid ${domainName} 2>/dev/null)" = "$run" ] || exit 0
