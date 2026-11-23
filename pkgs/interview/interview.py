@@ -30,6 +30,7 @@ CONFIG_PATH = Path(os.environ.get("INTERVIEW_CONFIG") or env_dir("XDG_CONFIG_HOM
 STATE = Path(os.environ.get("INTERVIEW_STATE") or env_dir("XDG_STATE_HOME", ".local/state") / "interview")
 CURRENT = STATE / "current.json"
 EVENTS = STATE / "events.jsonl"
+ENDED = STATE / "ended.json"
 LOG = STATE / "log.jsonl"
 LOCK = STATE / "lock"
 SNOOZE = STATE / "snooze"
@@ -60,15 +61,23 @@ EVENT_GUIDE = {
     "FINISH_APPROVED": "You approved finishing early; the candidate can now press Finish early, or run `interview done` yourself if they asked to finish.",
     "HINT": "The candidate took the next ladder rung themselves; do not repeat it, build on it.",
     "CODING_OVER": "Coding phase over and the submission is frozen. Stop coaching and run /review now.",
-    "RECORDS": "The candidate pressed End interview: the discussion is over. Write the records now (review steps 6 to 10), then run `interview close`, which counts the interview and closes this window.",
-    "REVIEW_OVER": "Interview closed and logged; the interviewer window and the session's Emacs buffers close now.",
+    "RECORDS": "The candidate pressed End interview: the interview is counted and logged, and the discussion is over. Write the records now (review steps 6 to 10; `interview hint --all` and `interview bench` still work on this session), then run `interview close`, which closes this window.",
+    "REVIEW_OVER": "Interview over; the interviewer window and the session's Emacs buffers close now.",
 }
 
 
 def track_entry(name: str, langs: list[str], context: str = "", difficulty: str = "easy-medium",
-                enabled: bool = True, coding_minutes: int | None = None, syntax_notes: bool = False, **_) -> dict:
+                enabled: bool = True, coding_minutes: int | None = None, syntax_notes: bool = False,
+                review_sections: list[str] | None = None, **_) -> dict:
     return {"name": name, "langs": list(langs), "context": context, "difficulty": difficulty, "enabled": enabled,
-            "coding_minutes": coding_minutes, "syntax_notes": syntax_notes}
+            "coding_minutes": coding_minutes, "syntax_notes": syntax_notes,
+            "review_sections": None if review_sections is None else list(review_sections)}
+
+
+def review_sections(cfg: dict, track: str | None) -> list[str]:
+    entry = next((t for t in cfg["tracks"] if t["name"] == track), {})
+    sections = entry.get("review_sections")
+    return cfg["review_sections"] if sections is None else sections
 
 
 def track_minutes(cfg: dict, track: str | None, key: str) -> int:
@@ -89,6 +98,7 @@ def base_config() -> dict:
         "coding_minutes": 45,
         "required_per_day": 2,
         "context": "",
+        "review_sections": ["Mistakes", "Further optimisation"],
         "lockdown": True,
         "tracks": {"ocaml": ["ocaml"], "systems": ["rust", "c"], "managed": ["csharp", "python"]},
         "on_pause": None,
@@ -117,6 +127,7 @@ def editable(cfg: dict) -> dict:
         "snooze_minutes": auto["snooze_minutes"],
         "required_per_day": cfg["required_per_day"],
         "context": cfg.get("context", ""),
+        "review_sections": cfg["review_sections"],
         "tracks": cfg["tracks"],
     }
 
@@ -127,7 +138,7 @@ def overlay(cfg: dict, settings: dict) -> dict:
                         ("break_minutes", "break_minutes"), ("snooze_minutes", "snooze_minutes")):
         if key in settings:
             auto[target] = settings[key]
-    for key in ("lockdown", "coding_minutes", "required_per_day", "context"):
+    for key in ("lockdown", "coding_minutes", "required_per_day", "context", "review_sections"):
         if key in settings:
             cfg[key] = settings[key]
     if "tracks" in settings:
@@ -322,27 +333,7 @@ Filled in during the review. Compare against {solutions} beside it.
 - hints used: {hints}
 - extended: {extended}
 
-* My approach
-
-- method:
-- time and space:
-
-* Against the listed solutions
-
-- closest listed method:
-- what the better method does that mine does not:
-
-* Mistakes and slow spots
-
--
-
-* Three improvements
-
-1.
-2.
-3.
-
-* Revisit
+{sections}* Revisit
 
 - redo in =improved/= (~interview revisit {dir}~)? yes / no
 """
@@ -367,11 +358,26 @@ def open_review(cur: dict, early: bool) -> None:
             shutil.copyfile(solutions, session / solutions.name)
         review = doc(session, "review")
         if not review.exists():
-            review.write_text(REVIEW_TEMPLATE.format(
+            text = REVIEW_TEMPLATE.format(
                 lang=cur["lang"], problem=cur["problem"], dir=cur["dir"], solutions=solutions.name,
                 how="early" if early else "at time", minutes=round(cur["used_before"] / 60),
                 hidden=cur.get("hidden_tests") or "not run", benchmark=cur.get("benchmark") or "not run", hints=len(cur.get("hints", [])),
-                extended=extensions_line(cur)))
+                extended=extensions_line(cur),
+                sections="".join(f"* {name}\n\n-\n\n" for name in review_sections(config(), cur["track"])))
+            review.write_text(text)
+            cur["review_template"] = hashlib.sha256(text.encode()).hexdigest()
+
+
+def review_blank(session: Path) -> bool:
+    try:
+        template = json.loads((session / ".interview.json").read_text()).get("review_template")
+        return template is not None and hashlib.sha256(doc(session, "review").read_bytes()).hexdigest() == template
+    except (OSError, ValueError):
+        return False
+
+
+def unreviewed_on(date: str) -> list[Path]:
+    return [doc(Path(e["dir"]), "review") for e in completed_on(date) if e.get("dir") and review_blank(Path(e["dir"]))]
 
 
 def end_coding(cur: dict, at: float, early: bool) -> dict:
@@ -392,7 +398,7 @@ def end_coding(cur: dict, at: float, early: bool) -> dict:
     return cur
 
 
-def finish(cur: dict, at: float, reason: str) -> None:
+def finish(cur: dict, at: float, event: str, reason: str) -> None:
     review_end = cur.get("review_ended") or at
     log("review", cur, cur["review_started"], review_end)
     log("complete", cur, cur["started"], at,
@@ -404,12 +410,25 @@ def finish(cur: dict, at: float, reason: str) -> None:
     meta["finished"] = iso(at)
     with contextlib.suppress(OSError):
         Path(cur["dir"], ".interview.json").write_text(json.dumps(meta, indent=2))
-    emit(cur, "REVIEW_OVER", reason)
+    emit(cur, event, reason)
+    ENDED.write_text(json.dumps(meta))
     save_current(None)
-    cfg = config()
-    run_hook(cfg["on_complete"])
-    if cfg["on_close"]:
-        run_hook([*cfg["on_close"], cur["dir"]])
+    run_hook(config()["on_complete"])
+
+
+def close_windows(ended: dict) -> None:
+    ENDED.unlink(missing_ok=True)
+    emit(ended, "REVIEW_OVER", "closed")
+    hook = config()["on_close"]
+    if hook:
+        run_hook([*hook, ended["dir"]])
+
+
+def last_ended() -> dict | None:
+    try:
+        return json.loads(ENDED.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def tick(at: float) -> None:
@@ -516,6 +535,7 @@ def status_dict(at: float) -> dict:
         "now": iso(at),
         "date": today,
         "completed_today": len({e["track"] for e in completed_on(today)}),
+        "unreviewed": [str(p) for p in unreviewed_on(today)],
         "required_per_day": cfg["required_per_day"],
         "phase": "idle",
         "interview_day": interview_day(at),
@@ -545,7 +565,7 @@ def status_dict(at: float) -> dict:
                 cur.get("hidden_tests") == "pass" and cur.get("hidden_digest") == digest(Path(cur["dir"])))
         if cur["phase"] in ("coding", "paused"):
             out["coding_left"] = max(0, round(coding_left(cur, at)))
-        if cur["phase"] in ("review", "records"):
+        if cur["phase"] == "review":
             out["review_started"] = cur["review_started"]
             out["review_elapsed"] = round(at - cur["review_started"])
     return out
@@ -556,15 +576,14 @@ def status_line(s: dict) -> str:
     if s["phase"] == "idle":
         if not s["interview_day"]:
             return f"[interview clock {s['now']}] No interviews today; nothing is due."
-        return head + " No interview running."
+        blank = "".join(f" Review {r} is still the blank template: it must be filled in before the next interview or the unlock." for r in s["unreviewed"])
+        return head + " No interview running." + blank
     where = f"{s['lang']} {s['problem']} ({s['dir']})"
     if s["phase"] == "coding":
         approved = " Finishing early is allowed (approved or hidden tests pass)." if s.get("can_finish") else ""
         return head + f" CODING {where}: {s['coding_left'] // 60}m{s['coding_left'] % 60:02d}s of coding left; scope every request to fit.{approved}"
     if s["phase"] == "paused":
         return head + f" PAUSED {where}: clock stopped with {s['coding_left'] // 60}m{s['coding_left'] % 60:02d}s left; candidate is with the tutor."
-    if s["phase"] == "records":
-        return head + f" RECORDS {where}: the candidate ended the review; write the records, then `interview close`."
     return head + f" REVIEW {where}: {s['review_elapsed'] // 60}m{s['review_elapsed'] % 60:02d}s in, no time limit; it ends when the candidate presses End interview; submission frozen at tag sub/{s['session']}."
 
 
@@ -593,8 +612,9 @@ benchmark runs large inputs against a time limit per case; meeting it is the ide
 a requirement. When coding ends the files freeze, and the solutions (a short list of methods with
 their complexity) and a review template appear here. During review, ~interview submit-tests~ shows
 the full hidden output and ~interview hint --all~ the whole ladder with its follow-ups. The review
-has no time limit: when it is over, press End interview; the interviewer writes the records and
-closes the interview.
+has no time limit: End interview counts it at once; the interviewer then writes the records, or
+you fill in the review file yourself. It must differ from its template before the next interview
+starts or the day unlocks.
 """
 
 
@@ -624,6 +644,9 @@ def begin(at: float, lang: str | None, problem: str | None, minutes: int | None 
     known = languages(cfg["repo"])
     if load_current():
         return "an interview is already running; see `interview status`"
+    blank = unreviewed_on(day_of(at))
+    if blank:
+        return f"fill in {blank[0]} first: it is still the blank template"
     if not problem:
         if lang is not None and lang not in known and lang not in {t["name"] for t in cfg["tracks"]}:
             return f"unknown track or language {lang}"
@@ -869,27 +892,31 @@ def cmd_extend(args) -> int:
 
 
 def do_end(cur: dict, at: float):
-    if cur["phase"] == "records":
-        finish(cur, at, "ended by the candidate while records were being written")
-        return "interview complete"
     if cur["phase"] != "review":
         print(f"cannot end during {cur['phase']}; the review starts when coding finishes", file=sys.stderr)
         return 1
-    cur["phase"] = "records"
     cur["review_ended"] = at
-    save_current(cur)
-    emit(cur, "RECORDS", f"review ended after {round((at - cur['review_started']) / 60)} minutes")
-    return "review ended; the interviewer is writing the records and closes the interview when done"
+    finish(cur, at, "RECORDS", f"review ended after {round((at - cur['review_started']) / 60)} minutes")
+    return "interview complete and counted; the interviewer writes the records, then `interview close` closes its window"
 
 
-def do_close(cur: dict, at: float):
-    if cur["phase"] not in ("review", "records"):
-        print(f"cannot close during {cur['phase']}; finish coding first with `interview done`", file=sys.stderr)
+def cmd_close(args) -> int:
+    at = now()
+    with locked():
+        cur = load_current()
+        if cur and cur["phase"] != "review":
+            print(f"cannot close during {cur['phase']}; finish coding first with `interview done`", file=sys.stderr)
+            return 1
+        if cur:
+            cur["review_ended"] = at
+            finish(cur, at, "RECORDS", "closed by the interviewer")
+        ended = last_ended()
+    if not ended:
+        print("nothing to close", file=sys.stderr)
         return 1
-    if cur["phase"] == "review":
-        cur["review_ended"] = at
-    finish(cur, at, "records written")
-    return "interview complete"
+    close_windows(ended)
+    print("interview closed")
+    return 0
 
 
 def cmd_abandon(args) -> int:
@@ -941,12 +968,150 @@ def session_dir(arg: str | None) -> Path:
     cur = load_current()
     if cur:
         return Path(cur["dir"])
+    ended = last_ended()
+    if ended:
+        return Path(ended["dir"])
     raise SystemExit("no interview running; pass a session directory")
+
+
+TEST_ENV = {"NO_COLOR": "1", "CARGO_TERM_COLOR": "never", "PYTEST_ADDOPTS": "-vv -rfE --tb=short", "DOTNET_NOLOGO": "1"}
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
+DIAGNOSTIC = re.compile(r"^(\S+:\d+:\d+: (?P<c>warning|error|fatal error|note)|(?P<r>warning|error)(\[\w+\])?:|\S+\(\d+,\d+\): (?P<cs>warning|error) |File \"[^\"]+\", line \d+)")
+
+
+def recipe_lines(session: Path) -> set[str]:
+    lines, inside = set(), False
+    with contextlib.suppress(OSError):
+        for line in (session / "justfile").read_text().splitlines():
+            if re.match(r"^test\s*:", line):
+                inside = True
+            elif inside and line[:1] in (" ", "\t"):
+                lines.add(line.strip().lstrip("@-").strip())
+            elif inside and line.strip():
+                inside = False
+    return lines
+
+
+def clean_output(raw: str, session: Path) -> list[str]:
+    echoes = recipe_lines(session)
+    out = []
+    for line in ANSI.sub("", raw).replace("\r", "\n").splitlines():
+        line = re.sub(r"⏱ \d+s", "", line).replace(f"{session}/", "").rstrip()
+        if line in echoes or re.match(r"^(Finished at |error: recipe `|warning: Nix search path)", line):
+            continue
+        out.append(line)
+    return out
+
+
+def pytest_message(message: str) -> str:
+    m = re.search(r"assert (.+?) == (.+)$", message)
+    return f"expected {m[2]}, got {m[1]}" if m else message
+
+
+def rust_tests(session: Path) -> list[str]:
+    names = []
+    for path in sorted((session / "tests").glob("*.rs")):
+        with contextlib.suppress(OSError):
+            names += re.findall(r"#\[test\]\s*fn\s+(\w+)", path.read_text())
+    return names
+
+
+def rust_failures(lines: list[str]) -> dict[str, str]:
+    failures, name, body = {}, None, []
+
+    def close():
+        if name is None:
+            return
+        text = "\n".join(body)
+        left, right = re.search(r"^\s*left: (.*)$", text, re.M), re.search(r"^\s*right: (.*)$", text, re.M)
+        if left and right:
+            failures[name] = f"expected {right[1]}, got {left[1]}"
+        else:
+            after = [b.strip() for b in body if b.strip() and not b.startswith(("thread ", "note: "))]
+            failures[name] = after[0] if after else "panicked"
+    for line in lines:
+        m = re.match(r"^---- (\S+) stdout ----$", line)
+        if m:
+            close()
+            name, body = m[1], []
+        elif name is not None and (line == "failures:" or line.startswith("test result:")):
+            close()
+            name = None
+        elif name is not None:
+            body.append(line)
+    close()
+    return failures
+
+
+def parse_cases(lines: list[str], session: Path) -> list[tuple[str, bool, str]]:
+    cases = []
+    for line in lines:
+        m = re.match(r"^(PASS|FAIL) case (\S+?):?(?: (.*))?$", line)
+        if m:
+            cases.append((m[2], m[1] == "PASS", m[3] or ""))
+    if cases:
+        return cases
+    pytest = [(m[1], m[2]) for m in (re.match(r"^\S+\.py::(\S+) (PASSED|FAILED|ERROR)\b", line) for line in lines) if m]
+    if pytest:
+        reasons, block = {}, None
+        for line in lines:
+            header = re.match(r"^_{3,} (\S+) _{3,}$", line)
+            if header:
+                block = header[1]
+            elif block and line.startswith("E ") and line[1:].strip():
+                reasons.setdefault(block, pytest_message(line[1:].strip()))
+            m = re.match(r"^(?:FAILED|ERROR) \S+\.py::(\S+)(?: - (.*))?$", line)
+            if m:
+                reasons.setdefault(m[1], pytest_message(m[2] or ""))
+        return [(str(i), status == "PASSED", reasons.get(name, "")) for i, (name, status) in enumerate(pytest)]
+    if any(line.startswith("test result:") for line in lines):
+        failures = rust_failures(lines)
+        return [(name.removeprefix("visible_"), name not in failures, failures.get(name, "")) for name in rust_tests(session)]
+    return []
+
+
+def diagnostics(lines: list[str]) -> list[str]:
+    out, keep = [], False
+    for line in lines:
+        m = DIAGNOSTIC.match(line)
+        if m:
+            kind = m["c"] or m["r"] or m["cs"]
+            keep = kind is None or "error" in kind
+        elif not line.strip() and keep and out and out[-1] == "":
+            continue
+        if keep and line not in out[-40:]:
+            out.append(line)
+    return out
+
+
+def report_tests(code: int | None, raw: str, session: Path) -> int:
+    lines = clean_output(raw, session)
+    cases = parse_cases(lines, session)
+    if code is None:
+        print("the tests did not finish in time; is there an infinite loop?")
+    if not cases:
+        errors = diagnostics(lines) or [line[1:].strip() for line in lines if line.startswith("E ")]
+        print("did not compile:" if errors else "no test results; the output ends:")
+        print("\n".join(errors or [line for line in lines if line.strip()][-30:]))
+        return 1
+    width = max(len(c[0]) for c in cases)
+    for name, ok, detail in cases:
+        print(f"case {name:>{width}}  {'pass' if ok else 'FAIL'}{'  ' + detail if detail and not ok else ''}")
+    passed = sum(ok for _, ok, _ in cases)
+    if code != 0 and passed == len(cases):
+        print("the run failed after the cases; the output ends:")
+        print("\n".join([line for line in diagnostics(lines) or lines if line.strip()][-15:]))
+    print(f"{passed}/{len(cases)} passed")
+    return 0 if code == 0 and passed == len(cases) else 1
 
 
 def cmd_run(args) -> int:
     session = session_dir(args.dir)
-    return nix_run(Path(config()["repo"]), session, ["just", "test"], session_lang(session))
+    command = in_shell(Path(config()["repo"]), session_lang(session), ["just", "test"])
+    if args.raw:
+        return subprocess.run(command, cwd=session).returncode
+    code, raw = run_capped(command, session, HIDDEN_SECONDS, env=TEST_ENV)
+    return report_tests(code, raw, session)
 
 
 def test_counts(output: str) -> str:
@@ -986,8 +1151,9 @@ def kill_group(proc: subprocess.Popen) -> None:
     proc.wait()
 
 
-def run_capped(command: list[str], cwd: Path, seconds: float) -> tuple[int | None, str]:
-    proc = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+def run_capped(command: list[str], cwd: Path, seconds: float, env: dict | None = None) -> tuple[int | None, str]:
+    proc = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
+                            start_new_session=True, env={**os.environ, **env} if env else None)
     try:
         out, _ = proc.communicate(timeout=seconds)
         return proc.returncode, out
@@ -1158,6 +1324,18 @@ def cmd_submit_tests(args) -> int:
     if secret and hidden_result == "pass" and meta["phase"] == "coding":
         print("you may finish early now with `interview done` (or keep improving)")
     return 0 if hidden_result == "pass" else 1
+
+
+def cmd_submit(args) -> int:
+    cur = load_current()
+    if not cur or cur["phase"] not in ("coding", "paused"):
+        print("submit works only while coding; see `interview status`", file=sys.stderr)
+        return 1
+    args.dir, args.show = None, False
+    if cmd_submit_tests(args) != 0:
+        print("not submitted: the hidden tests must pass (the benchmark is optional); keep coding")
+        return 1
+    return mutate(do_done)
 
 
 ALIAS_LANGS = {"ocaml": "let {fn} = {expr}", "python": "{fn} = {expr}"}
@@ -1390,7 +1568,7 @@ def cmd_bench(args) -> int:
     if cur and cur["phase"] in ("coding", "paused"):
         print("benchmarks run once the coding phase is over", file=sys.stderr)
         return 1
-    meta = json.loads((session / ".interview.json").read_text())
+    meta = cur if cur and Path(cur["dir"]) == session else json.loads((session / ".interview.json").read_text())
     lang, problem = meta["lang"], meta["problem"]
     fn = args.target or target_name(problem, lang)
     versions = [("submitted", None)]
@@ -1457,13 +1635,13 @@ def for_lang(rungs: list[str], lang: str) -> list[str]:
 
 def cmd_hint(args) -> int:
     with locked():
-        cur = load_current()
+        cur = load_current() or (last_ended() if args.all else None)
         if not cur:
             print("no interview running", file=sys.stderr)
             return 1
         rungs = for_lang(ladder_rungs(cur["problem"]), cur["lang"])
         if args.all:
-            if cur["phase"] not in ("review", "records"):
+            if cur["phase"] != "review":
                 print("the whole ladder opens during review; `interview hint` gives the next rung", file=sys.stderr)
                 return 1
             for n, rung in enumerate(rungs, 1):
@@ -1532,8 +1710,12 @@ def cmd_today(args) -> int:
 
 
 def cmd_check_day(args) -> int:
-    done = len({e["track"] for e in completed_on(day_of(now()))})
-    return 0 if done >= config()["required_per_day"] else 1
+    today = day_of(now())
+    done = len({e["track"] for e in completed_on(today)})
+    blank = unreviewed_on(today)
+    for review in blank:
+        print(f"{review} is still the blank template; fill it in to unlock", file=sys.stderr)
+    return 0 if done >= config()["required_per_day"] and not blank else 1
 
 
 def problems_list() -> list[dict]:
@@ -1573,7 +1755,7 @@ def cmd_log(args) -> int:
             entries.append({"kind": "coding", "date": day_of(cur["started"]), "start": iso(cur["started"]), "seconds": round(coding_used(cur, at)), "session": cur["id"], "track": cur["track"], "lang": cur["lang"], "problem": cur["problem"], "live": True})
         if cur["phase"] == "paused":
             entries.append({"kind": "paused", "date": day_of(cur["pause_started"]), "start": iso(cur["pause_started"]), "seconds": round(at - cur["pause_started"]), "session": cur["id"], "track": cur["track"], "lang": cur["lang"], "problem": cur["problem"], "live": True})
-        if cur["phase"] in ("review", "records"):
+        if cur["phase"] == "review":
             entries.append({"kind": "review", "date": day_of(cur["review_started"]), "start": iso(cur["review_started"]), "seconds": round((cur.get("review_ended") or at) - cur["review_started"]), "session": cur["id"], "track": cur["track"], "lang": cur["lang"], "problem": cur["problem"], "live": True})
     since = (dt.date.fromtimestamp(at) - dt.timedelta(days=args.days - 1)).isoformat()
     days: dict[str, dict] = {}
@@ -1608,8 +1790,10 @@ def cmd_log(args) -> int:
                                  tail=v["tail"], cases=[{k: c.get(k) for k in ("seconds", "status", "met", "ratio")} for c in v["cases"]])
                     versions.append(entry)
             s.update(complete=True, early=e.get("early"), hidden_tests=e.get("hidden_tests"), benchmark=e.get("benchmark"), dir=e.get("dir"),
-                     review_doc=str(review) if review.exists() else None, versions=versions, bench_cases=cases)
+                     review_doc=str(review) if review.exists() else None, review_blank=review_blank(sdir),
+                     versions=versions, bench_cases=cases)
             d["completed"] += 1
+            d["unreviewed"] = d.get("unreviewed", 0) + review_blank(sdir)
         if e.get("live"):
             s["live"] = True
     for d in days.values():
@@ -1658,6 +1842,17 @@ def check_settings(raw: dict, known: dict) -> tuple[dict, list[str]]:
     context = raw.get("context", "")
     if need(isinstance(context, str) and len(context) <= 4000, "context: text of at most 4000 characters"):
         out["context"] = context.strip()
+
+    def headings(value):
+        if isinstance(value, list) and all(isinstance(v, str) and "\n" not in v for v in value):
+            kept = [v.strip() for v in value if v.strip()]
+            if 1 <= len(kept) <= 12 and all(len(v) <= 60 for v in kept):
+                return kept
+        return None
+
+    sections = headings(raw.get("review_sections", base_config()["review_sections"]))
+    if need(sections is not None, "review_sections: 1 to 12 headings of at most 60 characters"):
+        out["review_sections"] = sections
     tracks = raw.get("tracks")
     names = set()
     cleaned = []
@@ -1681,6 +1876,8 @@ def check_settings(raw: dict, known: dict) -> tuple[dict, list[str]]:
             need(t.get("difficulty", "easy-medium") in DIFFICULTIES, f"{label}: difficulty one of {', '.join(DIFFICULTIES)}")
             need(isinstance(t.get("enabled", True), bool), f"{label}: enabled true or false")
             need(isinstance(t.get("syntax_notes", False), bool), f"{label}: syntax_notes true or false")
+            track_sections = headings(t.get("review_sections"))
+            need(t.get("review_sections") is None or track_sections is not None, f"{label}: review_sections empty for the default, or 1 to 12 headings of at most 60 characters")
             lengths = {}
             for key, low, high in (("coding_minutes", 5, 240),):
                 value = t.get(key)
@@ -1690,7 +1887,8 @@ def check_settings(raw: dict, known: dict) -> tuple[dict, list[str]]:
             if good_langs and isinstance(name, str) and isinstance(track_context, str):
                 cleaned.append(track_entry(name, list(dict.fromkeys(langs)), context=track_context.strip(),
                                            difficulty=t.get("difficulty", "easy-medium"), enabled=t.get("enabled", True),
-                                           syntax_notes=t.get("syntax_notes", False), **lengths))
+                                           syntax_notes=t.get("syntax_notes", False),
+                                           review_sections=track_sections, **lengths))
         enabled = [t for t in cleaned if t["enabled"]]
         need(len(enabled) > 0, "tracks: at least one enabled")
         out["tracks"] = cleaned
@@ -1729,9 +1927,10 @@ def cmd_settings(args) -> int:
             print(f"{s['coding_minutes']} min coding, review until ended, {s['break_minutes']} min break; {s['required_per_day']} of {len([t for t in s['tracks'] if t['enabled']])} questions required")
             print("always: " + " ".join(doc["rules"]))
             print(f"style: {s['context'] or '(none)'}")
+            print(f"review sections: {', '.join(s['review_sections'])}")
             for t in s["tracks"]:
                 lengths = "".join(f"; {t[k]} min {k.split('_')[0]}" for k in ("coding_minutes",) if t[k] is not None)
-                print(f"track {t['name']}{'' if t['enabled'] else ' (off)'}: {', '.join(t['langs'])}; {t['difficulty']}{lengths}{'; syntax notes' if t['syntax_notes'] else ''}; {t['context'] or '(no extra context)'}")
+                print(f"track {t['name']}{'' if t['enabled'] else ' (off)'}: {', '.join(t['langs'])}; {t['difficulty']}{lengths}{'; syntax notes' if t['syntax_notes'] else ''}{'; review ' + ', '.join(t['review_sections']) if t['review_sections'] is not None else ''}; {t['context'] or '(no extra context)'}")
             print("settings: " + ("customised in the desktop UI" if doc["customised"] else "nix defaults"))
         return 0
     password = lockdown_password(base)
@@ -1868,7 +2067,7 @@ def main() -> int:
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_langs)
 
-    for name, fn in (("pause", do_pause), ("resume", do_resume), ("toggle", do_toggle), ("done", do_done), ("end", do_end), ("close", do_close)):
+    for name, fn in (("pause", do_pause), ("resume", do_resume), ("toggle", do_toggle), ("done", do_done), ("end", do_end)):
         p = sub.add_parser(name)
         p.set_defaults(fn=lambda _a, fn=fn: mutate(fn))
 
@@ -1907,12 +2106,19 @@ def main() -> int:
 
     p = sub.add_parser("run", help="run the visible tests")
     p.add_argument("dir", nargs="?")
+    p.add_argument("--raw", action="store_true", help="show the test tool's own output")
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("submit-tests", help="run the hidden tests")
     p.add_argument("dir", nargs="?")
     p.add_argument("--show", action="store_true", help="print the full output even while coding")
     p.set_defaults(fn=cmd_submit_tests)
+
+    p = sub.add_parser("close", help="close the interviewer window and the session's Emacs buffers; during review it ends the interview first")
+    p.set_defaults(fn=cmd_close)
+
+    p = sub.add_parser("submit", help="run the hidden tests and, if they pass, finish coding and start the review; the benchmark is optional")
+    p.set_defaults(fn=cmd_submit)
 
     p = sub.add_parser("hint", help="reveal the next ladder hint; --all shows the whole ladder during review")
     p.add_argument("--all", action="store_true")

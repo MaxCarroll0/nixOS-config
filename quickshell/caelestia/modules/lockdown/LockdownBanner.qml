@@ -90,10 +90,10 @@ Scope {
                         elide: Text.ElideRight
                         text: {
                             const done = `${Practice.completedToday}/${Practice.required} done today`;
+                            if (!Practice.active && Practice.unreviewed > 0)
+                                return `${done} · fill in the blank review.org first`;
                             if (!Practice.active)
                                 return `${done} · no interview running`;
-                            if (Practice.phase === "records")
-                                return `${done} · interviewer writing records`;
                             if (Practice.phase === "review")
                                 return `${done} · review ${Practice.clock(Practice.left)} in, End interview when done`;
                             return `${done} · ${Practice.phase} ${Practice.clock(Practice.left)} left`;
@@ -102,7 +102,7 @@ Scope {
                 }
 
                 Repeater {
-                    model: root.active?.actions ?? []
+                    model: (root.active?.actions ?? []).filter(a => !(a.phases ?? []).length || a.phases.includes(Practice.phase))
 
                     TextButton {
                         required property var modelData

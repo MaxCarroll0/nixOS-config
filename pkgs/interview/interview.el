@@ -22,6 +22,13 @@
     (seq-find (lambda (frame) (and (window-system frame) (frame-visible-p frame)))
               (frame-list))))
 
+(defun interview-compile (dir command)
+  (when-let* ((frame (interview--graphical-frame)))
+    (select-frame-set-input-focus frame))
+  (let ((default-directory (file-name-as-directory dir))
+        (compilation-buffer-name-function (lambda (_) "*interview tests*")))
+    (compile command)))
+
 (defun interview-open-session (prompt main)
   (when-let* ((frame (interview--graphical-frame)))
     (select-frame-set-input-focus frame))

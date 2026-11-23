@@ -106,6 +106,10 @@ in
     coding_minutes = 45;
     required_per_day = 2;
     lockdown = true;
+    review_sections = [
+      "Mistakes"
+      "Further optimisation"
+    ];
     context = "LeetCode-style: well-known algorithm and data-structure classics, climbing the curriculum topic ladder from arrays and hashing to dynamic programming.";
     tracks = [
       {
@@ -122,6 +126,11 @@ in
         ];
         difficulty = "easy";
         syntax_notes = true;
+        review_sections = [
+          "Mistakes"
+          "Further optimisation"
+          "Taught"
+        ];
         context = "Beginner in Rust and C: keep problems small. The prompt's notes never hint at the approach or the algorithm; they only introduce syntax the problem needs that is new to the candidate, each item in a line or two (ownership and borrowing in Rust; pointers, lengths and memory in C). Leave out anything TAUGHT.md already covers, except syntax taught in the last couple of interviews, which gets a one-line reminder. Keep the notes short: the interviewer explains the syntax in conversation.";
       }
       {
@@ -231,6 +240,22 @@ in
         command = [ (hook "focus") ];
       }
       {
+        label = "Run tests";
+        command = [
+          (hook "bar-test")
+          "run"
+        ];
+        phases = [ "coding" ];
+      }
+      {
+        label = "Submit";
+        command = [
+          (hook "bar-test")
+          "submit"
+        ];
+        phases = [ "coding" ];
+      }
+      {
         label = "Start next";
         command = [
           interviewExe
@@ -251,6 +276,7 @@ in
           interviewExe
           "end"
         ];
+        phases = [ "review" ];
       }
     ];
     binds = [

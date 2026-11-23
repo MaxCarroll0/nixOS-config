@@ -1,15 +1,11 @@
--- Lockdown enforcement: stashes every window older than the lockdown except the substate's own, closes new app windows outside the allowlist and holds the profile's submap.
+-- Lockdown enforcement: stashes every window older than the lockdown except the substate's own, leaves new windows open and holds the profile's submap.
 
 local M = {
     source = nil,
     active = nil,
     kb_options = nil,
-    before = {},
     submaps = {},
     keep = {},
-    spare = {},
-    stray_check_ms = 1500,
-    stray_kill_ms = 3000,
 }
 
 local runtime = (os.getenv("XDG_RUNTIME_DIR") or "/run/user/1000") .. "/lockdown/active.lua"
@@ -78,57 +74,6 @@ end
 
 local function move(window, target)
     hl.dispatch(hl.dsp.window.move({ workspace = target, follow = false, window = window }))
-end
-
-local function kept(window)
-    return any_match(M.keep[M.active.profile], window) or any_match(M.spare, window)
-end
-
-local function command_name(pid)
-    local file = io.open("/proc/" .. pid .. "/comm", "r")
-    if not file then return "" end
-    local name = file:read("l") or ""
-    file:close()
-    return name
-end
-
-local function cgroup(pid)
-    local file = io.open("/proc/" .. pid .. "/cgroup", "r")
-    if not file then return "" end
-    local text = file:read("a") or ""
-    file:close()
-    return text
-end
-
-local function parent(pid)
-    local file = io.open("/proc/" .. pid .. "/stat", "r")
-    if not file then return nil end
-    local text = file:read("a") or ""
-    file:close()
-    return tonumber(text:match("%) %S+ (%d+)"))
-end
-
-local function desktop(window)
-    if not (window.pid and window.pid > 1) or not cgroup(window.pid):match("/session%.slice/") then return false end
-    local ppid = parent(window.pid)
-    return ppid ~= nil and command_name(ppid) == "systemd"
-end
-
-local function protected(window)
-    if not window.pid or window.pid <= 1 or (window.class or "") == "" or kept(window) or desktop(window) then return true end
-    if command_name(window.pid):match("^emacs") then return true end
-    for _, other in ipairs(hl.get_windows()) do
-        if other.pid == window.pid and (M.before[other.address] or kept(other)) then return true end
-    end
-    return false
-end
-
-local function reap(pid, signal, next_signal)
-    if not M.active then return end
-    hl.dispatch(hl.dsp.exec_cmd(string.format("kill -%s %d", signal, pid)))
-    if next_signal then
-        hl.timer(function() reap(pid, next_signal, nil) end, { timeout = M.stray_kill_ms, type = "oneshot" })
-    end
 end
 
 local function free_workspace(taken)
@@ -225,8 +170,6 @@ local function enforce()
 end
 
 local function engage()
-    M.before = {}
-    for _, window in ipairs(hl.get_windows()) do M.before[window.address] = true end
     if M.kb_options == nil then
         M.kb_options = hl.get_config("input.kb_options") or ""
         local opts = M.kb_options == "" and "srvrkeys:none" or (M.kb_options .. ",srvrkeys:none")
@@ -239,7 +182,6 @@ end
 
 local function release()
     rehome()
-    M.before = {}
     if M.kb_options ~= nil then
         hl.config({ ["input.kb_options"] = M.kb_options })
         M.kb_options = nil
@@ -269,14 +211,7 @@ end
 hl.on("window.open", function(window)
     poll()
     if not M.active then return end
-    if not allowed(window) and not desktop(window) then
-        local pid = not protected(window) and window.pid
-        hl.dispatch(hl.dsp.window.close({ window = "address:" .. window.address }))
-        if pid then
-            hl.timer(function() reap(pid, "TERM", "KILL") end, { timeout = M.stray_check_ms, type = "oneshot" })
-        end
-        return
-    end
+    if not allowed(window) then return end
     hl.timer(function()
         if not M.active then return end
         if not on(window, M.active.workspace) then move(window, home()) end

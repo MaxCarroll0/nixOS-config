@@ -37,7 +37,8 @@ ColumnLayout {
     StyledText {
         Layout.fillWidth: true
         text: {
-            const done = `${Practice.completedToday}/${Practice.required} today, ${Practice.hours(Practice.todaySeconds)} practised`;
+            const base = `${Practice.completedToday}/${Practice.required} today, ${Practice.hours(Practice.todaySeconds)} practised`;
+            const done = Practice.unreviewed > 0 ? `${base}. Fill in the blank review.org before the next interview` : base;
             if (!Practice.locked)
                 return done;
             return `${done}. Locked: ${Practice.lockdown.message || Practice.lockdown.profile}`;
@@ -93,7 +94,7 @@ ColumnLayout {
 
             StyledText {
                 Layout.fillWidth: true
-                text: Practice.phase === "records" ? "The interviewer is writing the records; the interview counts and its windows close when they finish." : Practice.phase === "review" ? "Submission frozen; reviewing with the interviewer, no time limit. End interview when you are done." : Practice.phase === "paused" ? "Clock stopped. The tutor window is up; SUPER+F5 resumes." : `Paused ${Practice.hours(root.cur?.pause_seconds ?? 0)} so far. ${Practice.finishApproved ? "Finishing early is allowed." : "Finish early: pass interview submit-tests, or ask the interviewer."}`
+                text: Practice.phase === "review" ? "Submission frozen; reviewing with the interviewer, no time limit. End interview when you are done." : Practice.phase === "paused" ? "Clock stopped. The tutor window is up; SUPER+F5 resumes." : `Paused ${Practice.hours(root.cur?.pause_seconds ?? 0)} so far. ${Practice.finishApproved ? "Finishing early is allowed." : "Finish early: pass interview submit-tests, or ask the interviewer."}`
                 color: Colours.palette.m3onSurfaceVariant
                 font: Tokens.font.body.small
                 wrapMode: Text.WordWrap
@@ -131,8 +132,8 @@ ColumnLayout {
     IconTextButton {
         Layout.fillWidth: true
         visible: Practice.reviewing
-        icon: Practice.phase === "records" ? "close" : "done_all"
-        text: Practice.phase === "records" ? "Close now, skip waiting" : "End interview"
+        icon: "done_all"
+        text: "End interview"
         inactiveColour: Colours.palette.m3secondaryContainer
         inactiveOnColour: Colours.palette.m3onSecondaryContainer
         verticalPadding: Tokens.padding.extraSmall

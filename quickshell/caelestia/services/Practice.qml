@@ -31,11 +31,12 @@ Singleton {
     readonly property string phase: current?.phase ?? "idle"
     readonly property bool active: phase !== "idle"
     readonly property real codingLeft: current ? Math.max(0, current.coding_budget - current.used_before - (current.running_since ? now - current.running_since : 0)) : 0
-    readonly property bool reviewing: phase === "review" || phase === "records"
+    readonly property bool reviewing: phase === "review"
     readonly property real reviewElapsed: current?.review_started ? Math.max(0, (current.review_ended ?? now) - current.review_started) : 0
     readonly property real left: reviewing ? reviewElapsed : codingLeft
     readonly property var today: log.days[log.today] ?? null
     readonly property int completedToday: today?.completed ?? 0
+    readonly property int unreviewed: today?.unreviewed ?? 0
     readonly property int required: log.required_per_day ?? 2
     readonly property real todaySeconds: today?.total ?? 0
     readonly property bool testing: tests.running

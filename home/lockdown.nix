@@ -69,6 +69,11 @@ let
         type = lib.types.listOf lib.types.str;
         description = "Command run detached when the button is pressed.";
       };
+      phases = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = "Interview phases the button shows in; empty shows it in every phase.";
+      };
     };
   };
 
@@ -223,7 +228,8 @@ let
 
   homeEntry =
     p: s:
-    entry "SUPER+0" "hl.dsp.focus({ workspace = ${luaStr "name:${workspaceOf p s}"} })" "back to ${workspaceOf p s}";
+    entry "SUPER+0" "hl.dsp.focus({ workspace = ${luaStr "name:${workspaceOf p s}"} })"
+      "back to ${workspaceOf p s}";
 
   entriesFor =
     p: s:
@@ -300,7 +306,6 @@ let
         ) enabled
       )
     } }
-    lockdown.spare = ${luaRules cfg.spare}
   '';
 
   keyParts = spec: lib.splitString "+" spec;
@@ -363,14 +368,6 @@ in
       type = lib.types.attrsOf profileType;
       default = { };
       description = "Lockdown profiles by name; at most one is enforced at a time, the first by name.";
-    };
-    spare = lib.mkOption {
-      type = lib.types.listOf ruleType;
-      default = [
-        { class = "[Cc]hrom"; }
-        { class = "[Ff]irefox"; }
-      ];
-      description = "Windows whose process is never killed as a stray during a lockdown.";
     };
     recreational = lib.mkOption {
       type = lib.types.listOf lib.types.str;

@@ -67,8 +67,13 @@ Item {
                 difficulty: "easy-medium",
                 enabled: true,
                 coding_minutes: null,
-                syntax_notes: false
+                syntax_notes: false,
+                review_sections: null
             }]);
+    }
+
+    function lines(text: string): var {
+        return text.split("\n");
     }
 
     function removeTrack(index: int): void {
@@ -306,6 +311,34 @@ Item {
                             placeholder: "e.g. LeetCode-style classics, or practical parsing and data wrangling"
                             text: root.draft?.context ?? ""
                             onEdited: value => root.set("context", value)
+                        }
+                    }
+                }
+
+                ConnectedRect {
+                    Layout.fillWidth: true
+                    implicitHeight: sectionsCol.implicitHeight + Tokens.padding.medium * 2
+
+                    ColumnLayout {
+                        id: sectionsCol
+
+                        anchors.fill: parent
+                        anchors.margins: Tokens.padding.medium
+                        anchors.leftMargin: Tokens.padding.largeIncreased
+                        anchors.rightMargin: Tokens.padding.largeIncreased
+                        spacing: Tokens.spacing.small
+
+                        RowLabel {
+                            text: "Review sections"
+                            subtext: "One heading per line in each review file; it must be filled in before the next interview or the unlock"
+                        }
+
+                        Area {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 84
+                            placeholder: "Mistakes\nFurther optimisation"
+                            text: (root.draft?.review_sections ?? []).join("\n")
+                            onEdited: value => root.set("review_sections", root.lines(value))
                         }
                     }
                 }
@@ -624,6 +657,50 @@ Item {
                                     options: ["default", "custom"]
                                     current: card.customLength ? "custom" : "default"
                                     onPicked: value => value === "custom" ? root.setTrackLength(card.index, root.draft.coding_minutes) : root.setTrackLength(card.index, null)
+                                }
+                            }
+                        }
+
+                        ConnectedRect {
+                            Layout.fillWidth: true
+                            implicitHeight: trackSectionsCol.implicitHeight + Tokens.padding.medium * 2
+
+                            ColumnLayout {
+                                id: trackSectionsCol
+
+                                anchors.fill: parent
+                                anchors.margins: Tokens.padding.medium
+                                anchors.leftMargin: Tokens.padding.largeIncreased
+                                anchors.rightMargin: Tokens.padding.largeIncreased
+                                spacing: Tokens.spacing.small
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Tokens.spacing.medium
+
+                                    RowLabel {
+                                        text: "Review sections"
+                                        subtext: card.track.review_sections ? "One heading per line, for this track only" : `Default: ${(root.draft?.review_sections ?? []).join(", ")}`
+                                    }
+
+                                    Item {
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Segmented {
+                                        options: ["default", "custom"]
+                                        current: card.track.review_sections ? "custom" : "default"
+                                        onPicked: value => root.setTrack(card.index, "review_sections", value === "custom" ? root.copy(root.draft.review_sections) : null)
+                                    }
+                                }
+
+                                Area {
+                                    visible: !!card.track.review_sections
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 84
+                                    placeholder: "Mistakes\nFurther optimisation\nTaught"
+                                    text: (card.track.review_sections ?? []).join("\n")
+                                    onEdited: value => root.setTrack(card.index, "review_sections", root.lines(value))
                                 }
                             }
                         }
