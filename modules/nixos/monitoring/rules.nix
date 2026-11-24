@@ -361,6 +361,10 @@ let
     "cpu:cores" = ''count by (instance) (node_cpu_seconds_total{mode="idle"})'';
   };
 
+  guestPeers =
+    direction:
+    "rate(tailscale_peer_${direction}_bytes_total[1m]) or sum without (guest) (label_replace(rate(tailscale_guest_peer_${direction}_bytes_total[2m]), \"instance\", \"$1\", \"guest\", \"(.+)\"))";
+
   byTransport =
     direction:
     let
@@ -393,8 +397,8 @@ let
       ''sum by (instance, device) (rate(node_network_receive_drop_total{device!="lo"}[1m]))'';
     "net:receive_bytes_by_transport" = byTransport "receive";
     "net:transmit_bytes_by_transport" = byTransport "transmit";
-    "ts:peer_rx_bytes" = "rate(tailscale_peer_rx_bytes_total[1m])";
-    "ts:peer_tx_bytes" = "rate(tailscale_peer_tx_bytes_total[1m])";
+    "ts:peer_rx_bytes" = guestPeers "rx";
+    "ts:peer_tx_bytes" = guestPeers "tx";
     "ts:peer_online" = "tailscale_peer_online";
     "ts:peer_direct" = "tailscale_peer_direct";
     # A peer that has never handshaken reports epoch 0.

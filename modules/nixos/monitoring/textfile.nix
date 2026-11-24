@@ -319,6 +319,26 @@ let
         done
       '';
 
+  peerNameJq = "(\$names[.TailscaleIPs[0]] // (if .ShareeNode then (((\$status.User[.UserID|tostring].DisplayName // \"shared\") | split(\" \")[0]) + \" .\" + (.TailscaleIPs[0] | split(\".\")[3])) else .HostName end))";
+
+  tailscaleGuestMetrics = writeCollector "tailscale-guests" [ pkgs.jq ] (
+    ''
+      echo '# TYPE tailscale_guest_peer_rx_bytes_total counter'
+      echo '# TYPE tailscale_guest_peer_tx_bytes_total counter'
+    ''
+    + lib.concatMapStrings (guest: ''
+      if status=$(${lib.getExe cfg.tailscaleGuests.${guest}}); then
+        jq -r --argjson names ${lib.escapeShellArg (builtins.toJSON tailscalePeerNames)} '. as $status | .Peer[]
+               | [${peerNameJq}, .OS, .Relay, (.RxBytes|tostring), (.TxBytes|tostring)] | join("\u001f")' <<<"$status" \
+        | while IFS=$'\x1f' read -r peer os relay rx tx; do
+            labels="guest=\"${guest}\",peer=\"$peer\",peer_os=\"$os\",relay=\"$relay\""
+            printf 'tailscale_guest_peer_rx_bytes_total{%s} %s\n' "$labels" "$rx"
+            printf 'tailscale_guest_peer_tx_bytes_total{%s} %s\n' "$labels" "$tx"
+          done
+      fi
+    '') (lib.attrNames cfg.tailscaleGuests)
+  );
+
   tailscaleMetrics =
     writeCollector "tailscale"
       [
@@ -676,6 +696,17 @@ in
         );
 
         systemd.timers.textfile-tailscale = lib.mkIf config.services.tailscale.enable (collectorTimer "5s");
+
+        systemd.services.textfile-tailscale-guests = lib.mkIf (cfg.tailscaleGuests != { }) (
+          lib.mkMerge [
+            (collectorService tailscaleGuestMetrics)
+            { description = "Publish per-peer tailnet traffic seen by guests"; }
+          ]
+        );
+
+        systemd.timers.textfile-tailscale-guests = lib.mkIf (cfg.tailscaleGuests != { }) (
+          collectorTimer "15s"
+        );
 
         systemd.services.textfile-wireguard = lib.mkIf hasWireguard (
           lib.mkMerge [

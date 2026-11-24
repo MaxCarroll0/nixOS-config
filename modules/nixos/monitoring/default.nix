@@ -314,6 +314,12 @@ in
       description = "Whether the RAPL energy counters are readable by the powermon group; default off.";
     };
 
+    tailscaleGuests = lib.mkOption {
+      type = lib.types.attrsOf lib.types.package;
+      default = { };
+      description = "Map of guest name to a command printing its tailscale status JSON, exported as that guest's peer traffic; default none.";
+    };
+
     sensorNames = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
