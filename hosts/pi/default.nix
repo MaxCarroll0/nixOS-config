@@ -446,7 +446,10 @@ in
     streams.minecraft = {
       branch = "disk1";
       port = 8020;
-      allowFrom = [ facts.desktopnew.tailscale ];
+      allowFrom = [
+        facts.mc-server.tailnetAddress
+        facts.desktopnew.tailscale
+      ];
     };
     streams.satisfactory = {
       branch = "disk1";
