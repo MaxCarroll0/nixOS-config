@@ -98,6 +98,8 @@ class LiveBuilds:
             "uri": uri,
             "phase": phase,
             "since": time.time(),
+            "inputs": drv_text(drv) if uri else "",
+            "reached": 0.0,
         }
         if self.thread is None:
             self.thread = threading.Thread(target=self.run, daemon=True)
@@ -107,6 +109,7 @@ class LiveBuilds:
         if build["phase"] != phase:
             build["phase"] = phase
             build["since"] = time.time()
+            build["reached"] = 0.0
 
     def start(self, activity_id, kind, fields):
         fields = fields or []
@@ -132,8 +135,10 @@ class LiveBuilds:
 
     def copy(self, activity_id, path, source, target):
         remote = [build for build in self.builds.values() if build["uri"]]
-        if any(build["uri"] == target and build["phase"] == "upload" for build in remote):
-            self.copies[activity_id] = {"uri": target, "drv": "", "started": time.time(), "done": 0, "expected": 0}
+        uploading = [build for build in remote if build["uri"] == target and build["phase"] == "upload"]
+        if uploading:
+            owner = next((build for build in uploading if path in build["inputs"]), None) or min(uploading, key=lambda build: build["since"])
+            self.copies[activity_id] = {"uri": target, "drv": owner["drv"], "started": time.time(), "done": 0, "expected": 0}
             return
         waiting = [build for build in remote if build["uri"] == source and build["phase"] in ("upload", "build", "download")]
         if not waiting:
@@ -172,13 +177,15 @@ class LiveBuilds:
         if build["phase"] in ("done", "failed"):
             return 1.0
         if build["phase"] == "upload":
-            copies = [copy for copy in self.copies.values() if copy["uri"] == build["uri"] and copy["started"] >= build["since"] - 1]
+            copies = [copy for copy in self.copies.values() if copy["uri"] == build["uri"] and copy["drv"] == build["drv"]]
         elif build["phase"] == "download":
-            copies = [copy for copy in self.copies.values() if copy["drv"] == build["drv"]]
+            copies = [copy for copy in self.copies.values() if copy["drv"] == build["drv"] and not copy["uri"]]
         else:
             return 0.0
         expected = sum(copy["expected"] for copy in copies)
-        return min(1.0, sum(copy["done"] for copy in copies) / expected) if expected else 0.0
+        if expected:
+            build["reached"] = max(build["reached"], min(1.0, sum(copy["done"] for copy in copies) / expected))
+        return build["reached"]
 
     def render(self):
         now = time.time()
@@ -226,6 +233,13 @@ class LiveBuilds:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
+
+
+def drv_text(drv):
+    try:
+        return Path(drv).read_text(errors="replace")
+    except OSError:
+        return ""
 
 
 def redact(value):
@@ -309,7 +323,7 @@ class Observer:
         if not words:
             return False
         pair = " ".join(words[:2])
-        return words[0] in {"build", "develop", "run", "shell"} or pair in {
+        return words[0] in {"build", "develop", "run", "shell", "print-dev-env"} or pair in {
             "flake check",
             "profile install",
             "profile upgrade",
@@ -644,10 +658,8 @@ def add_log_options(argv):
     if "--log-format" in argv:
         return argv
     options = ["--log-format", "internal-json", "-v"]
-    if "--" in argv:
-        split = argv.index("--")
-        return argv[:split] + options + argv[split:]
-    return argv + options
+    split = next((i for i, arg in enumerate(argv) if arg in ("--", "-c", "--command")), len(argv))
+    return argv[:split] + options + argv[split:]
 
 
 def heavy(drv):
@@ -734,39 +746,57 @@ def spawns_interactive_shell(command, argv):
     )
 
 
+def realise_first(command, argv):
+    if command == "nix-shell":
+        return argv + ["--run", "true"] if {"-p", "--packages"} & set(argv) else None
+    index = next((i for i, arg in enumerate(argv) if not arg.startswith("-")), None)
+    if index is None:
+        return None
+    verb = {"shell": ["build", "--no-link"], "develop": ["print-dev-env"]}.get(argv[index])
+    return argv[:index] + verb + argv[index + 1 :] if verb else None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--observed-command", dest="command", required=True)
     parser.add_argument("--observed-real", dest="real", required=True)
     options, forwarded = parser.parse_known_args()
-    observer = Observer(options.command, forwarded)
     interactive = spawns_interactive_shell(options.command, forwarded)
-    command_args = (
-        add_log_options(forwarded) if observer.has_build_intent() and not interactive else forwarded
-    )
-    command = [options.real, *command_args]
-    roots = None
-    if runs_tool_shell(options.command, forwarded):
-        roots = ToolRoots(str(Path(options.real).parent / "nix-store"))
-    # Must precede the sg wrap: skgid 700 would bypass the killswitch session-wide.
-    if interactive and roots is None:
+    if not interactive:
+        roots = None
+        if runs_tool_shell(options.command, forwarded):
+            roots = ToolRoots(str(Path(options.real).parent / "nix-store"))
+        return observe(options.command, options.real, forwarded, roots, None)
+    prepared = realise_first(options.command, forwarded)
+    if prepared:
+        exit_code = observe(options.command, options.real, prepared, None, subprocess.DEVNULL)
+        if exit_code:
+            return exit_code
+    command = [options.real, *forwarded]
+    if not runs_tool_shell(options.command, forwarded):
         os.execv(command[0], command)
-    if interactive:
-        child = subprocess.Popen(command)
-        threading.Thread(target=roots.watch, args=(child,), daemon=True).start()
-        try:
-            exit_code = child.wait()
-        except KeyboardInterrupt:
-            exit_code = child.wait()
-        finally:
-            roots.release()
-        return exit_code
+    roots = ToolRoots(str(Path(options.real).parent / "nix-store"))
+    child = subprocess.Popen(command)
+    threading.Thread(target=roots.watch, args=(child,), daemon=True).start()
+    try:
+        exit_code = child.wait()
+    except KeyboardInterrupt:
+        exit_code = child.wait()
+    finally:
+        roots.release()
+    return exit_code
+
+
+def observe(name, real, forwarded, roots, stdout):
+    observer = Observer(name, forwarded)
+    command_args = add_log_options(forwarded) if observer.has_build_intent() else forwarded
+    command = [real, *command_args]
     if os.environ.get("NIX_OBSERVER_NOVPN") == "1" and Path("/run/wrappers/bin/sg").exists():
         command = ["/run/wrappers/bin/sg", "novpn", "-c", "exec " + shlex.join(command)]
     nom = None
     if observer.has_build_intent() and os.environ.get("NIX_OBSERVER_PLAIN") != "1":
         nom_environment = os.environ.copy()
-        real_nix = os.environ.get("NIX_OBSERVER_REAL_NIX", options.real)
+        real_nix = os.environ.get("NIX_OBSERVER_REAL_NIX", real)
         nom_environment["PATH"] = str(Path(real_nix).parent) + os.pathsep + nom_environment.get("PATH", "")
         nom = subprocess.Popen(
             [os.environ.get("NIX_OBSERVER_NOM", "nom"), "--json"],
@@ -774,7 +804,7 @@ def main():
             text=True,
             env=nom_environment,
         )
-    child = subprocess.Popen(command, stderr=subprocess.PIPE, text=True, bufsize=1)
+    child = subprocess.Popen(command, stdout=stdout, stderr=subprocess.PIPE, text=True, bufsize=1)
     if roots:
         threading.Thread(target=roots.watch, args=(child,), daemon=True).start()
     try:
