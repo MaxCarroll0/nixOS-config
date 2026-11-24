@@ -61,6 +61,7 @@ Item {
     readonly property int boxRows: 3
     readonly property real boxCell: 11
     readonly property real boxReach: 104
+    property var labelSizes: ({})
     property var boxCounts: ({})
     property var boxFade: ({})
     property var boxHeights: ({})
@@ -722,7 +723,7 @@ Item {
         const psi = live ?? root.slice.psi[name] ?? {};
         const span = (colour, ratio) => `<font color="${colour}">${root.fleet.percent(ratio)}</font>`;
         const cores = root.fresh ? (root.current.cores[name] ?? []) : [];
-        const parts = cores.length ? [span(Colours.palette.m3primary, cores.reduce((sum, core) => sum + core.busy, 0) / cores.length), `<font color="${Colours.palette.m3primary}">max ${root.fleet.percent(Math.max(...cores.map(core => core.busy)))}</font>`] : [span(Colours.palette.m3primary, root.histories[name]?.mean ?? NaN)];
+        const parts = [span(Colours.palette.m3primary, cores.length ? cores.reduce((sum, core) => sum + core.busy, 0) / cores.length : root.histories[name]?.mean ?? NaN)];
         for (const key of ["cpu", "io", "memory"])
             if (isFinite(psi[key]))
                 parts.push(span(root.colours[key], psi[key]));
@@ -857,10 +858,11 @@ Item {
             return null;
         const rows = Math.max(1, Math.min(root.boxRows, Math.ceil(count / root.boxColumns)));
         const width = root.boxColumns * root.boxCell + 10;
+        const label = root.labelSizes[name];
         const middle = root.legendWidth + (root.width - root.legendWidth) / 2;
         return {
-            x: centre.x > middle - 1 ? centre.x - root.boxReach - width : centre.x + root.boxReach,
-            y: centre.y + root.bloomExtent + 4,
+            x: label ? centre.x - width / 2 : centre.x > middle - 1 ? centre.x - root.boxReach - width : centre.x + root.boxReach,
+            y: centre.y + root.bloomExtent + (label ? label.height + 6 : 4),
             width: width,
             height: rows * root.boxCell + 21
         };
@@ -1558,6 +1560,12 @@ Item {
             readonly property var centre: root.place[modelData] ?? Qt.point(-1000, -1000)
             readonly property var deploy: root.slice.deploys[modelData] ?? null
 
+            onWidthChanged: root.labelSizes = Object.assign({}, root.labelSizes, {
+                    [modelData]: Qt.size(width, height)
+                })
+            onHeightChanged: root.labelSizes = Object.assign({}, root.labelSizes, {
+                    [modelData]: Qt.size(width, height)
+                })
             opacity: root.nodeAlpha[modelData] ?? 0
             x: centre.x - width / 2
             y: node.host ? centre.y + root.bloomExtent + 2 : centre.y + 8
