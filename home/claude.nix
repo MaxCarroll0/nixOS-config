@@ -19,6 +19,10 @@ let
       rev = "v0.25.0";
       hash = "sha256-BDfwyH7h7Ii7QYaunHDnf0Epk5nUEd8OdOH3QCf1CJU=";
     };
+    postPatch = ''
+      substituteInPlace src/claude_swap/switcher.py \
+        --replace-fail 'anchor = current_num if strategy == "next-available" else active_account' 'anchor = current_num'
+    '';
     build-system = [ pkgs-unstable.python3Packages.hatchling ];
     dependencies = [
       pkgs-unstable.python3Packages.textual
