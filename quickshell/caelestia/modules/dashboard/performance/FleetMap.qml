@@ -21,6 +21,8 @@ Item {
     readonly property real pressureScale: 28
     readonly property real pressureClamp: 2
     readonly property real bloomExtent: coreRadius + pressureScale * Math.sqrt(pressureClamp)
+    readonly property real stallRadius: coreRadius + pressureScale + 8
+    readonly property real stallGap: 0.12
     readonly property real blobRadius: 9
     readonly property real blobRim: bloomExtent + 9
     readonly property real hostRow: 136
@@ -290,7 +292,7 @@ Item {
             if (!origin)
                 continue;
             const host = root.nodeByName[owner]?.host ?? false;
-            const clear = host ? root.bloomExtent + 4 : 10;
+            const clear = host ? root.stallRadius + 22 : 10;
             list.forEach((tunnel, index) => {
                 const txTarget = root.laneWidth(Math.max(tunnel.tx, 1));
                 const rxTarget = root.laneWidth(Math.max(tunnel.rx, 1));
@@ -1080,14 +1082,6 @@ Item {
             ctx.fillText(text, x, y);
         }
 
-        function petal(ctx: var, centre: var, angle: real, length: real): void {
-            const spread = 0.4;
-            ctx.beginPath();
-            ctx.moveTo(centre.x, centre.y);
-            ctx.quadraticCurveTo(centre.x + Math.cos(angle - spread) * length * 1.15, centre.y + Math.sin(angle - spread) * length * 1.15, centre.x + Math.cos(angle) * length, centre.y + Math.sin(angle) * length);
-            ctx.quadraticCurveTo(centre.x + Math.cos(angle + spread) * length * 1.15, centre.y + Math.sin(angle + spread) * length * 1.15, centre.x, centre.y);
-        }
-
         function placeLabels(ctx: var, centre: var, labels: var): void {
             ctx.font = "bold 11px sans-serif";
             const placed = [];
@@ -1120,19 +1114,18 @@ Item {
         }
 
         function drawBloom(ctx: var, name: string, centre: var, shown: var): void {
-            const r0 = root.coreRadius;
-            const scale = value => r0 + root.pressureScale * Math.sqrt(Math.min(root.pressureClamp, Math.max(0, value)));
+            const palette = Colours.palette;
+            const scale = value => root.coreRadius + root.pressureScale * Math.sqrt(Math.min(root.pressureClamp, Math.max(0, value)));
+            const ring = radius => {
+                ctx.beginPath();
+                ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2);
+            };
             const labels = [];
 
-            if (isFinite(shown.load)) {
-                ctx.beginPath();
-                ctx.arc(centre.x, centre.y, scale(shown.load), 0, Math.PI * 2);
-                ctx.fillStyle = Qt.alpha(Colours.palette.m3onSurface, 0.1);
-                ctx.fill();
-                ctx.strokeStyle = Qt.alpha(Colours.palette.m3onSurface, 0.85);
-                ctx.lineWidth = 1.5;
-                ctx.stroke();
-            }
+            ring(scale(1));
+            ctx.strokeStyle = Qt.alpha(palette.m3onSurface, 0.16);
+            ctx.lineWidth = 1;
+            ctx.stroke();
 
             if (shown.values) {
                 const n = shown.values.length;
@@ -1150,60 +1143,86 @@ Item {
                     ctx.quadraticCurveTo(point.x, point.y, next.x, next.y);
                 });
                 ctx.closePath();
+                ctx.fillStyle = Qt.alpha(palette.m3primary, 0.16);
+                ctx.fill();
                 ctx.lineJoin = "round";
-                ctx.strokeStyle = Qt.alpha(Colours.palette.m3primary, 0.95);
+                ctx.strokeStyle = palette.m3primary;
+                ctx.lineWidth = 2.5;
+                ctx.stroke();
+            } else if (isFinite(shown.load)) {
+                ring(scale(shown.load));
+                ctx.strokeStyle = palette.m3primary;
                 ctx.lineWidth = 2.5;
                 ctx.stroke();
             }
 
             if (isFinite(shown.mean)) {
                 const radius = scale(shown.mean);
-                ctx.beginPath();
-                ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2);
+                ring(radius);
                 ctx.save();
-                ctx.setLineDash([0.01, 2.6]);
+                ctx.setLineDash([0.01, 3]);
                 ctx.lineCap = "round";
-                ctx.strokeStyle = Colours.palette.m3onSurface;
+                ctx.strokeStyle = palette.m3onSurface;
                 ctx.lineWidth = 1.6;
                 ctx.stroke();
                 ctx.restore();
                 labels.push({
                     text: root.fleet.percent(root.histories[name]?.mean ?? shown.mean),
-                    angle: -Math.PI / 4,
-                    reach: radius + 4,
-                    colour: Colours.palette.m3onSurface
+                    angle: Math.PI / 4,
+                    reach: Math.max(radius, scale(1)) + 3,
+                    colour: palette.m3onSurface
                 });
             }
 
-            const length = ratio => r0 + 40 * Math.sqrt(Math.min(1, Math.max(0, ratio)));
-            for (const [key, angle] of [["cpu", -Math.PI / 2], ["io", Math.PI / 6], ["memory", 5 * Math.PI / 6]]) {
+            if (isFinite(shown.load)) {
+                const radius = scale(shown.load);
+                ctx.beginPath();
+                ctx.arc(centre.x, centre.y - radius, 3.5, 0, Math.PI * 2);
+                ctx.fillStyle = palette.m3primary;
+                ctx.fill();
+                ctx.strokeStyle = palette.m3surfaceContainer;
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+            }
+
+            const gauge = root.stallRadius;
+            const fraction = ratio => Math.max(0, Math.min(1, Math.log10(Math.max(ratio, 1e-6) * 1000) / 3));
+            const span = (Math.PI - 4 * root.stallGap) / 3;
+            ["cpu", "io", "memory"].forEach((key, index) => {
+                const from = -Math.PI + root.stallGap + index * (span + root.stallGap);
+                const colour = root.colours[key];
+                const arc = (a, b, width, style) => {
+                    ctx.beginPath();
+                    ctx.arc(centre.x, centre.y, gauge, a, b);
+                    ctx.lineWidth = width;
+                    ctx.strokeStyle = style;
+                    ctx.stroke();
+                };
+                ctx.save();
+                ctx.lineCap = "round";
+                arc(from, from + span, 4, Qt.alpha(colour, 0.2));
                 const now = shown.live[key] ?? 0;
-                if (now > 0.001) {
-                    canvas.petal(ctx, centre, angle, length(now));
-                    ctx.fillStyle = Qt.alpha(root.colours[key], 0.32);
-                    ctx.fill();
-                    ctx.strokeStyle = root.colours[key];
+                if (fraction(now) > 0)
+                    arc(from, from + span * fraction(now), 4, colour);
+                ctx.restore();
+                const mean = shown.average[key] ?? 0;
+                if (fraction(mean) > 0) {
+                    const angle = from + span * fraction(mean);
+                    ctx.beginPath();
+                    ctx.moveTo(centre.x + Math.cos(angle) * (gauge - 5), centre.y + Math.sin(angle) * (gauge - 5));
+                    ctx.lineTo(centre.x + Math.cos(angle) * (gauge + 5), centre.y + Math.sin(angle) * (gauge + 5));
+                    ctx.strokeStyle = palette.m3onSurface;
                     ctx.lineWidth = 1.5;
                     ctx.stroke();
                 }
-                const mean = shown.average[key] ?? 0;
-                if (mean > 0.001) {
-                    canvas.petal(ctx, centre, angle, length(mean));
-                    ctx.save();
-                    ctx.setLineDash([0.01, 2.6]);
-                    ctx.lineCap = "round";
-                    ctx.strokeStyle = root.colours[key];
-                    ctx.lineWidth = 1.6;
-                    ctx.stroke();
-                    ctx.restore();
+                if (fraction(now) > 0)
                     labels.push({
-                        text: root.fleet.percent(root.slice.psi[name]?.[key] ?? mean),
-                        angle: angle,
-                        reach: length(mean) + 2,
-                        colour: root.colours[key]
+                        text: root.fleet.percent(now),
+                        angle: from + span / 2,
+                        reach: gauge + 5,
+                        colour: colour
                     });
-                }
-            }
+            });
             canvas.placeLabels(ctx, centre, labels);
         }
 

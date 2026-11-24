@@ -213,7 +213,7 @@ Item {
             FleetLegend {
                 rows: 12
                 colours: fleetData.colours
-                entries: [["", "load per core"], ["loadNow", "now"], ["mean", "average"], ["outline", "history"], ["", "stall"], ["cpu", "cpu now"], ["io", "io now"], ["memory", "memory now"], ["stallMean", "average"], ["", ""], ["", "links"], ["direct", "direct"], ["relayed", "relayed"], ["down", "unreachable"], ["sheath", "VPN tunnel"], ["sheathOff", "VPN off"], ["", "traffic"], ["lane:1000", "1 KB/s avg"], ["lane:10000000", "10 MB/s avg"], ["dots", "live flow"], ["blob", "build in flight"], ["builds", "builds"]]
+                entries: [["", "load per core"], ["loadNow", "now"], ["mean", "average"], ["outline", "history"], ["full", "one task per core"], ["", "stall, log scale"], ["cpu", "cpu now"], ["io", "io now"], ["memory", "memory now"], ["stallMean", "average"], ["", "links"], ["direct", "direct"], ["relayed", "relayed"], ["down", "unreachable"], ["sheath", "VPN tunnel"], ["sheathOff", "VPN off"], ["", "traffic"], ["lane:1000", "1 KB/s avg"], ["lane:10000000", "10 MB/s avg"], ["dots", "live flow"], ["blob", "build in flight"], ["builds", "builds"]]
             }
         }
 

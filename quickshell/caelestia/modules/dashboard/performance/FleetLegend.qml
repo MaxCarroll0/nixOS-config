@@ -41,15 +41,13 @@ Grid {
                 ctx.lineTo(w - 1, h / 2);
                 ctx.stroke();
             };
-            const petal = colour => {
-                ctx.fillStyle = Qt.alpha(colour, 0.45);
+            const gauge = colour => {
+                ctx.lineCap = "round";
+                line([], Qt.alpha(colour, 0.2), 4);
                 ctx.beginPath();
-                ctx.moveTo(4, h / 2);
-                ctx.quadraticCurveTo(w / 2, -2, w - 3, h / 2);
-                ctx.quadraticCurveTo(w / 2, h + 2, 4, h / 2);
-                ctx.fill();
+                ctx.moveTo(3, h / 2);
+                ctx.lineTo(w * 0.6, h / 2);
                 ctx.strokeStyle = colour;
-                ctx.lineWidth = 1.25;
                 ctx.stroke();
             };
             const bar = colour => {
@@ -67,16 +65,27 @@ Grid {
             }
             switch (glyph.kind) {
             case "outline":
-                ctx.strokeStyle = Qt.alpha(p.m3onSurface, 0.4);
-                ctx.lineWidth = 1;
                 ctx.beginPath();
-                ctx.moveTo(1, h - 2);
-                [[5, 4], [9, 7], [13, 2], [17, 6], [21, 3]].forEach(([x, y]) => ctx.lineTo(x, y));
+                ctx.moveTo(1, h - 1);
+                [[1, 7], [6, 4], [10, 7], [14, 2], [18, 6], [21, 4], [21, h - 1]].forEach(([x, y]) => ctx.lineTo(x, y));
+                ctx.fillStyle = Qt.alpha(p.m3primary, 0.16);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(1, 7);
+                [[6, 4], [10, 7], [14, 2], [18, 6], [21, 4]].forEach(([x, y]) => ctx.lineTo(x, y));
+                ctx.strokeStyle = p.m3primary;
+                ctx.lineWidth = 2;
+                ctx.lineJoin = "round";
                 ctx.stroke();
                 break;
             case "loadNow":
-                ctx.fillStyle = Qt.alpha(p.m3onSurface, 0.1);
-                ctx.fillRect(1, 1, w - 2, h - 2);
+                ctx.beginPath();
+                ctx.arc(w / 2, h / 2, 3.5, 0, Math.PI * 2);
+                ctx.fillStyle = p.m3primary;
+                ctx.fill();
+                break;
+            case "full":
+                line([], Qt.alpha(p.m3onSurface, 0.16), 1);
                 break;
             case "mean":
                 ctx.lineCap = "round";
@@ -84,13 +93,13 @@ Grid {
                 break;
             case "stallMean":
                 ctx.lineCap = "round";
-                ctx.setLineDash([0.01, 4.5]);
-                ctx.strokeStyle = c.cpu;
-                ctx.lineWidth = 2.75;
+                line([], Qt.alpha(c.cpu, 0.2), 4);
+                ctx.lineCap = "butt";
                 ctx.beginPath();
-                ctx.moveTo(4, h / 2);
-                ctx.quadraticCurveTo(w / 2, -2, w - 3, h / 2);
-                ctx.quadraticCurveTo(w / 2, h + 2, 4, h / 2);
+                ctx.moveTo(w / 2, 1);
+                ctx.lineTo(w / 2, h - 1);
+                ctx.strokeStyle = p.m3onSurface;
+                ctx.lineWidth = 1.5;
                 ctx.stroke();
                 break;
             case "sheath":
@@ -130,13 +139,13 @@ Grid {
                 ctx.fillRect(13, h / 2 - 4, 8, 8);
                 break;
             case "cpu":
-                petal(c.cpu);
+                gauge(c.cpu);
                 break;
             case "io":
-                petal(c.io);
+                gauge(c.io);
                 break;
             case "memory":
-                petal(c.memory);
+                gauge(c.memory);
                 break;
             case "direct":
                 line([], c.direct, 1.5);
