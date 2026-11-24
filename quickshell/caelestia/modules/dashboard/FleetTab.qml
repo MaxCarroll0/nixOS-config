@@ -23,9 +23,9 @@ Item {
         active: root.visible
     }
 
-    Keys.onLeftPressed: fleetData.anchor = fleetData.at - fleetData.smoothing / 2
+    Keys.onLeftPressed: fleetData.anchor = fleetData.committed - fleetData.smoothing / 2
     Keys.onRightPressed: {
-        const next = fleetData.at + fleetData.smoothing / 2;
+        const next = fleetData.committed + fleetData.smoothing / 2;
         fleetData.anchor = next >= fleetData.now ? null : next;
     }
     Keys.onSpacePressed: player.running = !player.running
@@ -36,7 +36,7 @@ Item {
         interval: 400
         repeat: true
         onTriggered: {
-            const next = fleetData.at + fleetData.smoothing / 4;
+            const next = fleetData.committed + fleetData.smoothing / 4;
             if (next >= fleetData.now) {
                 fleetData.anchor = null;
                 running = false;
@@ -143,7 +143,7 @@ Item {
             }
 
             Choice {
-                visible: !fleetData.following
+                visible: fleetData.anchor !== null
                 text: "back to live"
                 onPicked: {
                     player.running = false;
@@ -211,9 +211,9 @@ Item {
             fleet: fleetData
 
             FleetLegend {
-                rows: 15
+                rows: 22
                 colours: fleetData.colours
-                entries: [["", "load"], ["outline", "load per core"], ["ring", "1 per core"], ["cpu", "cpu stall"], ["io", "io stall"], ["memory", "memory stall"], ["", "links"], ["direct", "direct"], ["relayed", "relayed"], ["down", "unreachable"], ["", "traffic"], ["lane:1000", "1 KB/s"], ["lane:100000", "100 KB/s"], ["lane:10000000", "10 MB/s"], ["builds", "builds"]]
+                entries: [["", "load per core"], ["loadNow", "now"], ["mean", "average"], ["outline", "history"], ["ring", "1 per core"], ["", "stall"], ["cpu", "cpu now"], ["io", "io now"], ["memory", "memory now"], ["stallMean", "average"], ["", "links"], ["direct", "direct"], ["relayed", "relayed"], ["down", "unreachable"], ["sheath", "VPN tunnel"], ["sheathOff", "VPN off"], ["", "traffic"], ["lane:1000", "1 KB/s avg"], ["lane:10000000", "10 MB/s avg"], ["dots", "live flow"], ["blob", "build in flight"], ["builds", "builds"]]
             }
         }
 

@@ -17,15 +17,43 @@ Item {
             io: "#d55181",
             memory: "#c98500"
         })
+    readonly property var countries: ({
+            UK: "#3d6fe0",
+            NL: "#ec7a22",
+            DE: "#e0b62a",
+            CH: "#e04848",
+            SE: "#1fa3d9",
+            US: "#8b5fd6",
+            FR: "#4f7fd1",
+            JP: "#d64f8a"
+        })
 
     property var range: [Date.now() / 1000 - 86400, Date.now() / 1000]
     property var anchor: null
+    property var preview: null
     property real smoothing: 600
+    readonly property real currentWindow: 10
     property bool active: true
 
     readonly property real now: clock.now
-    readonly property real at: anchor === null ? now : anchor
-    readonly property bool following: anchor === null
+    readonly property real committed: anchor === null ? now : anchor
+    readonly property real at: preview === null ? committed : preview
+    readonly property bool following: anchor === null && preview === null
+    property var current: ({
+            live: false,
+            edges: ({}),
+            psi: ({}),
+            load: ({}),
+            tunnels: ({}),
+            builds: []
+        })
+    property var graphs: ({
+            from: 0,
+            step: 1,
+            edges: ({}),
+            psi: ({}),
+            tunnels: ({})
+        })
 
     property var rows: []
     property var slice: ({
@@ -34,6 +62,7 @@ Item {
             builds: [],
             pressure: ({}),
             psi: ({}),
+            tunnels: [],
             deploys: ({})
         })
     property bool reachable: true
@@ -71,10 +100,21 @@ Item {
     }
 
     Timer {
+        interval: root.current.builds.length ? 1000 : 2000
+        repeat: true
+        running: root.active && root.following
+        triggeredOnStart: true
+        onTriggered: root.fetchCurrent()
+    }
+
+    Timer {
         id: sliceDebounce
 
         interval: 120
-        onTriggered: root.fetchSlice()
+        onTriggered: {
+            root.fetchSlice();
+            root.fetchCurrent();
+        }
     }
 
     Timer {
@@ -94,6 +134,7 @@ Item {
         }
         sliceDebounce.restart();
     }
+    onPreviewChanged: sliceDebounce.restart()
     onSmoothingChanged: sliceDebounce.restart()
     onRangeChanged: if (!ticking)
         rowsDebounce.restart()
@@ -260,6 +301,191 @@ Item {
             }));
     }
 
+    function edgeKey(a: string, b: string): string {
+        return [root.canonical(a), root.canonical(b)].sort().join("\u001f");
+    }
+
+    function edgeTable(): var {
+        const edges = {};
+        const edge = (rawA, rawB) => {
+            const key = root.edgeKey(rawA, rawB);
+            if (!edges[key]) {
+                const [first, second] = key.split("\u001f");
+                edges[key] = {
+                    key: key,
+                    a: first,
+                    b: second,
+                    ab: 0,
+                    ba: 0,
+                    direct: NaN,
+                    relay: ""
+                };
+            }
+            return edges[key];
+        };
+        const flow = (from, to, rate) => {
+            if (!isFinite(rate))
+                return;
+            const item = edge(from, to);
+            if (item.a === root.canonical(from))
+                item.ab = Math.max(item.ab, rate);
+            else
+                item.ba = Math.max(item.ba, rate);
+        };
+        return {
+            edges: edges,
+            edge: edge,
+            flow: flow
+        };
+    }
+
+    function tunnelKey(host: string, iface: string): string {
+        return `${host}\u001f${iface}`;
+    }
+
+    function countryColour(country: string): color {
+        if (root.countries[country])
+            return root.countries[country];
+        let hash = 0;
+        for (const c of country)
+            hash = (hash * 31 + c.charCodeAt(0)) % 360;
+        return Qt.hsla(hash / 360, 0.6, 0.55, 1);
+    }
+
+    property int currentGeneration: 0
+
+    function fetchCurrent(): void {
+        const at = root.following ? Date.now() / 1000 - 1 : root.at;
+        const generation = ++root.currentGeneration;
+        if (root.archived(at - root.currentWindow)) {
+            root.current = {
+                live: false,
+                edges: {},
+                psi: {},
+                load: {},
+                tunnels: {},
+                builds: []
+            };
+            return;
+        }
+        const window = root.duration(root.currentWindow);
+        const point = (expr, done) => root.instant(false, expr, at, done);
+        root.gather({
+            tx: done => point(`rate(tailscale_peer_tx_bytes_total[${window}])`, done),
+            rx: done => point(`rate(tailscale_peer_rx_bytes_total[${window}])`, done),
+            psiCpu: done => point(`rate(node_pressure_cpu_waiting_seconds_total[${window}])`, done),
+            psiIo: done => point(`rate(node_pressure_io_stalled_seconds_total[${window}])`, done),
+            psiMemory: done => point(`rate(node_pressure_memory_stalled_seconds_total[${window}])`, done),
+            load: done => point("last_over_time(load:pressure_ratio[1m])", done),
+            tunnelTx: done => point(`sum by (instance, interface) (rate(wireguard_peer_tx_bytes_total[${window}]))`, done),
+            tunnelRx: done => point(`sum by (instance, interface) (rate(wireguard_peer_rx_bytes_total[${window}]))`, done),
+            builds: done => point('fleet_build_progress and on (instance, invocation) (time() - push_time_seconds{job="fleet_build"} < 30)', done)
+        }, results => {
+            if (generation !== root.currentGeneration)
+                return;
+            const table = root.edgeTable();
+            for (const result of results.tx)
+                table.flow(result.metric.instance, result.metric.peer, root.value(result));
+            for (const result of results.rx)
+                table.flow(result.metric.peer, result.metric.instance, root.value(result));
+            const psi = {};
+            const psiOf = name => psi[name] ?? (psi[name] = {
+                    cpu: 0,
+                    io: 0,
+                    memory: 0
+                });
+            for (const result of results.psiCpu)
+                psiOf(result.metric.instance).cpu = root.value(result);
+            for (const result of results.psiIo)
+                psiOf(result.metric.instance).io = root.value(result);
+            for (const result of results.psiMemory)
+                psiOf(result.metric.instance).memory = root.value(result);
+            const load = {};
+            for (const result of results.load)
+                load[result.metric.instance] = root.value(result);
+            const tunnels = {};
+            const tunnelOf = result => {
+                const key = root.tunnelKey(result.metric.instance, result.metric.interface);
+                return tunnels[key] ?? (tunnels[key] = {
+                        tx: 0,
+                        rx: 0
+                    });
+            };
+            for (const result of results.tunnelTx)
+                tunnelOf(result).tx = root.value(result);
+            for (const result of results.tunnelRx)
+                tunnelOf(result).rx = root.value(result);
+            const builds = results.builds.map(result => ({
+                        key: `${result.metric.instance}\u001f${result.metric.invocation}\u001f${result.metric.drv}`,
+                        origin: result.metric.instance,
+                        builder: result.metric.builder,
+                        package: result.metric.package ?? "",
+                        phase: result.metric.phase ?? "build",
+                        since: parseFloat(result.metric.since ?? "NaN"),
+                        progress: root.value(result)
+                    }));
+            root.current = {
+                live: true,
+                edges: table.edges,
+                psi: psi,
+                load: load,
+                tunnels: tunnels,
+                builds: builds
+            };
+        });
+    }
+
+    function fetchGraphs(at: real, smoothing: real, archive: bool, generation: int): void {
+        const step = archive ? 3600 : Math.max(2, Math.round(smoothing / 120));
+        const from = Math.floor((at - smoothing) / step) * step;
+        const count = Math.floor((at - from) / step) + 1;
+        const window = root.duration(Math.max(root.currentWindow, 2 * step));
+        const raw = (counter, recorded) => archive ? root.series(recorded, true) : `rate(${counter}[${window}])`;
+        const span = (expr, done) => root.ranged(archive, expr, from, at, step, done);
+        root.gather({
+            tx: done => span(raw("tailscale_peer_tx_bytes_total", "ts:peer_tx_bytes"), done),
+            rx: done => span(raw("tailscale_peer_rx_bytes_total", "ts:peer_rx_bytes"), done),
+            psiCpu: done => span(raw("node_pressure_cpu_waiting_seconds_total", "psi:cpu_waiting"), done),
+            psiIo: done => span(raw("node_pressure_io_stalled_seconds_total", "psi:io_stalled"), done),
+            psiMemory: done => span(raw("node_pressure_memory_stalled_seconds_total", "psi:memory_stalled"), done),
+            tunnelTx: done => archive ? done([]) : span(`sum by (instance, interface) (rate(wireguard_peer_tx_bytes_total[${window}]))`, done),
+            tunnelRx: done => archive ? done([]) : span(`sum by (instance, interface) (rate(wireguard_peer_rx_bytes_total[${window}]))`, done)
+        }, results => {
+            if (generation !== root.sliceGeneration)
+                return;
+            const values = result => root.valuesOf(result, from, step, count);
+            const edges = {};
+            const edgeFlow = (rawFrom, rawTo, series) => {
+                const key = root.edgeKey(rawFrom, rawTo);
+                const item = edges[key] ?? (edges[key] = {
+                        ab: new Array(count).fill(NaN),
+                        ba: new Array(count).fill(NaN)
+                    });
+                const side = key.split("\u001f")[0] === root.canonical(rawFrom) ? "ab" : "ba";
+                item[side] = root.merge(item[side], series, Math.max);
+            };
+            for (const result of results.tx)
+                edgeFlow(result.metric.instance, result.metric.peer, values(result));
+            for (const result of results.rx)
+                edgeFlow(result.metric.peer, result.metric.instance, values(result));
+            const psi = {};
+            for (const [key, list] of [["cpu", results.psiCpu], ["io", results.psiIo], ["memory", results.psiMemory]])
+                for (const result of list)
+                    (psi[result.metric.instance] = psi[result.metric.instance] ?? {})[key] = values(result);
+            const tunnels = {};
+            for (const [key, list] of [["tx", results.tunnelTx], ["rx", results.tunnelRx]])
+                for (const result of list)
+                    (tunnels[root.tunnelKey(result.metric.instance, result.metric.interface)] = tunnels[root.tunnelKey(result.metric.instance, result.metric.interface)] ?? {})[key] = values(result);
+            root.graphs = {
+                from: from,
+                step: step,
+                edges: edges,
+                psi: psi,
+                tunnels: tunnels
+            };
+        });
+    }
+
     property int sliceGeneration: 0
 
     function fetchSlice(): void {
@@ -284,11 +510,16 @@ Item {
             pressure: done => root.ranged(archive, s("load:pressure_ratio"), at - smoothing, at, Math.max(archive ? 3600 : 1, smoothing / 48), done),
             rev: done => point(`last_over_time(${s("fleet_system_info")}[${lookback}])`, done),
             activated: done => point(`last_over_time(${s("fleet_system_activated_seconds")}[${lookback}])`, done),
-            deploy: done => point(`last_over_time(${s("fleet_deploy_seconds")}[${archive ? "30d" : "7d"}])`, done)
+            deploy: done => point(`last_over_time(${s("fleet_deploy_seconds")}[${archive ? "30d" : "7d"}])`, done),
+            tunnelTx: done => archive ? done([]) : point(`sum by (instance, interface) (increase(wireguard_peer_tx_bytes_total[${window}])) / ${smoothing}`, done),
+            tunnelRx: done => archive ? done([]) : point(`sum by (instance, interface) (increase(wireguard_peer_rx_bytes_total[${window}])) / ${smoothing}`, done),
+            tunnelInfo: done => point(`last_over_time(vpn_tunnel_info[${lookback}])`, done),
+            vpnEnabled: done => point(`avg_over_time(vpn_enabled[${window}])`, done)
         }, results => {
             if (generation === root.sliceGeneration)
                 root.slice = root.shapeSlice(results, at - smoothing, at);
         });
+        root.fetchGraphs(at, smoothing, archive, generation);
     }
 
     function value(result: var): real {
@@ -320,31 +551,11 @@ Item {
                 peer.up = Math.max(peer.up, root.value(result));
         }
 
-        const edges = {};
-        const edge = (rawA, rawB) => {
-            const key = [root.canonical(rawA), root.canonical(rawB)].sort().join("\u001f");
-            if (!edges[key]) {
-                const [first, second] = key.split("\u001f");
-                edges[key] = {
-                    a: first,
-                    b: second,
-                    ab: 0,
-                    ba: 0,
-                    direct: NaN,
-                    relay: ""
-                };
-            }
-            return edges[key];
-        };
-        const flow = (from, to, rate) => {
-            if (!isFinite(rate))
-                return;
-            const item = edge(from, to);
-            if (item.a === root.canonical(from))
-                item.ab = Math.max(item.ab, rate);
-            else
-                item.ba = Math.max(item.ba, rate);
-        };
+        const {
+            edges,
+            edge,
+            flow
+        } = root.edgeTable();
         for (const result of results.tx) {
             node(result.metric.peer, result.metric.peer_os);
             flow(result.metric.instance, result.metric.peer, root.value(result));
@@ -438,11 +649,46 @@ Item {
             };
         }
 
+        const tunnels = {};
+        const tunnelOf = result => {
+            const key = root.tunnelKey(result.metric.instance, result.metric.interface);
+            return tunnels[key] ?? (tunnels[key] = {
+                    key: key,
+                    host: result.metric.instance,
+                    iface: result.metric.interface,
+                    server: "",
+                    country: "",
+                    enabled: 1,
+                    tx: 0,
+                    rx: 0
+                });
+        };
+        for (const result of results.tunnelInfo) {
+            const tunnel = tunnelOf(result);
+            tunnel.server = result.metric.server ?? "";
+            tunnel.country = result.metric.country ?? "";
+        }
+        for (const result of results.vpnEnabled)
+            tunnelOf(result).enabled = root.value(result);
+        for (const result of results.tunnelTx)
+            tunnelOf(result).tx = root.value(result);
+        for (const result of results.tunnelRx)
+            tunnelOf(result).rx = root.value(result);
+
+        const traffic = {};
+        for (const item of Object.values(edges)) {
+            traffic[item.a] = (traffic[item.a] ?? 0) + item.ab + item.ba;
+            traffic[item.b] = (traffic[item.b] ?? 0) + item.ab + item.ba;
+        }
+        const visible = Object.values(nodes).filter(item => item.host || item.up > 0 || (traffic[item.name] ?? 0) >= 1);
+        const shown = new Set(visible.map(item => item.name));
+
         return {
             from: from,
             to: to,
-            nodes: Object.values(nodes),
-            edges: Object.values(edges).filter(item => nodes[item.a] && nodes[item.b]),
+            nodes: visible,
+            edges: Object.values(edges).filter(item => shown.has(item.a) && shown.has(item.b)),
+            tunnels: Object.values(tunnels).filter(tunnel => root.hosts.includes(tunnel.host)),
             builds: builds,
             pressure: pressure,
             psi: psi,

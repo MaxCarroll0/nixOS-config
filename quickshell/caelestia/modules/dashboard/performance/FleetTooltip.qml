@@ -9,6 +9,7 @@ StyledRect {
     id: root
 
     property var lines: []
+    property var graph: null
     property point at
     property real boundsWidth
     property real boundsHeight
@@ -54,6 +55,10 @@ StyledRect {
                     color: line.index === 0 ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant
                 }
             }
+        }
+
+        FleetSparkline {
+            graph: root.graph
         }
     }
 }

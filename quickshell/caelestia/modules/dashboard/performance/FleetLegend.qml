@@ -42,7 +42,7 @@ Grid {
                 ctx.stroke();
             };
             const petal = colour => {
-                ctx.fillStyle = Qt.alpha(colour, 0.7);
+                ctx.fillStyle = Qt.alpha(colour, 0.45);
                 ctx.beginPath();
                 ctx.moveTo(4, h / 2);
                 ctx.quadraticCurveTo(w / 2, -2, w - 3, h / 2);
@@ -64,18 +64,58 @@ Grid {
             }
             switch (glyph.kind) {
             case "outline":
-                ctx.strokeStyle = Qt.alpha(p.m3onSurface, 0.75);
-                ctx.fillStyle = Qt.alpha(p.m3onSurface, 0.07);
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.moveTo(1, h - 2);
-                [[5, 4], [9, 7], [13, 2], [17, 6], [21, 3]].forEach(([x, y]) => ctx.lineTo(x, y));
-                ctx.lineTo(21, h - 2);
-                ctx.fill();
+                ctx.strokeStyle = Qt.alpha(p.m3onSurface, 0.4);
+                ctx.lineWidth = 1;
                 ctx.beginPath();
                 ctx.moveTo(1, h - 2);
                 [[5, 4], [9, 7], [13, 2], [17, 6], [21, 3]].forEach(([x, y]) => ctx.lineTo(x, y));
                 ctx.stroke();
+                break;
+            case "loadNow":
+                ctx.fillStyle = Qt.alpha(p.m3onSurface, 0.1);
+                ctx.fillRect(1, 1, w - 2, h - 2);
+                break;
+            case "mean":
+                line([], p.m3onSurface, 2.25);
+                break;
+            case "stallMean":
+                ctx.strokeStyle = c.cpu;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(4, h / 2);
+                ctx.quadraticCurveTo(w / 2, -2, w - 3, h / 2);
+                ctx.quadraticCurveTo(w / 2, h + 2, 4, h / 2);
+                ctx.stroke();
+                break;
+            case "sheath":
+            case "sheathOff":
+                ctx.lineCap = "round";
+                ctx.strokeStyle = glyph.kind === "sheath" ? "#3d6fe0" : p.m3outline;
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash(glyph.kind === "sheath" ? [] : [3, 2]);
+                ctx.strokeRect(2, 2, w - 4, h - 4);
+                if (glyph.kind === "sheath") {
+                    ctx.fillStyle = Qt.alpha("#3d6fe0", 0.3);
+                    ctx.fillRect(2, 2, w - 4, h - 4);
+                }
+                break;
+            case "dots":
+                ctx.fillStyle = p.m3onSurface;
+                for (const x of [4, 11, 18]) {
+                    ctx.beginPath();
+                    ctx.arc(x, h / 2, 2, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                break;
+            case "blob":
+                ctx.fillStyle = Qt.alpha(p.m3primary, 0.9);
+                ctx.beginPath();
+                ctx.arc(7, h / 2, 5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = Qt.alpha(p.m3tertiary, 0.9);
+                ctx.beginPath();
+                ctx.arc(17, h / 2, 5, 0, Math.PI * 2);
+                ctx.fill();
                 break;
             case "ring":
                 line([2, 3], Qt.alpha(p.m3onSurfaceVariant, 0.6), 1);

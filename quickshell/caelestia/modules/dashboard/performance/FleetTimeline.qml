@@ -15,8 +15,8 @@ Item {
     readonly property real plotLeft: labelWidth
     readonly property real plotWidth: width - labelWidth - 4
     readonly property var span: fleet.range
-    readonly property real windowFrom: fleet.at - fleet.smoothing
-    readonly property real windowTo: fleet.at
+    readonly property real windowFrom: fleet.committed - fleet.smoothing
+    readonly property real windowTo: fleet.committed
 
     property var pointer: null
     readonly property var hovered: {
@@ -97,6 +97,9 @@ Item {
         function onAnchorChanged(): void {
             canvas.requestPaint();
         }
+        function onPreviewChanged(): void {
+            canvas.requestPaint();
+        }
         function onSmoothingChanged(): void {
             canvas.requestPaint();
         }
@@ -169,8 +172,12 @@ Item {
                         ctx.moveTo(x, y);
                     open = true;
                 });
-                ctx.strokeStyle = Qt.alpha(Colours.palette.m3onSurface, 0.7);
-                ctx.lineWidth = 1;
+                ctx.lineJoin = "round";
+                ctx.strokeStyle = Qt.alpha(Colours.palette.m3surfaceContainer, 0.85);
+                ctx.lineWidth = 3.5;
+                ctx.stroke();
+                ctx.strokeStyle = Colours.palette.m3onSurface;
+                ctx.lineWidth = 1.5;
                 ctx.stroke();
             });
 
@@ -193,6 +200,16 @@ Item {
             ctx.fillStyle = Colours.palette.m3onSurface;
             ctx.fillRect(left, 0, 2, axisTop);
             ctx.fillRect(right - 2, 0, 2, axisTop);
+
+            const preview = root.fleet.preview;
+            if (preview !== null) {
+                const previewLeft = Math.max(root.plotLeft, root.xOf(preview - root.fleet.smoothing));
+                const previewRight = Math.max(previewLeft + 1, root.xOf(preview));
+                ctx.fillStyle = Qt.alpha(Colours.palette.m3primary, 0.12);
+                ctx.fillRect(previewLeft, 0, previewRight - previewLeft, axisTop);
+                ctx.fillStyle = Qt.alpha(Colours.palette.m3primary, 0.7);
+                ctx.fillRect(previewRight - 1, 0, 1, axisTop);
+            }
 
             if (canvas.selectFrom >= 0 && canvas.selectTo >= 0) {
                 ctx.fillStyle = Qt.alpha(Colours.palette.m3onSurface, 0.18);
@@ -232,7 +249,8 @@ Item {
         onPressed: event => {
             mouse.pressX = event.x;
             mouse.pressAt = root.atOf(event.x);
-            mouse.pressAnchor = root.fleet.at;
+            root.fleet.preview = null;
+            mouse.pressAnchor = root.fleet.committed;
             mouse.pressSmoothing = root.fleet.smoothing;
             if (Math.abs(event.x - windowLeft) < 6)
                 mouse.mode = "from";
@@ -244,11 +262,18 @@ Item {
                 mouse.mode = "click";
         }
 
-        onExited: root.pointer = null
+        onExited: {
+            root.pointer = null;
+            root.fleet.preview = null;
+        }
         onPositionChanged: event => {
             root.pointer = Qt.point(event.x, event.y);
-            if (!pressed)
+            if (!pressed) {
+                const inPlot = event.x >= root.plotLeft && event.x <= root.plotLeft + root.plotWidth && event.y < root.fleet.rows.length * root.rowHeight;
+                const at = root.atOf(event.x);
+                root.fleet.preview = inPlot && Math.abs(at - root.fleet.committed) > (root.span[1] - root.span[0]) / 400 ? Math.min(root.fleet.now, at) : null;
                 return;
+            }
             const at = root.atOf(event.x);
             const start = mouse.pressAnchor - mouse.pressSmoothing;
             if (mouse.mode === "from")
