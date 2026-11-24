@@ -9,6 +9,9 @@ Item {
     property string repo: "https://github.com/MaxCarroll0/nixOS-config"
     readonly property real liveRetention: 7 * 86400 - 3600
     readonly property var hosts: ["pi", "laptop", "desktopnew"]
+    readonly property var tunnelOwners: ({
+            "desktopnew/proton-mc": "mc-server"
+        })
     readonly property var colours: ({
             direct: "#199e70",
             relayed: "#9085e9",
@@ -177,7 +180,7 @@ Item {
             if (xhr.status !== 200) {
                 root.reachable = false;
                 root.error = xhr.status ? `${xhr.status} ${path}` : "pi unreachable";
-                done([]);
+                done([], true);
                 return;
             }
             root.reachable = true;
@@ -185,7 +188,7 @@ Item {
             try {
                 done(JSON.parse(xhr.responseText).data.result);
             } catch (e) {
-                done([]);
+                done([], true);
             }
         };
         xhr.open("GET", `${base}/api/v1/${path}?${query}`);
@@ -211,10 +214,12 @@ Item {
     function gather(jobs: var, finish: var): void {
         const results = {};
         let left = Object.keys(jobs).length;
+        let complete = true;
         for (const key in jobs)
-            jobs[key](result => {
+            jobs[key]((result, failed) => {
                 results[key] = result;
-                if (--left === 0)
+                complete = complete && !failed;
+                if (--left === 0 && complete)
                     finish(results);
             });
     }
@@ -514,7 +519,8 @@ Item {
             tunnelTx: done => archive ? done([]) : point(`sum by (instance, interface) (increase(wireguard_peer_tx_bytes_total[${window}])) / ${smoothing}`, done),
             tunnelRx: done => archive ? done([]) : point(`sum by (instance, interface) (increase(wireguard_peer_rx_bytes_total[${window}])) / ${smoothing}`, done),
             tunnelInfo: done => point(`last_over_time(vpn_tunnel_info[${lookback}])`, done),
-            vpnEnabled: done => point(`avg_over_time(vpn_enabled[${window}])`, done)
+            vpnEnabled: done => point(`avg_over_time(vpn_enabled[${window}])`, done),
+            shared: done => archive ? done([]) : point(`max by (peer) (max_over_time(tailscale_peer_shared[${window}]))`, done)
         }, results => {
             if (generation === root.sliceGeneration)
                 root.slice = root.shapeSlice(results, at - smoothing, at);
@@ -535,6 +541,7 @@ Item {
                     name: name,
                     os: os || "",
                     host: root.hosts.includes(name),
+                    shared: false,
                     up: 0
                 };
             if (os && !nodes[name].os)
@@ -550,6 +557,9 @@ Item {
             if (!peer.host)
                 peer.up = Math.max(peer.up, root.value(result));
         }
+        for (const result of results.shared)
+            if (root.value(result) > 0 && nodes[root.canonical(result.metric.peer)])
+                nodes[root.canonical(result.metric.peer)].shared = true;
 
         const {
             edges,
@@ -655,6 +665,7 @@ Item {
             return tunnels[key] ?? (tunnels[key] = {
                     key: key,
                     host: result.metric.instance,
+                    owner: root.tunnelOwners[`${result.metric.instance}/${result.metric.interface}`] ?? result.metric.instance,
                     iface: result.metric.interface,
                     server: "",
                     country: "",
@@ -668,19 +679,21 @@ Item {
             tunnel.server = result.metric.server ?? "";
             tunnel.country = result.metric.country ?? "";
         }
-        for (const result of results.vpnEnabled)
-            tunnelOf(result).enabled = root.value(result);
         for (const result of results.tunnelTx)
             tunnelOf(result).tx = root.value(result);
         for (const result of results.tunnelRx)
             tunnelOf(result).rx = root.value(result);
+        for (const result of results.vpnEnabled)
+            for (const tunnel of Object.values(tunnels))
+                if (tunnel.host === result.metric.instance && (!result.metric.interface || result.metric.interface === tunnel.iface))
+                    tunnel.enabled = root.value(result);
 
         const traffic = {};
         for (const item of Object.values(edges)) {
             traffic[item.a] = (traffic[item.a] ?? 0) + item.ab + item.ba;
             traffic[item.b] = (traffic[item.b] ?? 0) + item.ab + item.ba;
         }
-        const visible = Object.values(nodes).filter(item => item.host || item.up > 0 || (traffic[item.name] ?? 0) >= 1);
+        const visible = Object.values(nodes).filter(item => item.host || !item.shared || item.up > 0 || (traffic[item.name] ?? 0) >= 1);
         const shown = new Set(visible.map(item => item.name));
 
         return {
@@ -688,7 +701,7 @@ Item {
             to: to,
             nodes: visible,
             edges: Object.values(edges).filter(item => shown.has(item.a) && shown.has(item.b)),
-            tunnels: Object.values(tunnels).filter(tunnel => root.hosts.includes(tunnel.host)),
+            tunnels: Object.values(tunnels).filter(tunnel => shown.has(tunnel.owner)),
             builds: builds,
             pressure: pressure,
             psi: psi,

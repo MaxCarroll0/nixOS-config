@@ -14,7 +14,7 @@ Item {
     readonly property var current: fleet.current
     readonly property var graphs: fleet.graphs
     readonly property var colours: fleet.colours
-    readonly property real legendWidth: 160
+    readonly property real legendWidth: 250
     readonly property real coreRadius: 14
     readonly property real pressureScale: 22
     readonly property real pressureClamp: 2
@@ -24,7 +24,7 @@ Item {
     readonly property real hostRow: 136
     readonly property real tunnelTop: 22
     readonly property real peerRow: height - 50
-    readonly property real dotSpacing: 26
+    readonly property real dotSpacing: 34
     property real clock: 0
     property var pointer: null
     property var lanes: []
@@ -34,6 +34,28 @@ Item {
     property var phases: ({})
     property var blobs: ({})
     property var paths: ({})
+    property var histories: ({})
+    property var bloomShown: ({})
+    property var place: ({})
+    property var widths: ({})
+    property var nodeFade: ({})
+    property var edgeFade: ({})
+    property var laneFade: ({})
+    property var sheathFade: ({})
+    property var badgeFade: ({})
+    property var edgeLooks: ({})
+    property var shownUp: ({})
+    property var tunnelOn: ({})
+    property var nodeNames: []
+    property var nodeAlpha: ({})
+    readonly property int bloomSteps: 96
+    readonly property int boxColumns: 8
+    readonly property int boxRows: 3
+    readonly property real boxCell: 11
+    readonly property real boxReach: 104
+    property var boxCounts: ({})
+    property var boxFade: ({})
+    property var boxHeights: ({})
     readonly property var hovered: pointer ? hit(pointer) : null
 
     readonly property var positions: {
@@ -66,7 +88,7 @@ Item {
     }
 
     function dotSpeed(rate: real): real {
-        return rate < 100 ? 0 : Math.min(200, 12 + 34 * Math.log10(rate / 100));
+        return rate < 100 ? 0 : Math.min(60, 8 + 13 * Math.log10(rate / 100));
     }
 
     function edgeState(edge: var): string {
@@ -105,8 +127,8 @@ Item {
     }
 
     function curve(edge: var): var {
-        const a = root.positions[edge.a];
-        const b = root.positions[edge.b];
+        const a = root.place[edge.a];
+        const b = root.place[edge.b];
         if (!a || !b)
             return null;
         const dx = b.x - a.x;
@@ -118,7 +140,7 @@ Item {
             nx = -nx;
             ny = -ny;
         }
-        const blocked = Object.keys(root.positions).some(name => name !== edge.a && name !== edge.b && root.segmentDistance(root.positions[name], a, b) < root.clearance(name));
+        const blocked = Object.keys(root.place).some(name => name !== edge.a && name !== edge.b && root.segmentDistance(root.place[name], a, b) < root.clearance(name));
         const bend = blocked ? 2 * (root.bloomExtent + 20) : Math.min(30, length * 0.08);
         return {
             a: a,
@@ -171,8 +193,8 @@ Item {
         const key = `${origin}\u001f${builder}`;
         if (root.paths[key])
             return root.paths[key];
-        const from = root.positions[origin];
-        const to = root.positions[builder];
+        const from = root.place[origin];
+        const to = root.place[builder];
         if (!from || !to)
             return null;
         const edge = root.edgeBetween(origin, builder);
@@ -208,7 +230,9 @@ Item {
                 const live = root.current.live ? (now ? (forward ? now.ab : now.ba) : 0) : rate;
                 if (!(rate >= 100) && !(live >= 100))
                     continue;
-                const width = root.laneWidth(rate);
+                const key = `${edge.key}\u001f${forward}`;
+                const target = root.laneWidth(rate);
+                const width = root.widths[key] ?? target;
                 const side = (forward ? 1 : -1) * (1.5 + width / 2);
                 const clipA = root.nodeByName[edge.a]?.host ? root.coreRadius + 2 : 7;
                 const clipB = root.nodeByName[edge.b]?.host ? root.coreRadius + 2 : 7;
@@ -224,49 +248,46 @@ Item {
                 const base = root.along(shape, u, side);
                 const out = root.along(shape, u, side + Math.sign(side) * (width / 2 + 6));
                 lanes.push(Object.assign(root.polyline(points), {
-                    key: `${edge.key}\u001f${forward}`,
+                    key: key,
                     edge: edge,
                     forward: forward,
                     rate: rate,
                     width: width,
+                    target: target,
                     label: out,
                     normal: Qt.point(out.x - base.x, out.y - base.y)
                 }));
             }
         }
 
-        const centre = root.positions.pi;
-        for (const host of root.fleet.hosts) {
-            const origin = root.positions[host];
-            const list = (root.slice.tunnels ?? []).filter(tunnel => tunnel.host === host).sort((a, b) => a.iface.localeCompare(b.iface));
-            if (!origin || !centre)
+        for (const owner of new Set((root.slice.tunnels ?? []).map(tunnel => tunnel.owner))) {
+            const origin = root.place[owner];
+            const list = root.slice.tunnels.filter(tunnel => tunnel.owner === owner).sort((a, b) => a.iface.localeCompare(b.iface));
+            if (!origin)
                 continue;
+            const host = root.nodeByName[owner]?.host ?? false;
+            const clear = host ? root.bloomExtent + 4 : 10;
             list.forEach((tunnel, index) => {
-                const tilt = Math.sign(origin.x - centre.x) * 0.3;
-                const angle = -Math.PI / 2 + tilt + (index - (list.length - 1) / 2) * 0.42;
-                const dx = Math.cos(angle);
-                const dy = Math.sin(angle);
-                const start = Qt.point(origin.x + dx * (root.bloomExtent + 4), origin.y + dy * (root.bloomExtent + 4));
-                const reach = Math.max(24, (start.y - root.tunnelTop) / Math.max(0.2, -dy));
-                const end = Qt.point(start.x + dx * reach, start.y + dy * reach);
-                const live = root.current.tunnels[tunnel.key] ?? {
-                    tx: 0,
-                    rx: 0
-                };
-                const txWidth = root.laneWidth(Math.max(tunnel.tx, 1));
-                const rxWidth = root.laneWidth(Math.max(tunnel.rx, 1));
-                const width = txWidth + rxWidth + 10;
-                const nx = -dy;
-                const ny = dx;
+                const txTarget = root.laneWidth(Math.max(tunnel.tx, 1));
+                const rxTarget = root.laneWidth(Math.max(tunnel.rx, 1));
+                const txWidth = root.widths[`${tunnel.key}\u001ftrue`] ?? txTarget;
+                const rxWidth = root.widths[`${tunnel.key}\u001ffalse`] ?? rxTarget;
+                const width = txWidth + rxWidth + 8;
+                const shift = (index - (list.length - 1) / 2) * (width + 34);
+                const start = Qt.point(origin.x + shift, origin.y - clear);
+                const end = Qt.point(start.x, host ? root.tunnelTop : origin.y - clear - 30);
+                const nx = 1;
+                const ny = 0;
                 const offset = width / 4;
                 tunnels.push({
+                    key: tunnel.key,
                     tunnel: tunnel,
                     start: start,
                     end: end,
                     width: width,
                     colour: tunnel.country ? root.fleet.countryColour(tunnel.country) : Colours.palette.m3onSurfaceVariant
                 });
-                for (const [rate, forward, laneWidth] of [[tunnel.tx, true, txWidth], [tunnel.rx, false, rxWidth]]) {
+                for (const [rate, forward, laneWidth, target] of [[tunnel.tx, true, txWidth, txTarget], [tunnel.rx, false, rxWidth, rxTarget]]) {
                     const sign = forward ? 1 : -1;
                     const a = Qt.point(start.x + nx * offset * sign, start.y + ny * offset * sign);
                     const b = Qt.point(end.x + nx * offset * sign, end.y + ny * offset * sign);
@@ -276,6 +297,7 @@ Item {
                         forward: forward,
                         rate: rate,
                         width: laneWidth,
+                        target: target,
                         label: null
                     }));
                 }
@@ -283,7 +305,7 @@ Item {
         }
 
         for (const build of root.slice.builds) {
-            const origin = root.positions[build.origin];
+            const origin = root.place[build.origin];
             if (!origin)
                 continue;
             const local = build.origin === build.builder;
@@ -292,10 +314,11 @@ Item {
             if (local) {
                 const reach = root.bloomExtent * 0.78;
                 badges.push({
+                    key: `${build.origin}\u001f${build.builder}`,
                     build: build,
                     text: text,
                     width: width,
-                    at: Qt.point(origin.x + reach, origin.y + reach)
+                    at: Qt.point(origin.x - reach, origin.y - reach)
                 });
                 continue;
             }
@@ -307,6 +330,7 @@ Item {
             const at = root.along(shape, 0.5, 0);
             const ahead = root.along(shape, forward ? 0.5 + 0.06 : 0.5 - 0.06, 0);
             badges.push({
+                key: `${build.origin}\u001f${build.builder}`,
                 build: build,
                 text: text,
                 width: width,
@@ -363,59 +387,312 @@ Item {
         }
     }
 
+    function present(store: var, items: var, keyOf: var, blend: real): bool {
+        const seen = new Set();
+        let changed = false;
+        for (const item of items) {
+            const key = keyOf(item);
+            seen.add(key);
+            if (store[key])
+                store[key].item = item;
+            else {
+                store[key] = {
+                    item: item,
+                    alpha: 0
+                };
+                changed = true;
+            }
+        }
+        for (const key of Object.keys(store)) {
+            const entry = store[key];
+            const target = seen.has(key) ? 1 : 0;
+            if (Math.abs(target - entry.alpha) < 0.005) {
+                if (entry.alpha !== target)
+                    changed = true;
+                entry.alpha = target;
+            } else {
+                entry.alpha += (target - entry.alpha) * blend;
+                changed = true;
+            }
+            if (!target && entry.alpha <= 0) {
+                delete store[key];
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    function shown(store: var): var {
+        return Object.values(store).filter(entry => entry.alpha > 0);
+    }
+
+    function settle(map: var, key: string, target: real, blend: real, epsilon: real): bool {
+        const value = map[key];
+        if (value === undefined || !isFinite(value) || !isFinite(target) || Math.abs(target - value) < epsilon) {
+            const changed = value !== target;
+            map[key] = target;
+            return changed;
+        }
+        map[key] = value + (target - value) * blend;
+        return true;
+    }
+
+    function easeScene(blend: real): void {
+        let moved = false;
+        const targets = root.positions;
+        for (const name of Object.keys(targets)) {
+            const target = targets[name];
+            const now = root.place[name];
+            if (!now || Math.abs(target.x - now.x) + Math.abs(target.y - now.y) < 0.2) {
+                if (!now || now.x !== target.x || now.y !== target.y) {
+                    root.place[name] = target;
+                    moved = true;
+                }
+                continue;
+            }
+            root.place[name] = Qt.point(now.x + (target.x - now.x) * blend, now.y + (target.y - now.y) * blend);
+            moved = true;
+        }
+        for (const entry of root.shown(root.laneFade))
+            moved = root.settle(root.widths, entry.item.key, entry.item.target, blend, 0.02) || moved;
+
+        let changed = root.present(root.nodeFade, root.slice.nodes, node => node.name, blend);
+        for (const name of Object.keys(root.place))
+            if (!targets[name] && !root.nodeFade[name]) {
+                delete root.place[name];
+                moved = true;
+            }
+        const names = Object.keys(root.nodeFade).sort();
+        if (names.join("\u001f") !== root.nodeNames.join("\u001f"))
+            root.nodeNames = names;
+        for (const entry of Object.values(root.nodeFade))
+            changed = root.settle(root.shownUp, entry.item.name, entry.item.up, blend, 0.005) || changed;
+        if (changed) {
+            const alpha = {};
+            for (const name of names)
+                alpha[name] = root.nodeFade[name].alpha;
+            root.nodeAlpha = alpha;
+            root.shownUp = Object.assign({}, root.shownUp);
+        }
+
+        changed = root.present(root.edgeFade, root.slice.edges.filter(edge => root.edgeState(edge) !== "hidden"), edge => edge.key, blend) || changed;
+        for (const entry of root.shown(root.edgeFade)) {
+            const state = root.edgeState(entry.item);
+            const look = root.edgeLooks[entry.item.key];
+            if (!look)
+                root.edgeLooks[entry.item.key] = {
+                    state: state === "hidden" ? "direct" : state,
+                    previous: state,
+                    mix: 1
+                };
+            else {
+                if (state !== "hidden" && state !== look.state) {
+                    look.previous = look.state;
+                    look.state = state;
+                    look.mix = 0;
+                }
+                if (look.mix < 1) {
+                    look.mix = look.mix > 0.995 ? 1 : look.mix + (1 - look.mix) * blend;
+                    changed = true;
+                }
+            }
+        }
+        changed = root.present(root.laneFade, root.lanes, lane => lane.key, blend) || changed;
+        changed = root.present(root.sheathFade, root.tunnels, sheath => sheath.key, blend) || changed;
+        changed = root.present(root.badgeFade, root.badges, badge => badge.key, blend) || changed;
+        for (const entry of root.shown(root.sheathFade))
+            changed = root.settle(root.tunnelOn, entry.item.key, entry.item.tunnel.enabled > 0.5 ? 1 : 0, blend, 0.005) || changed;
+
+        if (moved) {
+            root.place = Object.assign({}, root.place);
+            root.rebuild();
+        }
+        if (moved || changed)
+            canvas.requestPaint();
+    }
+
     function tick(dt: real): void {
         const blend = 1 - Math.exp(-dt / 0.3);
-        for (const lane of root.lanes) {
-            const target = root.liveRate(lane);
+        root.easeScene(1 - Math.exp(-dt / 0.35));
+        for (const entry of root.shown(root.laneFade)) {
+            const lane = entry.item;
+            const target = root.lanes.includes(lane) ? root.liveRate(lane) : 0;
             const value = root.eased[lane.key] ?? target;
             const next = value + (target - value) * blend;
             root.eased[lane.key] = next;
             root.phases[lane.key] = ((root.phases[lane.key] ?? Math.random() * root.dotSpacing) + root.dotSpeed(next) * dt) % root.dotSpacing;
         }
-        const follow = 1 - Math.exp(-dt / 0.4);
+        const follow = 1 - Math.exp(-dt / 0.6);
+        const glide = 1 - Math.exp(-dt / 0.3);
+        const slots = root.slots();
+        const boxes = Object.keys(root.boxCounts).map(name => ({
+                    key: name,
+                    count: root.boxCounts[name]
+                }));
+        root.present(root.boxFade, boxes, box => box.key, glide);
+        for (const box of boxes)
+            root.settle(root.boxHeights, box.key, root.boxOf(box.key, box.count)?.height ?? 0, glide, 0.2);
         for (const blob of Object.values(root.blobs)) {
             const target = blob.phase === "done" ? 1 : blob.build.progress;
             blob.shown += (target - blob.shown) * follow;
+            const place = root.blobPlace(blob, slots[blob.key] ?? 0);
+            if (!place)
+                continue;
+            blob.last = blob.last ? Qt.point(blob.last.x + (place.x - blob.last.x) * glide, blob.last.y + (place.y - blob.last.y) * glide) : place;
         }
+        root.easeBlooms(1 - Math.exp(-dt / 0.9));
         root.clock += dt;
+    }
+
+    function historyOf(name: string): var {
+        const samples = (root.slice.pressure[name] ?? []).filter(sample => isFinite(sample.value));
+        if (!samples.length)
+            return {
+                values: null,
+                mean: NaN,
+                last: NaN
+            };
+        const [from, to] = [root.slice.from, root.slice.to];
+        let values = null;
+        if (samples.length >= 2) {
+            values = [];
+            let j = 0;
+            for (let i = 0; i < root.bloomSteps; i++) {
+                const t = from + (to - from) * i / root.bloomSteps;
+                while (j < samples.length - 1 && samples[j + 1].at <= t)
+                    j++;
+                const a = samples[j];
+                const b = samples[Math.min(samples.length - 1, j + 1)];
+                const u = b.at > a.at ? Math.max(0, Math.min(1, (t - a.at) / (b.at - a.at))) : 0;
+                values.push(a.value + (b.value - a.value) * u);
+            }
+        }
+        return {
+            values: values,
+            mean: samples.reduce((sum, sample) => sum + sample.value, 0) / samples.length,
+            last: samples[samples.length - 1].value
+        };
+    }
+
+    function easeValue(shown: real, target: real, blend: real): real {
+        return !isFinite(target) ? shown : isFinite(shown) ? shown + (target - shown) * blend : target;
+    }
+
+    function easeBlooms(blend: real): void {
+        for (const name of root.fleet.hosts) {
+            const history = root.histories[name] ?? root.historyOf(name);
+            const average = root.slice.psi[name] ?? {
+                cpu: 0,
+                io: 0,
+                memory: 0
+            };
+            const live = root.current.live ? (root.current.psi[name] ?? average) : average;
+            const target = {
+                load: root.current.live ? root.current.load[name] : history.last,
+                mean: history.mean,
+                values: history.values,
+                live: live,
+                average: average
+            };
+            const shown = root.bloomShown[name];
+            if (!shown) {
+                root.bloomShown[name] = {
+                    load: target.load,
+                    mean: target.mean,
+                    values: target.values ? target.values.slice() : null,
+                    live: Object.assign({}, live),
+                    average: Object.assign({}, average)
+                };
+                continue;
+            }
+            shown.load = root.easeValue(shown.load, target.load, blend);
+            shown.mean = root.easeValue(shown.mean, target.mean, blend);
+            if (!target.values || !shown.values)
+                shown.values = target.values ? target.values.slice() : null;
+            else
+                for (let i = 0; i < target.values.length; i++)
+                    shown.values[i] = root.easeValue(shown.values[i], target.values[i], blend);
+            for (const key of ["cpu", "io", "memory"]) {
+                shown.live[key] = root.easeValue(shown.live[key] ?? 0, live[key] ?? 0, blend);
+                shown.average[key] = root.easeValue(shown.average[key] ?? 0, average[key] ?? 0, blend);
+            }
+        }
+    }
+
+    function inBox(blob: var): bool {
+        return blob.build.origin === blob.build.builder || blob.phase === "build";
     }
 
     function slots(): var {
         const groups = {};
-        for (const blob of Object.values(root.blobs)) {
-            const build = blob.build;
-            const local = build.origin === build.builder;
-            if (!local && blob.phase !== "build")
-                continue;
-            const group = local ? `local\u001f${build.origin}` : build.builder;
-            (groups[group] = groups[group] ?? []).push(blob.key);
-        }
+        for (const blob of Object.values(root.blobs))
+            if (root.inBox(blob) && blob.phase !== "done" && blob.phase !== "failed")
+                (groups[blob.build.builder] = groups[blob.build.builder] ?? []).push(blob.key);
         const out = {};
         for (const keys of Object.values(groups))
-            keys.sort().forEach((key, index) => out[key] = index - (keys.length - 1) / 2);
+            keys.sort().forEach((key, index) => out[key] = index);
+        const counts = {};
+        for (const name of Object.keys(groups))
+            counts[name] = groups[name].length;
+        root.boxCounts = counts;
         return out;
+    }
+
+    function boxOf(name: string, count: int): var {
+        const names = Array.from(new Set(Object.keys(root.boxCounts).concat(name))).sort();
+        const placed = [];
+        for (const other of names) {
+            const box = root.boxBase(other, other === name ? count : root.boxCounts[other]);
+            if (!box)
+                continue;
+            for (const below of placed)
+                if (below.x < box.x + box.width && box.x < below.x + below.width && below.y < box.y + box.height && box.y < below.y + below.height)
+                    Object.assign(box, {
+                        x: below.x,
+                        y: below.y + below.height + 4
+                    });
+            if (other === name)
+                return box;
+            placed.push(box);
+        }
+        return null;
+    }
+
+    function boxBase(name: string, count: int): var {
+        const centre = root.place[name];
+        if (!centre)
+            return null;
+        const rows = Math.max(1, Math.min(root.boxRows, Math.ceil(count / root.boxColumns)));
+        const width = root.boxColumns * root.boxCell + 10;
+        const middle = root.legendWidth + (root.width - root.legendWidth) / 2;
+        return {
+            x: centre.x > middle - 1 ? centre.x - root.boxReach - width : centre.x + root.boxReach,
+            y: centre.y + root.bloomExtent + 4,
+            width: width,
+            height: rows * root.boxCell + 21
+        };
+    }
+
+    function boxSlot(name: string, slot: int): var {
+        const box = root.boxOf(name, root.boxCounts[name] ?? 1);
+        if (!box)
+            return null;
+        const cell = Math.min(slot, root.boxColumns * root.boxRows - 1);
+        return Qt.point(box.x + 5 + (cell % root.boxColumns + 0.5) * root.boxCell, box.y + 16 + (Math.floor(cell / root.boxColumns) + 0.5) * root.boxCell);
     }
 
     function blobPlace(blob: var, slot: real): var {
         const build = blob.build;
-        const origin = root.positions[build.origin];
-        if (!origin)
+        if (!root.place[build.origin])
             return null;
-        const around = (centre, angle) => Qt.point(centre.x + Math.cos(angle) * root.blobRim, centre.y + Math.sin(angle) * root.blobRim);
-        if (build.origin === build.builder)
-            return around(origin, -Math.PI / 4 + slot * 0.38);
-        const builder = root.positions[build.builder];
+        if (root.inBox(blob))
+            return root.boxSlot(build.builder, slot);
         const path = root.blobPath(build.origin, build.builder);
-        if (!builder || !path || path.points.length < 2)
+        if (!path || path.points.length < 2)
             return null;
         switch (blob.phase) {
         case "upload":
             return root.pointAt(path, blob.shown * path.length);
-        case "build":
-            {
-                const end = path.points[path.points.length - 1];
-                return around(builder, Math.atan2(end.y - builder.y, end.x - builder.x) + slot * 0.38);
-            }
         case "download":
             return root.pointAt(path, (1 - blob.shown) * path.length);
         case "done":
@@ -427,7 +704,7 @@ Item {
 
     function hit(p: var): var {
         for (const blob of Object.values(root.blobs))
-            if (blob.last && Math.hypot(p.x - blob.last.x, p.y - blob.last.y) <= root.blobRadius + 3)
+            if (blob.last && Math.abs(p.x - blob.last.x) <= 6 && Math.abs(p.y - blob.last.y) <= 6)
                 return {
                     kind: "blob",
                     item: blob
@@ -439,7 +716,7 @@ Item {
                     item: badge.build
                 };
         for (const node of root.slice.nodes) {
-            const centre = root.positions[node.name];
+            const centre = root.place[node.name];
             if (centre && Math.hypot(p.x - centre.x, p.y - centre.y) <= (node.host ? root.coreRadius + 12 : 10))
                 return {
                     kind: "node",
@@ -447,7 +724,7 @@ Item {
                 };
         }
         for (const sheath of root.tunnels)
-            if (root.segmentDistance(p, sheath.start, sheath.end) <= sheath.width / 2 + 2 || Math.hypot(p.x - sheath.end.x, p.y - (sheath.end.y - 8)) < 24)
+            if (root.segmentDistance(p, sheath.start, sheath.end) <= sheath.width / 2 + 2 || (p.x > sheath.end.x && p.x - sheath.end.x < sheath.width / 2 + 90 && Math.abs(p.y - sheath.end.y - 8) < 9))
                 return {
                     kind: "tunnel",
                     item: sheath.tunnel
@@ -558,6 +835,7 @@ Item {
             return null;
         const graphs = root.graphs;
         const base = {
+            id: `${hovered.kind}\u001f${hovered.item.key ?? hovered.item.name}`,
             from: graphs.from,
             step: graphs.step,
             span: root.fleet.span(root.fleet.smoothing)
@@ -567,7 +845,7 @@ Item {
         if (hovered.kind === "edge") {
             const series = graphs.edges[hovered.item.key];
             return series ? Object.assign(base, {
-                log: true,
+                floor: 1024,
                 format: root.fleet.rate,
                 series: [
                     {
@@ -584,7 +862,7 @@ Item {
         if (hovered.kind === "tunnel") {
             const series = graphs.tunnels[hovered.item.key];
             return series ? Object.assign(base, {
-                log: true,
+                floor: 1024,
                 format: root.fleet.rate,
                 series: [
                     {
@@ -601,7 +879,7 @@ Item {
         if (hovered.kind === "node" && hovered.item.host) {
             const series = graphs.psi[hovered.item.name];
             return series ? Object.assign(base, {
-                log: false,
+                floor: 0.01,
                 format: root.fleet.percent,
                 series: ["cpu", "io", "memory"].map(key => ({
                             values: series[key] ?? [],
@@ -612,8 +890,13 @@ Item {
         return null;
     }
 
-    onSliceChanged: Qt.callLater(rebuild)
-    onPositionsChanged: Qt.callLater(rebuild)
+    onSliceChanged: {
+        const histories = {};
+        for (const name of root.fleet.hosts)
+            histories[name] = root.historyOf(name);
+        root.histories = histories;
+        Qt.callLater(rebuild);
+    }
     onCurrentChanged: {
         syncBlobs();
         Qt.callLater(rebuild);
@@ -623,7 +906,10 @@ Item {
         canvas.requestPaint();
         flow.requestPaint();
     }
-    onClockChanged: flow.requestPaint()
+    onClockChanged: {
+        flow.requestPaint();
+        blooms.requestPaint();
+    }
     onHoveredChanged: canvas.requestPaint()
 
     Connections {
@@ -649,27 +935,50 @@ Item {
     }
 
     Canvas {
+        id: blooms
+
+        anchors.fill: parent
+        renderStrategy: Canvas.Cooperative
+
+        onPaint: {
+            const ctx = getContext("2d");
+            ctx.reset();
+            for (const name of root.fleet.hosts) {
+                const centre = root.place[name];
+                const shown = root.bloomShown[name];
+                if (centre && shown && root.nodeByName[name])
+                    canvas.drawBloom(ctx, name, centre, shown);
+            }
+        }
+    }
+
+    Canvas {
         id: canvas
 
         anchors.fill: parent
         renderStrategy: Canvas.Cooperative
 
-        function drawEdge(ctx: var, edge: var): void {
-            const state = root.edgeState(edge);
+        function drawEdge(ctx: var, edge: var, alpha: real): void {
+            const look = root.edgeLooks[edge.key];
             const shape = root.curve(edge);
-            if (!shape || state === "hidden")
+            if (!shape || !look)
                 return;
             const hovered = root.hovered?.kind === "edge" && root.hovered.item === edge;
-            ctx.save();
-            ctx.beginPath();
-            ctx.moveTo(shape.a.x, shape.a.y);
-            ctx.quadraticCurveTo(shape.c.x, shape.c.y, shape.b.x, shape.b.y);
-            ctx.lineWidth = hovered ? 3 : 1.5;
-            ctx.lineCap = "round";
-            ctx.strokeStyle = root.colours[state];
-            ctx.setLineDash(state === "offline" ? [0.5, 4] : state === "relayed" ? [6, 4] : []);
-            ctx.stroke();
-            ctx.restore();
+            for (const [state, weight] of [[look.previous, 1 - look.mix], [look.state, look.mix]]) {
+                if (weight <= 0 || state === "hidden")
+                    continue;
+                ctx.save();
+                ctx.globalAlpha = alpha * weight;
+                ctx.beginPath();
+                ctx.moveTo(shape.a.x, shape.a.y);
+                ctx.quadraticCurveTo(shape.c.x, shape.c.y, shape.b.x, shape.b.y);
+                ctx.lineWidth = hovered ? 3 : 1.5;
+                ctx.lineCap = "round";
+                ctx.strokeStyle = root.colours[state];
+                ctx.setLineDash(state === "offline" ? [0.5, 4] : state === "relayed" ? [6, 4] : []);
+                ctx.stroke();
+                ctx.restore();
+            }
         }
 
         function drawLane(ctx: var, lane: var): void {
@@ -687,7 +996,7 @@ Item {
         }
 
         function drawRate(ctx: var, lane: var): void {
-            const rate = root.liveRate(lane);
+            const rate = root.eased[lane.key] ?? root.liveRate(lane);
             if (!lane.label || rate < 1000)
                 return;
             const n = lane.normal;
@@ -709,38 +1018,42 @@ Item {
         }
 
         function drawSheath(ctx: var, sheath: var): void {
-            const on = sheath.tunnel.enabled > 0.5;
+            const on = root.tunnelOn[sheath.key] ?? (sheath.tunnel.enabled > 0.5 ? 1 : 0);
             const hovered = root.hovered?.kind === "tunnel" && root.hovered.item === sheath.tunnel;
+            const top = Math.min(sheath.start.y, sheath.end.y);
+            const height = Math.abs(sheath.end.y - sheath.start.y);
+            const left = sheath.start.x - sheath.width / 2;
             ctx.save();
-            ctx.lineCap = "round";
+            ctx.fillStyle = Qt.alpha(sheath.colour, 0.22 * on);
+            ctx.fillRect(left, top, sheath.width, height);
+            ctx.strokeStyle = Qt.alpha(sheath.colour, hovered ? 1 : 0.4 + 0.3 * on);
+            ctx.lineWidth = hovered ? 2 : 1.25;
+            ctx.setLineDash(on > 0.5 ? [] : [3, 3]);
             ctx.beginPath();
-            ctx.moveTo(sheath.start.x, sheath.start.y);
-            ctx.lineTo(sheath.end.x, sheath.end.y);
-            ctx.lineWidth = sheath.width + 3;
-            ctx.strokeStyle = Qt.alpha(sheath.colour, hovered ? 1 : 0.85);
-            ctx.setLineDash(on ? [] : [4, 3]);
+            ctx.moveTo(left, sheath.start.y);
+            ctx.lineTo(left, sheath.end.y);
+            ctx.moveTo(left + sheath.width, sheath.start.y);
+            ctx.lineTo(left + sheath.width, sheath.end.y);
             ctx.stroke();
             ctx.setLineDash([]);
-            ctx.globalCompositeOperation = "destination-out";
-            ctx.lineWidth = sheath.width;
-            ctx.strokeStyle = "#000000";
+            ctx.lineWidth = hovered ? 3 : 2.5;
+            ctx.beginPath();
+            ctx.moveTo(left - 3, sheath.end.y);
+            ctx.lineTo(left + sheath.width + 3, sheath.end.y);
             ctx.stroke();
-            ctx.globalCompositeOperation = "source-over";
-            if (on) {
-                ctx.strokeStyle = Qt.alpha(sheath.colour, 0.3);
-                ctx.stroke();
-            }
             ctx.restore();
-            ctx.font = "bold 10px sans-serif";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "bottom";
+
             const text = sheath.tunnel.server || sheath.tunnel.iface;
-            const at = Qt.point(sheath.end.x, sheath.end.y - sheath.width / 2 - 3);
-            ctx.lineWidth = 3;
+            ctx.font = "bold 11px sans-serif";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            const x = left + sheath.width + 6;
+            const y = sheath.end.y + 8;
+            ctx.lineWidth = 3.5;
             ctx.strokeStyle = Colours.palette.m3surfaceContainer;
-            ctx.strokeText(text, at.x, at.y);
-            ctx.fillStyle = on ? sheath.colour : Colours.palette.m3outline;
-            ctx.fillText(text, at.x, at.y);
+            ctx.strokeText(text, x, y);
+            ctx.fillStyle = Qt.alpha(sheath.colour, 0.55 + 0.45 * on);
+            ctx.fillText(text, x, y);
         }
 
         function petal(ctx: var, centre: var, angle: real, length: real): void {
@@ -751,45 +1064,57 @@ Item {
             ctx.quadraticCurveTo(centre.x + Math.cos(angle + spread) * length * 1.15, centre.y + Math.sin(angle + spread) * length * 1.15, centre.x, centre.y);
         }
 
-        function smallLabel(ctx: var, text: string, at: var, colour: var): void {
-            ctx.font = "9px sans-serif";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.lineWidth = 3;
-            ctx.strokeStyle = Colours.palette.m3surfaceContainer;
-            ctx.strokeText(text, at.x, at.y);
-            ctx.fillStyle = colour;
-            ctx.fillText(text, at.x, at.y);
+        function placeLabels(ctx: var, centre: var, labels: var): void {
+            ctx.font = "bold 11px sans-serif";
+            const placed = [];
+            for (const label of labels) {
+                const width = ctx.measureText(label.text).width + 4;
+                let reach = label.reach;
+                let box = null;
+                for (let attempt = 0; attempt < 12; attempt++) {
+                    const x = centre.x + Math.cos(label.angle) * (reach + width / 2 * Math.abs(Math.cos(label.angle)));
+                    const y = centre.y + Math.sin(label.angle) * (reach + 7 * Math.abs(Math.sin(label.angle)));
+                    box = {
+                        x: x,
+                        y: y,
+                        width: width,
+                        height: 14
+                    };
+                    if (!placed.some(other => Math.abs(other.x - x) < (other.width + width) / 2 && Math.abs(other.y - y) < 14))
+                        break;
+                    reach += 6;
+                }
+                placed.push(box);
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.lineWidth = 3.5;
+                ctx.strokeStyle = Colours.palette.m3surfaceContainer;
+                ctx.strokeText(label.text, box.x, box.y);
+                ctx.fillStyle = label.colour;
+                ctx.fillText(label.text, box.x, box.y);
+            }
         }
 
-        function drawBloom(ctx: var, name: string, centre: var): void {
+        function drawBloom(ctx: var, name: string, centre: var, shown: var): void {
             const r0 = root.coreRadius;
             const scale = value => r0 + root.pressureScale * Math.min(root.pressureClamp, Math.max(0, value));
-            const average = root.slice.psi[name] ?? {
-                cpu: 0,
-                io: 0,
-                memory: 0
-            };
-            const live = root.current.live ? (root.current.psi[name] ?? average) : average;
-            const samples = (root.slice.pressure[name] ?? []).filter(sample => isFinite(sample.value));
-            const loadNow = root.current.live ? root.current.load[name] : samples[samples.length - 1]?.value;
+            const labels = [];
 
-            if (isFinite(loadNow)) {
+            if (isFinite(shown.load)) {
                 ctx.beginPath();
-                ctx.arc(centre.x, centre.y, scale(loadNow), 0, Math.PI * 2);
+                ctx.arc(centre.x, centre.y, scale(shown.load), 0, Math.PI * 2);
                 ctx.fillStyle = Qt.alpha(Colours.palette.m3onSurface, 0.1);
                 ctx.fill();
             }
 
-            if (samples.length >= 2) {
-                const [from, to] = [root.slice.from, root.slice.to];
-                const points = samples.map(sample => {
-                    const angle = -Math.PI / 2 + 2 * Math.PI * (sample.at - from) / Math.max(1, to - from);
-                    const radius = scale(sample.value);
+            if (shown.values) {
+                const n = shown.values.length;
+                const points = shown.values.map((value, index) => {
+                    const angle = -Math.PI / 2 + 2 * Math.PI * index / n;
+                    const radius = scale(value);
                     return Qt.point(centre.x + Math.cos(angle) * radius, centre.y + Math.sin(angle) * radius);
                 });
                 const mid = (a, b) => Qt.point((a.x + b.x) / 2, (a.y + b.y) / 2);
-                const n = points.length;
                 ctx.beginPath();
                 const start = mid(points[n - 1], points[0]);
                 ctx.moveTo(start.x, start.y);
@@ -803,64 +1128,79 @@ Item {
                 ctx.stroke();
             }
 
-            ctx.save();
-            ctx.setLineDash([2, 3]);
-            ctx.strokeStyle = Qt.alpha(Colours.palette.m3onSurfaceVariant, 0.6);
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.arc(centre.x, centre.y, r0 + root.pressureScale, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.restore();
-
-            if (samples.length) {
-                const mean = samples.reduce((sum, sample) => sum + sample.value, 0) / samples.length;
-                const radius = scale(mean);
+            if (isFinite(shown.mean)) {
+                const radius = scale(shown.mean);
                 ctx.beginPath();
                 ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2);
+                ctx.save();
+                ctx.setLineDash([0.01, 4.5]);
+                ctx.lineCap = "round";
                 ctx.strokeStyle = Colours.palette.m3onSurface;
-                ctx.lineWidth = 2.25;
+                ctx.lineWidth = 2.75;
                 ctx.stroke();
-                const angle = -Math.PI / 4;
-                canvas.smallLabel(ctx, root.fleet.percent(mean), Qt.point(centre.x + Math.cos(angle) * (radius + 9), centre.y + Math.sin(angle) * (radius + 9)), Colours.palette.m3onSurface);
+                ctx.restore();
+                labels.push({
+                    text: root.fleet.percent(root.histories[name]?.mean ?? shown.mean),
+                    angle: -Math.PI / 4,
+                    reach: radius + 4,
+                    colour: Colours.palette.m3onSurface
+                });
             }
 
-            const length = ratio => r0 + 40 * Math.sqrt(Math.min(1, ratio));
+            const length = ratio => r0 + 40 * Math.sqrt(Math.min(1, Math.max(0, ratio)));
             for (const [key, angle] of [["cpu", -Math.PI / 2], ["io", Math.PI / 6], ["memory", 5 * Math.PI / 6]]) {
-                const now = live[key] ?? 0;
+                const now = shown.live[key] ?? 0;
                 if (now > 0.001) {
                     canvas.petal(ctx, centre, angle, length(now));
-                    ctx.fillStyle = Qt.alpha(root.colours[key], 0.45);
+                    ctx.fillStyle = Qt.alpha(root.colours[key], 0.32);
                     ctx.fill();
+                    ctx.strokeStyle = root.colours[key];
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
                 }
-                const mean = average[key] ?? 0;
+                const mean = shown.average[key] ?? 0;
                 if (mean > 0.001) {
                     canvas.petal(ctx, centre, angle, length(mean));
+                    ctx.save();
+                    ctx.setLineDash([0.01, 4.5]);
+                    ctx.lineCap = "round";
                     ctx.strokeStyle = root.colours[key];
-                    ctx.lineWidth = 2.25;
+                    ctx.lineWidth = 2.75;
                     ctx.stroke();
-                    const reach = length(mean) + 8;
-                    canvas.smallLabel(ctx, root.fleet.percent(mean), Qt.point(centre.x + Math.cos(angle) * reach, centre.y + Math.sin(angle) * reach), root.colours[key]);
+                    ctx.restore();
+                    labels.push({
+                        text: root.fleet.percent(root.slice.psi[name]?.[key] ?? mean),
+                        angle: angle,
+                        reach: length(mean) + 2,
+                        colour: root.colours[key]
+                    });
                 }
             }
+            canvas.placeLabels(ctx, centre, labels);
         }
 
-        function drawNode(ctx: var, node: var): void {
-            const centre = root.positions[node.name];
+        function drawNode(ctx: var, node: var, alpha: real): void {
+            const centre = root.place[node.name];
             if (!centre)
                 return;
-            if (node.host)
-                canvas.drawBloom(ctx, node.name, centre);
+            const up = Math.max(0, Math.min(1, root.shownUp[node.name] ?? node.up));
             const radius = node.host ? 5.5 : 4.5;
+            ctx.save();
+            ctx.globalAlpha = alpha;
             ctx.beginPath();
             ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2);
-            if (node.up > 0) {
-                ctx.fillStyle = node.host ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant;
-                ctx.fill();
-            }
-            const partial = node.up > 0 && node.up < 0.99;
-            ctx.strokeStyle = node.up > 0 && !partial ? Colours.palette.m3surfaceContainer : root.colours.offline;
-            ctx.lineWidth = partial || node.up <= 0 ? 2 : 1.5;
+            ctx.fillStyle = Qt.alpha(node.host ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant, Math.min(1, up * 4));
+            ctx.fill();
+            ctx.strokeStyle = Colours.palette.m3surfaceContainer;
+            ctx.lineWidth = 1.5;
             ctx.stroke();
+            const broken = 1 - Math.min(1, Math.max(0, (up - 0.9) / 0.09));
+            if (broken > 0) {
+                ctx.strokeStyle = Qt.alpha(root.colours.offline, broken);
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+            ctx.restore();
             if (root.hovered?.kind === "node" && root.hovered.item === node) {
                 ctx.beginPath();
                 ctx.arc(centre.x, centre.y, radius + 4, 0, Math.PI * 2);
@@ -870,8 +1210,10 @@ Item {
             }
         }
 
-        function drawBadge(ctx: var, badge: var): void {
+        function drawBadge(ctx: var, badge: var, alpha: real): void {
             const at = badge.at;
+            ctx.save();
+            ctx.globalAlpha = alpha;
             const hovered = root.hovered?.kind === "build" && root.hovered.item === badge.build;
             if (badge.angle !== undefined) {
                 ctx.save();
@@ -898,23 +1240,25 @@ Item {
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             ctx.fillText(badge.text, at.x, at.y);
+            ctx.restore();
         }
 
         onPaint: {
             const ctx = getContext("2d");
             ctx.reset();
-            for (const sheath of root.tunnels)
-                canvas.drawSheath(ctx, sheath);
-            for (const lane of root.lanes)
-                canvas.drawLane(ctx, lane);
-            for (const edge of root.slice.edges)
-                canvas.drawEdge(ctx, edge);
-            for (const node of root.slice.nodes)
-                canvas.drawNode(ctx, node);
-            for (const lane of root.lanes)
-                canvas.drawRate(ctx, lane);
-            for (const badge of root.badges)
-                canvas.drawBadge(ctx, badge);
+            const faded = (store, draw) => {
+                for (const entry of root.shown(store)) {
+                    ctx.globalAlpha = entry.alpha;
+                    draw(entry.item, entry.alpha);
+                }
+                ctx.globalAlpha = 1;
+            };
+            faded(root.sheathFade, sheath => canvas.drawSheath(ctx, sheath));
+            faded(root.laneFade, lane => canvas.drawLane(ctx, lane));
+            faded(root.edgeFade, (edge, alpha) => canvas.drawEdge(ctx, edge, alpha));
+            faded(root.nodeFade, (node, alpha) => canvas.drawNode(ctx, node, alpha));
+            faded(root.laneFade, lane => canvas.drawRate(ctx, lane));
+            faded(root.badgeFade, (badge, alpha) => canvas.drawBadge(ctx, badge, alpha));
         }
     }
 
@@ -924,13 +1268,13 @@ Item {
         anchors.fill: parent
         renderStrategy: Canvas.Cooperative
 
-        function drawDots(ctx: var, lane: var): void {
+        function drawDots(ctx: var, lane: var, alpha: real): void {
             const rate = root.eased[lane.key] ?? 0;
             if (rate < 100 || lane.points.length < 2)
                 return;
-            ctx.globalAlpha = Math.min(1, Math.log10(rate / 100) + 0.35);
+            ctx.globalAlpha = alpha * Math.min(1, Math.log10(rate / 100) + 0.35);
             ctx.fillStyle = lane.tunnel && lane.tunnel.enabled <= 0.5 ? Colours.palette.m3outline : Colours.palette.m3onSurface;
-            const radius = Math.max(1.4, root.laneWidth(rate) / 2 + 0.4);
+            const radius = Math.max(2.6, root.laneWidth(rate) / 2 + 1.6);
             for (let s = root.phases[lane.key] ?? 0; s < lane.length; s += root.dotSpacing) {
                 const point = root.pointAt(lane, s);
                 ctx.beginPath();
@@ -940,75 +1284,57 @@ Item {
             ctx.globalAlpha = 1;
         }
 
-        function drawBlob(ctx: var, blob: var, slot: real): void {
-            const place = root.blobPlace(blob, slot);
+        function drawBox(ctx: var, name: string, count: int, alpha: real): void {
+            const box = root.boxOf(name, count);
+            if (!box)
+                return;
+            ctx.globalAlpha = alpha;
+            ctx.beginPath();
+            ctx.roundedRect(box.x, box.y, box.width, root.boxHeights[name] ?? box.height, 5, 5);
+            ctx.fillStyle = Qt.alpha(Colours.palette.m3surfaceContainerHighest, 0.85);
+            ctx.fill();
+            ctx.strokeStyle = Qt.alpha(Colours.palette.m3outline, 0.6);
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.font = "bold 10px sans-serif";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            ctx.fillStyle = Colours.palette.m3onSurfaceVariant;
+            ctx.fillText(`building ${root.boxCounts[name] ?? count}`, box.x + 6, box.y + 9);
+            ctx.globalAlpha = 1;
+        }
+
+        function drawBlob(ctx: var, blob: var): void {
+            const place = blob.last;
             if (!place)
                 return;
-            blob.last = place;
             const age = root.clock - blob.changedAt;
-            const pop = Math.min(1, age / 0.6);
+            const fade = Math.min(1, age / 0.6);
             const palette = Colours.palette;
             const colour = blob.phase === "failed" ? root.colours.offline : blob.phase === "download" || blob.phase === "done" ? palette.m3tertiary : palette.m3primary;
-            let radius = root.blobRadius;
-            let alpha = 1;
-            if (blob.phase === "build")
-                radius += 1.3 * Math.sin(root.clock * 5);
-            if (blob.phase === "download")
-                radius *= 1 + 0.6 * (1 - pop) * Math.sin(Math.PI * pop);
-            if (blob.phase === "done") {
-                radius *= 1 - pop;
-                alpha = 1 - pop;
-            }
-            if (blob.phase === "failed")
-                alpha = Math.max(0, 1 - age / 1.5);
-            if (alpha <= 0 || radius <= 0.2) {
-                if (pop >= 1)
-                    return;
-            }
-            if (age < 0.6 && blob.phase !== "upload" && blob.phase !== "build") {
-                ctx.beginPath();
-                ctx.arc(place.x, place.y, root.blobRadius + 20 * pop, 0, Math.PI * 2);
-                ctx.strokeStyle = Qt.alpha(colour, 1 - pop);
-                ctx.lineWidth = 3 * (1 - pop) + 0.5;
-                ctx.stroke();
-            }
-            if (radius > 0.2) {
-                ctx.beginPath();
-                ctx.arc(place.x, place.y, radius, 0, Math.PI * 2);
-                ctx.fillStyle = Qt.alpha(colour, 0.9 * alpha);
-                ctx.fill();
-                ctx.strokeStyle = Qt.alpha(palette.m3surfaceContainer, alpha);
-                ctx.lineWidth = 1.5;
-                ctx.stroke();
-                if (age < 0.5 && blob.phase !== "upload" && blob.phase !== "build") {
-                    ctx.fillStyle = Qt.alpha("#ffffff", 0.9 * (1 - age / 0.5));
-                    ctx.fill();
-                }
-            }
-            if (blob.phase === "upload" || blob.phase === "download") {
-                ctx.beginPath();
-                ctx.arc(place.x, place.y, root.blobRadius + 3, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * Math.max(0, Math.min(1, blob.shown)));
-                ctx.strokeStyle = colour;
-                ctx.lineWidth = 2;
-                ctx.stroke();
-            }
+            const ending = blob.phase === "done" || blob.phase === "failed";
+            const alpha = ending ? 1 - fade : 1;
+            if (alpha <= 0)
+                return;
+            const half = root.inBox(blob) || ending ? 3.5 : 5.5;
+            ctx.fillStyle = Qt.alpha(colour, 0.9 * alpha);
+            ctx.fillRect(place.x - half, place.y - half, half * 2, half * 2);
             if (root.hovered?.kind === "blob" && root.hovered.item === blob) {
-                ctx.beginPath();
-                ctx.arc(place.x, place.y, root.blobRadius + 6, 0, Math.PI * 2);
                 ctx.strokeStyle = palette.m3onSurface;
                 ctx.lineWidth = 1.5;
-                ctx.stroke();
+                ctx.strokeRect(place.x - half - 2, place.y - half - 2, half * 2 + 4, half * 2 + 4);
             }
         }
 
         onPaint: {
             const ctx = getContext("2d");
             ctx.reset();
-            for (const lane of root.lanes)
-                flow.drawDots(ctx, lane);
-            const slots = root.slots();
+            for (const entry of root.shown(root.laneFade))
+                flow.drawDots(ctx, entry.item, entry.alpha);
+            for (const entry of root.shown(root.boxFade))
+                flow.drawBox(ctx, entry.item.key, entry.item.count, entry.alpha);
             for (const blob of Object.values(root.blobs))
-                flow.drawBlob(ctx, blob, slots[blob.key] ?? 0);
+                flow.drawBlob(ctx, blob);
         }
     }
 
@@ -1027,17 +1353,23 @@ Item {
     }
 
     Repeater {
-        model: root.slice.nodes
+        model: root.nodeNames
 
         delegate: Rectangle {
             id: label
 
-            required property var modelData
-            readonly property var centre: root.positions[modelData.name] ?? Qt.point(-1000, -1000)
-            readonly property var deploy: root.slice.deploys[modelData.name] ?? null
+            required property string modelData
+            readonly property var node: root.nodeByName[modelData] ?? root.nodeFade[modelData]?.item ?? ({
+                    name: modelData,
+                    host: false,
+                    up: 0
+                })
+            readonly property var centre: root.place[modelData] ?? Qt.point(-1000, -1000)
+            readonly property var deploy: root.slice.deploys[modelData] ?? null
 
+            opacity: root.nodeAlpha[modelData] ?? 0
             x: centre.x - width / 2
-            y: modelData.host ? centre.y + root.bloomExtent + 2 : centre.y + 8
+            y: node.host ? centre.y + root.bloomExtent + 2 : centre.y + 8
             implicitWidth: column.implicitWidth + 12
             implicitHeight: column.implicitHeight + 4
             radius: 6
@@ -1051,9 +1383,9 @@ Item {
 
                 StyledText {
                     Layout.alignment: Qt.AlignHCenter
-                    text: root.fleet.displayName(label.modelData.name)
-                    font: label.modelData.host ? Tokens.font.title.small : Tokens.font.body.small
-                    color: label.modelData.up > 0 ? Colours.palette.m3onSurface : Colours.palette.m3outline
+                    text: root.fleet.displayName(label.node.name)
+                    font: label.node.host ? Tokens.font.title.small : Tokens.font.body.small
+                    color: Qt.tint(Colours.palette.m3outline, Qt.alpha(Colours.palette.m3onSurface, Math.min(1, (root.shownUp[label.modelData] ?? label.node.up) * 4)))
                 }
 
                 StyledText {

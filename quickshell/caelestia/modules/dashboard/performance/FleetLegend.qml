@@ -48,6 +48,9 @@ Grid {
                 ctx.quadraticCurveTo(w / 2, -2, w - 3, h / 2);
                 ctx.quadraticCurveTo(w / 2, h + 2, 4, h / 2);
                 ctx.fill();
+                ctx.strokeStyle = colour;
+                ctx.lineWidth = 1.25;
+                ctx.stroke();
             };
             const bar = colour => {
                 ctx.fillStyle = colour;
@@ -76,11 +79,14 @@ Grid {
                 ctx.fillRect(1, 1, w - 2, h - 2);
                 break;
             case "mean":
-                line([], p.m3onSurface, 2.25);
+                ctx.lineCap = "round";
+                line([0.01, 4.5], p.m3onSurface, 2.75);
                 break;
             case "stallMean":
+                ctx.lineCap = "round";
+                ctx.setLineDash([0.01, 4.5]);
                 ctx.strokeStyle = c.cpu;
-                ctx.lineWidth = 2;
+                ctx.lineWidth = 2.75;
                 ctx.beginPath();
                 ctx.moveTo(4, h / 2);
                 ctx.quadraticCurveTo(w / 2, -2, w - 3, h / 2);
@@ -89,15 +95,25 @@ Grid {
                 break;
             case "sheath":
             case "sheathOff":
-                ctx.lineCap = "round";
-                ctx.strokeStyle = glyph.kind === "sheath" ? "#3d6fe0" : p.m3outline;
-                ctx.lineWidth = 1.5;
-                ctx.setLineDash(glyph.kind === "sheath" ? [] : [3, 2]);
-                ctx.strokeRect(2, 2, w - 4, h - 4);
                 if (glyph.kind === "sheath") {
-                    ctx.fillStyle = Qt.alpha("#3d6fe0", 0.3);
-                    ctx.fillRect(2, 2, w - 4, h - 4);
+                    ctx.fillStyle = Qt.alpha("#3d6fe0", 0.22);
+                    ctx.fillRect(1, 3, w - 6, h - 6);
                 }
+                ctx.strokeStyle = Qt.alpha("#3d6fe0", glyph.kind === "sheath" ? 0.7 : 0.4);
+                ctx.lineWidth = 1.25;
+                ctx.setLineDash(glyph.kind === "sheath" ? [] : [3, 3]);
+                ctx.beginPath();
+                ctx.moveTo(1, 3);
+                ctx.lineTo(w - 5, 3);
+                ctx.moveTo(1, h - 3);
+                ctx.lineTo(w - 5, h - 3);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.moveTo(w - 5, 1);
+                ctx.lineTo(w - 5, h - 1);
+                ctx.stroke();
                 break;
             case "dots":
                 ctx.fillStyle = p.m3onSurface;
@@ -109,16 +125,9 @@ Grid {
                 break;
             case "blob":
                 ctx.fillStyle = Qt.alpha(p.m3primary, 0.9);
-                ctx.beginPath();
-                ctx.arc(7, h / 2, 5, 0, Math.PI * 2);
-                ctx.fill();
+                ctx.fillRect(3, h / 2 - 4, 8, 8);
                 ctx.fillStyle = Qt.alpha(p.m3tertiary, 0.9);
-                ctx.beginPath();
-                ctx.arc(17, h / 2, 5, 0, Math.PI * 2);
-                ctx.fill();
-                break;
-            case "ring":
-                line([2, 3], Qt.alpha(p.m3onSurfaceVariant, 0.6), 1);
+                ctx.fillRect(13, h / 2 - 4, 8, 8);
                 break;
             case "cpu":
                 petal(c.cpu);

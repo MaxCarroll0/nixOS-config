@@ -1,70 +1,144 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
+import Caelestia
+import Caelestia.Components
 import qs.services
 
-Canvas {
+Item {
     id: root
 
     property var graph: null
+    readonly property var series: graph ? Array.from(graph.series) : []
+    readonly property real peak: series.reduce((top, item) => Array.from(item.values).reduce((high, value) => isFinite(value) ? Math.max(high, value) : high, top), 0)
+    readonly property real targetMax: nice(Math.max(graph?.floor ?? 1, peak))
+    property real smoothMax: 1
+    property string shownId: ""
+    readonly property real axisWidth: 46
 
-    visible: graph !== null
-    implicitWidth: 240
-    implicitHeight: visible ? 64 : 0
-    onGraphChanged: requestPaint()
-
-    onPaint: {
-        const ctx = getContext("2d");
-        ctx.reset();
-        const graph = root.graph;
-        if (!graph)
-            return;
-        const scale = graph.log ? value => Math.log10(1 + Math.max(0, value) / 100) : value => Math.max(0, value);
-        const series = Array.from(graph.series);
-        const raw = series.reduce((all, item) => all.concat(Array.from(item.values).filter(isFinite)), []);
-        const peakRaw = raw.length ? Math.max(...raw) : 0;
-        const peak = Math.max(graph.log ? 1 : 0.01, scale(peakRaw));
-        const top = 12;
-        const bottom = height - 12;
-        const count = Math.max(...series.map(item => item.values.length), 2);
-        const xOf = index => width * index / (count - 1);
-        const yOf = value => bottom - (bottom - top) * scale(value) / peak;
-
-        ctx.fillStyle = Qt.alpha(Colours.palette.m3onSurface, 0.05);
-        ctx.fillRect(0, top, width, bottom - top);
-        for (const item of series) {
-            ctx.beginPath();
-            let open = false;
-            Array.from(item.values).forEach((value, index) => {
-                if (!isFinite(value)) {
-                    open = false;
-                    return;
-                }
-                if (open)
-                    ctx.lineTo(xOf(index), yOf(value));
-                else
-                    ctx.moveTo(xOf(index), yOf(value));
-                open = true;
-            });
-            ctx.strokeStyle = item.colour;
-            ctx.lineWidth = 1.5;
-            ctx.lineJoin = "round";
-            ctx.stroke();
-        }
-
-        ctx.font = "9px sans-serif";
-        ctx.fillStyle = Colours.palette.m3onSurfaceVariant;
-        ctx.textBaseline = "bottom";
-        ctx.textAlign = "left";
-        ctx.fillText(`peak ${graph.format(peakRaw)}${graph.log ? ", log" : ""}`, 0, top - 1);
-        ctx.textBaseline = "top";
-        ctx.fillText(`-${graph.span}`, 0, bottom + 1);
-        ctx.textAlign = "right";
-        ctx.fillText("now", width, bottom + 1);
+    function nice(value: real): real {
+        const power = Math.pow(10, Math.floor(Math.log10(value)));
+        for (const step of [1, 2, 5, 10])
+            if (value <= step * power * 1.0001)
+                return step * power;
+        return 10 * power;
     }
 
-    Connections {
-        target: Colours
-        function onPaletteChanged(): void {
-            root.requestPaint();
+    function follow(): void {
+        const id = `${graph?.id ?? ""}\u001f${peak > 0}`;
+        if (id === shownId) {
+            smoothMax = targetMax;
+            return;
         }
+        shownId = id;
+        scaleAnimation.enabled = false;
+        smoothMax = targetMax;
+        scaleAnimation.enabled = true;
+    }
+
+    onTargetMaxChanged: follow()
+    onGraphChanged: follow()
+
+    visible: graph !== null
+    implicitWidth: 280
+    implicitHeight: visible ? 84 : 0
+
+    Behavior on smoothMax {
+        id: scaleAnimation
+
+        NumberAnimation {
+            duration: 400
+            easing.type: Easing.OutCubic
+        }
+    }
+
+    Item {
+        id: plot
+
+        anchors.left: parent.left
+        anchors.leftMargin: root.axisWidth
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.topMargin: 6
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 16
+
+        Repeater {
+            model: 3
+
+            Rectangle {
+                required property int index
+
+                width: plot.width
+                height: 1
+                y: plot.height * index / 2
+                color: Qt.alpha(Colours.palette.m3onSurface, index === 2 ? 0.25 : 0.1)
+            }
+        }
+
+        Repeater {
+            model: root.series
+
+            SparklineItem {
+                id: line
+
+                required property var modelData
+
+                anchors.fill: parent
+                line1: CircularBuffer {
+                    id: buffer
+                }
+                line1Color: modelData.colour
+                line1FillAlpha: 0.15
+                lineWidth: 1.5
+                maxValue: root.smoothMax
+                historyLength: buffer.capacity
+                slideProgress: 1
+
+                function load(): void {
+                    const values = Array.from(modelData.values);
+                    buffer.capacity = Math.max(2, values.length);
+                    buffer.clear();
+                    for (const value of values)
+                        buffer.push(isFinite(value) ? Math.max(0, value) : 0);
+                }
+
+                onModelDataChanged: load()
+                Component.onCompleted: load()
+            }
+        }
+    }
+
+    Repeater {
+        model: 3
+
+        Text {
+            required property int index
+
+            anchors.right: plot.left
+            anchors.rightMargin: 4
+            y: plot.y + plot.height * index / 2 - height / 2
+            text: index === 2 ? "0" : root.graph ? root.graph.format(root.smoothMax * (1 - index / 2)) : ""
+            font.pixelSize: 9
+            color: Colours.palette.m3onSurfaceVariant
+        }
+    }
+
+    Text {
+        anchors.left: plot.left
+        anchors.top: plot.bottom
+        anchors.topMargin: 2
+        text: root.graph ? `-${root.graph.span}` : ""
+        font.pixelSize: 9
+        color: Colours.palette.m3onSurfaceVariant
+    }
+
+    Text {
+        anchors.right: plot.right
+        anchors.top: plot.bottom
+        anchors.topMargin: 2
+        text: "now"
+        font.pixelSize: 9
+        color: Colours.palette.m3onSurfaceVariant
     }
 }

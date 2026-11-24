@@ -9,6 +9,9 @@
 
 let
   cfg = config.local.monitoring;
+  tailscalePeerNames = {
+    "100.125.126.78" = "mc VPS";
+  };
 
   collectors = import ./collector-lib.nix { inherit pkgs lib; };
   inherit (collectors)
@@ -335,18 +338,22 @@ let
         echo '# TYPE tailscale_peer_direct gauge'
         echo '# HELP tailscale_peer_last_handshake_seconds Unix time of the last wireguard handshake.'
         echo '# TYPE tailscale_peer_last_handshake_seconds gauge'
+        echo '# HELP tailscale_peer_shared Whether the peer is shared in from another tailnet.'
+        echo '# TYPE tailscale_peer_shared gauge'
 
-        jq -r '.Peer[]
-               | [.HostName, .OS, .Relay, (.Online|tostring),
+        jq -r --argjson names ${lib.escapeShellArg (builtins.toJSON tailscalePeerNames)} '. as $status | .Peer[]
+               | .TailscaleIPs[0] as $ip
+               | [($names[$ip] // (if .ShareeNode then ((($status.User[.UserID|tostring].DisplayName // "shared") | split(" ")[0]) + " ." + ($ip | split(".")[3])) else .HostName end)), .OS, .Relay, (.Online|tostring),
                   (if .CurAddr == "" then "0" else "1" end),
                   (.RxBytes|tostring), (.TxBytes|tostring),
-                  (.LastHandshake // "")] | join("\u001f")' <<<"$status" \
-        | while IFS=$'\x1f' read -r peer os relay online direct rx tx handshake; do
+                  (.LastHandshake // ""), ((.ShareeNode // false)|tostring)] | join("\u001f")' <<<"$status" \
+        | while IFS=$'\x1f' read -r peer os relay online direct rx tx handshake shared; do
             labels="peer=\"$peer\",peer_os=\"$os\",relay=\"$relay\""
             printf 'tailscale_peer_rx_bytes_total{%s} %s\n' "$labels" "$rx"
             printf 'tailscale_peer_tx_bytes_total{%s} %s\n' "$labels" "$tx"
             printf 'tailscale_peer_online{%s} %s\n' "$labels" "$([ "$online" = true ] && echo 1 || echo 0)"
             printf 'tailscale_peer_direct{%s} %s\n' "$labels" "$direct"
+            printf 'tailscale_peer_shared{%s} %s\n' "$labels" "$([ "$shared" = true ] && echo 1 || echo 0)"
             epoch=0
             case "$handshake" in
               ""|0001-01-01*) ;;
