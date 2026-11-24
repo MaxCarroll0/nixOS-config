@@ -606,7 +606,17 @@ in
   config = lib.mkIf cfg.exporter.enable (
     lib.mkMerge [
       {
-        systemd.tmpfiles.rules = [ "d ${textfileDir} 0755 root root -" ];
+        systemd.tmpfiles.rules = [
+          "d ${textfileDir} 0755 root root -"
+        ]
+        ++ map (name: "r ${textfileDir}/${name}.prom") (
+          lib.filter (name: !(config.systemd.services ? "textfile-${name}")) [
+            "power-model"
+            "tailscale"
+            "wireguard"
+            "pi-firmware"
+          ]
+        );
 
         services.prometheus.exporters.node.extraFlags = [
           "--collector.textfile.directory=${textfileDir}"
@@ -665,9 +675,7 @@ in
           ]
         );
 
-        systemd.timers.textfile-tailscale = lib.mkIf config.services.tailscale.enable (
-          collectorTimer "5s"
-        );
+        systemd.timers.textfile-tailscale = lib.mkIf config.services.tailscale.enable (collectorTimer "5s");
 
         systemd.services.textfile-wireguard = lib.mkIf hasWireguard (
           lib.mkMerge [

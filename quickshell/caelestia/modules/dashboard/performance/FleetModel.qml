@@ -258,7 +258,13 @@ Item {
     }
 
     function canonical(name: string): string {
-        return /@github-/.test(name ?? "") ? "github runners" : name;
+        if (/@github-/.test(name ?? ""))
+            return "github runners";
+        return /^(.+) \.\d+$/.exec(name ?? "")?.[1] ?? name;
+    }
+
+    function deviceOf(name: string): string {
+        return / (\.\d+)$/.exec(name ?? "")?.[1] ?? "";
     }
 
     function merge(into: var, values: var, combine: var): var {
@@ -307,7 +313,8 @@ Item {
     }
 
     function edgeKey(a: string, b: string): string {
-        return [root.canonical(a), root.canonical(b)].sort().join("\u001f");
+        const device = root.deviceOf(a) || root.deviceOf(b);
+        return [root.canonical(a), root.canonical(b)].sort().concat(device ? [device] : []).join("\u001f");
     }
 
     function edgeTable(): var {
@@ -315,11 +322,12 @@ Item {
         const edge = (rawA, rawB) => {
             const key = root.edgeKey(rawA, rawB);
             if (!edges[key]) {
-                const [first, second] = key.split("\u001f");
+                const [first, second, device] = key.split("\u001f");
                 edges[key] = {
                     key: key,
                     a: first,
                     b: second,
+                    device: device ?? "",
                     ab: 0,
                     ba: 0,
                     direct: NaN,
@@ -695,12 +703,23 @@ Item {
         }
         const visible = Object.values(nodes).filter(item => item.host || !item.shared || item.up > 0 || (traffic[item.name] ?? 0) >= 1);
         const shown = new Set(visible.map(item => item.name));
+        const pairs = {};
+        for (const item of Object.values(edges).filter(item => shown.has(item.a) && shown.has(item.b)))
+            (pairs[`${item.a}\u001f${item.b}`] = pairs[`${item.a}\u001f${item.b}`] ?? []).push(item);
+        const kept = [];
+        for (const group of Object.values(pairs)) {
+            const active = group.filter(item => !item.device || item.ab + item.ba >= 1).sort((x, y) => x.device.localeCompare(y.device));
+            const lines = active.length ? active : [group.reduce((best, item) => (item.online ?? 0) > (best.online ?? 0) ? item : best)];
+            lines.forEach((item, index) => kept.push(Object.assign(item, {
+                        fan: index - (lines.length - 1) / 2
+                    })));
+        }
 
         return {
             from: from,
             to: to,
             nodes: visible,
-            edges: Object.values(edges).filter(item => shown.has(item.a) && shown.has(item.b)),
+            edges: kept,
             tunnels: Object.values(tunnels).filter(tunnel => shown.has(tunnel.owner)),
             builds: builds,
             pressure: pressure,

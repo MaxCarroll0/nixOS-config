@@ -2,6 +2,8 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Layouts
+import Quickshell
+import Quickshell.Io
 import Caelestia.Config
 import qs.components
 import qs.services
@@ -16,15 +18,16 @@ Item {
     readonly property var colours: fleet.colours
     readonly property real legendWidth: 250
     readonly property real coreRadius: 14
-    readonly property real pressureScale: 22
+    readonly property real pressureScale: 28
     readonly property real pressureClamp: 2
-    readonly property real bloomExtent: coreRadius + pressureScale * pressureClamp
+    readonly property real bloomExtent: coreRadius + pressureScale * Math.sqrt(pressureClamp)
     readonly property real blobRadius: 9
     readonly property real blobRim: bloomExtent + 9
     readonly property real hostRow: 136
     readonly property real tunnelTop: 22
     readonly property real peerRow: height - 50
-    readonly property real dotSpacing: 34
+    readonly property real dotGrid: 9
+    readonly property real dotSpeed: 14
     property real clock: 0
     property var pointer: null
     property var lanes: []
@@ -58,22 +61,47 @@ Item {
     property var boxHeights: ({})
     readonly property var hovered: pointer ? hit(pointer) : null
 
-    readonly property var positions: {
+    property var order: []
+    property var dragging: null
+
+    function arranged(defaults: var): var {
+        const slots = Object.values(defaults).sort((a, b) => a.x - b.x);
+        const names = Object.keys(defaults).sort((a, b) => defaults[a].x - defaults[b].x);
+        const saved = names.filter(name => root.order.includes(name)).sort((a, b) => root.order.indexOf(a) - root.order.indexOf(b));
         const out = {};
+        names.forEach((name, index) => out[root.order.includes(name) ? saved.shift() : name] = slots[index]);
+        return out;
+    }
+
+    readonly property var positions: {
+        const hosts = {};
         const left = root.legendWidth;
         const span = width - left;
         const cx = left + span / 2;
-        out.pi = Qt.point(cx, root.hostRow);
+        hosts.pi = Qt.point(cx, root.hostRow);
         fleet.hosts.filter(name => name !== "pi").forEach((name, index) => {
             const side = index % 2 === 0 ? -1 : 1;
-            out[name] = Qt.point(cx + side * (Math.floor(index / 2) + 1) * span * 0.34, root.hostRow);
+            hosts[name] = Qt.point(cx + side * (Math.floor(index / 2) + 1) * span * 0.34, root.hostRow);
         });
-        const peers = slice.nodes.filter(node => !node.host).sort((a, b) => (a.os + a.name).localeCompare(b.os + b.name));
-        peers.forEach((node, index) => {
-            const spread = peers.length === 1 ? 0.5 : index / (peers.length - 1);
-            out[node.name] = Qt.point(left + span * (0.24 + 0.52 * spread), root.peerRow);
+        const peers = {};
+        const list = slice.nodes.filter(node => !node.host).sort((a, b) => (a.os + a.name).localeCompare(b.os + b.name));
+        list.forEach((node, index) => {
+            const spread = list.length === 1 ? 0.5 : index / (list.length - 1);
+            peers[node.name] = Qt.point(left + span * (0.24 + 0.52 * spread), root.peerRow);
         });
+        const out = Object.assign(root.arranged(hosts), root.arranged(peers));
+        if (root.dragging && out[root.dragging.name])
+            out[root.dragging.name] = root.dragging.point;
         return out;
+    }
+
+    function drop(): void {
+        const name = root.dragging.name;
+        const host = !!root.nodeByName[name]?.host || fleet.hosts.includes(name);
+        const row = Object.keys(root.positions).filter(other => (!!root.nodeByName[other]?.host || fleet.hosts.includes(other)) === host).sort((a, b) => root.positions[a].x - root.positions[b].x);
+        root.order = root.order.filter(other => !row.includes(other)).concat(row);
+        root.dragging = null;
+        orderFile.setText(JSON.stringify(root.order));
     }
 
     readonly property var nodeByName: {
@@ -85,10 +113,6 @@ Item {
 
     function laneWidth(rate: real): real {
         return Math.max(1, Math.min(8, 1 + 1.5 * Math.log10(Math.max(1, rate) / 1000)));
-    }
-
-    function dotSpeed(rate: real): real {
-        return rate < 100 ? 0 : Math.min(60, 8 + 13 * Math.log10(rate / 100));
     }
 
     function edgeState(edge: var): string {
@@ -141,7 +165,7 @@ Item {
             ny = -ny;
         }
         const blocked = Object.keys(root.place).some(name => name !== edge.a && name !== edge.b && root.segmentDistance(root.place[name], a, b) < root.clearance(name));
-        const bend = blocked ? 2 * (root.bloomExtent + 20) : Math.min(30, length * 0.08);
+        const bend = (blocked ? 2 * (root.bloomExtent + 20) : Math.min(30, length * 0.08)) + (edge.fan ?? 0) * 16;
         return {
             a: a,
             b: b,
@@ -520,7 +544,7 @@ Item {
             const value = root.eased[lane.key] ?? target;
             const next = value + (target - value) * blend;
             root.eased[lane.key] = next;
-            root.phases[lane.key] = ((root.phases[lane.key] ?? Math.random() * root.dotSpacing) + root.dotSpeed(next) * dt) % root.dotSpacing;
+            root.phases[lane.key] = (root.phases[lane.key] ?? Math.random() * 1e4) + root.dotSpeed * dt;
         }
         const follow = 1 - Math.exp(-dt / 0.6);
         const glide = 1 - Math.exp(-dt / 0.3);
@@ -793,7 +817,7 @@ Item {
             };
             const a = fleet.displayName(item.a);
             const b = fleet.displayName(item.b);
-            return [[`${a} ⇄ ${b}`, ""], [path, root.colours[state]], [`${a} → ${b}  ${root.nowAndAverage(now.ab, item.ab, fleet.rate)}`, primary], [`${b} → ${a}  ${root.nowAndAverage(now.ba, item.ba, fleet.rate)}`, tertiary], [window, ""]];
+            return [[`${a} ⇄ ${b}${item.device ? ` ${item.device}` : ""}`, ""], [path, root.colours[state]], [`${a} → ${b}  ${root.nowAndAverage(now.ab, item.ab, fleet.rate)}`, primary], [`${b} → ${a}  ${root.nowAndAverage(now.ba, item.ba, fleet.rate)}`, tertiary], [window, ""]];
         }
         const name = item.name;
         let sent = 0;
@@ -1097,7 +1121,7 @@ Item {
 
         function drawBloom(ctx: var, name: string, centre: var, shown: var): void {
             const r0 = root.coreRadius;
-            const scale = value => r0 + root.pressureScale * Math.min(root.pressureClamp, Math.max(0, value));
+            const scale = value => r0 + root.pressureScale * Math.sqrt(Math.min(root.pressureClamp, Math.max(0, value)));
             const labels = [];
 
             if (isFinite(shown.load)) {
@@ -1105,6 +1129,9 @@ Item {
                 ctx.arc(centre.x, centre.y, scale(shown.load), 0, Math.PI * 2);
                 ctx.fillStyle = Qt.alpha(Colours.palette.m3onSurface, 0.1);
                 ctx.fill();
+                ctx.strokeStyle = Qt.alpha(Colours.palette.m3onSurface, 0.85);
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
             }
 
             if (shown.values) {
@@ -1123,8 +1150,9 @@ Item {
                     ctx.quadraticCurveTo(point.x, point.y, next.x, next.y);
                 });
                 ctx.closePath();
-                ctx.strokeStyle = Qt.alpha(Colours.palette.m3onSurface, 0.4);
-                ctx.lineWidth = 1;
+                ctx.lineJoin = "round";
+                ctx.strokeStyle = Qt.alpha(Colours.palette.m3primary, 0.95);
+                ctx.lineWidth = 2.5;
                 ctx.stroke();
             }
 
@@ -1133,10 +1161,10 @@ Item {
                 ctx.beginPath();
                 ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2);
                 ctx.save();
-                ctx.setLineDash([0.01, 4.5]);
+                ctx.setLineDash([0.01, 2.6]);
                 ctx.lineCap = "round";
                 ctx.strokeStyle = Colours.palette.m3onSurface;
-                ctx.lineWidth = 2.75;
+                ctx.lineWidth = 1.6;
                 ctx.stroke();
                 ctx.restore();
                 labels.push({
@@ -1162,10 +1190,10 @@ Item {
                 if (mean > 0.001) {
                     canvas.petal(ctx, centre, angle, length(mean));
                     ctx.save();
-                    ctx.setLineDash([0.01, 4.5]);
+                    ctx.setLineDash([0.01, 2.6]);
                     ctx.lineCap = "round";
                     ctx.strokeStyle = root.colours[key];
-                    ctx.lineWidth = 2.75;
+                    ctx.lineWidth = 1.6;
                     ctx.stroke();
                     ctx.restore();
                     labels.push({
@@ -1274,9 +1302,17 @@ Item {
                 return;
             ctx.globalAlpha = alpha * Math.min(1, Math.log10(rate / 100) + 0.35);
             ctx.fillStyle = lane.tunnel && lane.tunnel.enabled <= 0.5 ? Colours.palette.m3outline : Colours.palette.m3onSurface;
-            const radius = Math.max(2.6, root.laneWidth(rate) / 2 + 1.6);
-            for (let s = root.phases[lane.key] ?? 0; s < lane.length; s += root.dotSpacing) {
-                const point = root.pointAt(lane, s);
+            const density = Math.max(0.06, Math.min(1, Math.log10(rate / 100) / 4.5));
+            const radius = Math.min(5.5, 2.4 + 2 * Math.max(0, Math.log10(rate / 1e6)));
+            const travel = root.phases[lane.key] ?? 0;
+            const base = ctx.globalAlpha;
+            for (let n = Math.ceil((travel - lane.length) / root.dotGrid); n * root.dotGrid <= travel; n++) {
+                const seed = Math.sin(n * 12.9898) * 43758.5453;
+                const show = Math.min(1, (density - (seed - Math.floor(seed))) / 0.08);
+                if (show <= 0)
+                    continue;
+                const point = root.pointAt(lane, travel - n * root.dotGrid);
+                ctx.globalAlpha = base * show;
                 ctx.beginPath();
                 ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
                 ctx.fill();
@@ -1341,8 +1377,32 @@ Item {
     MouseArea {
         anchors.fill: parent
         hoverEnabled: true
-        acceptedButtons: Qt.NoButton
-        onPositionChanged: mouse => root.pointer = Qt.point(mouse.x, mouse.y)
+        acceptedButtons: Qt.LeftButton
+        cursorShape: root.dragging ? Qt.ClosedHandCursor : Qt.ArrowCursor
+        onPressed: mouse => {
+            const name = Object.keys(root.place).find(name => Math.hypot(root.place[name].x - mouse.x, root.place[name].y - mouse.y) < root.coreRadius + 10);
+            if (!name) {
+                mouse.accepted = false;
+                return;
+            }
+            root.dragging = {
+                name: name,
+                point: Qt.point(mouse.x, mouse.y)
+            };
+        }
+        onPositionChanged: mouse => {
+            root.pointer = Qt.point(mouse.x, mouse.y);
+            if (root.dragging)
+                root.dragging = {
+                    name: root.dragging.name,
+                    point: Qt.point(mouse.x, mouse.y)
+                };
+        }
+        onReleased: {
+            if (root.dragging)
+                root.drop();
+        }
+        onCanceled: root.dragging = null
         onExited: root.pointer = null
         onWheel: wheel => {
             const steps = [60, 300, 600, 1800, 3600, 3 * 3600, 6 * 3600];
@@ -1384,7 +1444,7 @@ Item {
                 StyledText {
                     Layout.alignment: Qt.AlignHCenter
                     text: root.fleet.displayName(label.node.name)
-                    font: label.node.host ? Tokens.font.title.small : Tokens.font.body.small
+                    font: label.node.host ? Tokens.font.body.small : Tokens.font.label.small
                     color: Qt.tint(Colours.palette.m3outline, Qt.alpha(Colours.palette.m3onSurface, Math.min(1, (root.shownUp[label.modelData] ?? label.node.up) * 4)))
                 }
 
@@ -1401,7 +1461,7 @@ Item {
                             return rev;
                         return deploy.snapshot ? `snapshot ${rev} on ${deploy.branch}` : `${deploy.branch} ${rev}`;
                     }
-                    font: Tokens.font.body.small
+                    font: Tokens.font.label.small
                     color: url ? Colours.palette.m3primary : Colours.palette.m3onSurfaceVariant
 
                     MouseArea {
@@ -1430,6 +1490,20 @@ Item {
                     font: Tokens.font.label.small
                     color: Colours.palette.m3tertiary
                 }
+            }
+        }
+    }
+
+    FileView {
+        id: orderFile
+
+        path: `${Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state"}/caelestia/fleet-order.json`
+        printErrors: false
+        onLoaded: {
+            try {
+                root.order = JSON.parse(text());
+            } catch (error) {
+                root.order = [];
             }
         }
     }
