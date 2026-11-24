@@ -14,41 +14,82 @@ let
   stateDir = "/var/lib/nas-streams";
 
   branchPath = st: "${scfg.diskRoot}/${st.branch}";
-  mirrorDir = name: "${stateDir}/mirror/${name}";
+  mirrorRoot = name: "${stateDir}/mirror/${name}";
+  mirrorDir = name: "${mirrorRoot name}/data";
+  pushedFile = name: "${mirrorRoot name}/pushed";
   indexDir = name: "${cfg.streamIndexDir}/${name}";
   dataDir = st: "${branchPath st}/${st.data}";
   deltaArgs = name: st: "--index ${indexDir name} --data ${dataDir st}";
+  pushUser = name: "nas-push-${name}";
+  deltaUser = name: "nas-delta-${name}";
+  streamLock = name: "/run/nas-streams/${name}.lock";
 
-  point = pkgs.writeShellApplication {
-    name = "nas-stream-point";
-    runtimeInputs = [
-      pkgs.util-linux
-      pkgs.stream-delta
-    ];
+  pushed = pkgs.writeShellApplication {
+    name = "nas-stream-pushed";
+    runtimeInputs = [ pkgs.coreutils ];
     text = ''
       [ "$RSYNC_EXIT_STATUS" = 0 ] || exit 0
-      now=$(date +%s)
-      if stream-delta --index "$1" --data "$2" ingest --mirror "$3" --captured "$now" --source "push:$now"; then
-        echo "$now" > ${stateDir}/"$RSYNC_MODULE_NAME".last
-      else
-        logger -t nas-stream-delta "ingest of $RSYNC_MODULE_NAME at $now failed"
-      fi
+      date +%s > "$1"
     '';
   };
 
+  mirrorSetup = pkgs.writeShellApplication {
+    name = "nas-stream-mirror-setup";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.findutils
+      pkgs.util-linux
+      pkgs.e2fsprogs
+    ];
+    text = builtins.readFile ./stream-mirror-setup.sh;
+  };
+
+  ingest = pkgs.writeShellApplication {
+    name = "nas-stream-ingest";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.findutils
+      pkgs.util-linux
+      pkgs.stream-delta
+    ];
+    text = builtins.readFile ./stream-ingest.sh;
+  };
+
   rsyncdConf =
-    name: st:
+    name:
     pkgs.writeText "nas-stream-${name}.conf" ''
       [${name}]
       path = ${mirrorDir name}
       use chroot = no
+      munge symlinks = yes
       read only = no
       write only = yes
+      list = no
+      numeric ids = yes
+      reverse lookup = no
+      incoming chmod = D750,F640
       timeout = 120
-      uid = root
-      gid = root
-      post-xfer exec = ${lib.getExe point} ${indexDir name} ${dataDir st} ${mirrorDir name}
+      post-xfer exec = ${lib.getExe pushed} ${pushedFile name}
     '';
+
+  sandbox = {
+    ProtectSystem = "strict";
+    ProtectHome = true;
+    PrivateTmp = true;
+    PrivateDevices = true;
+    ProtectKernelTunables = true;
+    ProtectKernelModules = true;
+    ProtectKernelLogs = true;
+    ProtectControlGroups = true;
+    ProtectClock = true;
+    ProtectHostname = true;
+    ProtectProc = "invisible";
+    RestrictNamespaces = true;
+    RestrictRealtime = true;
+    RestrictSUIDSGID = true;
+    LockPersonality = true;
+    SystemCallArchitectures = "native";
+  };
 
   register = pkgs.writeShellApplication {
     name = "nas-stream-register";
@@ -110,6 +151,16 @@ in
               type = lib.types.listOf lib.types.str;
               description = "Tailnet addresses allowed to push.";
             };
+            mirrorSize = lib.mkOption {
+              type = lib.types.str;
+              default = "16G";
+              description = "Size of the filesystem a push lands in, which caps what one pusher can store.";
+            };
+            dailyIngestLimit = lib.mkOption {
+              type = lib.types.int;
+              default = 8 * 1024 * 1024 * 1024;
+              description = "Bytes the delta packs may grow per 24 hours before ingest is refused.";
+            };
           };
         }
       )
@@ -125,9 +176,37 @@ in
 
     systemd.tmpfiles.rules = [
       "d ${stateDir} 0755 root root - -"
-      "d ${stateDir}/mirror 0700 root root - -"
-      "d ${cfg.streamIndexDir} 0700 root root - -"
-    ];
+      "d ${stateDir}/mirror 0711 root root - -"
+      "d ${cfg.streamIndexDir} 0711 root root - -"
+      "d /run/nas-streams 0755 root root - -"
+      "f ${cfg.nilfsWriteLock} 0600 root root - -"
+    ]
+    ++ lib.concatLists (
+      lib.mapAttrsToList (name: _: [
+        "f ${streamLock name} 0640 root ${pushUser name} - -"
+        "d ${indexDir name} 0700 ${deltaUser name} ${deltaUser name} - -"
+      ]) cfg.streams
+    );
+
+    users.users = lib.mkMerge (
+      lib.mapAttrsToList (name: _: {
+        ${pushUser name} = {
+          isSystemUser = true;
+          group = pushUser name;
+        };
+        ${deltaUser name} = {
+          isSystemUser = true;
+          group = deltaUser name;
+          extraGroups = [ (pushUser name) ];
+        };
+      }) cfg.streams
+    );
+    users.groups = lib.mkMerge (
+      lib.mapAttrsToList (name: _: {
+        ${pushUser name} = { };
+        ${deltaUser name} = { };
+      }) cfg.streams
+    );
 
     environment.systemPackages = [ pkgs.stream-delta ];
 
@@ -157,6 +236,16 @@ in
       }
     ) cfg.streams;
 
+    systemd.paths = lib.mapAttrs' (
+      name: _:
+      lib.nameValuePair "nas-stream-${name}-ingest" {
+        wantedBy = [ "paths.target" ];
+        requires = [ "nas-stream-${name}-mirror.service" ];
+        after = [ "nas-stream-${name}-mirror.service" ];
+        pathConfig.PathChanged = pushedFile name;
+      }
+    ) cfg.streams;
+
     systemd.timers."nas-stream-compact" = {
       wantedBy = [ "timers.target" ];
       timerConfig = {
@@ -167,21 +256,96 @@ in
     };
 
     systemd.services =
-      lib.mapAttrs' (
-        name: st:
-        lib.nameValuePair "nas-stream-${name}@" {
-          unitConfig.ConditionPathIsMountPoint = branchPath st;
+      lib.concatMapAttrs (name: st: {
+        "nas-stream-${name}-mirror" = {
+          wantedBy = [ "multi-user.target" ];
+          after = [
+            "local-fs.target"
+            "systemd-tmpfiles-setup.service"
+          ];
+          before = [ "shutdown.target" ];
+          conflicts = [ "shutdown.target" ];
+          unitConfig.DefaultDependencies = false;
+          restartIfChanged = false;
           serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            ExecStart = "${lib.getExe mirrorSetup} ${stateDir}/mirror/${name}.img ${mirrorRoot name} ${st.mirrorSize} ${pushUser name} ${pushUser name}";
+            ExecStop = "${pkgs.util-linux}/bin/umount ${mirrorRoot name}";
+          };
+        };
+
+        "nas-stream-${name}@" = {
+          requires = [ "nas-stream-${name}-mirror.service" ];
+          after = [ "nas-stream-${name}-mirror.service" ];
+          serviceConfig = sandbox // {
+            User = pushUser name;
+            Group = pushUser name;
             LogLevelMax = "notice";
-            ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${mirrorDir name} ${dataDir st}";
-            ExecStart = "${pkgs.util-linux}/bin/flock ${cfg.nilfsWriteLock} ${lib.getExe pkgs.rsync} --daemon --config=${rsyncdConf name st}";
+            ExecStart = "${pkgs.util-linux}/bin/flock ${streamLock name} ${lib.getExe pkgs.rsync} --daemon --config=${rsyncdConf name}";
             StandardInput = "socket";
             StandardOutput = "inherit";
+            TemporaryFileSystem = [
+              "/mnt:ro"
+              "/var:ro"
+            ];
+            BindPaths = [ (mirrorRoot name) ];
+            ReadWritePaths = [ "-${streamLock name}" ];
+            NoNewPrivileges = true;
+            CapabilityBoundingSet = "";
+            MemoryDenyWriteExecute = true;
+            ProcSubset = "pid";
+            RestrictAddressFamilies = [ "AF_UNIX" ];
+            SystemCallFilter = [
+              "@system-service"
+              "~@privileged"
+              "~@resources"
+            ];
+            SystemCallErrorNumber = "EPERM";
+            IPAddressAllow = st.allowFrom;
+            IPAddressDeny = "any";
+            UMask = "0027";
+            MemoryMax = "512M";
+            TasksMax = 16;
             RuntimeMaxSec = "1h";
             Nice = 5;
           };
-        }
-      ) cfg.streams
+        };
+
+        "nas-stream-${name}-ingest" = {
+          startLimitIntervalSec = 0;
+          unitConfig.ConditionPathIsMountPoint = branchPath st;
+          requires = [ "nas-stream-${name}-mirror.service" ];
+          after = [ "nas-stream-${name}-mirror.service" ];
+          serviceConfig = sandbox // {
+            Type = "oneshot";
+            ExecStartPre = "+${pkgs.coreutils}/bin/mkdir -p ${dataDir st}";
+            ExecStart = "${lib.getExe ingest} ${name} ${mirrorDir name} ${indexDir name} ${dataDir st} ${streamLock name} ${cfg.nilfsWriteLock} ${deltaUser name} ${toString st.dailyIngestLimit} ${stateDir}/${name}.last ${stateDir}/${name}.budget";
+            ReadWritePaths = [
+              stateDir
+              "-${dataDir st}"
+              "-${streamLock name}"
+              "-${cfg.nilfsWriteLock}"
+            ];
+            CapabilityBoundingSet = [
+              "CAP_SETUID"
+              "CAP_SETGID"
+              "CAP_CHOWN"
+              "CAP_DAC_READ_SEARCH"
+              "CAP_DAC_OVERRIDE"
+              "CAP_FOWNER"
+            ];
+            PrivateNetwork = true;
+            IPAddressDeny = "any";
+            RestrictAddressFamilies = [ "AF_UNIX" ];
+            MemoryMax = "2G";
+            TimeoutStartSec = "4h";
+            Nice = 19;
+            CPUSchedulingPolicy = "idle";
+            IOSchedulingClass = "idle";
+          };
+        };
+      }) cfg.streams
       // {
         nas-stream-register = {
           wantedBy = [ "multi-user.target" ];
@@ -197,11 +361,16 @@ in
           script = lib.concatStrings (
             lib.mapAttrsToList (name: st: ''
               if mountpoint -q ${branchPath st}; then
-                stream-delta ${deltaArgs name st} compact --to-level 19 --limit 4 --lock ${cfg.nilfsWriteLock}
+                find ${indexDir name} ${dataDir st} \( ! -user ${deltaUser name} -o ! -group ${deltaUser name} \) -exec chown -h ${deltaUser name}:${deltaUser name} {} +
+                flock ${cfg.nilfsWriteLock} \
+                  setpriv --reuid=${deltaUser name} --regid=${deltaUser name} --init-groups --no-new-privs --inh-caps=-all -- \
+                  stream-delta ${deltaArgs name st} compact --to-level 19 --limit 4
               fi
             '') cfg.streams
           );
           path = [
+            pkgs.coreutils
+            pkgs.findutils
             pkgs.stream-delta
             pkgs.util-linux
           ];
