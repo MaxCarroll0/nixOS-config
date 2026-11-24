@@ -114,6 +114,8 @@ in
       AllowSuspendThenHibernate = false;
     };
 
+    systemd.services.systemd-suspend.environment.SYSTEMD_SLEEP_FREEZE_USER_SESSIONS = "false";
+
     services.earlyoom = {
       enable = true;
       freeMemThreshold = lib.mkDefault 5;
