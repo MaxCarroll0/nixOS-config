@@ -670,9 +670,12 @@ Item {
         const scrubbing = root.fleet.preview !== null;
         const blend = 1 - Math.exp(-dt / (scrubbing ? 0.02 : 0.3));
         root.easeScene(1 - Math.exp(-dt / (scrubbing ? 0.05 : 0.35)));
+        const live = {};
+        for (const lane of root.lanes)
+            live[lane.key] = lane;
         for (const entry of root.shown(root.laneFade)) {
-            const lane = entry.item;
-            const target = root.lanes.includes(lane) ? root.liveRate(lane) : 0;
+            const lane = live[entry.item.key] ?? entry.item;
+            const target = live[lane.key] ? root.liveRate(lane) : 0;
             const value = root.eased[lane.key] ?? target;
             const next = scrubbing ? target : value + (target - value) * blend;
             root.eased[lane.key] = next;
