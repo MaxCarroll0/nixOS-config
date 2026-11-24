@@ -44,6 +44,7 @@ Item {
     readonly property bool following: anchor === null && preview === null
     property var current: ({
             live: false,
+            cores: ({}),
             edges: ({}),
             psi: ({}),
             load: ({}),
@@ -59,6 +60,12 @@ Item {
         })
 
     property var rows: []
+    property var scrub: ({
+            from: 0,
+            step: 1,
+            tx: [],
+            rx: []
+        })
     property var slice: ({
             nodes: [],
             edges: [],
@@ -113,7 +120,7 @@ Item {
     Timer {
         id: sliceDebounce
 
-        interval: 120
+        interval: 60
         onTriggered: {
             root.fetchSlice();
             root.fetchCurrent();
@@ -137,7 +144,10 @@ Item {
         }
         sliceDebounce.restart();
     }
-    onPreviewChanged: sliceDebounce.restart()
+    onPreviewChanged: {
+        root.previewFromScrub();
+        sliceDebounce.restart();
+    }
     onSmoothingChanged: sliceDebounce.restart()
     onRangeChanged: if (!ticking)
         rowsDebounce.restart()
@@ -240,10 +250,19 @@ Item {
             up: done => span(`avg_over_time(${s("host:up")}[${window}])`, done),
             online: done => span(`max by (peer, peer_os) (avg_over_time(${s("ts:peer_online")}[${window}]))`, done),
             direct: done => span(`max by (peer) (avg_over_time(${s("ts:peer_direct")}[${window}]))`, done),
-            traffic: done => span(`sum by (peer) (avg_over_time(${s("ts:peer_rx_bytes")}[${window}]) + avg_over_time(${s("ts:peer_tx_bytes")}[${window}]))`, done)
+            traffic: done => span(`sum by (peer) (avg_over_time(${s("ts:peer_rx_bytes")}[${window}]) + avg_over_time(${s("ts:peer_tx_bytes")}[${window}]))`, done),
+            tx: done => span(`avg_over_time(${s("ts:peer_tx_bytes")}[${window}])`, done),
+            rx: done => span(`avg_over_time(${s("ts:peer_rx_bytes")}[${window}])`, done)
         }, results => {
-            if (generation === root.rowsGeneration)
-                root.rows = root.shapeRows(results, from, to, step);
+            if (generation !== root.rowsGeneration)
+                return;
+            root.rows = root.shapeRows(results, from, to, step);
+            root.scrub = {
+                from: from,
+                step: step,
+                tx: results.tx,
+                rx: results.rx
+            };
         });
     }
 
@@ -306,7 +325,8 @@ Item {
             const host = root.hosts.indexOf(name);
             return host >= 0 ? `0${host}` : `1${byName[name].os}${name}`;
         };
-        return Object.keys(byName).sort((a, b) => order(a).localeCompare(order(b))).map(name => Object.assign(byName[name], {
+        const seen = name => byName[name].host || byName[name].online.some(online => online >= 0.05);
+        return Object.keys(byName).filter(seen).sort((a, b) => order(a).localeCompare(order(b))).map(name => Object.assign(byName[name], {
                 from: from,
                 step: step
             }));
@@ -373,6 +393,7 @@ Item {
         if (root.archived(at - root.currentWindow)) {
             root.current = {
                 live: false,
+                cores: {},
                 edges: {},
                 psi: {},
                 load: {},
@@ -392,10 +413,25 @@ Item {
             load: done => point("last_over_time(load:pressure_ratio[1m])", done),
             tunnelTx: done => point(`sum by (instance, interface) (rate(wireguard_peer_tx_bytes_total[${window}]))`, done),
             tunnelRx: done => point(`sum by (instance, interface) (rate(wireguard_peer_rx_bytes_total[${window}]))`, done),
-            builds: done => point('fleet_build_progress and on (instance, invocation) (time() - push_time_seconds{job="fleet_build"} < 30)', done)
+            builds: done => point('fleet_build_progress and on (instance, invocation) (time() - push_time_seconds{job="fleet_build"} < 30)', done),
+            busy: done => point(`sum by (instance, cpu) (rate(node_cpu_seconds_total{mode!~"idle|iowait"}[${window}]))`, done)
         }, results => {
             if (generation !== root.currentGeneration)
                 return;
+            const cores = {};
+            const coreOf = result => {
+                const list = cores[result.metric.instance] ?? (cores[result.metric.instance] = []);
+                const index = Number(result.metric.cpu);
+                return list[index] ?? (list[index] = {
+                        busy: 0
+                    });
+            };
+            for (const result of results.busy)
+                coreOf(result).busy = Math.max(0, Math.min(1, root.value(result)));
+            for (const [name, list] of Object.entries(cores))
+                cores[name] = Array.from(list, core => core ?? {
+                        busy: 0
+                    });
             const table = root.edgeTable();
             for (const result of results.tx)
                 table.flow(result.metric.instance, result.metric.peer, root.value(result));
@@ -439,6 +475,8 @@ Item {
                     }));
             root.current = {
                 live: true,
+                at: root.following ? null : at,
+                cores: cores,
                 edges: table.edges,
                 psi: psi,
                 load: load,
@@ -501,6 +539,36 @@ Item {
 
     property int sliceGeneration: 0
 
+    function previewFromScrub(): void {
+        if (root.preview === null || !root.scrub.tx.length)
+            return;
+        const at = Math.round((root.preview - root.scrub.from) / root.scrub.step) * root.scrub.step + root.scrub.from;
+        const sample = result => parseFloat((result.values ?? []).find(([time]) => Math.abs(time - at) < root.scrub.step / 2)?.[1] ?? "NaN");
+        const edges = root.slice.edges.map(item => Object.assign({}, item, {
+                    ab: 0,
+                    ba: 0
+                }));
+        const byKey = {};
+        for (const item of edges)
+            byKey[item.key] = item;
+        const flow = (from, to, rate) => {
+            const item = byKey[root.edgeKey(from, to)];
+            if (!item || !isFinite(rate))
+                return;
+            if (item.a === root.canonical(from))
+                item.ab = Math.max(item.ab, rate);
+            else
+                item.ba = Math.max(item.ba, rate);
+        };
+        for (const result of root.scrub.tx)
+            flow(result.metric.instance, result.metric.peer, sample(result));
+        for (const result of root.scrub.rx)
+            flow(result.metric.peer, result.metric.instance, sample(result));
+        root.slice = Object.assign({}, root.slice, {
+            edges: edges
+        });
+    }
+
     function fetchSlice(): void {
         const at = root.at;
         const smoothing = Math.max(60, root.smoothing);
@@ -530,8 +598,10 @@ Item {
             vpnEnabled: done => point(`avg_over_time(vpn_enabled[${window}])`, done),
             shared: done => archive ? done([]) : point(`max by (peer) (max_over_time(tailscale_peer_shared[${window}]))`, done)
         }, results => {
-            if (generation === root.sliceGeneration)
-                root.slice = root.shapeSlice(results, at - smoothing, at);
+            if (generation !== root.sliceGeneration)
+                return;
+            root.slice = root.shapeSlice(results, at - smoothing, at);
+            root.previewFromScrub();
         });
         root.fetchGraphs(at, smoothing, archive, generation);
     }

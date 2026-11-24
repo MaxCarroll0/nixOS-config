@@ -13,6 +13,7 @@ Item {
 
     required property FleetModel fleet
     readonly property var slice: fleet.slice
+    readonly property bool fresh: current.live && fleet.preview === null
     readonly property var current: fleet.current
     readonly property var graphs: fleet.graphs
     readonly property var colours: fleet.colours
@@ -21,15 +22,17 @@ Item {
     readonly property real pressureScale: 28
     readonly property real pressureClamp: 2
     readonly property real bloomExtent: coreRadius + pressureScale * Math.sqrt(pressureClamp)
-    readonly property real stallRadius: coreRadius + pressureScale + 8
+    readonly property real stallRadius: bloomExtent + 6
     readonly property real stallGap: 0.12
     readonly property real blobRadius: 9
-    readonly property real blobRim: bloomExtent + 9
+    readonly property real blobRim: stallRadius + 10
     readonly property real hostRow: 136
     readonly property real tunnelTop: 22
     readonly property real peerRow: height - 50
     readonly property real dotGrid: 9
     readonly property real dotSpeed: 14
+    readonly property real blobTravel: 1.5
+    readonly property real blobDwell: 0.6
     property real clock: 0
     property var pointer: null
     property var lanes: []
@@ -64,7 +67,17 @@ Item {
     readonly property var hovered: pointer ? hit(pointer) : null
 
     property var order: []
+    property var raised: []
     property var dragging: null
+    property var emitted: ({})
+
+    function isHost(name: string): bool {
+        return !!root.nodeByName[name]?.host || fleet.hosts.includes(name);
+    }
+
+    function upper(name: string): bool {
+        return root.isHost(name) || root.raised.includes(name);
+    }
 
     function arranged(defaults: var): var {
         const slots = Object.values(defaults).sort((a, b) => a.x - b.x);
@@ -76,22 +89,23 @@ Item {
     }
 
     readonly property var positions: {
-        const hosts = {};
         const left = root.legendWidth;
         const span = width - left;
         const cx = left + span / 2;
-        hosts.pi = Qt.point(cx, root.hostRow);
-        fleet.hosts.filter(name => name !== "pi").forEach((name, index) => {
-            const side = index % 2 === 0 ? -1 : 1;
-            hosts[name] = Qt.point(cx + side * (Math.floor(index / 2) + 1) * span * 0.34, root.hostRow);
+        const peers = slice.nodes.filter(node => !node.host).sort((a, b) => (a.os + a.name).localeCompare(b.os + b.name)).map(node => node.name);
+        const ring = ["pi"];
+        fleet.hosts.filter(name => name !== "pi").forEach((name, index) => index % 2 === 0 ? ring.unshift(name) : ring.push(name));
+        const row = ring.filter(name => fleet.hosts.includes(name)).concat(peers.filter(name => root.raised.includes(name)));
+        const gap = span * Math.min(0.34, 0.8 / Math.max(1, row.length - 1));
+        const hosts = {};
+        row.forEach((name, index) => hosts[name] = Qt.point(cx + (index - (row.length - 1) / 2) * gap, root.hostRow));
+        const lower = peers.filter(name => !root.raised.includes(name));
+        const others = {};
+        lower.forEach((name, index) => {
+            const spread = lower.length === 1 ? 0.5 : index / (lower.length - 1);
+            others[name] = Qt.point(left + span * (0.24 + 0.52 * spread), root.peerRow);
         });
-        const peers = {};
-        const list = slice.nodes.filter(node => !node.host).sort((a, b) => (a.os + a.name).localeCompare(b.os + b.name));
-        list.forEach((node, index) => {
-            const spread = list.length === 1 ? 0.5 : index / (list.length - 1);
-            peers[node.name] = Qt.point(left + span * (0.24 + 0.52 * spread), root.peerRow);
-        });
-        const out = Object.assign(root.arranged(hosts), root.arranged(peers));
+        const out = Object.assign(root.arranged(hosts), root.arranged(others));
         if (root.dragging && out[root.dragging.name])
             out[root.dragging.name] = root.dragging.point;
         return out;
@@ -99,11 +113,19 @@ Item {
 
     function drop(): void {
         const name = root.dragging.name;
-        const host = !!root.nodeByName[name]?.host || fleet.hosts.includes(name);
-        const row = Object.keys(root.positions).filter(other => (!!root.nodeByName[other]?.host || fleet.hosts.includes(other)) === host).sort((a, b) => root.positions[a].x - root.positions[b].x);
+        if (!root.isHost(name)) {
+            const raise = root.dragging.point.y < (root.hostRow + root.peerRow) / 2;
+            const rest = root.raised.filter(other => other !== name);
+            root.raised = raise ? rest.concat([name]) : rest;
+        }
+        const up = root.upper(name);
+        const row = Object.keys(root.positions).filter(other => root.upper(other) === up).sort((a, b) => root.positions[a].x - root.positions[b].x);
         root.order = root.order.filter(other => !row.includes(other)).concat(row);
         root.dragging = null;
-        orderFile.setText(JSON.stringify(root.order));
+        orderFile.setText(JSON.stringify({
+            order: root.order,
+            top: root.raised
+        }));
     }
 
     readonly property var nodeByName: {
@@ -127,11 +149,11 @@ Item {
 
     function liveEdge(edge: var): bool {
         const now = root.current.edges[edge.key];
-        return root.current.live && !!now && (now.ab >= 100 || now.ba >= 100);
+        return root.fresh && !!now && (now.ab >= 100 || now.ba >= 100);
     }
 
     function liveRate(lane: var): real {
-        if (!root.current.live)
+        if (!root.fresh)
             return lane.rate;
         if (lane.tunnel) {
             const now = root.current.tunnels[lane.tunnel.key];
@@ -253,7 +275,7 @@ Item {
                 continue;
             const now = root.current.edges[edge.key];
             for (const [rate, forward] of [[edge.ab, true], [edge.ba, false]]) {
-                const live = root.current.live ? (now ? (forward ? now.ab : now.ba) : 0) : rate;
+                const live = root.fresh ? (now ? (forward ? now.ab : now.ba) : 0) : rate;
                 if (!(rate >= 100) && !(live >= 100))
                     continue;
                 const key = `${edge.key}\u001f${forward}`;
@@ -276,6 +298,8 @@ Item {
                 lanes.push(Object.assign(root.polyline(points), {
                     key: key,
                     edge: edge,
+                    shape: shape,
+                    side: side,
                     forward: forward,
                     rate: rate,
                     width: width,
@@ -330,7 +354,7 @@ Item {
             });
         }
 
-        for (const build of root.slice.builds) {
+        for (const build of root.buildCounts()) {
             const origin = root.place[build.origin];
             if (!origin)
                 continue;
@@ -363,13 +387,110 @@ Item {
                 angle: Math.atan2(ahead.y - at.y, ahead.x - at.x)
             });
         }
+        root.placeRates(lanes, badges);
         root.lanes = lanes;
         root.badges = badges;
         root.tunnels = tunnels;
     }
 
+    function rateAt(lane: var, u: real): var {
+        const base = root.along(lane.shape, u, lane.side);
+        const out = root.along(lane.shape, u, lane.side + Math.sign(lane.side) * (lane.width / 2 + 6));
+        const normal = Qt.point(out.x - base.x, out.y - base.y);
+        const length = Math.max(1e-6, Math.hypot(normal.x, normal.y));
+        return {
+            label: out,
+            normal: normal,
+            centre: Qt.point(out.x + normal.x / length * 22, out.y + normal.y / length * 8)
+        };
+    }
+
+    function placeRates(lanes: var, badges: var): void {
+        const taken = badges.map(badge => ({
+                    x: badge.at.x,
+                    y: badge.at.y,
+                    rx: badge.width / 2 + 26,
+                    ry: 16
+                }));
+        const clashes = centre => taken.some(box => Math.abs(centre.x - box.x) < box.rx && Math.abs(centre.y - box.y) < box.ry);
+        for (const lane of lanes) {
+            if (!lane.label || !lane.shape)
+                continue;
+            const steps = [0, 0.08, -0.08, 0.16, -0.16, 0.24];
+            const start = lane.forward ? 0.3 : 0.7;
+            const tries = steps.map(step => root.rateAt(lane, Math.max(0.1, Math.min(0.9, start + (lane.forward ? step : -step)))));
+            const chosen = tries.find(place => !clashes(place.centre)) ?? tries[0];
+            lane.label = chosen.label;
+            lane.normal = chosen.normal;
+            taken.push({
+                x: chosen.centre.x,
+                y: chosen.centre.y,
+                rx: 50,
+                ry: 14
+            });
+        }
+    }
+
+    function buildCounts(): var {
+        const out = {};
+        for (const build of root.slice.builds)
+            out[`${build.origin}\u001f${build.builder}`] = Object.assign({}, build);
+        if (root.fresh) {
+            const live = {};
+            for (const build of root.current.builds) {
+                const builder = build.builder === "local" || !build.builder ? build.origin : build.builder;
+                const key = `${build.origin}\u001f${builder}`;
+                (live[key] = live[key] ?? {
+                        origin: build.origin,
+                        builder: builder,
+                        drvs: new Set()
+                    }).drvs.add(build.key);
+            }
+            for (const key of Object.keys(live)) {
+                const item = out[key] ?? (out[key] = {
+                        origin: live[key].origin,
+                        builder: live[key].builder,
+                        count: 0
+                    });
+                item.count = Math.max(item.count, live[key].drvs.size);
+            }
+        }
+        return Object.values(out);
+    }
+
+    function stage(blob: var, name: string): void {
+        blob.stage = name;
+        blob.stageAt = root.clock;
+        blob.shown = 0;
+    }
+
+    function advance(blob: var, dt: real): void {
+        const phase = blob.phase;
+        if (phase === "failed") {
+            if (blob.stage !== "failed")
+                root.stage(blob, "failed");
+            return;
+        }
+        if (blob.stage === "done" || blob.stage === "failed")
+            return;
+        if (blob.build.origin === blob.build.builder) {
+            if (phase === "done")
+                root.stage(blob, "done");
+            return;
+        }
+        if (blob.stage === "upload" || blob.stage === "download") {
+            const live = phase === blob.stage;
+            const ahead = live ? Math.max(0, Math.min(blob.rate * Math.min(root.clock - blob.at, 1.5), 0.97 - blob.target)) : 0;
+            const target = live ? blob.target + ahead : 1;
+            blob.shown += Math.max(0, Math.min(target - blob.shown, dt / root.blobTravel));
+            if (!live && blob.shown >= 1)
+                root.stage(blob, blob.stage === "upload" ? "build" : "done");
+        } else if (blob.stage === "build" && (phase === "download" || phase === "done") && root.clock - blob.stageAt > root.blobDwell)
+            root.stage(blob, "download");
+    }
+
     function syncBlobs(): void {
-        if (!root.current.live) {
+        if (!root.fresh) {
             root.blobs = {};
             return;
         }
@@ -381,16 +502,25 @@ Item {
                 blob = root.blobs[build.key] = {
                     key: build.key,
                     phase: build.phase,
-                    changedAt: root.clock - 10,
-                    shown: build.progress,
+                    stage: build.origin === build.builder && build.phase !== "done" ? "build" : build.phase,
+                    stageAt: root.clock - 10,
+                    shown: build.phase === "done" ? 1 : build.progress,
+                    target: build.progress,
+                    rate: 0,
+                    at: root.clock,
                     missingSince: -1,
                     last: null
                 };
             if (blob.phase !== build.phase) {
                 blob.phase = build.phase;
-                blob.changedAt = root.clock;
-                if (build.phase === "download")
-                    blob.shown = 0;
+                blob.target = build.progress;
+                blob.rate = 0;
+                blob.at = root.clock;
+            } else if (build.progress > blob.target + 1e-4) {
+                const measured = (build.progress - blob.target) / Math.max(0.2, root.clock - blob.at);
+                blob.rate = blob.rate > 0 ? (blob.rate + measured) / 2 : measured;
+                blob.target = build.progress;
+                blob.at = root.clock;
             }
             blob.build = build;
             blob.missingSince = -1;
@@ -403,11 +533,9 @@ Item {
                 blob.missingSince = root.clock;
             if (root.clock - blob.missingSince < 3)
                 continue;
-            if (blob.phase !== "done" && blob.phase !== "failed") {
+            if (blob.phase !== "done" && blob.phase !== "failed")
                 blob.phase = "done";
-                blob.changedAt = root.clock;
-            }
-            if (root.clock - blob.changedAt > 3)
+            if ((blob.stage === "done" || blob.stage === "failed") && root.clock - blob.stageAt > 1)
                 delete root.blobs[key];
         }
     }
@@ -522,7 +650,9 @@ Item {
                 }
             }
         }
-        changed = root.present(root.laneFade, root.lanes, lane => lane.key, blend) || changed;
+        const current = new Set(root.lanes.map(lane => lane.key));
+        const trailing = root.shown(root.laneFade).map(entry => entry.item).filter(lane => !current.has(lane.key) && Object.values(root.emitted[lane.key] ?? {}).some(rate => rate >= 100));
+        changed = root.present(root.laneFade, root.lanes.concat(trailing), lane => lane.key, blend) || changed;
         changed = root.present(root.sheathFade, root.tunnels, sheath => sheath.key, blend) || changed;
         changed = root.present(root.badgeFade, root.badges, badge => badge.key, blend) || changed;
         for (const entry of root.shown(root.sheathFade))
@@ -537,17 +667,31 @@ Item {
     }
 
     function tick(dt: real): void {
-        const blend = 1 - Math.exp(-dt / 0.3);
-        root.easeScene(1 - Math.exp(-dt / 0.35));
+        const scrubbing = root.fleet.preview !== null;
+        const blend = 1 - Math.exp(-dt / (scrubbing ? 0.02 : 0.3));
+        root.easeScene(1 - Math.exp(-dt / (scrubbing ? 0.05 : 0.35)));
         for (const entry of root.shown(root.laneFade)) {
             const lane = entry.item;
             const target = root.lanes.includes(lane) ? root.liveRate(lane) : 0;
             const value = root.eased[lane.key] ?? target;
-            const next = value + (target - value) * blend;
+            const next = scrubbing ? target : value + (target - value) * blend;
             root.eased[lane.key] = next;
-            root.phases[lane.key] = (root.phases[lane.key] ?? Math.random() * 1e4) + root.dotSpeed * dt;
+            const travel = (root.phases[lane.key] ?? Math.random() * 1e4) + (scrubbing ? 0 : root.dotSpeed * dt);
+            root.phases[lane.key] = travel;
+            const fresh = !root.emitted[lane.key];
+            const emitted = root.emitted[lane.key] ?? {};
+            const first = Math.ceil((travel - lane.length) / root.dotGrid);
+            for (const n of Object.keys(emitted))
+                if (Number(n) < first)
+                    delete emitted[n];
+            for (let n = first; n * root.dotGrid <= travel; n++)
+                if (emitted[n] === undefined || scrubbing)
+                    emitted[n] = fresh && !scrubbing && root.clock > 2 ? 0 : next;
+            root.emitted[lane.key] = emitted;
         }
-        const follow = 1 - Math.exp(-dt / 0.6);
+        for (const key of Object.keys(root.emitted))
+            if (!root.laneFade[key])
+                delete root.emitted[key];
         const glide = 1 - Math.exp(-dt / 0.3);
         const slots = root.slots();
         const boxes = Object.keys(root.boxCounts).map(name => ({
@@ -558,22 +702,24 @@ Item {
         for (const box of boxes)
             root.settle(root.boxHeights, box.key, root.boxOf(box.key, box.count)?.height ?? 0, glide, 0.2);
         for (const blob of Object.values(root.blobs)) {
-            const target = blob.phase === "done" ? 1 : blob.build.progress;
-            blob.shown += (target - blob.shown) * follow;
+            root.advance(blob, dt);
             const place = root.blobPlace(blob, slots[blob.key] ?? 0);
             if (!place)
                 continue;
-            blob.last = blob.last ? Qt.point(blob.last.x + (place.x - blob.last.x) * glide, blob.last.y + (place.y - blob.last.y) * glide) : place;
+            const jump = 1 - Math.exp(-dt / 0.12);
+            const moving = (blob.stage === "upload" || blob.stage === "download") && root.clock - blob.stageAt > 0.5;
+            blob.last = blob.last && !moving ? Qt.point(blob.last.x + (place.x - blob.last.x) * jump, blob.last.y + (place.y - blob.last.y) * jump) : place;
         }
         root.easeBlooms(1 - Math.exp(-dt / 0.9));
         root.clock += dt;
     }
 
     function hostStats(name: string): string {
-        const live = root.current.live ? root.current.psi[name] : null;
+        const live = root.fresh ? root.current.psi[name] : null;
         const psi = live ?? root.slice.psi[name] ?? {};
         const span = (colour, ratio) => `<font color="${colour}">${root.fleet.percent(ratio)}</font>`;
-        const parts = [span(Colours.palette.m3primary, root.histories[name]?.mean ?? NaN)];
+        const cores = root.fresh ? (root.current.cores[name] ?? []) : [];
+        const parts = cores.length ? [span(Colours.palette.m3primary, cores.reduce((sum, core) => sum + core.busy, 0) / cores.length), `<font color="${Colours.palette.m3primary}">max ${root.fleet.percent(Math.max(...cores.map(core => core.busy)))}</font>`] : [span(Colours.palette.m3primary, root.histories[name]?.mean ?? NaN)];
         for (const key of ["cpu", "io", "memory"])
             if (isFinite(psi[key]))
                 parts.push(span(root.colours[key], psi[key]));
@@ -622,9 +768,10 @@ Item {
                 io: 0,
                 memory: 0
             };
-            const live = root.current.live ? (root.current.psi[name] ?? average) : average;
+            const live = root.fresh ? (root.current.psi[name] ?? average) : average;
             const target = {
-                load: root.current.live ? root.current.load[name] : history.last,
+                cores: root.fresh ? (root.current.cores[name] ?? null) : null,
+                load: root.fresh ? root.current.load[name] : history.last,
                 mean: history.mean,
                 values: history.values,
                 live: live,
@@ -633,6 +780,7 @@ Item {
             const shown = root.bloomShown[name];
             if (!shown) {
                 root.bloomShown[name] = {
+                    cores: target.cores ? target.cores.map(core => Object.assign({}, core)) : null,
                     load: target.load,
                     mean: target.mean,
                     values: target.values ? target.values.slice() : null,
@@ -642,6 +790,12 @@ Item {
                 continue;
             }
             shown.load = root.easeValue(shown.load, target.load, blend);
+            if (!target.cores || !shown.cores || shown.cores.length !== target.cores.length)
+                shown.cores = target.cores ? target.cores.map(core => Object.assign({}, core)) : null;
+            else
+                target.cores.forEach((core, index) => {
+                    shown.cores[index].busy = root.easeValue(shown.cores[index].busy, core.busy, blend);
+                });
             shown.mean = root.easeValue(shown.mean, target.mean, blend);
             if (!target.values || !shown.values)
                 shown.values = target.values ? target.values.slice() : null;
@@ -656,13 +810,13 @@ Item {
     }
 
     function inBox(blob: var): bool {
-        return blob.build.origin === blob.build.builder || blob.phase === "build";
+        return blob.build.origin === blob.build.builder || blob.stage === "build";
     }
 
     function slots(): var {
         const groups = {};
         for (const blob of Object.values(root.blobs))
-            if (root.inBox(blob) && blob.phase !== "done" && blob.phase !== "failed")
+            if (root.inBox(blob) && blob.stage !== "done" && blob.stage !== "failed")
                 (groups[blob.build.builder] = groups[blob.build.builder] ?? []).push(blob.key);
         const out = {};
         for (const keys of Object.values(groups))
@@ -726,7 +880,7 @@ Item {
         const path = root.blobPath(build.origin, build.builder);
         if (!path || path.points.length < 2)
             return null;
-        switch (blob.phase) {
+        switch (blob.stage) {
         case "upload":
             return root.pointAt(path, blob.shown * path.length);
         case "download":
@@ -787,7 +941,7 @@ Item {
     }
 
     function nowAndAverage(now: real, average: real, format: var): string {
-        return root.current.live ? `now ${format(now)}, avg ${format(average)}` : `avg ${format(average)}`;
+        return root.fresh ? `now ${format(now)}, avg ${format(average)}` : `avg ${format(average)}`;
     }
 
     function describe(hovered: var): var {
@@ -945,8 +1099,13 @@ Item {
     onClockChanged: {
         flow.requestPaint();
         blooms.requestPaint();
+        if (root.hovered?.kind === "edge")
+            overlay.requestPaint();
     }
-    onHoveredChanged: canvas.requestPaint()
+    onHoveredChanged: {
+        canvas.requestPaint();
+        overlay.requestPaint();
+    }
 
     Connections {
         target: Colours
@@ -1104,13 +1263,15 @@ Item {
             ctx.lineWidth = 1;
             ctx.stroke();
 
-            if (shown.values) {
-                const n = shown.values.length;
-                const points = shown.values.map((value, index) => {
+            if (shown.cores && shown.cores.length) {
+                const n = shown.cores.length;
+                const radiusOf = busy => root.coreRadius + (root.bloomExtent - root.coreRadius) * Math.max(0, Math.min(1, busy));
+                const points = shown.cores.map((core, index) => {
                     const angle = -Math.PI / 2 + 2 * Math.PI * index / n;
-                    const radius = scale(value);
+                    const radius = radiusOf(core.busy);
                     return Qt.point(centre.x + Math.cos(angle) * radius, centre.y + Math.sin(angle) * radius);
                 });
+                const average = shown.cores.reduce((sum, core) => sum + core.busy, 0) / n;
                 const mid = (a, b) => Qt.point((a.x + b.x) / 2, (a.y + b.y) / 2);
                 ctx.beginPath();
                 const start = mid(points[n - 1], points[0]);
@@ -1120,39 +1281,16 @@ Item {
                     ctx.quadraticCurveTo(point.x, point.y, next.x, next.y);
                 });
                 ctx.closePath();
-                ctx.fillStyle = Qt.alpha(palette.m3primary, 0.16);
+                ctx.fillStyle = Qt.alpha(palette.m3primary, 0.1 + 0.25 * Math.max(0, Math.min(1, average)));
                 ctx.fill();
                 ctx.lineJoin = "round";
                 ctx.strokeStyle = palette.m3primary;
-                ctx.lineWidth = 2.5;
+                ctx.lineWidth = 2;
                 ctx.stroke();
             } else if (isFinite(shown.load)) {
                 ring(scale(shown.load));
                 ctx.strokeStyle = palette.m3primary;
                 ctx.lineWidth = 2.5;
-                ctx.stroke();
-            }
-
-            if (isFinite(shown.mean)) {
-                const radius = scale(shown.mean);
-                ring(radius);
-                ctx.save();
-                ctx.setLineDash([0.01, 3]);
-                ctx.lineCap = "round";
-                ctx.strokeStyle = palette.m3onSurface;
-                ctx.lineWidth = 1.6;
-                ctx.stroke();
-                ctx.restore();
-            }
-
-            if (isFinite(shown.load)) {
-                const radius = scale(shown.load);
-                ctx.beginPath();
-                ctx.arc(centre.x, centre.y - radius, 3.5, 0, Math.PI * 2);
-                ctx.fillStyle = palette.m3primary;
-                ctx.fill();
-                ctx.strokeStyle = palette.m3surfaceContainer;
-                ctx.lineWidth = 1.5;
                 ctx.stroke();
             }
 
@@ -1282,22 +1420,27 @@ Item {
         renderStrategy: Canvas.Cooperative
 
         function drawDots(ctx: var, lane: var, alpha: real): void {
-            const rate = root.eased[lane.key] ?? 0;
-            if (rate < 100 || lane.points.length < 2)
+            const emitted = root.emitted[lane.key];
+            if (!emitted || lane.points.length < 2)
                 return;
-            ctx.globalAlpha = alpha * Math.min(1, Math.log10(rate / 100) + 0.35);
             ctx.fillStyle = lane.tunnel && lane.tunnel.enabled <= 0.5 ? Colours.palette.m3outline : Colours.palette.m3onSurface;
-            const density = Math.max(0.06, Math.min(1, Math.log10(rate / 100) / 4.5));
-            const radius = Math.min(5.5, 2.4 + 2 * Math.max(0, Math.log10(rate / 1e6)));
             const travel = root.phases[lane.key] ?? 0;
-            const base = ctx.globalAlpha;
-            for (let n = Math.ceil((travel - lane.length) / root.dotGrid); n * root.dotGrid <= travel; n++) {
+            for (const key of Object.keys(emitted)) {
+                const rate = emitted[key];
+                if (rate < 100)
+                    continue;
+                const n = Number(key);
+                const distance = travel - n * root.dotGrid;
+                if (distance < 0 || distance > lane.length)
+                    continue;
+                const density = Math.max(0.06, Math.min(1, Math.log10(rate / 100) / 4.5));
                 const seed = Math.sin(n * 12.9898) * 43758.5453;
                 const show = Math.min(1, (density - (seed - Math.floor(seed))) / 0.08);
                 if (show <= 0)
                     continue;
-                const point = root.pointAt(lane, travel - n * root.dotGrid);
-                ctx.globalAlpha = base * show;
+                const radius = Math.min(5.5, 2.4 + 2 * Math.max(0, Math.log10(rate / 1e6)));
+                const point = root.pointAt(lane, distance);
+                ctx.globalAlpha = alpha * show * Math.min(1, Math.log10(rate / 100) + 0.35);
                 ctx.beginPath();
                 ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
                 ctx.fill();
@@ -1329,11 +1472,11 @@ Item {
             const place = blob.last;
             if (!place)
                 return;
-            const age = root.clock - blob.changedAt;
+            const age = root.clock - blob.stageAt;
             const fade = Math.min(1, age / 0.6);
             const palette = Colours.palette;
-            const colour = blob.phase === "failed" ? root.colours.offline : blob.phase === "download" || blob.phase === "done" ? palette.m3tertiary : palette.m3primary;
-            const ending = blob.phase === "done" || blob.phase === "failed";
+            const colour = blob.stage === "failed" ? root.colours.offline : blob.stage === "download" || blob.stage === "done" ? palette.m3tertiary : palette.m3primary;
+            const ending = blob.stage === "done" || blob.stage === "failed";
             const alpha = ending ? 1 - fade : 1;
             if (alpha <= 0)
                 return;
@@ -1487,6 +1630,51 @@ Item {
         }
     }
 
+    Canvas {
+        id: overlay
+
+        anchors.fill: parent
+        renderStrategy: Canvas.Cooperative
+
+        onPaint: {
+            const ctx = getContext("2d");
+            ctx.reset();
+            if (root.hovered?.kind !== "edge")
+                return;
+            const edge = root.hovered.item;
+            const entry = root.edgeFade[edge.key];
+            const shape = root.curve(edge);
+            if (!entry || !shape)
+                return;
+            const lanes = root.shown(root.laneFade).map(lane => lane.item).filter(lane => !lane.tunnel && lane.edge.key === edge.key && lane.points.length > 1);
+            ctx.save();
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            ctx.strokeStyle = Colours.palette.m3surfaceContainer;
+            ctx.beginPath();
+            ctx.moveTo(shape.a.x, shape.a.y);
+            ctx.quadraticCurveTo(shape.c.x, shape.c.y, shape.b.x, shape.b.y);
+            ctx.lineWidth = 10;
+            ctx.stroke();
+            for (const lane of lanes) {
+                ctx.beginPath();
+                ctx.moveTo(lane.points[0].x, lane.points[0].y);
+                for (const point of lane.points.slice(1))
+                    ctx.lineTo(point.x, point.y);
+                ctx.lineWidth = lane.width + 8;
+                ctx.stroke();
+            }
+            ctx.restore();
+            for (const lane of lanes)
+                canvas.drawLane(ctx, lane);
+            canvas.drawEdge(ctx, edge, 1);
+            for (const lane of lanes)
+                flow.drawDots(ctx, lane, 1);
+            for (const lane of lanes)
+                canvas.drawRate(ctx, lane);
+        }
+    }
+
     FileView {
         id: orderFile
 
@@ -1494,9 +1682,12 @@ Item {
         printErrors: false
         onLoaded: {
             try {
-                root.order = JSON.parse(text());
+                const saved = JSON.parse(text());
+                root.order = Array.isArray(saved) ? saved : saved.order ?? [];
+                root.raised = Array.isArray(saved) ? [] : saved.top ?? [];
             } catch (error) {
                 root.order = [];
+                root.raised = [];
             }
         }
     }
