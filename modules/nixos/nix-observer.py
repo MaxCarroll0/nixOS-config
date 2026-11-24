@@ -49,6 +49,185 @@ SECRET = re.compile(
 STORE_NAME = re.compile(r"/nix/store/[0-9a-z]{32}-([^/]+?)(?:\.drv)?$")
 
 
+ACT_COPY_PATH = 100
+ACT_BUILD = 105
+RES_PROGRESS = 105
+LIVE_LINGER = 20.0
+LIVE_HEARTBEAT = 5.0
+LIVE_URL = "http://%s/metrics/job/fleet_build/instance/%s/invocation/%s"
+LIVE_DELETE = (
+    "import sys, time, urllib.request\n"
+    "time.sleep(float(sys.argv[2]))\n"
+    "urllib.request.urlopen(urllib.request.Request(sys.argv[1], method='DELETE'), timeout=5)\n"
+)
+
+
+def builder_host(uri):
+    host = re.sub(r"^[a-z-]+://", "", uri)
+    host = re.sub(r"^[^@]*@", "", host)
+    host = re.sub(r"[?:/ ].*$", "", host)
+    return re.sub(r"-builder$", "", host)
+
+
+def store_uri(uri):
+    return str(uri).split("?", 1)[0]
+
+
+def label(value):
+    return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+class LiveBuilds:
+    def __init__(self, host, invocation):
+        self.host = host
+        self.url = LIVE_URL % (os.environ.get("FLEET_PUSHGATEWAY", "pi:9093"), host, invocation)
+        self.lock = threading.Lock()
+        self.changed = threading.Event()
+        self.builds = {}
+        self.owners = {}
+        self.copies = {}
+        self.pushed = False
+        self.quiet_until = 0.0
+        self.thread = None
+
+    def begin(self, drv, builder, uri, phase):
+        self.builds[drv] = {
+            "drv": drv,
+            "package": package_name(drv),
+            "builder": builder,
+            "uri": uri,
+            "phase": phase,
+            "since": time.time(),
+        }
+        if self.thread is None:
+            self.thread = threading.Thread(target=self.run, daemon=True)
+            self.thread.start()
+
+    def enter(self, build, phase):
+        if build["phase"] != phase:
+            build["phase"] = phase
+            build["since"] = time.time()
+
+    def start(self, activity_id, kind, fields):
+        fields = fields or []
+        with self.lock:
+            if kind == ACT_BUILD and fields and str(fields[0]).endswith(".drv"):
+                drv = fields[0]
+                machine = str(fields[1]) if len(fields) > 1 and fields[1] else ""
+                current = self.builds.get(drv)
+                if machine:
+                    self.begin(drv, builder_host(machine), store_uri(machine), "upload")
+                    self.owners[activity_id] = drv
+                elif current and current["phase"] == "upload":
+                    self.enter(current, "build")
+                elif current is None:
+                    self.begin(drv, self.host, "", "build")
+                    self.owners[activity_id] = drv
+            elif kind == ACT_COPY_PATH and len(fields) >= 3:
+                path, source, target = (str(field) for field in fields[:3])
+                self.copy(activity_id, path, store_uri(source), store_uri(target))
+            else:
+                return
+        self.changed.set()
+
+    def copy(self, activity_id, path, source, target):
+        remote = [build for build in self.builds.values() if build["uri"]]
+        if any(build["uri"] == target and build["phase"] == "upload" for build in remote):
+            self.copies[activity_id] = {"uri": target, "drv": "", "started": time.time(), "done": 0, "expected": 0}
+            return
+        waiting = [build for build in remote if build["uri"] == source and build["phase"] in ("upload", "build", "download")]
+        if not waiting:
+            return
+        output = package_name(path)
+        named = [build for build in waiting if output.startswith(build["package"])]
+        build = (named or [build for build in waiting if build["phase"] == "build"] or waiting)[0]
+        self.enter(build, "download")
+        self.copies[activity_id] = {"uri": "", "drv": build["drv"], "started": time.time(), "done": 0, "expected": 0}
+
+    def result(self, activity_id, kind, fields):
+        if kind != RES_PROGRESS or activity_id not in self.copies or len(fields or []) < 2:
+            return
+        with self.lock:
+            self.copies[activity_id]["done"] = fields[0] or 0
+            self.copies[activity_id]["expected"] = fields[1] or 0
+        self.changed.set()
+
+    def stop(self, activity_id, failed_drv):
+        with self.lock:
+            drv = self.owners.pop(activity_id, None)
+            if drv is None or drv not in self.builds:
+                return
+            self.enter(self.builds[drv], "failed" if drv == failed_drv else "done")
+        self.changed.set()
+
+    def fail(self, drv):
+        with self.lock:
+            build = self.builds.get(drv)
+            if build is None or build["phase"] == "failed":
+                return
+            self.enter(build, "failed")
+        self.changed.set()
+
+    def progress(self, build):
+        if build["phase"] in ("done", "failed"):
+            return 1.0
+        if build["phase"] == "upload":
+            copies = [copy for copy in self.copies.values() if copy["uri"] == build["uri"] and copy["started"] >= build["since"] - 1]
+        elif build["phase"] == "download":
+            copies = [copy for copy in self.copies.values() if copy["drv"] == build["drv"]]
+        else:
+            return 0.0
+        expected = sum(copy["expected"] for copy in copies)
+        return min(1.0, sum(copy["done"] for copy in copies) / expected) if expected else 0.0
+
+    def render(self):
+        now = time.time()
+        with self.lock:
+            for drv in [drv for drv, build in self.builds.items() if build["phase"] in ("done", "failed") and now - build["since"] > LIVE_LINGER]:
+                del self.builds[drv]
+            lines = [
+                'fleet_build_progress{builder="%s",drv="%s",package="%s",phase="%s",since="%d"} %.4f'
+                % (label(build["builder"]), label(os.path.basename(build["drv"])), label(build["package"]), build["phase"], build["since"], self.progress(build))
+                for build in self.builds.values()
+            ]
+        return "\n".join(lines) + "\n" if lines else ""
+
+    def send(self, body):
+        if time.monotonic() < self.quiet_until or (not body and not self.pushed):
+            return
+        request = urllib.request.Request(self.url, data=body.encode() if body else None, method="PUT" if body else "DELETE")
+        try:
+            urllib.request.urlopen(request, timeout=2).close()
+            self.pushed = bool(body)
+        except OSError:
+            self.quiet_until = time.monotonic() + 30
+
+    def run(self):
+        while True:
+            self.changed.wait(LIVE_HEARTBEAT)
+            self.changed.clear()
+            self.send(self.render())
+            time.sleep(1.0)
+
+    def finish(self, exit_code, failed_drv):
+        with self.lock:
+            for build in self.builds.values():
+                if build["phase"] not in ("done", "failed"):
+                    self.enter(build, "failed" if exit_code and (build["drv"] == failed_drv or not failed_drv) else "done")
+        if self.thread is None:
+            return
+        self.quiet_until = 0.0
+        self.send(self.render())
+        if self.pushed:
+            subprocess.Popen(
+                [sys.executable, "-c", LIVE_DELETE, self.url, str(LIVE_LINGER)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+
+
 def redact(value):
     return SECRET.sub(r"\1\2<redacted>", value)
 
@@ -103,6 +282,7 @@ class Observer:
         self.closure_nar_bytes = 0
         self.reading_plan = False
         self.wake_settled = False
+        self.live = LiveBuilds(self.host, self.trace_id[:16])
 
     def detect_kind(self):
         joined = " ".join(self.argv)
@@ -218,6 +398,7 @@ class Observer:
         if action == "start":
             fields = event.get("fields", [])
             text = event.get("text", "")
+            self.live.start(activity_id, event.get("type"), fields)
             drv = fields[0] if fields and isinstance(fields[0], str) and fields[0].endswith(".drv") else ""
             classification = "activity"
             if drv:
@@ -239,7 +420,9 @@ class Observer:
                 "phase": "",
                 "logs": tempfile.TemporaryFile(mode="w+t", encoding="utf-8") if drv else None,
             }
-        elif action == "result" and activity_id in self.activities:
+        if action == "result":
+            self.live.result(activity_id, event.get("type"), event.get("fields", []))
+        if action == "result" and activity_id in self.activities:
             activity = self.activities[activity_id]
             fields = event.get("fields", [])
             if event.get("type") == BUILD_PHASE and fields:
@@ -247,6 +430,7 @@ class Observer:
             if event.get("type") == BUILD_LOG and fields and activity["logs"]:
                 activity["logs"].write(str(fields[0]) + "\n")
         elif action == "stop":
+            self.live.stop(activity_id, self.failed_drv)
             for progress_type in PROGRESS_TYPES:
                 self.last_progress.pop((activity_id, progress_type), None)
                 self.last_progress_at.pop((activity_id, progress_type), None)
@@ -261,6 +445,7 @@ class Observer:
                 match = re.search(r"(/nix/store/[0-9a-z]{32}-[^ '\"]+\.drv)", message)
                 if match:
                     self.failed_drv = match.group(1)
+                    self.live.fail(self.failed_drv)
         return event
 
     def log(self, event):
@@ -400,6 +585,7 @@ class Observer:
             if candidates:
                 self.failed_drv = candidates[-1]
         self.closure_summary()
+        self.live.finish(exit_code, self.failed_drv)
         failed_package = package_name(self.failed_drv) if self.failed_drv else ""
         for activity in self.completed:
             if not activity["drv"]:

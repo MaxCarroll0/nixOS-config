@@ -336,7 +336,7 @@ let
         echo '# HELP tailscale_peer_last_handshake_seconds Unix time of the last wireguard handshake.'
         echo '# TYPE tailscale_peer_last_handshake_seconds gauge'
 
-        jq -r '.Peer[] | select(.ShareeNode != true)
+        jq -r '.Peer[]
                | [.HostName, .OS, .Relay, (.Online|tostring),
                   (if .CurAddr == "" then "0" else "1" end),
                   (.RxBytes|tostring), (.TxBytes|tostring),
@@ -363,6 +363,10 @@ let
       [
         pkgs.wireguard-tools
         pkgs.gawk
+        pkgs.nftables
+        pkgs.coreutils
+        pkgs.findutils
+        pkgs.gnused
       ]
       ''
         echo '# HELP wireguard_peer_latest_handshake_seconds Unix time of the last handshake.'
@@ -379,6 +383,24 @@ let
           printf "wireguard_peer_rx_bytes_total{%s} %s\n", labels, $7
           printf "wireguard_peer_tx_bytes_total{%s} %s\n", labels, $8
         }'
+
+        echo '# HELP vpn_tunnel_info The VPN server and exit country an interface is connected to.'
+        echo '# TYPE vpn_tunnel_info gauge'
+        echo '# HELP vpn_enabled Whether egress through this interface is routed and its tunnel is up.'
+        echo '# TYPE vpn_enabled gauge'
+        disabled=0
+        nft list table inet vpn-disabled >/dev/null 2>&1 && disabled=1
+        up=" $(wg show interfaces 2>/dev/null) "
+        for iface in $( (wg show interfaces 2>/dev/null | tr ' ' '\n'; find /run/proton -maxdepth 1 -name '*.server' -printf '%f\n' 2>/dev/null | sed 's/\.server$//') | sort -u); do
+          [ -n "$iface" ] || continue
+          server=$(cat "/run/proton/$iface.server" 2>/dev/null || true)
+          exit=''${server%%#*}
+          printf 'vpn_tunnel_info{interface="%s",server="%s",country="%s"} 1\n' "$iface" "$server" "''${exit##*-}"
+          enabled=1
+          [[ "$up" == *" $iface "* ]] || enabled=0
+          [ -n "$server" ] && [ "$disabled" = 1 ] && enabled=0
+          printf 'vpn_enabled{interface="%s"} %s\n' "$iface" "$enabled"
+        done
       '';
 
   nixBuildMetrics =
@@ -637,7 +659,7 @@ in
         );
 
         systemd.timers.textfile-tailscale = lib.mkIf config.services.tailscale.enable (
-          collectorTimer "15s"
+          collectorTimer "5s"
         );
 
         systemd.services.textfile-wireguard = lib.mkIf hasWireguard (
@@ -647,7 +669,7 @@ in
           ]
         );
 
-        systemd.timers.textfile-wireguard = lib.mkIf hasWireguard (collectorTimer "30s");
+        systemd.timers.textfile-wireguard = lib.mkIf hasWireguard (collectorTimer "5s");
 
         systemd.services.textfile-pi-firmware = lib.mkIf cfg.piFirmware.enable (
           lib.mkMerge [
