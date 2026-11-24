@@ -124,7 +124,11 @@ in
   ];
 
   # RESET_RESUME: the Focusrite is reset on resume rather than restored; once off the bus it stays off.
-  boot.kernelParams = [ "usbcore.quirks=1235:8202:b" ];
+  # kswapd0 oopsed in __pgalloc_tag_sub on 7.4.0-rc2 (2026-11-17) and 7.3.4 (2026-11-24).
+  boot.kernelParams = [
+    "usbcore.quirks=1235:8202:b"
+    "sysctl.vm.mem_profiling=never"
+  ];
 
   # serio0 and the Promontory root hubs latch an immediate S3 wake; a keypress cannot wake this board.
   local.power.idle.disableWakeSources = [
