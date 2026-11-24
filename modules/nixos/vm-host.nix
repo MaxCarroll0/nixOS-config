@@ -109,6 +109,13 @@ let
     forward.mode = "nat";
     bridge.name = bridge;
     mac.address = "52:54:00:f1:3d:00";
+    dns = {
+      forwardPlainNames = false;
+      forwarder = [
+        { addr = "1.1.1.1"; }
+        { addr = "9.9.9.9"; }
+      ];
+    };
     ip = {
       address = bridgeAddress;
       netmask = "255.255.255.0";
