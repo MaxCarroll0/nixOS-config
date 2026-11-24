@@ -11,6 +11,7 @@ let
   cfg = config.local.wm;
 
   suspendUnlessPlaying = pkgs.writeShellScript "suspend-unless-playing" ''
+    grep -q closed /proc/acpi/button/lid/*/state || exit 0
     ${lib.getExe config.programs.caelestia.cli.package} shell idleInhibitor isEnabled 2>/dev/null | grep -qx true && exit 0
     ${pkgs.playerctl}/bin/playerctl --all-players status 2>/dev/null | grep -qx Playing || systemctl suspend
   '';
