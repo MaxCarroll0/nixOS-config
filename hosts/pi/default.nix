@@ -278,6 +278,28 @@ in
     wld0.allowedTCPPorts = [ 80 ];
     end0.allowedTCPPorts = [ 80 ];
   };
+  # tailscaled's ts-input accepts all of tailscale0 ahead of nixos-fw, so this runs in mangle.
+  networking.firewall.extraCommands = ''
+    iptables -w -t mangle -D PREROUTING -s ${facts.mc-server.tailnetAddress} -j mc-vm-guard 2>/dev/null || true
+    ip6tables -w -t mangle -D PREROUTING -s ${facts.mc-server.tailnetAddress6} -j mc-vm-guard 2>/dev/null || true
+    for tool in iptables ip6tables; do
+      $tool -w -t mangle -F mc-vm-guard 2>/dev/null || $tool -w -t mangle -N mc-vm-guard
+      $tool -w -t mangle -A mc-vm-guard -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+    done
+    iptables -w -t mangle -A mc-vm-guard -i tailscale0 -d ${facts.pi.tailscale} -p tcp --dport 8020 -j RETURN
+    iptables -w -t mangle -A mc-vm-guard -j DROP
+    ip6tables -w -t mangle -A mc-vm-guard -j DROP
+    iptables -w -t mangle -I PREROUTING -s ${facts.mc-server.tailnetAddress} -j mc-vm-guard
+    ip6tables -w -t mangle -I PREROUTING -s ${facts.mc-server.tailnetAddress6} -j mc-vm-guard
+  '';
+  networking.firewall.extraStopCommands = ''
+    iptables -w -t mangle -D PREROUTING -s ${facts.mc-server.tailnetAddress} -j mc-vm-guard 2>/dev/null || true
+    ip6tables -w -t mangle -D PREROUTING -s ${facts.mc-server.tailnetAddress6} -j mc-vm-guard 2>/dev/null || true
+    iptables -w -t mangle -F mc-vm-guard 2>/dev/null || true
+    ip6tables -w -t mangle -F mc-vm-guard 2>/dev/null || true
+    iptables -w -t mangle -X mc-vm-guard 2>/dev/null || true
+    ip6tables -w -t mangle -X mc-vm-guard 2>/dev/null || true
+  '';
 
   # First server block on an address is nginx's default; the catalogue now shares it.
   services.nginx.virtualHosts.observatory.default = true;
@@ -446,7 +468,7 @@ in
     streams.minecraft = {
       branch = "disk1";
       port = 8020;
-      allowFrom = [ facts.desktopnew.tailscale ];
+      allowFrom = [ facts.mc-server.tailnetAddress ];
     };
     streams.satisfactory = {
       branch = "disk1";
