@@ -9,6 +9,7 @@ import hmac
 import re
 import json
 import math
+import random
 import os
 import select
 import shlex
@@ -66,11 +67,18 @@ EVENT_GUIDE = {
 }
 
 
+PROGRESSIONS = ["rotate", "in order"]
+TRACK_CHOICES = ["balanced", "random", "fixed"]
+BALANCE_DAYS = 14
+TEXT_LIMIT = 4000
+
+
 def track_entry(name: str, langs: list[str], context: str = "", difficulty: str = "easy-medium",
-                enabled: bool = True, coding_minutes: int | None = None, syntax_notes: bool = False,
-                review_sections: list[str] | None = None, **_) -> dict:
-    return {"name": name, "langs": list(langs), "context": context, "difficulty": difficulty, "enabled": enabled,
-            "coding_minutes": coding_minutes, "syntax_notes": syntax_notes,
+                enabled: bool = True, coding_minutes: int | None = None, memory: str = "", interviewer: str = "",
+                progression: str = "rotate", review_sections: list[str] | None = None, **_) -> dict:
+    return {"name": name, "langs": list(langs), "context": context, "memory": memory, "interviewer": interviewer,
+            "progression": progression, "difficulty": difficulty, "enabled": enabled,
+            "coding_minutes": coding_minutes,
             "review_sections": None if review_sections is None else list(review_sections)}
 
 
@@ -98,6 +106,8 @@ def base_config() -> dict:
         "coding_minutes": 45,
         "required_per_day": 2,
         "context": "",
+        "interviewer": "",
+        "track_choice": "balanced",
         "review_sections": ["Mistakes", "Further optimisation"],
         "lockdown": True,
         "tracks": {"ocaml": ["ocaml"], "systems": ["rust", "c"], "managed": ["csharp", "python"]},
@@ -127,6 +137,8 @@ def editable(cfg: dict) -> dict:
         "snooze_minutes": auto["snooze_minutes"],
         "required_per_day": cfg["required_per_day"],
         "context": cfg.get("context", ""),
+        "interviewer": cfg.get("interviewer", ""),
+        "track_choice": cfg.get("track_choice", "balanced"),
         "review_sections": cfg["review_sections"],
         "tracks": cfg["tracks"],
     }
@@ -138,7 +150,7 @@ def overlay(cfg: dict, settings: dict) -> dict:
                         ("break_minutes", "break_minutes"), ("snooze_minutes", "snooze_minutes")):
         if key in settings:
             auto[target] = settings[key]
-    for key in ("lockdown", "coding_minutes", "required_per_day", "context", "review_sections"):
+    for key in ("lockdown", "coding_minutes", "required_per_day", "context", "interviewer", "track_choice", "review_sections"):
         if key in settings:
             cfg[key] = settings[key]
     if "tracks" in settings:
@@ -488,48 +500,99 @@ def interview_day(at: float) -> bool:
     return moment.strftime("%a") in auto["days"]
 
 
-def plan_today(at: float) -> list[dict]:
-    cfg = config()
-    today = day_of(at)
-    due = "pending" if interview_day(at) else "off"
-    done = {e["track"]: e for e in completed_on(today)}
-    history = [e for e in read_jsonl(LOG) if e["kind"] == "complete"]
-    planned = schedule().get(today, {})
-    cur = load_current()
-    out = []
-    claimed = set()
-    for entry in active_tracks(cfg):
-        track, langs = entry["name"], entry["langs"]
-        if track in done:
-            out.append({"track": track, "lang": done[track]["lang"], "status": "done", "problem": done[track]["problem"]})
+def schedule_slots(cfg: dict) -> dict[str, list[dict]]:
+    first = cfg["auto"].get("from") or ""
+    tracks = active_tracks(cfg)
+    out = {t["name"]: [] for t in tracks}
+    for date, day in sorted(schedule().items()):
+        if not isinstance(day, dict) or date < first:
             continue
-        if cur and cur["track"] == track:
-            out.append({"track": track, "lang": cur["lang"], "status": cur["phase"], "problem": cur["problem"]})
-            continue
-        slot = planned.get(track)
-        if isinstance(slot, dict) and slot.get("problem"):
-            out.append({"track": track, "lang": slot.get("lang", langs[0]), "status": due, "problem": slot["problem"]})
-            continue
-        lang = next((lang for lang in langs if isinstance(planned.get(lang), str) and lang not in claimed), None)
-        if lang:
-            claimed.add(lang)
-            out.append({"track": track, "lang": lang, "status": due, "problem": planned[lang]})
-            continue
-        count = sum(1 for e in history if e["track"] == track)
-        out.append({"track": track, "lang": langs[count % len(langs)], "status": due, "problem": None})
+        claimed = set()
+        for t in tracks:
+            slot = day.get(t["name"])
+            if isinstance(slot, dict) and slot.get("problem"):
+                out[t["name"]].append({"date": date, "lang": slot.get("lang", t["langs"][0]), "problem": slot["problem"],
+                                       "moved": bool(slot.get("moved"))})
+                continue
+            lang = next((lang for lang in t["langs"] if isinstance(day.get(lang), str) and lang not in claimed), None)
+            if lang:
+                claimed.add(lang)
+                out[t["name"]].append({"date": date, "lang": lang, "problem": day[lang], "moved": False})
     return out
 
 
-def pick(at: float, choice: str | None) -> tuple[str, str, str] | str:
-    plan = [p for p in plan_today(at) if p["status"] == "pending"]
+def track_order(cfg: dict, tracks: list[dict], today: str, at: float) -> list[dict]:
+    choice = cfg.get("track_choice", "balanced")
+    if choice == "fixed":
+        return tracks
+    seed = random.Random(today)
+    noise = {t["name"]: seed.random() for t in tracks}
+    if choice == "random":
+        return sorted(tracks, key=lambda t: noise[t["name"]])
+    since = day_of(at - BALANCE_DAYS * 86400)
+    history = [e for e in read_jsonl(LOG) if e["kind"] == "complete" and since <= e["date"] < today and worked(e)]
+    recent = {t["name"]: sum(1 for e in history if e["track"] == t["name"]) for t in tracks}
+    last = {t["name"]: max((e["end"] for e in history if e["track"] == t["name"]), default="") for t in tracks}
+    return sorted(tracks, key=lambda t: (recent[t["name"]], last[t["name"]], noise[t["name"]]))
+
+
+def plan_today(at: float) -> list[dict]:
+    cfg = config()
+    today = day_of(at)
+    interview = interview_day(at)
+    log_entries = read_jsonl(LOG)
+    done = {e["track"]: e for e in completed_on(today)}
+    finished = {(e["lang"], e["problem"]) for e in log_entries if e["kind"] == "complete" and worked(e)}
+    dropped = {(e["lang"], e["problem"]) for e in log_entries if e["kind"] == "abandoned" and e["date"] == today}
+    slots = schedule_slots(cfg)
+    cur = load_current()
+    out = []
+    for entry in track_order(cfg, active_tracks(cfg), today, at):
+        track, langs = entry["name"], entry["langs"]
+        open_slots = [s for s in slots[track] if not s["moved"] and (s["lang"], s["problem"]) not in finished]
+        row = {"track": track, "progression": entry["progression"], "backlog": []}
+        if entry["progression"] == "in order":
+            head = open_slots[0] if open_slots else None
+            today_slot = head
+        else:
+            today_slot = next((s for s in open_slots if s["date"] == today), None)
+            row["backlog"] = [{"date": s["date"], "lang": s["lang"], "problem": s["problem"]} for s in open_slots if s["date"] < today]
+        if track in done:
+            row.update(lang=done[track]["lang"], status="done", problem=done[track]["problem"])
+        elif cur and cur["track"] == track:
+            row.update(lang=cur["lang"], status=cur["phase"], problem=cur["problem"])
+        elif today_slot and (today_slot["lang"], today_slot["problem"]) in dropped:
+            row.update(lang=today_slot["lang"], status="abandoned", problem=today_slot["problem"])
+        elif today_slot:
+            row.update(lang=today_slot["lang"], status="open", problem=today_slot["problem"], planned=today_slot["date"])
+        else:
+            count = sum(1 for e in log_entries if e["kind"] == "complete" and e["track"] == track)
+            row.update(lang=langs[count % len(langs)], status="open", problem=None)
+        out.append(row)
+    needed = cfg["required_per_day"] - len(done) - sum(1 for r in out if r["status"] in ("coding", "paused", "review"))
+    for row in out:
+        if row["status"] != "open":
+            continue
+        if interview and needed > 0 and row["problem"]:
+            row["status"] = "pending"
+            needed -= 1
+        else:
+            row["status"] = "optional" if interview else "off"
+    return out
+
+
+def pick(at: float, choice: str | None, required_only: bool = False) -> tuple[str, str, str] | str:
+    wanted = ("pending",) if required_only else ("pending", "optional", "off")
+    plan = [p for p in plan_today(at) if p["status"] in wanted]
     if choice:
         plan = [p for p in plan if choice in (p["track"], p["lang"])]
+    plan.sort(key=lambda p: wanted.index(p["status"]))
     for p in plan:
         if p["problem"]:
             return p["track"], p["lang"], p["problem"]
     if not plan:
-        return f"nothing pending today{' for ' + choice if choice else ''}; see `interview today`"
-    return f"no problem scheduled today for {plan[0]['lang']}; add one to schedule.toml or pass LANG PROBLEM"
+        return f"nothing {'due' if required_only else 'open'} today{' for ' + choice if choice else ''}; see `interview today`"
+    return f"no problem scheduled for {plan[0]['track']} ({plan[0]['lang']}); add one to schedule.toml or pass LANG PROBLEM"
 
 
 def status_dict(at: float) -> dict:
@@ -780,7 +843,7 @@ def cmd_auto(args) -> int:
         reason = auto_due(at)
     if reason is None and snoozed(at):
         reason = "prompt snoozed"
-    chosen = pick(at, None) if reason is None else reason
+    chosen = pick(at, None, required_only=True) if reason is None else reason
     if isinstance(chosen, str):
         if args.verbose:
             print(f"not starting: {chosen}")
@@ -1114,7 +1177,7 @@ def report_tests(code: int | None, raw: str, session: Path) -> int:
     lines = clean_output(raw, session)
     cases = parse_cases(lines, session)
     if code is None:
-        print("the tests did not finish in time; is there an infinite loop?")
+        print(f"stopped after {RUN_SECONDS}s: the tests did not finish; is there an infinite loop?")
     if not cases:
         errors = diagnostics(lines) or [line[1:].strip() for line in lines if line.startswith("E ")]
         print("did not compile:" if errors else "no test results; the output ends:")
@@ -1136,7 +1199,7 @@ def cmd_run(args) -> int:
     command = in_shell(Path(config()["repo"]), session_lang(session), ["just", "test"])
     if args.raw:
         return subprocess.run(command, cwd=session).returncode
-    code, raw = run_capped(command, session, HIDDEN_SECONDS, env=TEST_ENV)
+    code, raw = run_capped(command, session, RUN_SECONDS, env=TEST_ENV)
     return report_tests(code, raw, session)
 
 
@@ -1156,6 +1219,7 @@ def test_counts(output: str) -> str:
 
 
 HIDDEN_SECONDS = 300
+RUN_SECONDS = 60
 BENCH_BUILD_SECONDS = 300
 BENCH_SETUP_SECONDS = 60
 
@@ -1723,15 +1787,45 @@ def cmd_today(args) -> int:
     if args.json:
         print(json.dumps(plan))
         return 0
-    if not interview_day(at) and not any(p["status"] != "off" for p in plan):
-        print(f"no interviews on {dt.datetime.fromtimestamp(at).strftime('%A')}")
-        return 0
+    if not interview_day(at):
+        print(f"no interviews required on {dt.datetime.fromtimestamp(at).strftime('%A')}; any open problem can still be started")
     tw = max([5] + [len(p["track"]) for p in plan])
     lw = max([4] + [len(p["lang"]) for p in plan])
     for p in plan:
-        print(f"{p['track']:{tw}} {p['lang']:{lw}} {p['status']:8} {p['problem'] or ''}")
+        print(f"{p['track']:{tw}} {p['lang']:{lw}} {p['status']:9} {p['problem'] or ''}")
+        for b in p["backlog"]:
+            print(f"{'':{tw}} {b['lang']:{lw}} {'backlog':9} {b['problem']} (planned {b['date']})")
     done = sum(1 for p in plan if p["status"] == "done")
     print(f"{done}/{config()['required_per_day']} required done")
+    return 0
+
+
+def track_named(cfg: dict, name: str | None) -> dict | None:
+    if name is None:
+        cur = load_current()
+        name = cur["track"] if cur else None
+    return next((t for t in cfg["tracks"] if t["name"] == name), None)
+
+
+def brief_text(cfg: dict, track: dict | None) -> str:
+    lines = ["# Interviewer brief", "", "## Every track", "", cfg.get("interviewer") or "(none)", "",
+             "## Problem style", "", cfg.get("context") or "(none)"]
+    if track:
+        lines += ["", f"## Track {track['name']} ({', '.join(track['langs'])}; {track['difficulty']}; {track['progression']})", "",
+                  "### Context", "", track["context"] or "(none)", "",
+                  "### Memory", "", track["memory"] or "(none)", "",
+                  "### Interviewer", "", track["interviewer"] or "(none)", "",
+                  "### Review sections", "", ", ".join(review_sections(cfg, track["name"]))]
+    return "\n".join(lines)
+
+
+def cmd_brief(args) -> int:
+    cfg = config()
+    track = track_named(cfg, args.track)
+    if args.track and not track:
+        print(f"unknown track {args.track}", file=sys.stderr)
+        return 1
+    print(brief_text(cfg, track))
     return 0
 
 
@@ -1865,9 +1959,13 @@ def check_settings(raw: dict, known: dict) -> tuple[dict, list[str]]:
         value = raw.get(key)
         if need(isinstance(value, int) and not isinstance(value, bool) and low <= value <= high, f"{key}: a whole number from {low} to {high}"):
             out[key] = value
-    context = raw.get("context", "")
-    if need(isinstance(context, str) and len(context) <= 4000, "context: text of at most 4000 characters"):
-        out["context"] = context.strip()
+    for key in ("context", "interviewer"):
+        text = raw.get(key, "")
+        if need(isinstance(text, str) and len(text) <= TEXT_LIMIT, f"{key}: text of at most {TEXT_LIMIT} characters"):
+            out[key] = text.strip()
+    choice = raw.get("track_choice", "balanced")
+    if need(choice in TRACK_CHOICES, f"track_choice: one of {', '.join(TRACK_CHOICES)}"):
+        out["track_choice"] = choice
 
     def headings(value):
         if isinstance(value, list) and all(isinstance(v, str) and "\n" not in v for v in value):
@@ -1897,11 +1995,14 @@ def check_settings(raw: dict, known: dict) -> tuple[dict, list[str]]:
             if good_langs:
                 unknown = [lang for lang in langs if lang not in known]
                 need(not unknown, f"{label}: unknown languages {', '.join(unknown)}")
-            track_context = t.get("context", "")
-            need(isinstance(track_context, str) and len(track_context) <= 2000, f"{label}: context of at most 2000 characters")
+            texts = {}
+            for key in ("context", "memory", "interviewer"):
+                value = t.get(key, "")
+                if need(isinstance(value, str) and len(value) <= TEXT_LIMIT, f"{label}: {key} of at most {TEXT_LIMIT} characters"):
+                    texts[key] = value.strip()
+            need(t.get("progression", "rotate") in PROGRESSIONS, f"{label}: progression one of {', '.join(PROGRESSIONS)}")
             need(t.get("difficulty", "easy-medium") in DIFFICULTIES, f"{label}: difficulty one of {', '.join(DIFFICULTIES)}")
             need(isinstance(t.get("enabled", True), bool), f"{label}: enabled true or false")
-            need(isinstance(t.get("syntax_notes", False), bool), f"{label}: syntax_notes true or false")
             track_sections = headings(t.get("review_sections"))
             need(t.get("review_sections") is None or track_sections is not None, f"{label}: review_sections empty for the default, or 1 to 12 headings of at most 60 characters")
             lengths = {}
@@ -1910,10 +2011,10 @@ def check_settings(raw: dict, known: dict) -> tuple[dict, list[str]]:
                 if need(value is None or (isinstance(value, int) and not isinstance(value, bool) and low <= value <= high),
                         f"{label}: {key} empty for the default, or a whole number from {low} to {high}"):
                     lengths[key] = value
-            if good_langs and isinstance(name, str) and isinstance(track_context, str):
-                cleaned.append(track_entry(name, list(dict.fromkeys(langs)), context=track_context.strip(),
+            if good_langs and isinstance(name, str) and len(texts) == 3:
+                cleaned.append(track_entry(name, list(dict.fromkeys(langs)), **texts,
+                                           progression=t.get("progression", "rotate"),
                                            difficulty=t.get("difficulty", "easy-medium"), enabled=t.get("enabled", True),
-                                           syntax_notes=t.get("syntax_notes", False),
                                            review_sections=track_sections, **lengths))
         enabled = [t for t in cleaned if t["enabled"]]
         need(len(enabled) > 0, "tracks: at least one enabled")
@@ -1952,11 +2053,15 @@ def cmd_settings(args) -> int:
             print(f"days {' '.join(s['days']) or 'none'} from {s['start']}{', starting ' + s['from'] if s['from'] else ''}; auto start {'on' if s['auto_start'] else 'off'}; lockdown {'on' if s['lockdown'] else 'off'}")
             print(f"{s['coding_minutes']} min coding, review until ended, {s['break_minutes']} min break; {s['required_per_day']} of {len([t for t in s['tracks'] if t['enabled']])} questions required")
             print("always: " + " ".join(doc["rules"]))
+            print(f"mandatory tracks chosen: {s['track_choice']}")
             print(f"style: {s['context'] or '(none)'}")
+            print(f"interviewer: {s['interviewer'] or '(none)'}")
             print(f"review sections: {', '.join(s['review_sections'])}")
             for t in s["tracks"]:
                 lengths = "".join(f"; {t[k]} min {k.split('_')[0]}" for k in ("coding_minutes",) if t[k] is not None)
-                print(f"track {t['name']}{'' if t['enabled'] else ' (off)'}: {', '.join(t['langs'])}; {t['difficulty']}{lengths}{'; syntax notes' if t['syntax_notes'] else ''}{'; review ' + ', '.join(t['review_sections']) if t['review_sections'] is not None else ''}; {t['context'] or '(no extra context)'}")
+                print(f"track {t['name']}{'' if t['enabled'] else ' (off)'}: {', '.join(t['langs'])}; {t['difficulty']}{lengths}; {t['progression']}{'; review ' + ', '.join(t['review_sections']) if t['review_sections'] is not None else ''}; {t['context'] or '(no extra context)'}")
+                print(f"  memory: {t['memory'] or '(none)'}")
+                print(f"  interviewer: {t['interviewer'] or '(none)'}")
             print("settings: " + ("customised in the desktop UI" if doc["customised"] else "nix defaults"))
         return 0
     password = lockdown_password(base)
@@ -2122,6 +2227,10 @@ def main() -> int:
     p = sub.add_parser("today")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_today)
+
+    p = sub.add_parser("brief", help="the interviewer instructions, memory rules and review sections for a track (default: the running one)")
+    p.add_argument("track", nargs="?")
+    p.set_defaults(fn=cmd_brief)
 
     p = sub.add_parser("check-day")
     p.set_defaults(fn=cmd_check_day)

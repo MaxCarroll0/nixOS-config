@@ -79,7 +79,10 @@ in
 {
   imports = [ ./lockdown.nix ];
 
-  home.packages = [ interview ];
+  home.packages = [
+    interview
+    emacsFrame
+  ];
 
   programs.direnv.config.whitelist.prefix = [ "${repo}/sessions" ];
 
@@ -112,13 +115,18 @@ in
       "Mistakes"
       "Further optimisation"
     ];
-    context = "LeetCode-style: well-known algorithm and data-structure classics, climbing the curriculum topic ladder from arrays and hashing to dynamic programming.";
+    context = "LeetCode-style: well-known algorithm and data-structure classics, climbing the curriculum topic ladder (curriculum.toml) from arrays and hashing to dynamic programming. A prompt is the statement, examples, constraints and the signature; it never hints at the approach, a data structure, an edge case to watch or a trap the problem sets.";
+    interviewer = "Act as a friendly, rigorous interviewer at a strong engineering company. Never give a hint unprompted: give one only when the candidate asks or after noticing they have been stuck for a few minutes, and then only the next rung of the hint ladder. Otherwise ask one open question per gap (an input to trace, a case to try); never name the bug, the fix or the failing input. Never write solution code into the candidate's files. Answer language questions with a toy example unrelated to the problem.";
+    track_choice = "balanced";
     tracks = [
       {
         name = "ocaml";
         langs = [ "ocaml" ];
         difficulty = "easy-medium";
-        context = "Functional style: immutable data (lists, Map, Set, folds, recursion). At most a quarter of OCaml problems may need mutation.";
+        progression = "rotate";
+        context = "Functional OCaml: at least 75% of problems are solved with immutable data and functional technique (lists, Map and Set functors, folds, recursion, pattern matching, option and result); the rest may need arrays, Hashtbl or ref and say so in the prompt.";
+        memory = "No syntax section. Track which functional techniques recent problems exercised and vary them.";
+        interviewer = "The candidate is fluent in OCaml: discuss idiom, purity and complexity of persistent structures rather than syntax.";
       }
       {
         name = "systems";
@@ -127,13 +135,15 @@ in
           "c"
         ];
         difficulty = "easy";
-        syntax_notes = true;
+        progression = "in order";
         review_sections = [
           "Mistakes"
           "Further optimisation"
           "Taught"
         ];
-        context = "Beginner in Rust and C: keep problems small. The prompt's notes never hint at the approach or the algorithm; they only introduce syntax the problem needs that is new to the candidate, each item in a line or two (ownership and borrowing in Rust; pointers, lengths and memory in C). Leave out anything TAUGHT.md already covers, except syntax taught in the last couple of interviews, which gets a one-line reminder. Keep the notes short: the interviewer explains the syntax in conversation.";
+        context = "Beginner in Rust and C, taught one step at a time. Problems follow a syntax and feature ladder per language and each problem needs at most one or two constructs the taught log has not introduced. C ladder: functions, if, for loops over a pointer and length, out-pointers and bool, integer widths and casts, strings as char arrays, structs, header files (declarations against definitions, include guards or #pragma once, static helpers, a problem where the candidate writes the .h of their own helper module), malloc and free, qsort and function pointers, a hand-written hash table. Rust ladder: fn, slices, Option, for loops, let mut, match, Vec, String and &str, HashMap, ownership and borrowing, iterators and closures, Result. The algorithm stays easy so attention goes on the language.";
+        memory = "Taught log: progress/taught.toml. Every construct the problem needs that the log shows in fewer than 3 earlier problems of that language goes in a Useful syntax section of the prompt: the form on a toy example unrelated to the problem and one line on what it does. A construct shown in 3 problems is no longer listed. After each interview, record the problem against every construct its prompt listed and add anything newly taught in conversation.";
+        interviewer = "Act as a tutor on the language: explain compiler errors line by line, show the idiom on a toy example when the candidate struggles with the language rather than the algorithm, and build on what the taught log already lists. Algorithmic help still goes through the hint ladder.";
       }
       {
         name = "managed";
@@ -142,7 +152,10 @@ in
           "python"
         ];
         difficulty = "easy-medium";
+        progression = "rotate";
         context = "Idiomatic standard library use: LINQ and collections in C#, built-ins and comprehensions in Python.";
+        memory = "No syntax section. Track which library areas recent problems exercised and vary them.";
+        interviewer = "Ask about the idiomatic library choice once a working solution exists.";
       }
     ];
     on_pause = [ (hook "on-pause") ];

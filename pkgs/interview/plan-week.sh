@@ -16,7 +16,7 @@ echo "planning ${missing[*]} as $PLAN_ACCOUNT"
 cswap run "$PLAN_ACCOUNT" -- -p "Run the plan-week skill for these interview days: ${missing[*]}. You are running unattended from a timer: do not ask questions or stop to report repo state; plan, verify and commit, then report the table." \
   --permission-mode acceptEdits \
   --allowedTools "Skill" "Bash(nix develop:*)" "Bash(git add:*)" "Bash(git commit:*)" "Bash(git status:*)" \
-  "Bash(git log:*)" "Bash(interview problems:*)" "Bash(interview today:*)" "Bash(interview settings show:*)" "Bash(interview langs:*)" "Bash(interview run:*)" "Bash(nix build:*)" "Bash(mkdir:*)" "Bash(cp:*)" \
+  "Bash(git log:*)" "Bash(interview problems:*)" "Bash(interview today:*)" "Bash(interview settings show:*)" "Bash(interview brief:*)" "Bash(interview submit-tests:*)" "Bash(interview langs:*)" "Bash(interview run:*)" "Bash(nix build:*)" "Bash(mkdir:*)" "Bash(cp:*)" \
   "Bash(rm -rf /tmp/claude-*)" "Bash(ls:*)" "Bash(cat:*)" "Bash(python3:*)" "Read" "Glob" "Grep"
 for day in "${missing[@]}"; do
   grep -qF "[\"$day\"" schedule.toml || { echo "still unplanned: $day"; exit 1; }

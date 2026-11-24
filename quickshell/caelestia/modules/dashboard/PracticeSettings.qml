@@ -67,7 +67,9 @@ Item {
                 difficulty: "easy-medium",
                 enabled: true,
                 coding_minutes: null,
-                syntax_notes: false,
+                memory: "",
+                interviewer: "",
+                progression: "rotate",
                 review_sections: null
             }]);
     }
@@ -311,6 +313,39 @@ Item {
                             placeholder: "e.g. LeetCode-style classics, or practical parsing and data wrangling"
                             text: root.draft?.context ?? ""
                             onEdited: value => root.set("context", value)
+                        }
+
+                        RowLabel {
+                            text: "Interviewer"
+                            subtext: "Rules every interviewer follows; each track's interviewer text adds to it"
+                        }
+
+                        Area {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 104
+                            placeholder: "e.g. hints only when asked or clearly stuck, one ladder rung at a time"
+                            text: root.draft?.interviewer ?? ""
+                            onEdited: value => root.set("interviewer", value)
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Tokens.spacing.medium
+
+                            RowLabel {
+                                text: "Mandatory tracks"
+                                subtext: "Which tracks the required questions come from each day"
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+
+                            Segmented {
+                                options: ["balanced", "random", "fixed"]
+                                current: root.draft?.track_choice ?? "balanced"
+                                onPicked: value => root.set("track_choice", value)
+                            }
                         }
                     }
                 }
@@ -603,17 +638,18 @@ Item {
                                 spacing: Tokens.spacing.medium
 
                                 RowLabel {
-                                    text: "Syntax notes"
-                                    subtext: "Prompts introduce new syntax in a line or two, never the approach"
+                                    text: "Progression"
+                                    subtext: (card.track.progression ?? "rotate") === "in order" ? "Repeat an unfinished problem until it is done" : "A new problem each day; skipped ones return next week"
                                 }
 
                                 Item {
                                     Layout.fillWidth: true
                                 }
 
-                                StyledSwitch {
-                                    checked: card.track.syntax_notes ?? false
-                                    onToggled: root.setTrack(card.index, "syntax_notes", checked)
+                                Segmented {
+                                    options: ["rotate", "in order"]
+                                    current: card.track.progression ?? "rotate"
+                                    onPicked: value => root.setTrack(card.index, "progression", value)
                                 }
                             }
                         }
@@ -706,7 +742,6 @@ Item {
                         }
 
                         ConnectedRect {
-                            last: true
                             Layout.fillWidth: true
                             implicitHeight: ctxCol.implicitHeight + Tokens.padding.medium * 2
 
@@ -730,6 +765,63 @@ Item {
                                     placeholder: "e.g. graphs only, or teach the language as we go"
                                     text: card.track.context ?? ""
                                     onEdited: value => root.setTrack(card.index, "context", value)
+                                }
+                            }
+                        }
+
+                        ConnectedRect {
+                            Layout.fillWidth: true
+                            implicitHeight: memCol.implicitHeight + Tokens.padding.medium * 2
+
+                            ColumnLayout {
+                                id: memCol
+
+                                anchors.fill: parent
+                                anchors.margins: Tokens.padding.medium
+                                anchors.leftMargin: Tokens.padding.largeIncreased
+                                anchors.rightMargin: Tokens.padding.largeIncreased
+                                spacing: Tokens.spacing.small
+
+                                RowLabel {
+                                    text: "Memory"
+                                    subtext: "What is tracked between problems and how prompts use it"
+                                }
+
+                                Area {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 84
+                                    placeholder: "e.g. show new syntax in the prompt for the first 3 problems that need it"
+                                    text: card.track.memory ?? ""
+                                    onEdited: value => root.setTrack(card.index, "memory", value)
+                                }
+                            }
+                        }
+
+                        ConnectedRect {
+                            last: true
+                            Layout.fillWidth: true
+                            implicitHeight: intCol.implicitHeight + Tokens.padding.medium * 2
+
+                            ColumnLayout {
+                                id: intCol
+
+                                anchors.fill: parent
+                                anchors.margins: Tokens.padding.medium
+                                anchors.leftMargin: Tokens.padding.largeIncreased
+                                anchors.rightMargin: Tokens.padding.largeIncreased
+                                spacing: Tokens.spacing.small
+
+                                RowLabel {
+                                    text: "Interviewer"
+                                    subtext: "Added to the interviewer rules for this track only"
+                                }
+
+                                Area {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 84
+                                    placeholder: "e.g. act as a tutor on the language"
+                                    text: card.track.interviewer ?? ""
+                                    onEdited: value => root.setTrack(card.index, "interviewer", value)
                                 }
                             }
                         }
