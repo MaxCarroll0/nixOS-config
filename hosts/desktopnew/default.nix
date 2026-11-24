@@ -83,6 +83,8 @@ in
   ];
   # arctic_fan_controller drives the 10-port USB fan controller; it needs kernel 7.2.
   boot.kernelPackages = pkgs.linuxPackages_latest;
+  # kswapd0 oopsed in __pgalloc_tag_sub on 7.4.0-rc2 (2026-11-17) and 7.3.4 (2026-11-24).
+  boot.kernelParams = [ "sysctl.vm.mem_profiling=never" ];
 
   # Linux 7.3 no longer pulls asm/cpuid/api.h in through linux/pci.h.
   boot.extraModulePackages = [
