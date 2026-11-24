@@ -179,6 +179,11 @@ Item {
         return `${Math.max(1, Math.round(seconds))}s`;
     }
 
+    function peerRate(direction: string, window: string): string {
+        const guestWindow = root.duration(Math.max(parseFloat(window), 45));
+        return `rate(tailscale_peer_${direction}_bytes_total[${window}]) or sum without (guest) (label_replace(rate(tailscale_guest_peer_${direction}_bytes_total[${guestWindow}]), "instance", "$1", "guest", "(.+)"))`;
+    }
+
     function request(base: string, path: string, params: var, done: var): void {
         const query = Object.keys(params).map(key => `${key}=${encodeURIComponent(params[key])}`).join("&");
         const xhr = new XMLHttpRequest();
@@ -405,8 +410,8 @@ Item {
         const window = root.duration(root.currentWindow);
         const point = (expr, done) => root.instant(false, expr, at, done);
         root.gather({
-            tx: done => point(`rate(tailscale_peer_tx_bytes_total[${window}])`, done),
-            rx: done => point(`rate(tailscale_peer_rx_bytes_total[${window}])`, done),
+            tx: done => point(root.peerRate("tx", window), done),
+            rx: done => point(root.peerRate("rx", window), done),
             psiCpu: done => point(`rate(node_pressure_cpu_waiting_seconds_total[${window}])`, done),
             psiIo: done => point(`rate(node_pressure_io_stalled_seconds_total[${window}])`, done),
             psiMemory: done => point(`rate(node_pressure_memory_stalled_seconds_total[${window}])`, done),
@@ -494,8 +499,8 @@ Item {
         const raw = (counter, recorded) => archive ? root.series(recorded, true) : `rate(${counter}[${window}])`;
         const span = (expr, done) => root.ranged(archive, expr, from, at, step, done);
         root.gather({
-            tx: done => span(raw("tailscale_peer_tx_bytes_total", "ts:peer_tx_bytes"), done),
-            rx: done => span(raw("tailscale_peer_rx_bytes_total", "ts:peer_rx_bytes"), done),
+            tx: done => span(archive ? root.series("ts:peer_tx_bytes", true) : root.peerRate("tx", window), done),
+            rx: done => span(archive ? root.series("ts:peer_rx_bytes", true) : root.peerRate("rx", window), done),
             psiCpu: done => span(raw("node_pressure_cpu_waiting_seconds_total", "psi:cpu_waiting"), done),
             psiIo: done => span(raw("node_pressure_io_stalled_seconds_total", "psi:io_stalled"), done),
             psiMemory: done => span(raw("node_pressure_memory_stalled_seconds_total", "psi:memory_stalled"), done),
