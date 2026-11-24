@@ -292,7 +292,7 @@ Item {
             if (!origin)
                 continue;
             const host = root.nodeByName[owner]?.host ?? false;
-            const clear = host ? root.stallRadius + 22 : 10;
+            const clear = host ? root.stallRadius + 8 : 10;
             list.forEach((tunnel, index) => {
                 const txTarget = root.laneWidth(Math.max(tunnel.tx, 1));
                 const rxTarget = root.laneWidth(Math.max(tunnel.rx, 1));
@@ -338,13 +338,12 @@ Item {
             const text = `⚙ ${build.count}`;
             const width = text.length * 6.5 + 12;
             if (local) {
-                const reach = root.bloomExtent * 0.78;
                 badges.push({
                     key: `${build.origin}\u001f${build.builder}`,
                     build: build,
                     text: text,
                     width: width,
-                    at: Qt.point(origin.x - reach, origin.y - reach)
+                    at: Qt.point(origin.x - root.stallRadius - width / 2 - 4, origin.y - 24)
                 });
                 continue;
             }
@@ -568,6 +567,17 @@ Item {
         }
         root.easeBlooms(1 - Math.exp(-dt / 0.9));
         root.clock += dt;
+    }
+
+    function hostStats(name: string): string {
+        const live = root.current.live ? root.current.psi[name] : null;
+        const psi = live ?? root.slice.psi[name] ?? {};
+        const span = (colour, ratio) => `<font color="${colour}">${root.fleet.percent(ratio)}</font>`;
+        const parts = [span(Colours.palette.m3primary, root.histories[name]?.mean ?? NaN)];
+        for (const key of ["cpu", "io", "memory"])
+            if (isFinite(psi[key]))
+                parts.push(span(root.colours[key], psi[key]));
+        return parts.join("&nbsp;&nbsp;");
     }
 
     function historyOf(name: string): var {
@@ -1082,37 +1092,6 @@ Item {
             ctx.fillText(text, x, y);
         }
 
-        function placeLabels(ctx: var, centre: var, labels: var): void {
-            ctx.font = "bold 11px sans-serif";
-            const placed = [];
-            for (const label of labels) {
-                const width = ctx.measureText(label.text).width + 4;
-                let reach = label.reach;
-                let box = null;
-                for (let attempt = 0; attempt < 12; attempt++) {
-                    const x = centre.x + Math.cos(label.angle) * (reach + width / 2 * Math.abs(Math.cos(label.angle)));
-                    const y = centre.y + Math.sin(label.angle) * (reach + 7 * Math.abs(Math.sin(label.angle)));
-                    box = {
-                        x: x,
-                        y: y,
-                        width: width,
-                        height: 14
-                    };
-                    if (!placed.some(other => Math.abs(other.x - x) < (other.width + width) / 2 && Math.abs(other.y - y) < 14))
-                        break;
-                    reach += 6;
-                }
-                placed.push(box);
-                ctx.textAlign = "center";
-                ctx.textBaseline = "middle";
-                ctx.lineWidth = 3.5;
-                ctx.strokeStyle = Colours.palette.m3surfaceContainer;
-                ctx.strokeText(label.text, box.x, box.y);
-                ctx.fillStyle = label.colour;
-                ctx.fillText(label.text, box.x, box.y);
-            }
-        }
-
         function drawBloom(ctx: var, name: string, centre: var, shown: var): void {
             const palette = Colours.palette;
             const scale = value => root.coreRadius + root.pressureScale * Math.sqrt(Math.min(root.pressureClamp, Math.max(0, value)));
@@ -1120,8 +1099,6 @@ Item {
                 ctx.beginPath();
                 ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2);
             };
-            const labels = [];
-
             ring(scale(1));
             ctx.strokeStyle = Qt.alpha(palette.m3onSurface, 0.16);
             ctx.lineWidth = 1;
@@ -1166,12 +1143,6 @@ Item {
                 ctx.lineWidth = 1.6;
                 ctx.stroke();
                 ctx.restore();
-                labels.push({
-                    text: root.fleet.percent(root.histories[name]?.mean ?? shown.mean),
-                    angle: Math.PI / 4,
-                    reach: Math.max(radius, scale(1)) + 3,
-                    colour: palette.m3onSurface
-                });
             }
 
             if (isFinite(shown.load)) {
@@ -1200,30 +1171,25 @@ Item {
                 };
                 ctx.save();
                 ctx.lineCap = "round";
-                arc(from, from + span, 4, Qt.alpha(colour, 0.2));
+                arc(from, from + span, 5, Qt.alpha(colour, 0.32));
                 const now = shown.live[key] ?? 0;
                 if (fraction(now) > 0)
-                    arc(from, from + span * fraction(now), 4, colour);
+                    arc(from, from + span * fraction(now), 5, colour);
                 ctx.restore();
                 const mean = shown.average[key] ?? 0;
                 if (fraction(mean) > 0) {
                     const angle = from + span * fraction(mean);
                     ctx.beginPath();
-                    ctx.moveTo(centre.x + Math.cos(angle) * (gauge - 5), centre.y + Math.sin(angle) * (gauge - 5));
-                    ctx.lineTo(centre.x + Math.cos(angle) * (gauge + 5), centre.y + Math.sin(angle) * (gauge + 5));
+                    ctx.moveTo(centre.x + Math.cos(angle) * (gauge - 6), centre.y + Math.sin(angle) * (gauge - 6));
+                    ctx.lineTo(centre.x + Math.cos(angle) * (gauge + 6), centre.y + Math.sin(angle) * (gauge + 6));
+                    ctx.strokeStyle = palette.m3surfaceContainer;
+                    ctx.lineWidth = 3.5;
+                    ctx.stroke();
                     ctx.strokeStyle = palette.m3onSurface;
                     ctx.lineWidth = 1.5;
                     ctx.stroke();
                 }
-                if (fraction(now) > 0)
-                    labels.push({
-                        text: root.fleet.percent(now),
-                        angle: from + span / 2,
-                        reach: gauge + 5,
-                        colour: colour
-                    });
             });
-            canvas.placeLabels(ctx, centre, labels);
         }
 
         function drawNode(ctx: var, node: var, alpha: real): void {
@@ -1465,6 +1431,14 @@ Item {
                     text: root.fleet.displayName(label.node.name)
                     font: label.node.host ? Tokens.font.body.small : Tokens.font.label.small
                     color: Qt.tint(Colours.palette.m3outline, Qt.alpha(Colours.palette.m3onSurface, Math.min(1, (root.shownUp[label.modelData] ?? label.node.up) * 4)))
+                }
+
+                StyledText {
+                    Layout.alignment: Qt.AlignHCenter
+                    visible: label.node.host
+                    textFormat: Text.StyledText
+                    text: label.node.host ? root.hostStats(label.modelData) : ""
+                    font: Tokens.font.label.small
                 }
 
                 StyledText {
