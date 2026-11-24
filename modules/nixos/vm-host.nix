@@ -160,9 +160,12 @@ let
         config.virtualisation.libvirtd.package
         pkgs.jq
         pkgs.coreutils
+        pkgs.util-linux
       ];
       excludeShellChecks = [ "SC2016" ];
       text = ''
+        exec {lock}>/run/${domainName}-agent.lock
+        flock -w 20 "$lock" || exit 1
         agent() { virsh -c qemu:///system qemu-agent-command ${domainName} "$1" 2>/dev/null; }
         pid=$(agent ${
           lib.escapeShellArg (
@@ -188,6 +191,11 @@ let
         exit 1
       '';
     };
+
+  guestTailscaleStatus = guestRun "tailscale-status" "/usr/bin/tailscale" [
+    "status"
+    "--json"
+  ];
 
   guestLockCount = guestRun "lock-count" "/usr/bin/sh" [
     "-c"
@@ -465,6 +473,8 @@ in
       }
     '';
   };
+
+  local.monitoring.tailscaleGuests.${domainName} = guestTailscaleStatus;
 
   systemd.sockets."${domainName}-minecraft" = {
     wantedBy = [ "sockets.target" ];
