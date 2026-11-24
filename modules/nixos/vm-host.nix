@@ -16,7 +16,6 @@ let
   guestMac = "52:54:00:f1:3d:01";
   guestAddress = "192.168.122.108";
   bridgeAddress = "192.168.122.1";
-  nasStreamPort = 8020;
   minecraftPort = 25565;
   hostTailnetAddress = facts.${config.networking.hostName}.tailscale;
   firstClassPeers = map (host: facts.${host}.tailscale) [
@@ -451,16 +450,9 @@ in
   networking.nftables.tables.vm-isolation = {
     family = "inet";
     content = ''
-      chain prerouting {
-        type nat hook prerouting priority dstnat; policy accept;
-
-        iifname "${bridge}" ip saddr ${guestAddress} ip daddr ${bridgeAddress} tcp dport ${toString nasStreamPort} dnat ip to ${facts.pi.tailscale}
-      }
-
       chain forward {
         type filter hook forward priority filter - 1; policy accept;
 
-        iifname "${bridge}" ip saddr ${guestAddress} ip daddr ${facts.pi.tailscale} oifname "tailscale0" tcp dport ${toString nasStreamPort} accept
         iifname "${bridge}" meta nfproto ipv6 counter drop
         iifname "${bridge}" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 } counter drop
       }
