@@ -114,10 +114,10 @@ Scope {
                 }
 
                 TextButton {
-                    visible: Practice.finishApproved
+                    visible: Practice.phase === "coding" || Practice.phase === "paused"
                     type: TextButton.Tonal
-                    text: "Finish early"
-                    onClicked: Practice.finishEarly()
+                    text: Practice.submitting ? "Running hidden tests" : "Submit"
+                    onClicked: Practice.submit()
                 }
 
                 StyledTextField {

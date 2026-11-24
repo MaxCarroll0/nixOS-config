@@ -59,7 +59,6 @@ EVENT_GUIDE = {
     "PAUSED": "Candidate paused the clock and is with the tutor. Do not continue the interview until RESUMED.",
     "RESUMED": "Clock running again. Pick up where the interview left off.",
     "EXTENDED": "You extended the coding clock for an environment fault; the new time left is in `interview status`.",
-    "FINISH_APPROVED": "You approved finishing early; the candidate can now press Finish early, or run `interview done` yourself if they asked to finish.",
     "HINT": "The candidate took the next ladder rung themselves; do not repeat it, build on it.",
     "CODING_OVER": "Coding phase over and the submission is frozen. Stop coaching and run /review now.",
     "RECORDS": "The candidate pressed End interview: the interview is counted and logged, and the discussion is over. Write the records now (review steps 6 to 10; `interview hint --all` and `interview bench` still work on this session), then run `interview close`, which closes this window.",
@@ -622,15 +621,11 @@ def status_dict(at: float) -> dict:
             "running_since": cur.get("running_since"),
             "pause_started": cur.get("pause_started"),
             "pause_seconds": cur["pause_seconds"],
-            "finish_approved": cur.get("finish_approved"),
             "extended_minutes": extended_minutes(cur),
             "hidden_tests": cur.get("hidden_tests"),
             "benchmark": cur.get("benchmark") and (cur["benchmark"].split(" (")[0] if cur["phase"] in ("coding", "paused") else cur["benchmark"]),
             "hints": len(cur.get("hints", [])),
         })
-        if cur["phase"] in ("coding", "paused"):
-            out["can_finish"] = bool(cur.get("finish_approved")) or (
-                cur.get("hidden_tests") == "pass" and cur.get("hidden_digest") == digest(Path(cur["dir"])))
         if cur["phase"] in ("coding", "paused"):
             out["coding_left"] = max(0, round(coding_left(cur, at)))
         if cur["phase"] == "review":
@@ -648,8 +643,7 @@ def status_line(s: dict) -> str:
         return head + " No interview running." + blank
     where = f"{s['lang']} {s['problem']} ({s['dir']})"
     if s["phase"] == "coding":
-        approved = " Finishing early is allowed (approved or hidden tests pass)." if s.get("can_finish") else ""
-        return head + f" CODING {where}: {s['coding_left'] // 60}m{s['coding_left'] % 60:02d}s of coding left; scope every request to fit.{approved}"
+        return head + f" CODING {where}: {s['coding_left'] // 60}m{s['coding_left'] % 60:02d}s of coding left; scope every request to fit."
     if s["phase"] == "paused":
         return head + f" PAUSED {where}: clock stopped with {s['coding_left'] // 60}m{s['coding_left'] % 60:02d}s left; candidate is with the tutor."
     return head + f" REVIEW {where}: {s['review_elapsed'] // 60}m{s['review_elapsed'] % 60:02d}s in, no time limit; it ends when the candidate presses End interview; submission frozen at tag sub/{s['session']}."
@@ -670,11 +664,11 @@ then edit {main}. All commands work without the interviewer.
 | run the hidden tests, then the benchmark (pass or fail and a count, met or not met) | ~interview submit-tests~                    |
 | next hint from the ladder                                                          | ~interview hint~                            |
 | time left                                                                          | ~interview status~                          |
-| finish early (hidden tests passed on the current code)                             | ~interview done~                            |
+| submit: runs the hidden tests and ends coding only if they pass                     | ~interview submit~ or the Submit button     |
 | end the review                                                                     | the End interview button, or ~interview end~ |
 
-~interview done~ works once ~interview submit-tests~ has passed on exactly the files as they are
-now; otherwise wait for the clock, or ask the interviewer to approve. Hidden tests are small: any
+~interview submit~ runs the hidden tests on the files as they are and ends coding only if they
+pass; otherwise coding ends with the clock. Hidden tests are small: any
 correct solution passes them, brute force included, and passing them solves the problem. The
 benchmark runs large inputs against a time limit per case; meeting it is the ideal complexity, not
 a requirement. When coding ends the files freeze, and the solutions (a short list of methods with
@@ -914,28 +908,15 @@ def do_toggle(cur: dict, at: float):
     return do_pause(cur, at) if cur["phase"] == "coding" else do_resume(cur, at)
 
 
-def do_done(cur: dict, at: float):
+def do_submit(cur: dict, at: float):
     if cur["phase"] not in ("coding", "paused"):
-        print(f"cannot finish coding during {cur['phase']}", file=sys.stderr)
+        print(f"cannot submit during {cur['phase']}", file=sys.stderr)
         return 1
-    solved = cur.get("hidden_tests") == "pass" and cur.get("hidden_digest") == digest(Path(cur["dir"]))
-    if not (cur.get("finish_approved") or solved):
-        print("finishing early needs `interview submit-tests` to pass on the current files, or the interviewer's approval", file=sys.stderr)
+    if not (cur.get("hidden_tests") == "pass" and cur.get("hidden_digest") == digest(Path(cur["dir"]))):
+        print("not submitted: the files changed after the hidden tests ran; submit again", file=sys.stderr)
         return 1
     save_current(end_coding(cur, at, early=True))
-    return "coding finished; review started"
-
-
-def cmd_approve_finish(args) -> int:
-    def approve(cur: dict, at: float):
-        if cur["phase"] not in ("coding", "paused"):
-            print(f"nothing to approve during {cur['phase']}", file=sys.stderr)
-            return 1
-        cur["finish_approved"] = args.reason
-        save_current(cur)
-        emit(cur, "FINISH_APPROVED", args.reason)
-        return "finishing early approved"
-    return mutate(approve)
+    return "submitted; coding finished and review started"
 
 
 def cmd_extend(args) -> int:
@@ -989,7 +970,7 @@ def cmd_close(args) -> int:
     with locked():
         cur = load_current()
         if cur and cur["phase"] != "review":
-            print(f"cannot close during {cur['phase']}; finish coding first with `interview done`", file=sys.stderr)
+            print(f"cannot close during {cur['phase']}; submit first with `interview submit`", file=sys.stderr)
             return 1
         meta = cur or last_ended()
         gap = meta and not args.force and missing_bench(meta)
@@ -1411,8 +1392,6 @@ def cmd_submit_tests(args) -> int:
                 cur["hidden_digest"] = state if hidden_result == "pass" else None
                 cur["benchmark"] = line
                 save_current(cur)
-    if secret and hidden_result == "pass" and meta["phase"] == "coding":
-        print("you may finish early now with `interview done` (or keep improving)")
     return 0 if hidden_result == "pass" else 1
 
 
@@ -1425,7 +1404,7 @@ def cmd_submit(args) -> int:
     if cmd_submit_tests(args) != 0:
         print("not submitted: the hidden tests must pass (the benchmark is optional); keep coding")
         return 1
-    return mutate(do_done)
+    return mutate(do_submit)
 
 
 ALIAS_LANGS = {"ocaml": "let {fn} = {expr}", "python": "{fn} = {expr}"}
@@ -2198,13 +2177,9 @@ def main() -> int:
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_langs)
 
-    for name, fn in (("pause", do_pause), ("resume", do_resume), ("toggle", do_toggle), ("done", do_done), ("end", do_end)):
+    for name, fn in (("pause", do_pause), ("resume", do_resume), ("toggle", do_toggle), ("end", do_end)):
         p = sub.add_parser(name)
         p.set_defaults(fn=lambda _a, fn=fn: mutate(fn))
-
-    p = sub.add_parser("approve-finish", help="interviewer only: allow the candidate to finish coding early")
-    p.add_argument("reason")
-    p.set_defaults(fn=cmd_approve_finish)
 
     p = sub.add_parser("extend", help=f"interviewer only: add coding minutes for an environment fault, at most {EXTEND_CAP_MINUTES} per interview")
     p.add_argument("minutes", type=int)

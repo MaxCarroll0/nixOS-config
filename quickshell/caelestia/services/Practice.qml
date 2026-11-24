@@ -41,7 +41,8 @@ Singleton {
     readonly property real todaySeconds: today?.total ?? 0
     readonly property bool testing: tests.running
     readonly property bool locked: lockdown !== null
-    readonly property bool finishApproved: (phase === "coding" || phase === "paused") && (!!current?.finish_approved || current?.hidden_tests === "pass")
+    readonly property bool submitting: submitter.running
+    property string submitMessage
 
     readonly property var settings: settingsDoc?.settings ?? null
     readonly property var languages: settingsDoc?.languages ?? []
@@ -137,8 +138,11 @@ Singleton {
         command(["start", "--open"]);
     }
 
-    function finishEarly(): void {
-        command(["done"]);
+    function submit(): void {
+        if (submitter.running || !current)
+            return;
+        submitMessage = "";
+        submitter.running = true;
     }
 
     function endInterview(): void {
@@ -244,6 +248,23 @@ Singleton {
             onStreamFinished: root.openError = text.trim()
         }
         onExited: root.refresh()
+    }
+
+    Process {
+        id: submitter
+
+        command: ["interview", "submit"]
+        stdout: StdioCollector {
+            id: submitOut
+        }
+        stderr: StdioCollector {
+            id: submitErr
+        }
+        onExited: code => {
+            root.submitMessage = code === 0 ? "" : (submitErr.text + submitOut.text).trim().split("\n").filter(l => /^(not submitted|hidden tests|cannot)/.test(l)).join(" ");
+            currentFile.reload();
+            root.refresh();
+        }
     }
 
     Process {

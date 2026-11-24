@@ -94,7 +94,7 @@ ColumnLayout {
 
             StyledText {
                 Layout.fillWidth: true
-                text: Practice.phase === "review" ? "Submission frozen; reviewing with the interviewer, no time limit. End interview when you are done." : Practice.phase === "paused" ? "Clock stopped. The tutor window is up; SUPER+F5 resumes." : `Paused ${Practice.hours(root.cur?.pause_seconds ?? 0)} so far. ${Practice.finishApproved ? "Finishing early is allowed." : "Finish early: pass interview submit-tests, or ask the interviewer."}`
+                text: Practice.phase === "review" ? "Submission frozen; reviewing with the interviewer, no time limit. End interview when you are done." : Practice.phase === "paused" ? "Clock stopped. The tutor window is up; SUPER+F5 resumes." : `Paused ${Practice.hours(root.cur?.pause_seconds ?? 0)} so far. ${Practice.submitMessage || "Submit runs the hidden tests and ends coding only if they pass."}`
                 color: Colours.palette.m3onSurfaceVariant
                 font: Tokens.font.body.small
                 wrapMode: Text.WordWrap
@@ -119,13 +119,12 @@ ColumnLayout {
 
         IconTextButton {
             Layout.fillWidth: true
-            visible: Practice.finishApproved
             icon: "flag"
-            text: "Finish early"
+            text: Practice.submitting ? "Running hidden tests" : "Submit"
             inactiveColour: Colours.palette.m3secondaryContainer
             inactiveOnColour: Colours.palette.m3onSecondaryContainer
             verticalPadding: Tokens.padding.extraSmall
-            onClicked: Practice.finishEarly()
+            onClicked: Practice.submit()
         }
     }
 
