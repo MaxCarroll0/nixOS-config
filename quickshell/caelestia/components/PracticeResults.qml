@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Shapes
 import Caelestia.Config
 import qs.components
 import qs.services
@@ -119,7 +120,7 @@ ColumnLayout {
             const parts = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([i, n]) => `${cases[i]?.label ?? i}${n > 1 ? ` ×${n}` : ""}`);
             return `${role}: ${parts.join(", ")}`;
         }
-        return `slowdown vs fastest, 1x to ${ratio(ratioTop)} · time: mean · dots: median, bars: max`;
+        return `slowdown vs fastest, 1x to ${ratio(ratioTop)} · time: mean · dots: median, triangles: max`;
     }
 
     visible: versions.length > 0
@@ -223,23 +224,54 @@ ColumnLayout {
                         { role: "max", top: false }
                     ]
 
-                    Rectangle {
+                    Item {
+                        id: marker
+
                         required property var modelData
                         readonly property bool max: modelData.role === "max"
                         readonly property int index: max ? row.worstCase : row.medianCase
                         readonly property var result: index >= 0 ? (row.modelData.cases ?? [])[index] ?? null : null
                         readonly property real at: result ? root.tickPosition(result) : -1
                         readonly property bool active: root.role === modelData.role
+                        readonly property color fill: active ? Colours.palette.m3onSurface : max ? root.tickColour(result) : Colours.palette.m3onSurfaceVariant
 
                         visible: at >= 0
                         z: max ? 2 : 1
-                        width: max ? 8 : 5
-                        height: max ? 4 : 5
+                        width: max ? 9 : 5
+                        height: 5
                         x: Math.max(0, Math.min(strip.width - width, strip.usable * at + 1 - width / 2))
                         y: modelData.top ? strip.bandTop - 3 - height : strip.bandTop + strip.band + 3
-                        radius: max ? 1 : width / 2
-                        color: active ? Colours.palette.m3onSurface : max ? root.tickColour(result) : Colours.palette.m3onSurfaceVariant
                         opacity: active || !root.picking ? 1 : 0.3
+
+                        Rectangle {
+                            anchors.fill: parent
+                            visible: !marker.max
+                            radius: width / 2
+                            color: marker.fill
+                        }
+
+                        Shape {
+                            anchors.fill: parent
+                            visible: marker.max
+                            preferredRendererType: Shape.CurveRenderer
+
+                            ShapePath {
+                                strokeWidth: -1
+                                fillColor: marker.fill
+                                startX: 0
+                                startY: marker.modelData.top ? 0 : marker.height
+
+                                PathLine {
+                                    x: marker.width
+                                    y: marker.modelData.top ? 0 : marker.height
+                                }
+
+                                PathLine {
+                                    x: marker.width / 2
+                                    y: marker.modelData.top ? marker.height : 0
+                                }
+                            }
+                        }
                     }
                 }
 
