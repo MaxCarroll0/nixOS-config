@@ -36,10 +36,6 @@ ColumnLayout {
         return s < 1 ? `${(s * 1000).toFixed(s < 0.01 ? 1 : 0)}ms` : `${s.toFixed(2)}s`;
     }
 
-    function ratio(r: real): string {
-        return r < 10 ? `${r.toFixed(1)}x` : r < 1000 ? `${Math.round(r)}x` : `${Math.round(r / 1000)}kx`;
-    }
-
     function failed(c: var): bool {
         return !!c && (c.status === "wrong" || c.status === "raised");
     }
@@ -120,7 +116,7 @@ ColumnLayout {
             const parts = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([i, n]) => `${cases[i]?.label ?? i}${n > 1 ? ` ×${n}` : ""}`);
             return `${role}: ${parts.join(", ")}`;
         }
-        return `slowdown vs fastest, 1x to ${ratio(ratioTop)} · time: mean · dots: median, triangles: max`;
+        return "";
     }
 
     visible: versions.length > 0
@@ -328,7 +324,7 @@ ColumnLayout {
 
     StyledText {
         Layout.fillWidth: true
-        visible: root.cases.length > 0
+        visible: root.picking
         text: root.caption()
         wrapMode: Text.WordWrap
         color: root.picking ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant
