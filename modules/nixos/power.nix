@@ -809,9 +809,16 @@ in
     (lib.mkIf (cfg.idle.policy == "autosuspend" && cfg.idle.autosuspend.powerOffAfterHours != null) {
       systemd.services.deep-sleep-escalate = {
         description = "Power off when a timed wake finds the host still idle";
-        serviceConfig.Type = "oneshot";
+        serviceConfig = {
+          Type = "oneshot";
+          TimeoutStartSec = "2h";
+        };
         script = ''
           sleep 5
+          while [ "$(${pkgs.systemd}/bin/systemctl show -p ActiveState --value flake-sync.service)" = activating ] \
+            || [ -n "$(${pkgs.systemd}/bin/systemctl list-jobs --no-legend flake-sync.service)" ]; do
+            sleep 10
+          done
           if ${lib.getExe keepAwakeActive} || ${lib.getExe sessionActivity}; then
             exit 0
           fi
