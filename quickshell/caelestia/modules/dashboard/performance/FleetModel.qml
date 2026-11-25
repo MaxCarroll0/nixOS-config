@@ -6,6 +6,7 @@ Item {
 
     property string live: "http://pi:9090"
     property string history: "http://pi/fleet-history"
+    property string gateway: "http://pi:9093"
     property string repo: "https://github.com/MaxCarroll0/nixOS-config"
     readonly property real liveRetention: 7 * 86400 - 3600
     readonly property var hosts: ["pi", "laptop", "desktopnew"]
@@ -115,6 +116,14 @@ Item {
         running: root.active && root.following
         triggeredOnStart: true
         onTriggered: root.fetchCurrent()
+    }
+
+    Timer {
+        interval: root.current.builds.length ? 250 : 1000
+        repeat: true
+        running: root.active && root.following
+        triggeredOnStart: true
+        onTriggered: root.fetchBuilds()
     }
 
     Timer {
@@ -418,7 +427,7 @@ Item {
             load: done => point("last_over_time(load:pressure_ratio[1m])", done),
             tunnelTx: done => point(`sum by (instance, interface) (rate(wireguard_peer_tx_bytes_total[${window}]))`, done),
             tunnelRx: done => point(`sum by (instance, interface) (rate(wireguard_peer_rx_bytes_total[${window}]))`, done),
-            builds: done => point('fleet_build_progress and on (instance, invocation) (time() - push_time_seconds{job="fleet_build"} < 30)', done),
+            builds: done => root.following ? done([]) : point('fleet_build_progress and on (instance, invocation) (time() - push_time_seconds{job="fleet_build"} < 30)', done),
             busy: done => point(`sum by (instance, cpu) (rate(node_cpu_seconds_total{mode!~"idle|iowait"}[${window}]))`, done)
         }, results => {
             if (generation !== root.currentGeneration)
@@ -469,15 +478,7 @@ Item {
                 tunnelOf(result).tx = root.value(result);
             for (const result of results.tunnelRx)
                 tunnelOf(result).rx = root.value(result);
-            const builds = results.builds.map(result => ({
-                        key: `${result.metric.instance}\u001f${result.metric.invocation}\u001f${result.metric.drv}`,
-                        origin: result.metric.instance,
-                        builder: result.metric.builder,
-                        package: result.metric.package ?? "",
-                        phase: result.metric.phase ?? "build",
-                        since: parseFloat(result.metric.since ?? "NaN"),
-                        progress: root.value(result)
-                    }));
+            const builds = root.following ? root.current.builds : results.builds.map(result => root.buildOf(result.metric, root.value(result)));
             root.current = {
                 live: true,
                 at: root.following ? null : at,
@@ -609,6 +610,46 @@ Item {
             root.previewFromScrub();
         });
         root.fetchGraphs(at, smoothing, archive, generation);
+    }
+
+    function buildOf(labels: var, progress: real): var {
+        return {
+            key: `${labels.instance}\u001f${labels.invocation}\u001f${labels.drv}`,
+            origin: labels.instance,
+            builder: labels.builder,
+            package: labels.package ?? "",
+            phase: labels.phase ?? "build",
+            since: parseFloat(labels.since ?? "NaN"),
+            progress: progress
+        };
+    }
+
+    function fetchBuilds(): void {
+        const xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState !== XMLHttpRequest.DONE || !root || !root.following || xhr.status !== 200)
+                return;
+            let groups;
+            try {
+                groups = JSON.parse(xhr.responseText).data;
+            } catch (e) {
+                return;
+            }
+            const now = Date.now() / 1000;
+            const builds = [];
+            for (const group of groups) {
+                if (group.labels.job !== "fleet_build" || !(now - parseFloat(group.push_time_seconds?.metrics?.[0]?.value) < 30))
+                    continue;
+                for (const metric of group.fleet_build_progress?.metrics ?? [])
+                    builds.push(root.buildOf(metric.labels, parseFloat(metric.value)));
+            }
+            if (JSON.stringify(builds) !== JSON.stringify(root.current.builds))
+                root.current = Object.assign({}, root.current, {
+                    builds: builds
+                });
+        };
+        xhr.open("GET", `${root.gateway}/api/v1/metrics`);
+        xhr.send();
     }
 
     function value(result: var): real {

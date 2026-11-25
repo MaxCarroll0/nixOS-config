@@ -85,6 +85,7 @@ class LiveBuilds:
         self.changed = threading.Event()
         self.builds = {}
         self.owners = {}
+        self.relayed = {}
         self.copies = {}
         self.pushed = False
         self.quiet_until = 0.0
@@ -123,6 +124,7 @@ class LiveBuilds:
                     self.owners[activity_id] = drv
                 elif current and current["phase"] == "upload":
                     self.enter(current, "build")
+                    self.relayed[activity_id] = drv
                 elif current is None:
                     self.begin(drv, self.host, "", "build")
                     self.owners[activity_id] = drv
@@ -159,6 +161,10 @@ class LiveBuilds:
 
     def stop(self, activity_id, failed_drv):
         with self.lock:
+            relayed = self.builds.get(self.relayed.pop(activity_id, None))
+            if relayed and relayed["phase"] == "build":
+                self.enter(relayed, "download")
+                self.changed.set()
             drv = self.owners.pop(activity_id, None)
             if drv is None or drv not in self.builds:
                 return
@@ -214,7 +220,7 @@ class LiveBuilds:
             self.changed.wait(LIVE_HEARTBEAT)
             self.changed.clear()
             self.send(self.render())
-            time.sleep(1.0)
+            time.sleep(0.25)
 
     def finish(self, exit_code, failed_drv):
         with self.lock:
@@ -413,7 +419,7 @@ class Observer:
             fields = event.get("fields", [])
             text = event.get("text", "")
             self.live.start(activity_id, event.get("type"), fields)
-            drv = fields[0] if fields and isinstance(fields[0], str) and fields[0].endswith(".drv") else ""
+            drv = fields[0] if event.get("type") == ACT_BUILD and fields and isinstance(fields[0], str) and fields[0].endswith(".drv") else ""
             classification = "activity"
             if drv:
                 classification = "compiled_remote" if len(fields) > 1 and fields[1] else "compiled_local"
