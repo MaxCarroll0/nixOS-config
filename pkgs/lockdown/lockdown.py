@@ -218,9 +218,17 @@ def due(name: str, profile: dict, at: dt.datetime) -> bool:
     return not goal_met(profile)
 
 
+def began(name: str, profile: dict, at: dt.datetime) -> int:
+    state = load_state(name)
+    if state.get("forced") == at.date().isoformat():
+        return int(state.get("since") or at.timestamp())
+    start = minutes(profile["start"])
+    return int(at.replace(hour=start // 60, minute=start % 60, second=0, microsecond=0).timestamp())
+
+
 def cmd_engaged(args) -> int:
     at = now()
-    names = [name for name, profile in sorted(profiles().items()) if due(name, profile, at)]
+    names = [f"{name} {began(name, profile, at)}" for name, profile in sorted(profiles().items()) if due(name, profile, at)]
     print("\n".join(names))
     return 0 if names else 1
 
