@@ -41,7 +41,7 @@ let
 
     "input.kb_layout" = "gb";
     "input.kb_options" = "caps:none";
-    "input.follow_mouse" = 1;
+    "input.follow_mouse" = 2;
     "input.mouse_refocus" = false;
     "input.float_switch_override_focus" = 0;
     "input.focus_on_close" = 0;
