@@ -68,7 +68,7 @@
     };
 
     ani-cli = {
-      url = "github:pystardust/ani-cli";
+      url = "github:pystardust/ani-cli/7867d3b35d7a0cb6b589b33373cf4a954d4c4036";
       flake = false;
     };
 

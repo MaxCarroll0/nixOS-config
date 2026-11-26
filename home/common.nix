@@ -68,10 +68,12 @@ let
     lib.head
   ];
 
-  aniCli = pkgs-unstable.ani-cli.overrideAttrs {
-    version = aniCliUpstreamVersion;
+  aniCliHianime = pkgs-unstable.ani-cli.overrideAttrs (old: {
+    version = "${aniCliUpstreamVersion}-megaplay";
     src = aniCliSrc;
-  };
+    patches = (old.patches or [ ]) ++ [ ./patches/ani-cli-megaplay.patch ];
+    runtimeInputs = (old.runtimeInputs or [ ]) ++ [ pkgs-unstable.openssl ];
+  });
 
   arxiv-to-prompt = pkgs.python3Packages.buildPythonPackage {
     pname = "arxiv-to-prompt";
@@ -275,7 +277,7 @@ in
     ghostscript
     mpv
     yt-dlp
-    aniCli
+    aniCliHianime
     codex-cli
     pkgs-unstable.codecrafters-cli
     mcp-nixos
