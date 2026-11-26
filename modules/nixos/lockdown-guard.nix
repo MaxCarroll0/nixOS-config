@@ -1,4 +1,4 @@
-# Root side of the lockdown: while the user's lockdown is due, deny root and kill recreational apps.
+# Root side of the lockdown: while the user's lockdown is due, deny root.
 
 {
   config,
@@ -41,22 +41,6 @@ let
         exit 0
       fi
       touch ${flag}
-      apps=" ${lib.concatStringsSep " " cfg.apps} "
-      for proc in /proc/[0-9]*; do
-        [ "$(stat -c %u "$proc" 2>/dev/null)" = ${uid} ] || continue
-        comm=$(cat "$proc/comm" 2>/dev/null) || continue
-        argv0=$(tr '\0' '\n' < "$proc/cmdline" 2>/dev/null | head -n 1)
-        for name in "$comm" "$(basename -- "''${argv0:-x}")"; do
-          name=''${name#.}
-          name=''${name%%-wrap*}
-          case "$apps" in
-            *" $name "*)
-              kill -KILL "''${proc#/proc/}" 2>/dev/null || true
-              echo "killed $name (''${proc#/proc/})"
-              break ;;
-          esac
-        done
-      done
       if [ ! -e /run/user/${uid}/lockdown/active.json ]; then
         systemctl --user -M ${cfg.user}@ start lockdown.timer lockdown.service || true
       fi
@@ -92,11 +76,7 @@ in
     uid = lib.mkOption {
       type = lib.types.int;
       default = 1000;
-      description = "Numeric id of that user, for its runtime directory and process ownership.";
-    };
-    apps = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      description = "Process names killed while the lockdown is due, matched on comm and argv[0] without a nix wrapper prefix or suffix.";
+      description = "Numeric id of that user, for its runtime directory.";
     };
   };
 
@@ -104,7 +84,7 @@ in
     systemd.tmpfiles.rules = [ "d /run/lockdown-guard 0755 root root - -" ];
 
     systemd.services.lockdown-guard = {
-      description = "Deny root and kill recreational apps while the lockdown is due";
+      description = "Deny root while the lockdown is due";
       serviceConfig = {
         Type = "oneshot";
         ExecStart = lib.getExe guard;

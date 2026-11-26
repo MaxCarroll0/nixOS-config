@@ -30,21 +30,7 @@
   };
 
   local.gaming.enable = true;
-  local.lockdownGuard = {
-    enable = true;
-    apps = [
-      "ash"
-      "chromium"
-      "Discord"
-      "discord"
-      "heroic"
-      "lutris"
-      "mpv"
-      "prismlauncher"
-      "steam"
-      "steamwebhelper"
-    ];
-  };
+  local.lockdownGuard.enable = true;
   local.desktop.plasma.enable = false;
 
   local.nas.unlock = {
